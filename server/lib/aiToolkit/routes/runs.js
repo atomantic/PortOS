@@ -128,7 +128,7 @@ export function createRunsRoutes(runnerService, options = {}) {
         status: 400,
         context: {
           details: provider.type === 'tui'
-            ? 'TUI executor not attached to runner — check that executeTuiRun is patched in index.js'
+            ? 'TUI executor not attached to runner — check that setTuiRunner() was called in index.js'
             : `Known types: cli, api, tui (received: ${provider.type})`,
         },
       });

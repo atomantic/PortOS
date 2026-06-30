@@ -5,7 +5,6 @@ import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
 import { PORTS } from './lib/ports.js';
 import { existsSync } from 'fs';
-import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getSelfHost } from './lib/peerSelfHost.js';
@@ -166,7 +165,7 @@ import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
 import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice } from './services/catalogUserTypes/store.js';
-import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
+import { startUpdateScheduler, clearStaleUpdateInProgress, processUpdateMarker } from './services/updateChecker.js';
 import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
@@ -343,51 +342,21 @@ if (activeLocalLlmBackend === 'ollama') {
     console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
 }
 
-// Swap the toolkit's generic executeCliRun for PortOS's variant that adds
-// CLI-provider-specific args building (Codex `exec -`, Antigravity `agy --print`,
-// Claude Code `-p -`). The toolkit's in-tree implementation is also safe
-// (no shell, prompt via stdin) — the PortOS variant exists for the per-CLI
-// invocation conventions, not for security.
+// Register PortOS's CLI + TUI runners through the toolkit's declared extension
+// points (setCliRunner / setTuiRunner) instead of overwriting private props.
+// The CLI variant adds per-provider argv building (Codex `exec -`, Antigravity
+// `agy --print`, Claude Code `-p -`); the toolkit's in-tree implementation is
+// also safe (no shell, prompt via stdin) — the variant exists for the per-CLI
+// invocation conventions, not for security. The TUI runner has no toolkit
+// built-in: registering it lets POST /api/runs with a TUI provider dispatch
+// here instead of 400ing. Both runners track their child process / pty via the
+// toolkit's external-run registry, so the toolkit's own stopRun/isRunActive/
+// deleteRun account for live runs without any sibling-method monkey-patching.
 import { executeCliRun as executeCliRunFixed } from './services/runner.js';
 import { executeTuiRun as executeTuiRunFixed } from './lib/tuiPromptRunner.js';
-aiToolkit.services.runner.executeCliRun = executeCliRunFixed;
-// Attach the TUI executor so POST /api/runs with a TUI provider dispatches
-// here instead of erroring. The toolkit's runs router checks for
-// `runnerService.executeTuiRun` and 400s otherwise — without this patch,
-// runs UI would be unable to start TUI runs even though the staged-LLM path
-// (promptRunner.js) already routes TUI internally.
-aiToolkit.services.runner.executeTuiRun = executeTuiRunFixed;
-// Also patch stopRun + isRunActive so they consult `_portosActiveRuns`
-// (where the PortOS CLI variant tracks child processes), not just the
-// toolkit's internal `activeRuns` map. Without this, the runs router
-// would report live CLI runs as inactive and refuse to stop them.
-const originalStopRun = aiToolkit.services.runner.stopRun.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.stopRun = async (runId) => {
-  const portosActive = aiToolkit.services.runner._portosActiveRuns?.get(runId);
-  if (portosActive) {
-    if (portosActive.kill) portosActive.kill('SIGTERM');
-    aiToolkit.services.runner._portosActiveRuns.delete(runId);
-    return true;
-  }
-  return originalStopRun(runId);
-};
-const originalIsRunActive = aiToolkit.services.runner.isRunActive.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.isRunActive = (runId) => {
-  if (aiToolkit.services.runner._portosActiveRuns?.has(runId)) return true;
-  return originalIsRunActive(runId);
-};
-// Patch deleteRun so that deleting an in-flight PortOS CLI run also kills the
-// child process before removing the on-disk directory. Without this patch,
-// deleteRun only checks the toolkit's internal `activeRuns` map (which is
-// empty for PortOS CLI runs) and silently leaves a zombie child process running.
-const originalDeleteRun = aiToolkit.services.runner.deleteRun.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.deleteRun = async function (runId, ...args) {
-  if (this._portosActiveRuns?.has?.(runId)) {
-    await this.stopRun(runId);
-  }
-  return originalDeleteRun.call(this, runId, ...args);
-};
-console.log('🔧 Patched aiToolkit runner.executeCliRun + stopRun + isRunActive + deleteRun with PortOS CLI variants');
+aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
+aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
+console.log('🔧 Registered PortOS CLI + TUI runners via aiToolkit runner extension points');
 
 // Note: prompts service is initialized automatically by createAIToolkit()
 
@@ -635,46 +604,9 @@ getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reco
 // Re-arm any voice timers that survived a restart (independent of voice.enabled —
 // a pending reminder should still fire even if voice is currently off).
 initVoiceTimers().catch(err => console.error(`❌ Voice timer init failed: ${err.message}`));
-// Check for update completion marker from a previous update cycle
-const updateMarkerPath = join(PATHS.data, 'update-complete.json');
-const removeMarker = () => unlink(updateMarkerPath).catch(e => {
-  if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
-});
-
-(async () => {
-  let raw;
-  try { raw = await readFile(updateMarkerPath, 'utf-8'); }
-  catch (err) {
-    if (err?.code === 'ENOENT') return; // No marker = no recent update
-    console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
-    return removeMarker();
-  }
-
-  let marker;
-  try { marker = JSON.parse(raw); }
-  catch (err) {
-    console.error(`❌ Corrupted update marker (invalid JSON): ${err?.message ?? err}`);
-    return removeMarker();
-  }
-
-  if (!marker.version || !marker.completedAt) {
-    console.error(`❌ Update marker missing required fields (version: ${marker.version}, completedAt: ${marker.completedAt})`);
-    return removeMarker();
-  }
-
-  const runningVersion = await getCurrentVersion();
-  if (marker.version !== runningVersion) {
-    console.error(`❌ Update marker version (${marker.version}) doesn't match running version (${runningVersion}) — recording as failed`);
-    await recordUpdateResult({ version: marker.version, success: false, completedAt: marker.completedAt, log: `Version mismatch: expected ${marker.version}, running ${runningVersion}` })
-      .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
-    return removeMarker();
-  }
-
-  console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
-  await recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
-    .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
-  return removeMarker();
-})().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
+// Check for update completion marker from a previous update cycle. The full
+// read/validate/record/cleanup lifecycle lives in updateChecker.js.
+processUpdateMarker().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
 
 // Clear stale updateInProgress if the server was killed mid-update
 clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
