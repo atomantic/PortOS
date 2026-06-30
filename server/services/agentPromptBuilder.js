@@ -18,6 +18,7 @@ import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
+import { isOpencodeCommand } from '../lib/providerModels.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
 
@@ -364,20 +365,25 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
  * @param {boolean} opts.isReadOnly
  * @param {boolean} opts.isTui
  * @param {string} opts.tuiCompletionCommand - `/do:pr` or `/do:push`
+ * @param {boolean} [opts.slashdoFree] - TUI without slashdo (OpenCode): the bullet
+ *   points at the manual git/gh Completion Workflow instead of a `/do:*` command.
  * @param {Object|null} opts.worktreeInfo
  * @param {boolean} opts.willOpenPR
  * @param {boolean} opts.willReviewLoop
  * @returns {string|null}
  */
 export function buildCompletionGuidelineBullet({
-  isReadOnly, isTui, tuiCompletionCommand,
+  isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
   worktreeInfo, willOpenPR, willReviewLoop,
 }) {
   if (isReadOnly) {
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
   }
   if (isTui) {
-    return `On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`).`;
+    const howTo = slashdoFree
+      ? 'the Completion Workflow above (plain `git`/`gh` commands — this provider has no slashdo commands)'
+      : `the Completion Workflow above (\`${tuiCompletionCommand}\`)`;
+    return `On successful completion, YOU run ${howTo}, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`.`;
   }
   if (worktreeInfo && willOpenPR) {
     const reviewSuffix = willReviewLoop
@@ -417,14 +423,18 @@ export function buildCompletionGuidelineBullet({
  *   light prompt instructs the agent to run `/simplify` and `/do:pr` itself
  *   instead of relying on PortOS's post-exit push+PR. The spawner must then
  *   pass `openPR: false` to `cleanupAgentWorktree` to avoid double-firing.
+ * @param {string} [options.providerCommand] - Provider launch command (e.g. `'opencode'`).
+ *   Used to detect a slashdo-free TUI (OpenCode): such a TUI can't run `/do:pr` / `/do:push`,
+ *   so its completion workflow falls back to plain `git`/`gh` commands.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
+  const providerCommand = options.providerCommand || null;
   const isTui = providerType === PROVIDER_TYPES.TUI;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui, providerId });
+    return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui, providerId, providerCommand });
   }
 
   // Full path: API providers don't read CLAUDE.md natively, so always include it.
@@ -665,7 +675,8 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
-    isTui, tuiCompletionCommand, worktreeInfo, willOpenPR, willReviewLoop,
+    isTui, tuiCompletionCommand, slashdoFree: isTui && isOpencodeCommand(providerCommand),
+    worktreeInfo, willOpenPR, willReviewLoop,
   });
   return bullet ? `- ${bullet}` : '';
 })()}
@@ -704,7 +715,7 @@ Begin working on the task now.`;
  * Falls back gracefully when worktree/jira/pipeline metadata is absent — only
  * the present sections render.
  */
-export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null } = {}) {
+export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null } = {}) {
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
@@ -721,6 +732,11 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   // Other CLI providers (codex, antigravity) can't — they get the legacy
   // commit-only block where PortOS handles push+PR on exit.
   const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
+  // A TUI that does NOT load Claude Code slash commands (OpenCode) can't run
+  // `/do:pr` / `/do:push`, so its completion workflow uses plain git/gh instead.
+  // Keyed on the launch command (not the id) so a path-configured or renamed
+  // OpenCode provider is still recognised — mirrors the arg-builder gate.
+  const tuiSlashdoFree = isTui && isOpencodeCommand(providerCommand);
 
   const sections = [];
 
@@ -785,7 +801,9 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
-      willOpenPR, willReviewLoop, simplifyEnabled, providerId, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      willOpenPR, willReviewLoop, simplifyEnabled, providerId, slashdoFree: tuiSlashdoFree,
+      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      branchName: worktreeInfo?.branchName || null,
       reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
@@ -857,8 +875,15 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
 /**
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
+ *
+ * When `slashdoFree` is set (an OpenCode TUI, which does not load Claude Code
+ * slash commands), the agent can't run `/do:pr` / `/do:push`, so it delegates to
+ * the plain-git/`gh` variant below — same sentinel handshake, no slashdo.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+  if (slashdoFree) {
+    return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName });
+  }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
@@ -900,6 +925,81 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     '   EOF',
     '   ```'
   ].join('\n');
+}
+
+/**
+ * Manual (slashdo-free) TUI completion-workflow block — for an OpenCode TUI that
+ * does NOT load Claude Code slash commands and so can't run `/do:pr` / `/do:push`.
+ * Drives the same commit → push → (PR) → sentinel handshake with plain `git` / `gh`
+ * commands, so the `.agent-done` signal still fires and the task completes.
+ *
+ * PortOS forces `openPR:false, skipMerge:true` on TUI worktree cleanup (see
+ * agentTuiSpawning.js), so nothing happens after the agent exits — the agent owns
+ * the push, and the PR + merge when one is requested, itself.
+ *
+ * No automated review loop is emitted: OpenCode can't invoke the CLI reviewers, so
+ * (unlike `buildPostPRMergeSteps`) the merge step is unconditional rather than gated
+ * on a review-loop verdict.
+ */
+function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName = null }) {
+  const branchRef = branchName || 'HEAD';
+  const simplifyStep = simplifyEnabled
+    ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
+    : '1. (simplify disabled — skip)';
+  const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
+
+  const lines = [
+    '## Completion Workflow',
+    'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git` / `gh`. Run these in order:',
+    '',
+    simplifyStep,
+    '2. Stage only the files you changed (never `git add -A` / `git add .`) and commit with a conventional message (`feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations):',
+    '',
+    '   ```bash',
+    '   git add <file> [<file> ...]',
+    '   git commit -m "feat: <description>"',
+    '   ```',
+    '3. Push your branch (it is a fresh worktree branch, so set upstream on first push):',
+    '',
+    '   ```bash',
+    `   git push -u origin ${branchRef}`,
+    '   ```',
+  ];
+
+  let step = 4;
+  if (willOpenPR) {
+    lines.push(
+      `${step++}. Open a pull request against the default branch and capture the PR URL it prints:`,
+      '',
+      '   ```bash',
+      '   gh pr create --fill',
+      '   ```',
+      `${step++}. Merge the PR and delete the branch:`,
+      '',
+      '   ```bash',
+      '   gh pr merge "<PR_URL>" --merge --delete-branch',
+      '   ```',
+      `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
+    );
+  }
+
+  lines.push(
+    `${step}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
+    '',
+    '   ```bash',
+    `   cat > "${sentinelPath}" <<'EOF'`,
+    '   ## Summary',
+    '   <one-sentence statement of what was accomplished>',
+    '',
+    '   ## Changes',
+    '   - <key file or area>: <what changed and why>',
+    '',
+    sentinelTail,
+    '   EOF',
+    '   ```',
+  );
+
+  return lines.join('\n');
 }
 
 /**
