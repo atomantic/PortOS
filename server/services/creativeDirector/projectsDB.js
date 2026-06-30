@@ -35,6 +35,7 @@ import {
 } from './projectsLogic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 // The `data` JSONB is the whole record. status/created_at/updated_at are
@@ -218,7 +219,10 @@ export async function pruneTombstonedProjects(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('creativeDirectorProject', r.id);
+  // Coalesce the per-project base-hash evictions into ONE disk write.
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('creativeDirectorProject', r.id);
+  });
   return { pruned: rows.length };
 }
 
