@@ -1036,6 +1036,21 @@ export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates
 });
 
 /**
+ * Resolve a user-supplied screenshot filename to an absolute path under
+ * `PATHS.screenshots`. Used by the vision-test endpoint, whose `imagePath`
+ * comes straight from `req.body` — basenaming the input (and rejecting any
+ * non-image extension or missing file) stops `../` traversal and absolute-path
+ * escapes from reading arbitrary files off disk and forwarding their contents
+ * to an external vision provider. Returns `null` on any failure so the caller
+ * can surface a clean error. See `makePathResolver` for the defense-in-depth
+ * checks. Late-binds via a thunk so tests that mutate `PATHS.screenshots` still
+ * steer the resolver.
+ */
+export const resolveScreenshot = makePathResolver(() => PATHS.screenshots, {
+  extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
+});
+
+/**
  * Resolve any user-supplied image input (init image OR multi-reference image)
  * to an absolute path under one of PortOS's approved image roots — the
  * gallery (`PATHS.images`), the multi-ref upload dir (`PATHS.imageRefs`),

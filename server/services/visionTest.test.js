@@ -18,16 +18,20 @@ vi.mock('fs/promises', () => ({
   readdir: vi.fn()
 }));
 
-// Mock fs for existsSync
-vi.mock('fs', () => ({
-  existsSync: vi.fn()
+// Mock the fileUtils path-safety layer. `resolveScreenshot` is the basename
+// allowlist that hardens `imagePath` (issue #1820) — stubbing it lets each test
+// drive the resolved-or-rejected outcome without touching the real filesystem.
+// Its own traversal/absolute-escape guarantees are covered in fileUtils.test.js.
+vi.mock('../lib/fileUtils.js', () => ({
+  PATHS: { screenshots: '/mock/screenshots' },
+  resolveScreenshot: vi.fn(),
 }));
 
 // Import mocked modules
 import { getProviderById } from './providers.js';
 import { describeImageViaCli } from './visionCli.js';
 import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { resolveScreenshot } from '../lib/fileUtils.js';
 
 describe('Vision Test Service', () => {
   const mockProvider = {
@@ -103,7 +107,7 @@ describe('Vision Test Service', () => {
 
     it('should successfully test vision when API returns expected content', async () => {
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(true);
+      resolveScreenshot.mockReturnValue('/mock/screenshots/image.png');
       readFile.mockResolvedValue(mockImageBuffer);
 
       const mockResponse = {
@@ -135,7 +139,7 @@ describe('Vision Test Service', () => {
 
     it('should return success false when expected content not found', async () => {
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(true);
+      resolveScreenshot.mockReturnValue('/mock/screenshots/image.png');
       readFile.mockResolvedValue(mockImageBuffer);
 
       const mockResponse = {
@@ -164,7 +168,7 @@ describe('Vision Test Service', () => {
 
     it('should handle API errors gracefully', async () => {
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(true);
+      resolveScreenshot.mockReturnValue('/mock/screenshots/image.png');
       readFile.mockResolvedValue(mockImageBuffer);
 
       global.fetch.mockResolvedValue({
@@ -182,7 +186,7 @@ describe('Vision Test Service', () => {
 
     it('should use custom model when specified', async () => {
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(true);
+      resolveScreenshot.mockReturnValue('/mock/screenshots/image.png');
       readFile.mockResolvedValue(mockImageBuffer);
 
       const mockResponse = {
@@ -213,13 +217,31 @@ describe('Vision Test Service', () => {
 
     it('should handle image not found error', async () => {
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(false);
+      resolveScreenshot.mockReturnValue(null);
 
       await expect(testVision({
         imagePath: '/nonexistent/image.png',
         prompt: 'Describe',
         expectedContent: []
       })).rejects.toThrow('Failed to load image');
+    });
+
+    it('SECURITY: refuses a traversal/absolute imagePath without reading the file or calling the provider (#1820)', async () => {
+      getProviderById.mockResolvedValue(mockProvider);
+      // resolveScreenshot rejects anything that escapes the screenshots root.
+      resolveScreenshot.mockReturnValue(null);
+
+      await expect(testVision({
+        imagePath: '../../../../etc/passwd',
+        prompt: 'Describe',
+        expectedContent: []
+      })).rejects.toThrow('Failed to load image');
+
+      // The unsanitized path must never reach readFile or the external API —
+      // otherwise arbitrary file contents would be base64-encoded and forwarded.
+      expect(resolveScreenshot).toHaveBeenCalledWith('../../../../etc/passwd');
+      expect(readFile).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
     });
   });
 
@@ -236,7 +258,7 @@ describe('Vision Test Service', () => {
     it('should run multiple tests on available screenshots', async () => {
       readdir.mockResolvedValue(['test1.png', 'test2.jpg']);
       getProviderById.mockResolvedValue(mockProvider);
-      existsSync.mockReturnValue(true);
+      resolveScreenshot.mockReturnValue('/mock/screenshots/image.png');
       readFile.mockResolvedValue(mockImageBuffer);
 
       const mockResponse = {
