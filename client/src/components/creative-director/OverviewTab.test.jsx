@@ -124,4 +124,19 @@ describe('OverviewTab auto-compose (#1817)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
     await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', {}, { silent: true }));
   });
+
+  it('does not flip status to planning when the server did not start composing', async () => {
+    const onProjectUpdate = vi.fn();
+    applyCreativeDirectorAutoCast.mockResolvedValue({
+      project: { id: 'cd-1', cast: [{ ingredientId: 'p1', name: 'The Spire' }] },
+      added: [{ ingredientId: 'p1', name: 'The Spire' }],
+      suggestions: [],
+      // composing absent — server declined (e.g. paused project)
+    });
+    renderTab(baseProject, onProjectUpdate);
+    fireEvent.click(screen.getByLabelText(/\+ treatment/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(onProjectUpdate).toHaveBeenCalled());
+    expect(onProjectUpdate).toHaveBeenCalledWith(expect.not.objectContaining({ status: expect.anything() }));
+  });
 });
