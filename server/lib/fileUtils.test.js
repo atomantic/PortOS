@@ -672,10 +672,12 @@ describe('fileUtils', () => {
 
     it('resolves a basename present only in visualTemplates', () => {
       const out = resolveImageInputPath(templateName);
-      expect(out).toBeTruthy();
-      // visualTemplates is the third root; without a basename in gallery first
-      // it falls through. We can't fully isolate that here without temp dirs,
-      // so just assert the resolver doesn't return null.
+      // `templateName` is unique to the visualTemplates root (it is NOT copied
+      // into gallery or image-refs), so the resolver must land on the third
+      // root and the returned path must carry that root's segment + basename —
+      // a plain truthiness check would pass even on a wrong-root resolution.
+      expect(out).toContain('data/templates/');
+      expect(out).toContain(templateName);
     });
 
     it('REGRESSION: absolute path under a specific root stays in that root', () => {
