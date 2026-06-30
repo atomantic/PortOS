@@ -143,8 +143,85 @@ import { characterArcChecks } from './checks/characterArc.js';
 import { proseStyleChecks } from './checks/proseStyle.js';
 import { dialogueChecks } from './checks/dialogue.js';
 
-// The built-in editorial checks, assembled from the per-category groups.
-export const EDITORIAL_CHECKS = [
+// Canonical display + run order of the built-in checks. Grouping the checks into
+// ./checks/*.js by category (#1829) would otherwise change the observable order
+// (settings list, progress events, run sequencing), so the assembled array is
+// sorted back to this sequence — the exact order the single-file registry shipped.
+// A built-in check missing a slot here fails fast at load, forcing an explicit
+// position rather than silently appending.
+const CHECK_ORDER = Object.freeze([
+  'naming.dissimilar-names',
+  'roster.economy',
+  'roster.unmodeled-names',
+  'comic.lettering-density',
+  'comic.balloon-attribution',
+  'comic.prose-sync',
+  'cast.representation-balance',
+  'scene.component-balance',
+  'visual.shot-continuity',
+  'visual.eyeline-match',
+  'visual.appearance-continuity',
+  'sensory.balance',
+  'scene.white-room',
+  'scene.interiority-balance',
+  'pov.justified',
+  'pov.economy',
+  'pov.head-hopping',
+  'continuity.timeline-contradiction',
+  'research.fact-accuracy',
+  'character.consistency',
+  'character.secondary-arc',
+  'arc.transitions',
+  'arc.regression',
+  'plot.structure-momentum',
+  'pacing.escalation-curve',
+  'theme.coherence',
+  'arc.climax-agency',
+  'emotion.reaction-proportionality',
+  'relationships.reciprocity',
+  'relationships.dangling-target',
+  'relationships.opposition-reversal',
+  'arc.ticking-clock-hygiene',
+  'objects.unattached-significant',
+  'objects.unmotivated-interaction',
+  'objects.backstory-consistency',
+  'objects.weight-proportionality',
+  'prose.info-dumping',
+  'interiority.protagonist',
+  'style.reading-level',
+  'style.conformance',
+  'chekhov.setups-payoffs',
+  'prose.cliches',
+  'prose.modifier-stacking',
+  'prose.filter-words',
+  'prose.hedge-words',
+  'prose.crutch-words',
+  'prose.adverbs',
+  'prose.passive-voice',
+  'prose.repeated-gestures',
+  'prose.word-echoes',
+  'prose.sentence-rhythm',
+  'prose.telling-emotion',
+  'prose.dead-metaphor',
+  'opening.wrong-start',
+  'prose.mirror-description',
+  'dialogue.pleasantries',
+  'dialogue.said-bookisms',
+  'dialogue.attribution-clarity',
+  'dialogue.tag-variety',
+  'dialogue.on-the-nose',
+  'dialogue.voice-distinctiveness',
+  'style.voice-consistency',
+  'prose.kill-your-darlings',
+  'prose.italic-thoughts',
+  'endings.cliffhanger',
+  'endings.pov-switch',
+  'comic.panel-rhythm',
+  'comic.page-turn-beats',
+]);
+const CHECK_ORDER_INDEX = new Map(CHECK_ORDER.map((id, i) => [id, i]));
+
+const ASSEMBLED_CHECKS = [
   ...namingChecks,
   ...castChecks,
   ...comicChecks,
@@ -157,6 +234,17 @@ export const EDITORIAL_CHECKS = [
   ...proseStyleChecks,
   ...dialogueChecks,
 ];
+for (const c of ASSEMBLED_CHECKS) {
+  if (!CHECK_ORDER_INDEX.has(c.id)) {
+    throw new Error(`checkRegistry: built-in check "${c.id}" has no slot in CHECK_ORDER — add one to fix its display/run position.`);
+  }
+}
+
+// The built-in editorial checks, assembled from the per-category groups and
+// ordered by CHECK_ORDER so the decomposition is order-preserving.
+export const EDITORIAL_CHECKS = ASSEMBLED_CHECKS
+  .slice()
+  .sort((a, b) => CHECK_ORDER_INDEX.get(a.id) - CHECK_ORDER_INDEX.get(b.id));
 
 
 // ---------------------------------------------------------------------------
