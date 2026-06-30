@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -201,19 +202,20 @@ export default function Pipeline() {
 
   // Two-click delete: first click "arms" the row, second click fires. Avoids
   // window.confirm (banned per CLAUDE.md) without pulling in a modal for the
-  // skeleton. armedId resets on any other click.
-  const [armedId, setArmedId] = useState(null);
+  // skeleton. Only one row is armed at once.
+  const { isConfirming, requestDelete, confirmDelete } = useConfirmDelete();
   const handleDelete = async (s) => {
-    if (armedId !== s.id) {
-      setArmedId(s.id);
+    if (!isConfirming(s.id)) {
+      requestDelete(s.id);
       return;
     }
-    setArmedId(null);
-    const prior = series;
-    setSeries((prev) => prev.filter((x) => x.id !== s.id));
-    await deletePipelineSeries(s.id).catch((err) => {
-      toast.error(err.message || 'Delete failed');
-      setSeries(prior);
+    await confirmDelete(() => {
+      const prior = series;
+      setSeries((prev) => prev.filter((x) => x.id !== s.id));
+      return deletePipelineSeries(s.id).catch((err) => {
+        toast.error(err.message || 'Delete failed');
+        setSeries(prior);
+      });
     });
   };
 
@@ -473,9 +475,9 @@ export default function Pipeline() {
               <button
                 type="button"
                 onClick={() => handleDelete(s)}
-                className={`p-2 ${armedId === s.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-                aria-label={armedId === s.id ? `Confirm delete series ${s.name}` : `Delete series ${s.name}`}
-                title={armedId === s.id ? 'Click again to confirm delete' : 'Delete series'}
+                className={`p-2 ${isConfirming(s.id) ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
+                aria-label={isConfirming(s.id) ? `Confirm delete series ${s.name}` : `Delete series ${s.name}`}
+                title={isConfirming(s.id) ? 'Click again to confirm delete' : 'Delete series'}
               >
                 <Trash2 size={16} />
               </button>
