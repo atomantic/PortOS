@@ -24,7 +24,7 @@ export default function EventDetail({ event, onClose }) {
           <h2 className="text-lg font-semibold text-white truncate">{event.title}</h2>
           <button
             onClick={onClose}
-            className="p-1 text-gray-400 hover:text-white transition-colors"
+            className="p-1 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded transition-colors"
             aria-label="Close"
           >
             <X size={20} />
