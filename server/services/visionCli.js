@@ -115,6 +115,9 @@ export async function describeImageViaCli({
     await writeFile(join(dir, IMAGE_BASENAME), bytes);
     const { command, args, stdin, cwd } = buildCliVisionInvocation(provider, visionModel, dir, prompt);
 
+    const childEnv = { ...process.env, ...provider?.envVars };
+    delete childEnv.CLAUDECODE;
+
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
     // (cmd.exe /c) instead of enabling a shell. This matters even more here
     // than at other call sites: the codex branch of buildCliVisionInvocation
@@ -123,16 +126,17 @@ export async function describeImageViaCli({
     // prompt containing a space would silently mis-split into extra shell
     // tokens, corrupting or shell-injecting the invocation. The cmd.exe
     // wrapper instead relies on Node's own correct non-shell argv escaping,
-    // which DOES preserve spaces within each arg as a single token. See
-    // resolveWindowsExecutable/prepareWindowsSafeSpawn in
+    // which DOES preserve spaces within each arg as a single token. Resolved
+    // against `childEnv` so a provider-configured PATH override is honored.
+    // See resolveWindowsExecutable/prepareWindowsSafeSpawn in
     // server/lib/bufferedSpawn.js.
-    const resolvedCommand = resolveWindowsExecutable(command) || command;
+    const resolvedCommand = resolveWindowsExecutable(command, undefined, childEnv) || command;
     const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
 
     const text = await new Promise((resolve, reject) => {
       const child = spawnImpl(spawnCommand, spawnArgs, {
         cwd,
-        env: (() => { const e = { ...process.env, ...provider?.envVars }; delete e.CLAUDECODE; return e; })(),
+        env: childEnv,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
