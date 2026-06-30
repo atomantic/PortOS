@@ -277,7 +277,7 @@ function StoryBuilderIndex() {
             </div>
             <button
               onClick={create} disabled={creating}
-              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded"
             >
               {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Create &amp; begin
@@ -460,7 +460,7 @@ function ImportPanel({ onCreated }) {
 
       {!preview ? (
         <button onClick={analyze} disabled={analyzing}
-          className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded">
+          className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded">
           {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           {analyzing ? 'Analyzing… (this can take a minute)' : 'Analyze'}
         </button>
@@ -771,7 +771,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
   const genButton = (label = 'Generate with AI', hasContent = false) => (
     <button
       onClick={runGenerate} disabled={busy || locked}
-      className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+      className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
     >
       {isRunning('generate') ? <Loader2 className="w-4 h-4 animate-spin" /> : (hasContent ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />)}
       {isRunning('generate') ? (phase || 'Working…') : (hasContent ? 'Re-generate' : label)}
@@ -1069,7 +1069,7 @@ function IssuesPanel({ session, series, issues, onChanged }) {
             <button
               onClick={generateIssues} disabled={generating}
               title="Generate a per-episode breakdown for every season and create the issues here"
-              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
             >
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
               Generate issues from arc
@@ -1449,7 +1449,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
                   <button
                     onClick={() => goToStep(stepIds[activeIdx + 1])}
                     disabled={!stepState.locked || isStale}
-                    className="inline-flex items-center gap-1 text-sm bg-port-accent hover:bg-blue-600 disabled:opacity-40 text-white px-3 py-1.5 rounded"
+                    className="inline-flex items-center gap-1 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 text-white px-3 py-1.5 rounded"
                   >
                     Next <ChevronRight className="w-4 h-4" />
                   </button>

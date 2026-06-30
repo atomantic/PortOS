@@ -97,7 +97,7 @@ function TerminalHotKeys({ sendCtrlC, handlePaste, sendNavKey, showPasteInput, s
       </button>
       <button
         onClick={handlePaste}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-blue-300 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px] shrink-0"
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-port-accent/80 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px] shrink-0"
         title="Paste clipboard contents"
         aria-label="Paste clipboard contents"
       >
