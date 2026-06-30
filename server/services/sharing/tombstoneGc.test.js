@@ -897,34 +897,83 @@ describe('sweepTombstones — track GC cohort widened by musicVideoProject bundl
     expect(pruneTombstonedTracks).toHaveBeenCalledWith(minAck + 1);
   });
 
-  it('does NOT hold the track cutoff hostage to a stale musicVideoProject row when the peer already has a confirmed direct track subscription', async () => {
-    // Regression (codex review on #1922): a peer syncing BOTH Music and Music
-    // Videos has its own direct `track` subscription, already fully governed
-    // by that row's `lastConfirmedPushedAt` floor. Without excluding the
-    // peer's musicVideoProject rows here, an unrelated/long-stale project
-    // subscription (never confirmed a bundled track delivery — e.g. it has no
-    // linked track at all) would needlessly hold back GC for EVERY track
-    // tombstone, even ones the peer's direct track subscription already
-    // confirmed.
+  it('a stale musicVideoProject row STILL holds back the track cutoff even when the same peer has a confirmed direct track subscription (deliberate, matches the per-kind clamp posture elsewhere)', async () => {
+    // Regression (codex review round 2 on #1922): an earlier version of this
+    // fix excluded a peer's musicVideoProject rows from the `track` floor
+    // whenever that peer ALSO had a direct `track` subscription — but the
+    // `track` cutoff is one global value applied to every track tombstone
+    // (no per-record cutoff mechanism exists here), and a peer can directly
+    // subscribe to track A while relying ENTIRELY on an unrelated project's
+    // bundle as the delivery path for track B. Excluding the MV row in that
+    // case would let GC prune track B's tombstone before its only delivery
+    // path ever confirmed. So a never-confirmed MV row legitimately holds
+    // back the cutoff for the WHOLE kind — the same "correctness over GC
+    // aggressiveness" tradeoff already accepted for ordinary multi-record
+    // `track` subscriptions (see the per-record confirmed-push clamp tests).
     getMinAckAcrossPeers.mockResolvedValue(NOW);
     getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const mvCreatedAt = NOW - 30 * 24 * 60 * 60 * 1000;
     mockSubs({
       track: [
         { peerId: 'peer-a', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
       ],
       musicVideoProject: [
-        // Stale/unrelated project sub for the SAME peer: never confirmed a
-        // bundled track delivery, floors to its old createdAt — must NOT gate
-        // the track cutoff because peer-a already has a direct track sub.
+        // Never confirmed a bundled track delivery, and no lastPushedHash yet
+        // (brand-new sub) — floors to its own createdAt.
+        { peerId: 'peer-a', createdAt: new Date(mvCreatedAt).toISOString(), lastConfirmedTrackBundleAtMs: null },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(mvCreatedAt + 1); // clamped by the MV row, not the confirmed direct track row
+  });
+
+  it('backfills the bundle-confirmed floor off lastPushedHash for a musicVideoProject row created before lastConfirmedTrackBundleAtMs existed (#1922 upgrade compat)', async () => {
+    // Regression (codex review round 2 on #1922): an existing musicVideoProject
+    // subscription row predating this field has no lastConfirmedTrackBundleAtMs
+    // at all. If its project content hasn't changed since, pushRecordToPeer's
+    // `unchanged`-hash short-circuit means it may NEVER take another real push
+    // that would stamp the field — pinning the track cutoff at the row's old
+    // createdAt forever. A saved lastPushedHash is a safe historical proxy:
+    // persistPushSuccess has always withheld the hash when trackSyncPending was
+    // true (#1858, predating this field), so a non-null hash means that row's
+    // last successful push already had its bundled track merge confirmed.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const lastConfirmed = NOW - 5 * 60 * 1000;
+    mockSubs({
+      musicVideoProject: [
         {
           peerId: 'peer-a',
           createdAt: new Date(NOW - 30 * 24 * 60 * 60 * 1000).toISOString(),
-          lastConfirmedTrackBundleAtMs: null,
+          lastConfirmedTrackBundleAtMs: undefined, // pre-#1922 row: field never existed
+          lastPushedHash: 'abc123',
+          lastConfirmedPushedAt: lastConfirmed,
         },
       ],
     });
     await sweepTombstones({ now: NOW, graceMs: 0 });
     const cutoff = pruneTombstonedTracks.mock.calls[0][0];
-    expect(cutoff).toBe(NOW + 1); // governed by the direct track row, not the stale MV row
+    expect(cutoff).toBe(lastConfirmed + 1); // backfilled from lastConfirmedPushedAt, not createdAt
+  });
+
+  it('does NOT backfill off lastConfirmedPushedAt when lastPushedHash is absent (withheld push, no safe historical proxy)', async () => {
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const createdAt = NOW - 10 * 60 * 1000;
+    mockSubs({
+      musicVideoProject: [
+        {
+          peerId: 'peer-a',
+          createdAt: new Date(createdAt).toISOString(),
+          lastConfirmedTrackBundleAtMs: undefined,
+          lastPushedHash: null, // withheld (e.g. trackSyncPending) — no safe proxy
+          lastConfirmedPushedAt: NOW, // fresh, but must NOT be used without a hash
+        },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(createdAt + 1); // conservative floor to createdAt
   });
 });

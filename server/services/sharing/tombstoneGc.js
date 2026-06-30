@@ -202,11 +202,29 @@ function peerIdsSubscribedToKind(subs, peers, recordKind) {
 // `targetKind === 'musicVideoProject'`) still reads `lastConfirmedPushedAt`,
 // unchanged. Every other recordKind/targetKind pairing also keeps using
 // `lastConfirmedPushedAt` as before.
+//
+// Upgrade compat: an existing musicVideoProject subscription row created
+// BEFORE this field existed has no `lastConfirmedTrackBundleAtMs` at all —
+// and if its project content hasn't changed since, `pushRecordToPeer`'s
+// `unchanged`-hash short-circuit means it may NEVER take another real push
+// that would stamp the field, pinning the `track` floor at that row's old
+// `createdAt` indefinitely. A non-null `lastPushedHash` on the row is a safe
+// historical proxy: `persistPushSuccess` has ALWAYS withheld the hash when
+// `trackSyncPending` was true (#1858, predating this field), so a saved hash
+// means that row's most recent successful push already had its bundled track
+// merge confirmed — `lastConfirmedPushedAt` is a sound backfilled stand-in.
+// A row with neither field set (no hash yet, or hash withheld) still floors
+// conservatively to `createdAt`.
 function confirmedFloorForSub(sub, targetKind) {
-  const field = (targetKind === 'track' && sub.recordKind === 'musicVideoProject')
-    ? 'lastConfirmedTrackBundleAtMs'
-    : 'lastConfirmedPushedAt';
-  let confirmed = sub[field];
+  if (targetKind === 'track' && sub.recordKind === 'musicVideoProject') {
+    if (Number.isFinite(sub.lastConfirmedTrackBundleAtMs)) return sub.lastConfirmedTrackBundleAtMs;
+    if (typeof sub.lastPushedHash === 'string' && Number.isFinite(sub.lastConfirmedPushedAt)) {
+      return sub.lastConfirmedPushedAt;
+    }
+    const createdMs = Date.parse(sub.createdAt || '');
+    return Number.isFinite(createdMs) ? createdMs : 0;
+  }
+  let confirmed = sub.lastConfirmedPushedAt;
   if (!Number.isFinite(confirmed)) {
     // Never confirmed → floor to createdAt (0 if unparseable). See header.
     const createdMs = Date.parse(sub.createdAt || '');
@@ -218,25 +236,27 @@ function confirmedFloorForSub(sub, targetKind) {
 // Returns Infinity when there are no eligible rows for the kind (no per-record
 // constraint → the snapshot-coverage + per-peer-ack checks alone govern).
 //
-// #1922: a peer that has a DIRECT `track` subscription is already fully
-// governed by that row's own `lastConfirmedPushedAt` floor — its bundled
-// musicVideoProject rows must be excluded from the `track` floor for that
-// peer, otherwise an unrelated/stale project subscription (one whose linked
-// track this peer never even needed protecting) would needlessly hold back
-// pruning for EVERY track tombstone, including ones the peer's direct track
-// subscription already confirmed. Only a peer with NO direct `track`
-// subscription relies on its musicVideoProject rows as the stand-in vehicle.
+// #1922: every eligible row of the cohort's kinds contributes its floor,
+// INCLUDING a peer's musicVideoProject rows even when that same peer also
+// holds a direct `track` subscription. This is deliberately conservative: the
+// `track` cutoff is one global value applied to every track tombstone (this
+// file has no per-record cutoff mechanism — see the module docstring), and a
+// peer can directly subscribe to track A while relying on an UNRELATED
+// project's bundle as the only delivery path for track B. Excluding that
+// peer's musicVideoProject rows just because it also has SOME direct track
+// subscription would let GC prune track B's tombstone before the bundle ever
+// confirmed. The accepted tradeoff — an unrelated/stale musicVideoProject
+// subscription can hold back pruning for every track tombstone, not just the
+// one it bundles — matches this module's "correctness over GC aggressiveness"
+// posture for every other kind's clamp (see `minConfirmedPushedAtForKind`'s
+// header above).
 function minConfirmedPushedAtForKind(subs, peers, recordKind) {
   const cohortKinds = cohortKindsFor(recordKind);
   const eligible = eligiblePeerIdSet(peers);
-  const peersWithDirectKind = recordKind === 'track'
-    ? new Set(subs.filter((s) => s.recordKind === 'track' && s.peerId && eligible.has(s.peerId)).map((s) => s.peerId))
-    : null;
   let min = Infinity;
   for (const s of subs) {
     if (!cohortKinds.includes(s.recordKind)) continue;
     if (!s.peerId || !eligible.has(s.peerId)) continue;
-    if (peersWithDirectKind && s.recordKind === 'musicVideoProject' && peersWithDirectKind.has(s.peerId)) continue;
     const confirmed = confirmedFloorForSub(s, recordKind);
     if (confirmed < min) min = confirmed;
   }
