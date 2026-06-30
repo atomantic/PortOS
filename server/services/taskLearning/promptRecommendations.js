@@ -276,7 +276,10 @@ export async function getAllPromptRecommendations() {
 
   // Sort by priority (critical first, then needs-improvement, etc.)
   const priorityOrder = { critical: 0, 'needs-improvement': 1, moderate: 2, good: 3, 'insufficient-data': 4 };
-  allRecommendations.sort((a, b) => (priorityOrder[a.status] || 5) - (priorityOrder[b.status] || 5));
+  // Use ?? not || so the highest-priority status (`critical`, value 0) isn't
+  // treated as falsy and bumped to the catch-all 5 — that would sort the most
+  // urgent recommendations LAST, inverting the intended "critical first" order.
+  allRecommendations.sort((a, b) => (priorityOrder[a.status] ?? 5) - (priorityOrder[b.status] ?? 5));
 
   return allRecommendations;
 }
