@@ -179,6 +179,10 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
   return clips.map((clip) => {
     const scene = scenesById?.get(clip.sceneId);
     if (scene?.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec) {
+      // inSec stays 0 here deliberately: this only ever trims how much of the
+      // clip plays, never which frames — there is no in-point/out-point
+      // distinction. The BeatTimeline client intentionally exposes only a
+      // right-edge (out-point) trim handle for the same reason (#1854).
       const outSec = Math.min(clip.duration, Math.max(minClipSec, scene.endSec - scene.startSec));
       running += outSec;
       return { ...clip, inSec: 0, outSec, duration: outSec };
