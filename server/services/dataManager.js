@@ -208,8 +208,14 @@ export async function getBackups() {
   return backups;
 }
 
+// Backup archives are named like `agents-2026-06-30T12-34-56.tar.gz`, so the raw
+// filename legitimately contains dots. Validate the dotted value directly — the
+// old `filename.replace(/[.]/g,'')` double-pass never checked the real filename,
+// leaving only the startsWith(backupDir) guard against traversal (issue #1822).
+const SAFE_FILENAME = /^[a-z0-9._-]+$/i;
+
 export async function deleteBackup(filename) {
-  if (!SAFE_NAME.test(filename.replace(/[.]/g, ''))) throw new Error('Invalid filename');
+  if (!SAFE_FILENAME.test(filename) || filename.includes('..')) throw new Error('Invalid filename');
   const backupDir = join(DATA_DIR, 'backup');
   const fullPath = join(backupDir, filename);
   if (!fullPath.startsWith(backupDir)) throw new Error('Path traversal not allowed');

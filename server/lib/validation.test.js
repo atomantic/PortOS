@@ -21,7 +21,9 @@ import {
   editorialCustomCheckUpdateSchema,
   pipelineEditorialChecksSettingsSchema,
   storyboardShotSchema,
-  storyboardSceneSchema
+  storyboardSceneSchema,
+  restoreRequestSchema,
+  subdirFilterSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -949,6 +951,31 @@ describe('validation.js', () => {
       expect(r.data.sceneVideoJobId).toBe('v1');
       // A bad enum inside shots[] fails the whole scene.
       expect(storyboardSceneSchema.safeParse({ shots: [{ id: 's', shotType: 'nope' }] }).success).toBe(false);
+    });
+  });
+
+  describe('subdirFilter validation (#1822)', () => {
+    it('accepts a plain relative subdir', () => {
+      expect(subdirFilterSchema.safeParse('data').success).toBe(true);
+      expect(subdirFilterSchema.safeParse('brain/notes').success).toBe(true);
+      expect(subdirFilterSchema.safeParse('cos.worktrees').success).toBe(true);
+    });
+
+    it('rejects wildcard characters that would override the rsync filter chain', () => {
+      expect(subdirFilterSchema.safeParse('*').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('data/*').success).toBe(false);
+    });
+
+    it('rejects ".." traversal segments and absolute paths', () => {
+      expect(subdirFilterSchema.safeParse('../other-dir').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('data/../../etc').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('/etc/passwd').success).toBe(false);
+    });
+
+    it('allows the field to be omitted or null on the restore request', () => {
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1' }).success).toBe(true);
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: null }).success).toBe(true);
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: '*' }).success).toBe(false);
     });
   });
 });

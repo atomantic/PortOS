@@ -465,6 +465,16 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     throw new Error(`Path traversal detected for snapshotId: ${snapshotId}`);
   }
 
+  // Defense-in-depth for non-route callers (the route already validates via
+  // subdirFilterSchema). subdirFilter is interpolated into an rsync include arg,
+  // so a `*` would override the filter chain (restoring everything) and `..`
+  // would traverse out of the snapshot subdir — see issue #1822.
+  if (subdirFilter != null && (!/^[a-z0-9._/-]+$/i.test(subdirFilter)
+      || subdirFilter.split('/').includes('..')
+      || subdirFilter.startsWith('/'))) {
+    throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
+  }
+
   const flags = ['--itemize-changes'];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
