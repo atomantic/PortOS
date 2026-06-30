@@ -84,3 +84,41 @@ describe('OverviewTab auto-cast (#1810)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Auto-cast$/i })).toHaveProperty('disabled', false));
   });
 });
+
+describe('OverviewTab auto-compose (#1817)', () => {
+  it('offers the +treatment toggle only when the project has no treatment yet', () => {
+    const { unmount } = renderTab(baseProject);
+    expect(screen.getByLabelText(/\+ treatment/i)).toBeTruthy();
+    unmount();
+    renderTab({ ...baseProject, treatment: { scenes: [] } });
+    expect(screen.queryByLabelText(/\+ treatment/i)).toBeNull();
+  });
+
+  it('passes compose:true when the toggle is checked', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByLabelText(/\+ treatment/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', { compose: true }, { silent: true }));
+  });
+
+  it('toasts a composing message when the server kicks off the treatment', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({
+      project: { id: 'cd-1', cast: [{ ingredientId: 'p1', name: 'The Spire' }] },
+      added: [{ ingredientId: 'p1', name: 'The Spire' }],
+      suggestions: [],
+      composing: true,
+    });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByLabelText(/\+ treatment/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/composing the treatment/i)));
+  });
+
+  it('omits the compose flag when the toggle is left unchecked', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', {}, { silent: true }));
+  });
+});
