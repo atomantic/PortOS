@@ -43,25 +43,17 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
 /**
  * Resolve a bare command name (e.g. "opencode") to its full path WITH
- * extension on Windows, so `spawn()` can target it directly under the
- * default `shell: false`.
+ * extension on Windows, so the caller knows exactly which file (and which
+ * kind — `.exe` vs `.cmd`/`.bat`) it's about to launch.
  *
- * This is the actual fix for #1865 (CLI providers like opencode/codex/claude
- * failing to spawn on Windows) — NOT a missing `shell: true`. A bare command
- * with no extension never resolves on Windows even though typing it at a
- * real cmd.exe prompt works fine: libuv's internal PATHEXT search finds e.g.
- * "opencode.cmd", but Node's JS-layer `.bat`/`.cmd` safe-auto-escape
- * detection (the CVE-2024-27980 fix) only fires on a LITERAL `.bat`/`.cmd`
- * suffix in the string passed to `spawn()` — it never sees what libuv found.
- * Resolving to the explicit extension up front lets that already-tested,
- * already-safely-escaping Node code path take over automatically, instead of
- * hand-rolling cmd.exe argument quoting ourselves (the exact class of bug the
- * CVE was about — `shell: true` + an args array does NOT escape arguments,
- * it just space-joins them, so any arg containing a space or a cmd.exe
- * metacharacter would silently corrupt or be shell-injectable).
+ * A bare command with no extension never resolves on Windows even though
+ * typing it at a real cmd.exe prompt works fine: libuv's internal PATHEXT
+ * search finds e.g. "opencode.cmd", but `spawn()`'s default `shell: false`
+ * doesn't apply that search at all (it targets the literal string given).
  *
  * Deliberately filesystem-only (no `where`/`which` subprocess) so resolution
- * is synchronous and side-effect-free.
+ * is synchronous and side-effect-free. Pair with `prepareWindowsSafeSpawn`
+ * below to get a `{ command, args }` pair that's actually launchable.
  *
  * @param {string} command - bare command name, or an existing path (returned unchanged)
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
@@ -78,6 +70,42 @@ export function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
     }
   }
   return null;
+}
+
+const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
+
+/**
+ * Return the `{ command, args }` pair that's actually safe to hand to
+ * `spawn()`/`execFile()` under the default `shell: false`, given a (possibly
+ * `resolveWindowsExecutable`-resolved) command.
+ *
+ * THE ACTUAL FIX FOR #1865. An earlier version of this fix assumed Node's
+ * CVE-2024-27980 patch safely auto-escapes a `.bat`/`.cmd` target under
+ * `shell: false` once it carries the explicit extension — that's wrong. The
+ * shipped patch instead makes `spawn()`/`spawnSync()` **refuse** (an
+ * `'error'`/EINVAL-class failure) any `.bat`/`.cmd` target under
+ * `shell: false`, full stop; per Node's own docs, `.bat`/`.cmd` files
+ * "are not executable on their own... and cannot be launched" that way.
+ * Node's documented safe alternative is to spawn `cmd.exe /c <path> <args>`
+ * directly: `cmd.exe` is a normal `.exe`, so Node's existing, already-tested
+ * non-shell argv→command-line escaping governs the result — correctly
+ * preserving spaces/quotes in each arg — with none of `shell: true`'s
+ * DEP0190 unescaped-join hazard (a literal `shell: true` + args array does
+ * NOT escape arguments, it just space-joins them).
+ *
+ * A resolved native `.exe`/`.com` target needs no wrapping at all — it's
+ * directly launchable, so it's returned unchanged.
+ *
+ * @param {string} command - bare name, or a resolveWindowsExecutable result
+ * @param {string[]} args
+ * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
+ * @returns {{ command: string, args: string[] }}
+ */
+export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
+  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
+    return { command: 'cmd.exe', args: ['/c', command, ...args] };
+  }
+  return { command, args };
 }
 
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only

@@ -116,11 +116,12 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(result.success).toBe(true);
     expect(result.path).toBe(join(fakePathDir, 'opencode.cmd'));
     const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
-    expect(versionCall?.[0]).toBe(join(fakePathDir, 'opencode.cmd'));
-    // No options object (and so no shell) — the call is (path, args, callback)
-    // with nothing in between. The re-resolved path carries the explicit
-    // extension, so Node's own safely-escaping .bat/.cmd handling applies
-    // under shell:false.
+    // The re-resolved .cmd target can't be launched directly under
+    // shell:false even with the explicit extension (Node refuses it
+    // outright post-CVE-2024-27980) — it's wrapped through cmd.exe /c,
+    // Node's documented safe pattern (no shell:true, no DEP0190 hazard).
+    expect(versionCall?.[0]).toBe('cmd.exe');
+    expect(versionCall?.[1]).toEqual(['/c', join(fakePathDir, 'opencode.cmd'), '--version']);
     expect(versionCall?.length).toBe(3);
     expect(typeof versionCall?.[2]).toBe('function');
   });

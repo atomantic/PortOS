@@ -10,7 +10,7 @@ import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
-import { killProcessTree, resolveWindowsExecutable } from '../lib/bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -161,17 +161,18 @@ export async function patchRunMetadata(runId, patch) {
 /**
  * Override executeCliRun.
  *
- * Runs without a shell (`shell:false`, the default — never set `shell:true`
- * here): npm-installed CLI providers (opencode, codex, claude, …) are
- * .cmd/.bat shims on Windows, but the fix for that (#1865) is resolving the
- * bare command to its explicit-extension path via `resolveWindowsExecutable`
- * before spawning, NOT enabling a shell. `shell:true` + an args array does
- * NOT escape arguments — it just space-joins them (the literal DEP0190
- * warning) — so any arg or prompt content containing a space or a cmd.exe
- * metacharacter would silently corrupt or be shell-injectable. Resolving the
- * `.cmd`/`.bat` extension up front instead lets Node's own already-tested,
- * already-safely-escaping internal batch-file handling (the CVE-2024-27980
- * fix) take over automatically under `shell:false`.
+ * Runs without `shell:true` (never set it here): npm-installed CLI providers
+ * (opencode, codex, claude, …) are .cmd/.bat shims on Windows, but
+ * `shell:true` + an args array does NOT escape arguments — it just
+ * space-joins them (the literal DEP0190 warning) — so any arg or prompt
+ * content containing a space or a cmd.exe metacharacter would silently
+ * corrupt or be shell-injectable. The fix for #1865 instead resolves the
+ * bare command to its explicit-extension path (`resolveWindowsExecutable`)
+ * and, when that's a `.cmd`/`.bat` shim, spawns it via Node's own documented
+ * safe pattern — `cmd.exe /c <path> <args>` — instead of targeting it
+ * directly (`prepareWindowsSafeSpawn`; see its docstring for why a direct
+ * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
+ * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
 export async function executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   const toolkit = requireToolkit();
@@ -201,13 +202,12 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
-  // See the executeCliRun docblock above — resolve to the explicit-extension
-  // path on Windows (e.g. opencode.cmd) instead of enabling a shell, so a
-  // bare command name actually launches there without reopening the
-  // unescaped-argument injection surface DEP0190 warns about.
+  // See the executeCliRun docblock above for why this is a resolve+wrap, not
+  // a shell:true.
   const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+  const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
 
-  childProcess = spawn(resolvedCommand, args, {
+  childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: workspacePath,
     // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
     // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.

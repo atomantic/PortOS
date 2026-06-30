@@ -21,11 +21,11 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
 /**
  * Resolve a bare command name to its full path WITH extension on Windows, so
- * spawn() can target it directly under shell:false — the actual fix for
- * #1865 (a bare command never resolves on Windows even though typing it at a
- * real cmd.exe prompt works fine; see server/lib/bufferedSpawn.js's
- * `resolveWindowsExecutable` docstring for the full root-cause explanation,
- * mirrored here for self-containment). Filesystem-only (no subprocess).
+ * the caller knows exactly which file (and which kind — `.exe` vs
+ * `.cmd`/`.bat`) it's about to launch. Filesystem-only (no subprocess). See
+ * server/lib/bufferedSpawn.js's `resolveWindowsExecutable` docstring for the
+ * full root-cause explanation, mirrored here for self-containment. Pair with
+ * `prepareWindowsSafeSpawn` below to get a launchable `{ command, args }`.
  */
 function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
   if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
@@ -37,6 +37,27 @@ function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
     }
   }
   return null;
+}
+
+const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
+
+/**
+ * Return the `{ command, args }` pair that's actually safe to hand to
+ * `spawn()` under `shell:false` — THE ACTUAL FIX FOR #1865. `.bat`/`.cmd`
+ * files cannot be launched directly under `shell:false` even with the
+ * explicit extension (Node's CVE-2024-27980 patch makes `spawn()` refuse
+ * them outright, full stop — it does NOT safely auto-wrap them). Node's
+ * documented safe alternative is to spawn `cmd.exe /c <path> <args>`
+ * directly: `cmd.exe` is a normal `.exe`, so Node's existing, already-tested
+ * non-shell argv→command-line escaping governs the result, with none of
+ * `shell:true`'s DEP0190 unescaped-join hazard. Mirrors
+ * server/lib/bufferedSpawn.js's `prepareWindowsSafeSpawn` for self-containment.
+ */
+function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
+  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
+    return { command: 'cmd.exe', args: ['/c', command, ...args] };
+  }
+  return { command, args };
 }
 
 // On Windows, taskkill (used below) runs in a separate detached process that
@@ -346,13 +367,14 @@ export function createRunnerService(config = {}) {
       // user-configurable `provider.command` cannot inject extra commands via
       // shell metacharacters, and so the full prompt isn't visible in
       // process listings as a single command-line argument. On Windows,
-      // resolve to the explicit .cmd/.bat path instead of enabling a shell —
-      // see resolveWindowsExecutable above for why shell:true is unsafe here.
+      // resolve+wrap a .cmd/.bat target instead of enabling a shell — see
+      // prepareWindowsSafeSpawn above for why shell:true is unsafe here.
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 
       const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
-      const childProcess = spawn(resolvedCommand, args, {
+      const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+      const childProcess = spawn(spawnCommand, spawnArgs, {
         cwd: workspacePath,
         env: { ...process.env, ...provider.envVars },
         windowsHide: true
