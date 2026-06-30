@@ -244,7 +244,10 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
   const [refs, sources, relations, revisions, media, missingMedia] = await Promise.all([
-    catalogDB.listRefsForIngredient(req.params.id),
+    // Live refs only (#1812): the detail page's "Appears in" panel must not
+    // render a chip deep-linking to a soft-deleted universe/series/CD target.
+    // The orphan stays recoverable via the Catalog "Orphaned" album.
+    catalogDB.listLiveRefsForIngredient(req.params.id),
     catalogDB.listSourcesForIngredient(req.params.id),
     catalogDB.listRelationsForIngredient(req.params.id),
     catalogDB.listIngredientRevisions(req.params.id, { limit: 50 }),

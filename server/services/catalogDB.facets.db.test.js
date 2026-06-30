@@ -133,6 +133,32 @@ describe.skipIf(!dbReady)('catalogDB facets + album filters (#1762)', () => {
     expect(raw.items.map((i) => i.id)).not.toContain(orphan.id);
   });
 
+  it('classifies creative-director refs as homing: live → linked, soft-deleted → orphaned (#1812)', async () => {
+    const cdId = `cd-${nonce}`;
+    await query('INSERT INTO creative_director_projects (id, data) VALUES ($1, $2::jsonb)', [cdId, '{}']);
+    const cdLinked = await catalogDB.createIngredient({ type: 'object', name: `CDLinked ${nonce}` });
+    createdIngredientIds.add(cdLinked.id);
+    await catalogDB.linkIngredientToRef(cdLinked.id, 'creative-director', cdId, 'reference');
+
+    // While the CD project is live, the ingredient is LINKED — not unlinked (it
+    // has a homing ref) and not orphaned (the target resolves).
+    let unlinked = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    expect(unlinked.items.map((i) => i.id)).not.toContain(cdLinked.id);
+    let orphaned = await catalogDB.listIngredients({ orphaned: true, limit: 1000 });
+    expect(orphaned.items.map((i) => i.id)).not.toContain(cdLinked.id);
+
+    // Soft-delete the CD project → the ref dangles → the ingredient is ORPHANED
+    // (surfaces in the Orphaned album for re-linking), still not unlinked.
+    await query('UPDATE creative_director_projects SET deleted = TRUE, deleted_at = NOW() WHERE id = $1', [cdId]);
+    orphaned = await catalogDB.listIngredients({ orphaned: true, limit: 1000 });
+    expect(orphaned.items.map((i) => i.id)).toContain(cdLinked.id);
+    unlinked = await catalogDB.listIngredients({ unlinked: true, limit: 1000 });
+    expect(unlinked.items.map((i) => i.id)).not.toContain(cdLinked.id);
+
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [cdId]).catch(() => {});
+    await query('DELETE FROM creative_director_projects WHERE id = $1', [cdId]).catch(() => {});
+  });
+
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {
     const linked = await catalogDB.createIngredient({ type: 'character', name: `FacetLinked ${nonce}`, tags: [TAG] });
     const seriesLinked = await catalogDB.createIngredient({ type: 'character', name: `FacetSeries ${nonce}` });

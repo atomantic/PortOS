@@ -113,12 +113,18 @@ describe.skipIf(!dbReady)('catalog ref resolver — live resolution + dangling r
     expect(out).toMatchObject({ resolved: false, reason: 'missing-target' });
   });
 
-  it('a creative-director target resolves by row existence (hard-delete kind)', async () => {
+  it('a creative-director target resolves only while live (soft-delete kind, #1564)', async () => {
     await query(`INSERT INTO creative_director_projects (id, data) VALUES ('cd-rt-1', '{}'::jsonb)`);
     const [live] = await resolver.resolveRefs([{ refKind: 'creative-director', refId: 'cd-rt-1' }]);
     expect(live.resolved).toBe(true);
+    // An absent row never resolves…
     const [gone] = await resolver.resolveRefs([{ refKind: 'creative-director', refId: 'cd-rt-gone' }]);
     expect(gone.resolved).toBe(false);
+    // …and a SOFT-deleted CD project must not resolve either (the resolver's
+    // liveClause was stale `null` before #1812, wrongly treating CD as live).
+    await query(`UPDATE creative_director_projects SET deleted = TRUE, deleted_at = NOW() WHERE id = 'cd-rt-1'`);
+    const [softGone] = await resolver.resolveRefs([{ refKind: 'creative-director', refId: 'cd-rt-1' }]);
+    expect(softGone).toMatchObject({ resolved: false, reason: 'missing-target' });
   });
 
   it('listDanglingRefs reports only refs whose live target is missing', async () => {
