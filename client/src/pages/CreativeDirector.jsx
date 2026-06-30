@@ -90,6 +90,10 @@ export default function CreativeDirector() {
     navigate('.', { replace: true, state: {} });
   }, []);
 
+  // Drop any pending remix handoff so abandoned ingredient ids can't leak into
+  // a later, unrelated project created from this list page (#1808 review).
+  const clearRemix = () => { setRemixIds([]); setRemixIngredients([]); };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.modelId) {
@@ -119,8 +123,7 @@ export default function CreativeDirector() {
       // Land on the seeded project's overview when ingredients were remixed in
       // so the user sees the cast immediately; otherwise stay on the list.
       if (remixIds.length) {
-        setRemixIds([]);
-        setRemixIngredients([]);
+        clearRemix();
         navigate(`/media/creative-director/${created.id}/overview`);
       }
     } catch (err) {
@@ -192,7 +195,7 @@ export default function CreativeDirector() {
               Run smoke test
             </button>
             <button
-              onClick={() => setShowForm((s) => !s)}
+              onClick={() => { setShowForm((s) => !s); clearRemix(); }}
               className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
             >
               <Plus className="w-4 h-4" />
@@ -321,7 +324,7 @@ export default function CreativeDirector() {
             <button type="submit" className="bg-port-accent hover:bg-port-accent/80 text-white px-3 py-1.5 rounded text-sm">
               Create
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="bg-port-card border border-port-border px-3 py-1.5 rounded text-sm">
+            <button type="button" onClick={() => { setShowForm(false); clearRemix(); }} className="bg-port-card border border-port-border px-3 py-1.5 rounded text-sm">
               Cancel
             </button>
           </div>
