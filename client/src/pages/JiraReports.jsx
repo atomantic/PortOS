@@ -202,7 +202,7 @@ export default function JiraReports() {
           <button
             onClick={() => handleGenerate(filterAppId || null)}
             disabled={generating}
-            className="flex items-center gap-1.5 bg-port-accent hover:bg-blue-600 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
+            className="flex items-center gap-1.5 bg-port-accent hover:bg-port-accent/80 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
           >
             {generating ? <BrailleSpinner /> : <RefreshCw size={14} />}
             {generating ? 'Generating...' : 'Generate Report'}
