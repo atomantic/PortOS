@@ -4,8 +4,10 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import useChartColors from '../../hooks/useChartColors.js';
 
 export default function BodyCompChart() {
+  const chartColors = useChartColors();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -69,22 +71,22 @@ export default function BodyCompChart() {
       </h3>
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
           <XAxis
             dataKey="label"
-            tick={{ fill: '#6b7280', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             interval={Math.max(0, Math.floor(data.length / 12))}
           />
           <YAxis
             yAxisId="weight"
-            tick={{ fill: '#6b7280', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             domain={['dataMin - 5', 'dataMax + 5']}
           />
           {hasBodyFat && (
             <YAxis
               yAxisId="pct"
               orientation="right"
-              tick={{ fill: '#6b7280', fontSize: 11 }}
+              tick={{ fill: chartColors.axis, fontSize: 11 }}
               domain={[0, 50]}
             />
           )}
@@ -95,7 +97,7 @@ export default function BodyCompChart() {
             type="monotone"
             dataKey="weight"
             name="Weight (lbs)"
-            stroke="#3b82f6"
+            stroke={chartColors.accent}
             dot={false}
             strokeWidth={2}
             connectNulls
@@ -106,7 +108,7 @@ export default function BodyCompChart() {
               type="monotone"
               dataKey="fatPct"
               name="Body Fat %"
-              stroke="#ef4444"
+              stroke={chartColors.error}
               dot={false}
               strokeWidth={2}
               connectNulls
