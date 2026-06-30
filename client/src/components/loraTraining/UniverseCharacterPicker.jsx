@@ -35,7 +35,7 @@ export default function UniverseCharacterPicker({
 
   useEffect(() => {
     listUniverses().then((list) => setUniverses(Array.isArray(list) ? list : []))
-      .catch(() => setUniverses([]));
+      .catch(err => { console.warn('⚠️ Failed to load universes: ' + err.message); setUniverses([]); });
   }, []);
 
   useEffect(() => {
@@ -44,7 +44,7 @@ export default function UniverseCharacterPicker({
     setEntries(null);
     getUniverse(universeId, { silent: true })
       .then((u) => setUniverse(u || {}))
-      .catch(() => setUniverse({}));
+      .catch(err => { console.warn('⚠️ Failed to load universe: ' + err.message); setUniverse({}); });
   }, [universeId]);
 
   useEffect(() => {

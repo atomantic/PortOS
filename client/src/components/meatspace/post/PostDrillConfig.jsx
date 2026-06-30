@@ -114,7 +114,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(() => {});
+    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
   }, []);
 
   function toggleDrill(type) {

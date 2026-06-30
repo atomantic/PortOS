@@ -51,7 +51,7 @@ export default function MemoryPractice({ item, onBack }) {
     if (mode === 'spaced') {
       getChunkMastery(item.id).then(data => {
         setChunkMastery(data || []);
-      }).catch(() => setChunkMastery([]));
+      }).catch(err => { console.warn('⚠️ Failed to load chunk mastery: ' + err.message); setChunkMastery([]); });
     }
   }, [mode, item.id]);
 
