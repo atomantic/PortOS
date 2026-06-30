@@ -64,7 +64,7 @@ export default function LiveSampleGallery({ run, frames, progress, message }) {
     if (!run?.id) return;
     listLoraTrainingSamples(run.id)
       .then((res) => { if (mountedRef.current) setSeed(Array.isArray(res?.samples) ? res.samples : []); })
-      .catch(() => {});
+      .catch(err => console.warn('⚠️ Failed to load training samples: ' + err.message));
   }, [run?.id]);
 
   // Merge seed + live frames into a step-sorted, dedup'd sample list.

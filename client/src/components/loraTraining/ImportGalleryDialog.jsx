@@ -37,7 +37,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           .filter((it) => !it.hidden && it.filename);
         setItems(normalized);
       })
-      .catch(() => { if (!cancelled) setItems([]); })
+      .catch(err => { console.warn('⚠️ Failed to load gallery images: ' + err.message); if (!cancelled) setItems([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);

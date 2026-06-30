@@ -629,7 +629,7 @@ app.post('/run', async (req, res) => {
     if (!existsSync(runDir)) {
       await ensureDir(runDir);
     }
-    await writeFile(join(runDir, 'output.txt'), output).catch(() => {});
+    await writeFile(join(runDir, 'output.txt'), output).catch(err => console.error(`❌ Run ${runId} failed to persist output.txt: ${err.message}`));
 
     // Persist completion status to disk BEFORE emitting event
     // This ensures recovery is possible even if the socket event is lost
@@ -643,7 +643,7 @@ app.post('/run', async (req, res) => {
       duration,
       outputSize: Buffer.byteLength(output)
     };
-    await writeFile(metadataPath, JSON.stringify(updatedMetadata, null, 2)).catch(() => {});
+    await writeFile(metadataPath, JSON.stringify(updatedMetadata, null, 2)).catch(err => console.error(`❌ Run ${runId} failed to persist completion metadata: ${err.message}`));
 
     // Emit completion event
     emitToServer('run:complete', {
