@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -275,6 +275,28 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
     return {
       command: provider?.command || 'agy',
       args,
+      stdinMode: 'prompt'
+    };
+  }
+
+  // OpenCode CLI (`opencode run`): headless agent invocation for a local Ollama
+  // model. `opencode run` reads the prompt from stdin and auto-approves tools via
+  // the `permission: "allow"` baked into OPENCODE_CONFIG_CONTENT (the equivalent
+  // of claude's `--dangerously-skip-permissions` / codex's bypass — appropriate
+  // for PortOS's single-user trusted box). The model is namespaced `ollama/<id>`
+  // (prefixOpencodeModel). OpenCode emits plain text (no stream-json), so the
+  // live-output handler falls through to its default text path.
+  if (isOpencodeCommand(provider?.command)) {
+    const baseArgs = provider?.args?.includes('run') ? [...provider.args] : ['run', ...(provider?.args || [])];
+    const model = prefixOpencodeModel(provider, effectiveModel);
+    // Respect a user-baked -m/--model pin (mirrors buildCliArgs) rather than
+    // duplicating the flag — opencode takes the last, silently overriding it.
+    if (model && !hasModelFlag(baseArgs)) {
+      baseArgs.push('-m', model);
+    }
+    return {
+      command: provider.command,
+      args: baseArgs,
       stdinMode: 'prompt'
     };
   }

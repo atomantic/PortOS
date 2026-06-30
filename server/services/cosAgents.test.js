@@ -19,8 +19,14 @@ vi.mock('./cosState.js', () => ({
   withStateLock: async (fn) => fn()
 }));
 
-import { getAgent, createAgentOutputBatcher } from './cosAgents.js';
+vi.mock('./domainUsage.js', () => ({
+  recordDomainUsage: vi.fn(async () => {})
+}));
+
+import { getAgent, createAgentOutputBatcher, completeAgent } from './cosAgents.js';
 import { saveState } from './cosState.js';
+import { recordDomainUsage } from './domainUsage.js';
+import { cosEvents } from './cosEvents.js';
 
 describe('cosAgents', () => {
   beforeEach(async () => {
@@ -53,6 +59,81 @@ describe('cosAgents', () => {
       { line: 'full line one', timestamp: pausedAt },
       { line: 'full line two', timestamp: pausedAt }
     ]);
+  });
+});
+
+describe('completeAgent budget-ledger ordering (#1683)', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    mockCosState.state = { agents: {}, stats: { tasksCompleted: 0, errors: 0 } };
+    recordDomainUsage.mockClear();
+  });
+
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    cosEvents.removeAllListeners('agent:completed');
+  });
+
+  it('records the autonomous action usage BEFORE emitting agent:completed', async () => {
+    // The agent:completed handler schedules dequeueNextTask(), whose daily
+    // action-budget gate reads the usage ledger. If the emit beats the ledger
+    // write, the gate counts stale usage and can admit one spawn past the cap.
+    const order = [];
+    recordDomainUsage.mockImplementation(async () => { order.push('usage'); });
+    cosEvents.on('agent:completed', () => { order.push('completed'); });
+
+    const agentId = 'agent-autonomous';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' }
+    };
+
+    await completeAgent(agentId, { success: true, duration: 1200 });
+
+    expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1, ms: 1200 });
+    expect(order).toEqual(['usage', 'completed']);
+  });
+
+  it('still emits agent:completed when the usage-ledger write rejects', async () => {
+    // recordDomainUsage is .catch-guarded, so a ledger-write failure must not
+    // swallow the completion event — the scheduler still needs to advance.
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    recordDomainUsage.mockRejectedValueOnce(new Error('ledger disk full'));
+
+    const agentId = 'agent-ledger-fail';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' }
+    };
+    let emitted = false;
+    cosEvents.on('agent:completed', () => { emitted = true; });
+
+    await completeAgent(agentId, { success: true, duration: 500 });
+
+    expect(emitted).toBe(true);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to record CoS budget usage for ${agentId}`)
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('skips usage accounting for user tasks but still emits agent:completed', async () => {
+    const agentId = 'agent-user';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'user' }
+    };
+    let emitted = false;
+    cosEvents.on('agent:completed', () => { emitted = true; });
+
+    await completeAgent(agentId, { success: true });
+
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+    expect(emitted).toBe(true);
   });
 });
 

@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import {
@@ -20,8 +20,12 @@ import {
   addMoodBoardItem,
   updateMoodBoardItem,
   removeMoodBoardItem,
+  linkMoodBoardPinterest,
+  unlinkMoodBoardPinterest,
+  syncMoodBoardPinterest,
 } from '../services/api';
 import { moodBoardItemSrc } from '../lib/moodBoardItemSrc';
+import { timeAgo } from '../utils/formatters';
 
 export default function MoodBoardDetail() {
   const { id } = useParams();
@@ -41,6 +45,12 @@ export default function MoodBoardDetail() {
   const [source, setSource] = useState('');
   const [adding, setAdding] = useState(false);
 
+  // Pinterest link/sync.
+  const [pinUrl, setPinUrl] = useState('');
+  const [linking, setLinking] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [confirmingUnlink, setConfirmingUnlink] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const data = await getMoodBoard(id, { silent: true }).catch(() => null);
@@ -48,6 +58,7 @@ export default function MoodBoardDetail() {
       setBoard(data);
       setName(data.name || '');
       setDescription(data.description || '');
+      setPinUrl(data.pinterest?.boardUrl || '');
     } else {
       toast.error('Mood board not found');
     }
@@ -104,6 +115,36 @@ export default function MoodBoardDetail() {
     setBoard((prev) => (prev ? { ...prev, items: (prev.items || []).filter((it) => it.id !== itemId) } : prev));
   };
 
+  const handleLinkPinterest = async () => {
+    if (!pinUrl.trim()) { toast.error('Enter a Pinterest board URL'); return; }
+    setLinking(true);
+    const updated = await linkMoodBoardPinterest(id, pinUrl.trim(), { silent: true }).catch(() => null);
+    setLinking(false);
+    if (!updated) { toast.error('Could not link that Pinterest URL — is it a public board?'); return; }
+    setBoard(updated);
+    setPinUrl(updated.pinterest?.boardUrl || pinUrl.trim());
+    toast.success('Pinterest board linked');
+  };
+
+  const handleUnlinkPinterest = async () => {
+    setConfirmingUnlink(false);
+    const updated = await unlinkMoodBoardPinterest(id, { silent: true }).catch(() => null);
+    if (!updated) { toast.error('Failed to unlink'); return; }
+    setBoard(updated);
+    setPinUrl('');
+  };
+
+  const handleSyncPinterest = async () => {
+    setSyncing(true);
+    const result = await syncMoodBoardPinterest(id, { silent: true }).catch(() => null);
+    setSyncing(false);
+    if (!result?.board) { toast.error('Pinterest sync failed — the feed may be private or rate-limited'); return; }
+    setBoard(result.board);
+    toast.success(result.added > 0
+      ? `Added ${result.added} new pin${result.added === 1 ? '' : 's'}`
+      : 'Up to date — no new pins');
+  };
+
   if (loading) {
     return <div className="text-gray-400 text-sm py-8 text-center">Loading…</div>;
   }
@@ -117,6 +158,42 @@ export default function MoodBoardDetail() {
   }
 
   const items = Array.isArray(board.items) ? board.items : [];
+  const linkedFeedUrl = board.pinterest?.feedUrl || '';
+  const linkedBoardUrl = board.pinterest?.boardUrl || '';
+  const lastSyncedAt = board.pinterest?.lastSyncedAt || null;
+  // "Sync now" reads the SAVED feed URL server-side, so disable it while the URL
+  // input differs from what's persisted — otherwise a user edits the URL, doesn't
+  // click Link, hits Sync, and the OLD board syncs.
+  const pinDirty = pinUrl.trim() !== linkedBoardUrl;
+  const isLinked = !!linkedFeedUrl;
+
+  // The board-URL input is identical whether linking fresh or re-pointing an
+  // already-linked board — only the label/button text and (for a re-link) the
+  // dirty gate differ.
+  const renderPinUrlForm = (label, buttonText) => (
+    <div>
+      <label htmlFor="pinterest-url" className="block text-xs text-gray-400 mb-1">{label}</label>
+      <div className="flex gap-2">
+        <input
+          id="pinterest-url"
+          type="text"
+          value={pinUrl}
+          maxLength={2048}
+          placeholder="https://www.pinterest.com/user/board/"
+          onChange={(e) => setPinUrl(e.target.value)}
+          className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+        />
+        <button
+          type="button"
+          onClick={handleLinkPinterest}
+          disabled={linking || !pinUrl.trim() || (isLinked && !pinDirty)}
+          className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+        >
+          {linking ? 'Linking…' : buttonText}
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -164,6 +241,70 @@ export default function MoodBoardDetail() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Pinterest link + sync */}
+      <div className="bg-port-card border border-port-border rounded-md p-4 mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <Link2 className="w-4 h-4 text-port-accent" aria-hidden="true" />
+          <h2 className="text-sm font-medium text-white">Pinterest board</h2>
+        </div>
+        {linkedFeedUrl ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <a
+                href={linkedBoardUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-port-accent hover:underline truncate max-w-full"
+              >
+                {linkedBoardUrl}
+              </a>
+              <span className="text-gray-500">
+                {lastSyncedAt ? `Last synced ${timeAgo(lastSyncedAt)}` : 'Not synced yet'}
+              </span>
+            </div>
+            <p className="text-[11px] text-gray-500">
+              Pinterest’s feed exposes only the most-recent ~25 pins, so a sync pulls those — not the entire board.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSyncPinterest}
+                disabled={syncing || linking || pinDirty}
+                title={pinDirty ? 'Link the new URL before syncing' : undefined}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                {syncing ? 'Syncing…' : 'Sync now'}
+              </button>
+              {confirmingUnlink ? (
+                <InlineConfirmRow
+                  question="Unlink this board?"
+                  confirmText="Unlink"
+                  onConfirm={handleUnlinkPinterest}
+                  onCancel={() => setConfirmingUnlink(false)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingUnlink(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+                >
+                  <Unlink className="w-4 h-4" aria-hidden="true" /> Unlink
+                </button>
+              )}
+            </div>
+            {renderPinUrlForm('Change board URL', 'Update')}
+          </div>
+        ) : (
+          <div>
+            {renderPinUrlForm('Board URL', 'Link')}
+            <p className="text-[11px] text-gray-500 mt-2">
+              Paste a public Pinterest board URL. “Sync now” downloads its pins (newest ~25) into this board.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Add item */}

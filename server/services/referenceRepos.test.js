@@ -45,7 +45,7 @@ const addTaskMock = vi.fn(async (task) => task);
 vi.mock('./cos.js', () => ({
   addTask: (...args) => addTaskMock(...args),
 }));
-const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}');
+const getTaskPromptMock = vi.fn(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}\nTRACKER: {trackerInstructions}');
 vi.mock('./taskPromptService.js', () => ({
   getTaskPrompt: (...args) => getTaskPromptMock(...args),
 }));
@@ -70,7 +70,7 @@ beforeEach(async () => {
   addTaskMock.mockReset();
   addTaskMock.mockImplementation(async (task) => task);
   getTaskPromptMock.mockReset();
-  getTaskPromptMock.mockImplementation(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}');
+  getTaskPromptMock.mockImplementation(async () => 'Analyze {appName} at {repoPath} for {appId} reviewer={reviewers}\n{referenceData}\n{planConstraint}\nTRACKER: {trackerInstructions}');
   existsMock.mockReset();
   existsMock.mockReturnValue(false);
   svc = await import('./referenceRepos.js');
@@ -395,11 +395,35 @@ describe('triggerReferenceAnalysis', () => {
     // Task type markers
     expect(addTaskMock.mock.calls[0][1]).toBe('internal');
     expect(addTaskMock.mock.calls[0][2]).toEqual({ raw: true });
-    // readOnly must be false: the v2 reference-watch prompt appends slug-tagged
-    // [ref-watch-…] items to PLAN.md and commits them. readOnly:true would inject
-    // the "## Read-Only Task" guard into the system prompt and the agent would
-    // refuse to write the PLAN entries — defeating the whole flow.
+    // readOnly must be false: the v3 reference-watch prompt records proposals in
+    // the resolved tracker (PLAN.md commit, or gh/glab issue create). readOnly:true
+    // would inject the "## Read-Only Task" guard into the system prompt and the
+    // agent would refuse to write — defeating the whole flow.
     expect(taskArg.metadata.readOnly).toBe(false);
+    // With no configured tracker and no resolvable git origin (execGit mock
+    // returns empty stdout), the work tracker degrades to PLAN.md and the
+    // {trackerInstructions} block reflects that.
+    expect(taskArg.metadata.workTracker).toBe('plan');
+    expect(taskArg.metadata.context).toContain('PLAN.md');
+  });
+
+  it('injects the GitHub-issue tracker instructions when the app is configured for github', async () => {
+    const ghApp = { ...app, workTracker: 'github' };
+    const result = await svc.triggerReferenceAnalysis(ghApp, ref, snapshot);
+    expect(result.queued).toBe(true);
+    const taskArg = addTaskMock.mock.calls[0][0];
+    expect(taskArg.metadata.workTracker).toBe('github');
+    // The injected block drives `gh issue create`, not a PLAN.md append.
+    expect(taskArg.metadata.context).toContain('gh issue create');
+    expect(taskArg.metadata.context).toContain('GitHub Issues');
+  });
+
+  it('exposes formatTrackerInstructions and falls back to PLAN.md for an unknown tracker', () => {
+    expect(svc.formatTrackerInstructions('github')).toContain('gh issue create');
+    expect(svc.formatTrackerInstructions('gitlab')).toContain('glab issue create');
+    expect(svc.formatTrackerInstructions('jira')).toContain('JIRA');
+    expect(svc.formatTrackerInstructions('plan')).toContain('PLAN.md');
+    expect(svc.formatTrackerInstructions('nonsense')).toContain('PLAN.md');
   });
 
   it('returns duplicate when addTask signals a duplicate', async () => {

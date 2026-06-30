@@ -87,11 +87,26 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # trainer dies with a bare "exited with code 2" — see train_mflux_lora.py.
   #
   echo "📦 Installing image generation packages (mflux + deps)..."
+  # VALIDATED TRIO (issue #1329) — pin the MLX/Metal backend, do NOT leave it a
+  # floor. The original three M5 Max GPU-watchdog kernel panics
+  # (docs/research/2026-06-13-mflux-training-watchdog-panic.md) happened on
+  # mlx/mlx-metal 0.30.6. A `>=` floor lets pip resolve mlx silently under
+  # mflux's `mlx<0.32` cap, so the stack can drift back onto a known-bad build.
+  # The surviving trio is mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2:
+  # run d36562a0 (flux2-klein-4b, bf16, 768px) completed a full LoRA training to
+  # adapter extraction on this stack on the panicking M5 Max (Mac17,7/T6050,
+  # macOS 26.5.1) with no panic — see the bisect log in the incident doc.
+  # (mflux's `dev` extra itself pins mlx==0.31.0, so 0.31.2 is in-range and
+  # closer to what mflux develops against than the old 0.30.6.) Bump these only
+  # after re-validating with another full run on the M5; record the proving run.
+  MFLUX_PIN='mflux==0.17.5'
+  MLX_PIN='mlx==0.31.2'
+  MLX_METAL_PIN='mlx-metal==0.31.2'
   # Step 1: force-reinstall mflux's OWN files with --no-deps to flush a stale
   # file layout left by a partial reinstall (we hit this on 0.12.1, where
   # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
   # WITHOUT re-downloading the heavy torch/mlx tree.
-  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps 'mflux>=0.17'
+  "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN"
   # Step 2: let pip install mflux's DECLARED runtime deps — pip is the source
   # of truth, not a hand-kept list. mflux 0.17 imports packages the 0.12.x set
   # omitted (pillow, matplotlib, platformdirs, sentencepiece, piexif, …) and
@@ -100,7 +115,9 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # No --no-deps (so missing deps ARE pulled) and no --upgrade (so an
   # already-satisfied heavyweight like torch isn't re-resolved/re-downloaded on
   # repeat runs); a dep that violates mflux's constraints is still corrected.
-  "$PYTHON_BIN" -m pip install --user 'mflux>=0.17'
+  # The explicit mlx/mlx-metal pins ride alongside mflux so pip resolves the
+  # proven backend rather than the latest in-range build.
+  "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
 fi
 
 if [[ "$INSTALL_VIDEO" == "1" ]]; then

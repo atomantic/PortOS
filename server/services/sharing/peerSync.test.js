@@ -118,6 +118,12 @@ vi.mock('../tracks/index.js', async () => ({
   }),
 }));
 
+vi.mock('../musicVideo/projects.js', async () => ({
+  getProject: vi.fn(),
+  listProjects: vi.fn(),
+  mergeProjectsFromSync: vi.fn(),
+}));
+
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
   peerSocketOptions: {},
@@ -187,6 +193,11 @@ import {
 import { getArtist, listArtists, mergeArtistsFromSync } from '../artists/index.js';
 import { getAlbum, listAlbums, mergeAlbumsFromSync } from '../albums/index.js';
 import { getTrack, listTracks, mergeTracksFromSync } from '../tracks/index.js';
+import {
+  getProject as getMusicVideoProject,
+  listProjects as listMusicVideoProjects,
+  mergeProjectsFromSync as mergeMusicVideoProjectsFromSync,
+} from '../musicVideo/projects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
@@ -284,6 +295,9 @@ beforeEach(async () => {
   vi.mocked(getTrack).mockReset().mockResolvedValue(null);
   vi.mocked(listTracks).mockReset().mockResolvedValue([]);
   vi.mocked(mergeTracksFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(getMusicVideoProject).mockReset().mockResolvedValue(null);
+  vi.mocked(listMusicVideoProjects).mockReset().mockResolvedValue([]);
+  vi.mocked(mergeMusicVideoProjectsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
@@ -330,7 +344,7 @@ describe('peerSync', () => {
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']);
     });
   });
 
@@ -2275,6 +2289,116 @@ describe('peerSync', () => {
       expect(captured[1].assetManifest).toEqual([expect.objectContaining({ kind: 'image', filename: 'album.png' })]);
       expect(captured[2].assetManifest).toEqual([expect.objectContaining({ kind: 'music', filename: 'song.mp3' })]);
     });
+
+    // --- Music Video project media federation (#1772) ---
+    const enableMusicVideoPeer = () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { musicVideoProjects: true },
+      }]);
+    };
+
+    it('bundles uploaded audio + rendered scene clips + reference-frame stills for a music video project push', async () => {
+      // #1772: the project record federated but shipped an empty manifest, so a
+      // selectively-subscribed peer never received the referenced media. Audio
+      // rides as a `music` entry (PATHS.music); each scene's videoHistoryId
+      // resolves through video-history.json to its `<filename>` under PATHS.videos;
+      // each scene's referenceImageId (#1760 Phase 1b) rides as a sidecar-aware
+      // `image` entry (a gallery basename under PATHS.images).
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await mkdir(PATHS.images, { recursive: true });
+      await writeFile(join(PATHS.music, 'mv-song.mp3'), Buffer.from('audio bytes'));
+      await writeFile(join(PATHS.videos, 'scene-one.mp4'), Buffer.from('clip one'));
+      await writeFile(join(PATHS.videos, 'scene-two.webm'), Buffer.from('clip two'));
+      await writeFile(join(PATHS.images, 'ref-x.png'), Buffer.from('frame bytes'));
+      // video-history.json maps each videoHistoryId → its on-disk basename.
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([
+        { id: 'vh-1', filename: 'scene-one.mp4' },
+        { id: 'vh-2', filename: 'scene-two.webm' },
+      ]));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-1', name: 'My Video', mode: 'director', trackId: null,
+        uploadedAudioFilename: 'mv-song.mp3',
+        scenes: [
+          { sceneId: 's-1', order: 0, videoHistoryId: 'vh-1', referenceImageId: 'ref-x.png' },
+          { sceneId: 's-2', order: 1, videoHistoryId: 'vh-2', referenceImageId: null },
+          { sceneId: 's-3', order: 2, videoHistoryId: null, referenceImageId: null },
+        ],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-1',
+      });
+      expect(captured.kind).toBe('musicVideoProject');
+      expect(captured.record.id).toBe('mv-1');
+      const byKind = (k) => captured.assetManifest.filter(a => a.kind === k).map(a => a.filename).sort();
+      expect(byKind('music')).toEqual(['mv-song.mp3']);
+      expect(byKind('video')).toEqual(['scene-one.mp4', 'scene-two.webm']);
+      // referenceImageId (Phase 1b) now ships as a gallery `image` asset so the
+      // peer renders the thumbnail instead of a dangling /data/images/ reference.
+      expect(byKind('image')).toEqual(['ref-x.png']);
+    });
+
+    it('falls back to the <id>.mp4 convention when a scene clip has no video-history row', async () => {
+      // The metadata row may not have synced yet; the bare-id + .mp4 convention
+      // (collectionVideoRefToFilename) still resolves the bytes. A wrong guess is
+      // harmless — a missing file is skipped, never shipped.
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      await writeFile(join(PATHS.videos, 'vh-orphan.mp4'), Buffer.from('orphan clip'));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-2', name: 'No Rows', mode: 'director', trackId: null,
+        uploadedAudioFilename: null,
+        scenes: [{ sceneId: 's-1', order: 0, videoHistoryId: 'vh-orphan', referenceImageId: null }],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv2', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-2',
+      });
+      expect(captured.assetManifest).toEqual([expect.objectContaining({ kind: 'video', filename: 'vh-orphan.mp4' })]);
+    });
+
+    it('ships an empty asset manifest for a tombstone music video project push', async () => {
+      enableMusicVideoPeer();
+      PATHS.videos = join(tmp, 'videos');
+      await mkdir(PATHS.videos, { recursive: true });
+      // Real files on disk would otherwise hash in — the deleted gate must skip
+      // the manifest builder entirely.
+      await writeFile(join(PATHS.music, 'doomed.mp3'), Buffer.from('bytes'));
+      await writeFile(join(PATHS.videos, 'doomed.mp4'), Buffer.from('bytes'));
+      await writeFile(join(tmp, 'video-history.json'), JSON.stringify([{ id: 'vh-d', filename: 'doomed.mp4' }]));
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-tomb', name: 'Doomed', mode: 'director', trackId: null,
+        uploadedAudioFilename: 'doomed.mp3',
+        scenes: [{ sceneId: 's-1', order: 0, videoHistoryId: 'vh-d', referenceImageId: null }],
+        updatedAt: '2026-06-28T03:00:00Z', deleted: true, deletedAt: '2026-06-28T03:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mvt', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-tomb',
+      });
+      expect(captured.record.id).toBe('mv-tomb');
+      expect(captured.record.deleted).toBe(true);
+      expect(captured.assetManifest).toEqual([]);
+    });
   });
 
   describe('collectSubscriptionsForUpdate', () => {
@@ -3136,6 +3260,28 @@ describe('peerSync', () => {
         for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {
           if (NON_RECORD_SCHEMA_CATEGORIES.has(key)) continue;
           expect(covered.has(key)).toBe(true);
+        }
+      });
+
+      it('keeps the Tribe graph + universe render-runs intentionally OUT of the sync graph (#1724)', () => {
+        // ADR 2026-06-26: tribe_* and universe_runs are deliberately machine-local.
+        // - Tribe is relationship-graph data (mirrors the deliberate "memory_links
+        //   are instance-local" policy in memorySync.js) and is coupled to
+        //   machine-local calendar-account refs on touchpoints.
+        // - universe_runs is a regenerable render cache under a 200-row GLOBAL cap
+        //   that two producers would mutually evict; the durable universe record
+        //   already federates.
+        // This guard pins that decision: federating either later is a conscious act
+        // — wire the kind AND update this assertion + the ADR together.
+        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'universeRun'];
+        for (const kind of localOnlyKinds) {
+          expect(PEER_SUBSCRIBABLE_KINDS).not.toContain(kind);
+          expect(RECORD_KIND_SCHEMA_CATEGORIES[kind]).toBeUndefined();
+        }
+        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'universeRuns'];
+        for (const category of localOnlyCategories) {
+          expect(PORTOS_SCHEMA_VERSIONS[category]).toBeUndefined();
+          expect(NON_RECORD_SCHEMA_CATEGORIES.has(category)).toBe(false);
         }
       });
     });

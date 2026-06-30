@@ -21,7 +21,11 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
  * @param {function} emit - Callback (step, status, message) for progress
  * @returns {Promise<{success: boolean, version?: string, failedStep?: string, errorMessage?: string}>}
  */
-export async function executeUpdate(tag, emit) {
+// Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
+// passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
+const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+
+export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
   const args = isWindows
@@ -30,11 +34,24 @@ export async function executeUpdate(tag, emit) {
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
+  // For a reconcile (issue #1779), a bare `git pull` left stale node_modules
+  // even though HEAD already advanced — so the scripts' commit-diff dependency
+  // detection finds nothing to reinstall. Pass the workspaces whose deps are
+  // actually stale (per installState's receipt check) so update.sh/update.ps1
+  // force a from-scratch reinstall of exactly those, regardless of the diff.
+  const cleanList = Array.isArray(forceCleanWorkspaces)
+    ? forceCleanWorkspaces.filter(w => CLEANABLE_WORKSPACES.has(w))
+    : [];
+  const childEnv = cleanList.length
+    ? { ...process.env, PORTOS_FORCE_CLEAN_WORKSPACES: cleanList.join(',') }
+    : process.env;
+
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: PATHS.root
+      cwd: PATHS.root,
+      env: childEnv
     });
 
     let lastStep = 'starting';

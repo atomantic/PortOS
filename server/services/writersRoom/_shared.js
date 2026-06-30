@@ -24,6 +24,14 @@ export const assertValidWorkId = (workId) => {
 
 export const DRAFT_ID_RE = /^wr-draft-[0-9a-f-]+$/i;
 
+// Folder + exercise ids (`wr-folder-<uuid>` / `wr-ex-<uuid>`). Unlike works they
+// are NOT interpolated into a filesystem path (their records live in a shared
+// folders.json/exercises.json file or a single DB row), so these guard the
+// federation sanitizers against a malformed/junk peer-supplied id rather than a
+// path traversal — a record without a usable id is dropped before merge/persist.
+export const FOLDER_ID_RE = /^wr-folder-[0-9a-f-]+$/i;
+export const EXERCISE_ID_RE = /^wr-ex-[0-9a-f-]+$/i;
+
 // On-disk path helpers. Resolved lazily (functions, not consts) so tests can
 // swap PATHS.data via vi.mock without the module-load snapshot freezing them at
 // import time. The DRAFT .md bodies live under works/<id>/drafts/ regardless of

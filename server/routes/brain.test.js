@@ -13,6 +13,7 @@ vi.mock('../services/brain.js', () => ({
   resolveReview: vi.fn(),
   fixClassification: vi.fn(),
   retryClassification: vi.fn(),
+  markInboxSentToCatalog: vi.fn(),
   // People
   getPeople: vi.fn(),
   getPersonById: vi.fn(),
@@ -173,7 +174,7 @@ describe('Brain Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.inboxLog.id).toBe('inbox-001');
-      expect(brainService.captureThought).toHaveBeenCalledWith('Test thought', undefined, undefined);
+      expect(brainService.captureThought).toHaveBeenCalledWith('Test thought', undefined, undefined, { creative: undefined });
     });
 
     it('should return 400 if text is missing', async () => {
@@ -191,7 +192,17 @@ describe('Brain Routes', () => {
         .post('/api/brain/capture')
         .send({ text: 'Test', providerOverride: 'openai', modelOverride: 'gpt-4' });
 
-      expect(brainService.captureThought).toHaveBeenCalledWith('Test', 'openai', 'gpt-4');
+      expect(brainService.captureThought).toHaveBeenCalledWith('Test', 'openai', 'gpt-4', { creative: undefined });
+    });
+
+    it('should forward the creative flag when set', async () => {
+      brainService.captureThought.mockResolvedValue({ inboxLog: { id: 'inbox-003' } });
+
+      await request(app)
+        .post('/api/brain/capture')
+        .send({ text: 'a sentient city', creative: true });
+
+      expect(brainService.captureThought).toHaveBeenCalledWith('a sentient city', undefined, undefined, { creative: true });
     });
   });
 
@@ -323,6 +334,44 @@ describe('Brain Routes', () => {
 
       expect(response.status).toBe(200);
       expect(brainService.retryClassification).toHaveBeenCalledWith('inbox-001', undefined, undefined);
+    });
+  });
+
+  describe('POST /api/brain/inbox/sent-to-catalog', () => {
+    const id1 = '11111111-1111-4111-8111-111111111111';
+    const id2 = '22222222-2222-4222-8222-222222222222';
+
+    it('stamps the given creative notes consumed and returns the count', async () => {
+      brainService.markInboxSentToCatalog.mockResolvedValue([
+        { id: id1, sentToCatalogAt: 'x' },
+        { id: id2, sentToCatalogAt: 'x' }
+      ]);
+
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: [id1, id2] });
+
+      expect(response.status).toBe(200);
+      expect(response.body.count).toBe(2);
+      expect(brainService.markInboxSentToCatalog).toHaveBeenCalledWith([id1, id2]);
+    });
+
+    it('rejects an empty id list', async () => {
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: [] });
+
+      expect(response.status).toBe(400);
+      expect(brainService.markInboxSentToCatalog).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-guid ids', async () => {
+      const response = await request(app)
+        .post('/api/brain/inbox/sent-to-catalog')
+        .send({ ids: ['_pending_1'] });
+
+      expect(response.status).toBe(400);
+      expect(brainService.markInboxSentToCatalog).not.toHaveBeenCalled();
     });
   });
 

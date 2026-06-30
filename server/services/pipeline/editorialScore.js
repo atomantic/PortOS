@@ -24,6 +24,7 @@ import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getReview } from './manuscriptReview.js';
+import { DEFAULT_SEVERITY_WEIGHTS } from '../../lib/editorial/severityConfig.js';
 
 // Storage-layout version for the trend ledger. Bump + migrate if the snapshot
 // shape changes in a way older peers can't read. (Trend snapshots are local
@@ -36,7 +37,11 @@ const SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 // per OPEN finding: a `high` finding costs as much as a dozen `low` nits. These
 // are the published formula — surfaced in the API + UI so the score is never a
 // black box. Accepted (fixed) and dismissed (waived) findings cost nothing.
-export const SEVERITY_WEIGHTS = Object.freeze({ high: 12, medium: 5, low: 1 });
+// The canonical default lives in `server/lib/editorial/severityConfig.js`
+// (#1616); re-exported here so existing consumers keep working. A SERIES may
+// override these weights — `computeHealth`/`getSeriesHealth` accept a resolved
+// `weights` opt (via `mergeSeverityWeights`) and fall back to this default.
+export const SEVERITY_WEIGHTS = DEFAULT_SEVERITY_WEIGHTS;
 
 // Readiness gates — the convergence signal the autopilot + UI read as "clean".
 // `noOpenHigh` (default) is the manuscript-not-clean threshold; the stricter
@@ -90,10 +95,18 @@ export function isReadyUnderGate(openBySeverity, gate) {
 }
 
 // The weighted health score for a list of OPEN findings: 100 minus the summed
-// severity penalty, clamped to 0..100. Pure + deterministic.
-export function scoreFromOpen(openBySeverity) {
+// severity penalty, clamped to 0..100. Pure + deterministic. `weights` defaults
+// to SEVERITY_WEIGHTS; a SERIES override (resolved via mergeSeverityWeights)
+// re-weights the penalty so the same finding mix can score differently per
+// series. A missing per-severity weight falls back to the default (defensive
+// against a partial weights object).
+export function scoreFromOpen(openBySeverity, weights = SEVERITY_WEIGHTS) {
   const counts = openBySeverity || emptySeverityCounts();
-  const penalty = SEVERITIES.reduce((sum, sev) => sum + (counts[sev] || 0) * SEVERITY_WEIGHTS[sev], 0);
+  const w = weights || SEVERITY_WEIGHTS;
+  const penalty = SEVERITIES.reduce(
+    (sum, sev) => sum + (counts[sev] || 0) * (Number.isFinite(w[sev]) ? w[sev] : SEVERITY_WEIGHTS[sev]),
+    0,
+  );
   return Math.max(0, Math.min(100, 100 - penalty));
 }
 
@@ -203,9 +216,11 @@ const newAcc = () => ({
 });
 
 // Finalize an accumulator into a scored metric block (adds score + ready).
-function finalize(acc, gate) {
+// `weights` threads the (possibly series-overridden) severity weights into the
+// score; the readiness gate is independent of weights.
+function finalize(acc, gate, weights = SEVERITY_WEIGHTS) {
   return {
-    score: scoreFromOpen(acc.openBySeverity),
+    score: scoreFromOpen(acc.openBySeverity, weights),
     ready: isReadyUnderGate(acc.openBySeverity, gate),
     total: acc.total,
     open: acc.open,
@@ -224,10 +239,15 @@ function finalize(acc, gate) {
  *
  * @param {Array} comments — manuscriptReview comment records
  * @param {string} [gate] — readiness gate (default DEFAULT_READINESS_GATE)
+ * @param {object} [opts]
+ * @param {object} [opts.weights] — resolved severity weights (a series override,
+ *   via mergeSeverityWeights); defaults to SEVERITY_WEIGHTS. Echoed back as the
+ *   result's `weights` so the API/UI reflect the override that scored it.
  * @returns {{ score, ready, ...series-rollup, gate, weights, perIssue: [] }}
  */
-export function computeHealth(comments, gate = DEFAULT_READINESS_GATE) {
+export function computeHealth(comments, gate = DEFAULT_READINESS_GATE, { weights = SEVERITY_WEIGHTS } = {}) {
   const resolvedGate = resolveReadinessGate(gate);
+  const resolvedWeights = weights || SEVERITY_WEIGHTS;
   const list = Array.isArray(comments) ? comments : [];
   const seriesAcc = newAcc();
   const byIssue = new Map();
@@ -241,13 +261,13 @@ export function computeHealth(comments, gate = DEFAULT_READINESS_GATE) {
     tally(byIssue.get(key), c);
   }
   const perIssue = [...byIssue.entries()]
-    .map(([issueNumber, acc]) => ({ issueNumber, ...finalize(acc, resolvedGate) }))
+    .map(([issueNumber, acc]) => ({ issueNumber, ...finalize(acc, resolvedGate, resolvedWeights) }))
     // Stable order: real issue numbers ascending, the null (series-scoped) bucket last.
     .sort((a, b) => (a.issueNumber ?? Infinity) - (b.issueNumber ?? Infinity));
   return {
-    ...finalize(seriesAcc, resolvedGate),
+    ...finalize(seriesAcc, resolvedGate, resolvedWeights),
     gate: resolvedGate,
-    weights: SEVERITY_WEIGHTS,
+    weights: resolvedWeights,
     perIssue,
   };
 }
@@ -349,13 +369,15 @@ export async function getTrendLedger(seriesId) {
  * @param {object} [opts]
  *   - runId: the run that produced this revision (snapshot identity)
  *   - gate: readiness gate to stamp the snapshot's `ready` flag
+ *   - weights: resolved (possibly series-overridden) severity weights so a
+ *     persisted trend score matches the live computeHealth score (#1616)
  *   - comments: pre-loaded review comments (skips the getReview round-trip)
  * @returns {Promise<object>} the appended snapshot
  */
-export async function recordTrendSnapshot(seriesId, { runId = null, gate = DEFAULT_READINESS_GATE, comments } = {}) {
+export async function recordTrendSnapshot(seriesId, { runId = null, gate = DEFAULT_READINESS_GATE, weights = SEVERITY_WEIGHTS, comments } = {}) {
   assertValidSeriesId(seriesId);
   const list = Array.isArray(comments) ? comments : (await getReview(seriesId)).comments;
-  const health = computeHealth(list, gate);
+  const health = computeHealth(list, gate, { weights });
   const snapshot = {
     runId: typeof runId === 'string' ? runId : null,
     at: nowIso(),
@@ -424,6 +446,7 @@ export function computeTrend(snapshots) {
     score: s.score,
     open: s.open,
     openBySeverity: s.openBySeverity,
+    openByCategory: s.openByCategory,
     openByCheck: s.openByCheck,
   }));
   const latest = list[list.length - 1] || null;
@@ -446,10 +469,10 @@ export function computeTrend(snapshots) {
  * readiness signal, and the revision trend + regressions. The single read the
  * route + UI consume.
  */
-export async function getSeriesHealth(seriesId, { gate = DEFAULT_READINESS_GATE } = {}) {
+export async function getSeriesHealth(seriesId, { gate = DEFAULT_READINESS_GATE, weights = SEVERITY_WEIGHTS } = {}) {
   assertValidSeriesId(seriesId);
   const [review, ledger] = await Promise.all([getReview(seriesId), readLedger(seriesId)]);
-  const health = computeHealth(review.comments, gate);
+  const health = computeHealth(review.comments, gate, { weights });
   const trend = computeTrend(ledger.snapshots);
   return { seriesId, ...health, trend, generatedAt: nowIso() };
 }

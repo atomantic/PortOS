@@ -182,6 +182,23 @@ describe('AutopilotPanel', () => {
     expect(screen.queryByText(/not converging/i)).not.toBeInTheDocument();
   });
 
+  it('flags an editorial-checks pause with a "high findings" badge (#1613)', async () => {
+    renderPanel({
+      id: 's1',
+      targetFormat: 'comic',
+      autopilot: {
+        status: 'paused',
+        currentStep: 'editorialChecks',
+        pauseKind: 'checkFindings',
+        residualFindings: [{ severity: 'high', location: 'ch 1', problem: 'pacing stalls' }],
+      },
+    });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    expect(screen.getByText(/Paused at Editorial checks/i)).toBeInTheDocument();
+    expect(screen.getByText(/high findings/i)).toBeInTheDocument();
+    expect(screen.getByText(/pacing stalls/i)).toBeInTheDocument();
+  });
+
   it('shows the production-ready banner for a clean done marker', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0 } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
@@ -262,6 +279,20 @@ describe('AutopilotPanel', () => {
     sseLatest = { type: 'check:complete', scope: 'editorialChecks', checkId: 'prose.info-dumping', label: 'Info dumping', count: 3, bySeverity: { high: 1, medium: 2, low: 0 } };
     renderPanel({ id: 's1', targetFormat: 'comic' });
     expect(await screen.findByText(/Editorial check: Info dumping — 3 finding\(s\) \(1H\/2M\/0L\)/i)).toBeInTheDocument();
+  });
+
+  // #1617 — a cancel:acknowledged frame switches the Stop button to a disabled
+  // "Cancelling…" state with the active-step-finishing live label.
+  it('shows a Cancelling… state when the server acks a cancel (#1617)', async () => {
+    getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running', runId: 'r1' }, active: true });
+    sseLatest = { type: 'cancel:acknowledged', runId: 'r1' };
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    const btn = await screen.findByRole('button', { name: /cancelling/i });
+    expect(btn).toBeDisabled();
+    // The original Stop affordance is gone while cancelling.
+    expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/finishing the active step/i)).toBeInTheDocument();
   });
 
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {

@@ -593,6 +593,96 @@ describe('Provider Service', () => {
     });
   });
 
+  describe('Claude Ollama (ollama-backed) model refresh', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // Mock fetch for an Ollama daemon: /api/tags lists models, /api/show reports
+    // per-model capabilities. `caps[name]` controls which models report `tools`.
+    const stubOllama = (names, caps) => {
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (String(url).endsWith('/api/tags')) {
+          return { ok: true, json: async () => ({ models: names.map((n) => ({ name: n })) }) };
+        }
+        if (String(url).endsWith('/api/show')) {
+          const body = JSON.parse(opts?.body || '{}');
+          const capabilities = caps[body.model];
+          return { ok: true, json: async () => (capabilities ? { capabilities } : {}) };
+        }
+        return { ok: false, status: 404 };
+      }));
+    };
+
+    it('pulls Ollama models filtered to tool-use-capable ones (by capabilities)', async () => {
+      stubOllama(['qwen2.5:7b', 'gemma2:9b', 'llama3.1:8b'], {
+        'qwen2.5:7b': ['completion', 'tools'],
+        'gemma2:9b': ['completion', 'vision'],   // no tools → excluded
+        'llama3.1:8b': ['completion', 'tools'],
+      });
+
+      const p = await providerService.createProvider({
+        name: 'Claude Ollama (local model)',
+        type: 'cli',
+        command: 'claude',
+        ollamaBacked: true,
+        envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' },
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual(['qwen2.5:7b', 'llama3.1:8b']);
+    });
+
+    it('falls back to the id heuristic when /api/show reports no capabilities', async () => {
+      stubOllama(['qwen2.5:7b', 'gemma2:9b'], {}); // no capabilities reported for any
+
+      const p = await providerService.createProvider({
+        name: 'Claude Ollama',
+        type: 'cli',
+        command: 'claude',
+        envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' },
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      // qwen matches the tool-use heuristic; gemma2 does not.
+      expect(updated.models).toEqual(['qwen2.5:7b']);
+    });
+
+    it('refreshes models for an ollama-backed TUI provider too', async () => {
+      stubOllama(['qwen2.5:7b', 'gemma2:9b'], {
+        'qwen2.5:7b': ['completion', 'tools'],
+        'gemma2:9b': ['completion', 'vision'],
+      });
+
+      const p = await providerService.createProvider({
+        name: 'Claude Ollama TUI (local model)',
+        type: 'tui',
+        command: 'claude',
+        ollamaBacked: true,
+        envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' },
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual(['qwen2.5:7b']);
+    });
+
+    it('does not refresh a non-ollama-backed TUI provider (returns null)', async () => {
+      // A plain claude TUI provider has no Ollama backing — refresh is a no-op
+      // for tui type, so it returns null (models left as configured).
+      const p = await providerService.createProvider({
+        name: 'Claude Code TUI',
+        type: 'tui',
+        command: 'claude',
+        models: ['claude-opus-4-8'],
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).toBeNull();
+    });
+  });
+
   describe('_refreshAPIProviderModels — network layer', () => {
     afterEach(() => {
       vi.unstubAllGlobals();

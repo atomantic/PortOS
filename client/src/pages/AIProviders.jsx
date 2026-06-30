@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -15,6 +15,7 @@ import {
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
+import Modal from '../components/ui/Modal';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -135,6 +136,13 @@ export default function AIProviders() {
   };
 
   const supportsModelRefresh = (provider) => {
+    // Claude Ollama (ollama-backed claude CLI/TUI) refreshes its model list from
+    // the local Ollama daemon — including the TUI variant, which the server now
+    // refreshes via the type==='tui' && ollamaBacked branch. Check this before
+    // the generic TUI gate so the TUI variant's Refresh Models button shows.
+    if (isOllamaBackedProvider(provider)) {
+      return true;
+    }
     if (isTuiProvider(provider)) {
       return false;
     }
@@ -807,11 +815,17 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-bold text-white mb-4">
-          {provider ? 'Edit Provider' : 'Add Provider'}
-        </h2>
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      backdropClassName="bg-black/50"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
+      ariaLabelledBy="provider-form-title"
+    >
+      <h2 id="provider-form-title" className="text-xl font-bold text-white mb-4">
+        {provider ? 'Edit Provider' : 'Add Provider'}
+      </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -1333,7 +1347,6 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -236,4 +236,54 @@ describe('EditorialHealthPanel', () => {
     fireEvent.click(screen.getByTitle('Filter findings to Cast economy'));
     await waitFor(() => expect(params()).toContain('fcheck=roster.economy'));
   });
+
+  // Snapshot drill-down (#1630): clicking a sparkline point shows that revision's
+  // open-finding breakdown + a diff vs the previous revision.
+  const trendHealth = (over = {}) => health({
+    trend: {
+      points: [
+        { score: 70, open: 5, at: '2026-06-01T00:00:00Z', openBySeverity: { high: 1, medium: 1, low: 3 }, openByCategory: { continuity: 3, pacing: 2 }, openByCheck: { 'continuity.x': 3 } },
+        { score: 83, open: 3, at: '2026-06-02T00:00:00Z', openBySeverity: { high: 0, medium: 1, low: 2 }, openByCategory: { continuity: 1, pacing: 2 }, openByCheck: { 'continuity.x': 1 } },
+      ],
+      regressions: [],
+      checkRegressions: [],
+      delta: 13,
+    },
+    ...over,
+  });
+
+  it('drills into a snapshot when a sparkline point is clicked (#1630)', async () => {
+    getEditorialHealth.mockResolvedValue(trendHealth());
+    renderPanel({ seriesId: 'ser-1', checksById: { 'continuity.x': { label: 'Continuity X' } } });
+    await screen.findByText('83');
+    // No drill-down until a point is selected.
+    expect(screen.queryByText('Changed since previous revision')).toBeNull();
+    // Select the latest revision (revision 2 of 2).
+    fireEvent.click(screen.getByRole('button', { name: /Revision 2 of 2, score 83/ }));
+    expect(await screen.findByText('Changed since previous revision')).toBeTruthy();
+    expect(screen.getByText('Open findings this revision')).toBeTruthy();
+    // continuity dropped 3→1 since the prior revision — shown in both the
+    // category and the per-check diff rows.
+    expect(screen.getAllByText('3→1').length).toBeGreaterThanOrEqual(1);
+    // The resolved check label appears in the By-check diff.
+    expect(screen.getByText('Continuity X')).toBeTruthy();
+  });
+
+  it('notes the first revision has nothing to compare against (#1630)', async () => {
+    getEditorialHealth.mockResolvedValue(trendHealth());
+    renderPanel({ seriesId: 'ser-1' });
+    await screen.findByText('83');
+    fireEvent.click(screen.getByRole('button', { name: /Revision 1 of 2, score 70/ }));
+    expect(await screen.findByText(/First recorded revision/)).toBeTruthy();
+  });
+
+  it('closes the snapshot drill-down (#1630)', async () => {
+    getEditorialHealth.mockResolvedValue(trendHealth());
+    renderPanel({ seriesId: 'ser-1' });
+    await screen.findByText('83');
+    fireEvent.click(screen.getByRole('button', { name: /Revision 2 of 2/ }));
+    await screen.findByText('Changed since previous revision');
+    fireEvent.click(screen.getByRole('button', { name: 'Close snapshot detail' }));
+    await waitFor(() => expect(screen.queryByText('Changed since previous revision')).toBeNull());
+  });
 });

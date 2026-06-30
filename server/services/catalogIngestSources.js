@@ -1,18 +1,23 @@
 /**
- * Catalog ingest sources — URL / file / voice-memo entry points.
+ * Catalog ingest sources — URL / file / voice-memo / brain-bridge entry points.
  *
  * Each source produces raw text + a scrap with a typed `source_kind`, then
  * hands off to the SAME extraction pipeline the textarea-paste flow uses
  * (`extractIngredients`). So they emit identical `catalog:extract:progress`
  * frames and the client lands on the same paste→review→commit UI.
  *
- *   url        — fetch the page via the browser service, pull main text,
- *                source_kind 'url', metadata { url, title }.
- *   file       — text already read client-side (.txt/.md), source_kind 'file',
- *                metadata { filename, mime }.
- *   voice-memo — base64 WAV → Whisper transcript, audio persisted under
- *                data/audio to mint a media_key, source_kind 'voice-memo',
- *                metadata { mediaKey, mimeType, durationApproxMs? }.
+ *   url          — fetch the page via the browser service, pull main text,
+ *                  source_kind 'url', metadata { url, title }.
+ *   file         — text already read client-side (.txt/.md), source_kind 'file',
+ *                  metadata { filename, mime }.
+ *   voice-memo   — base64 WAV → Whisper transcript, audio persisted under
+ *                  data/audio to mint a media_key, source_kind 'voice-memo',
+ *                  metadata { mediaKey, mimeType, durationApproxMs? }.
+ *   brain-bridge — an existing brain record (idea / memory / project / admin /
+ *                  person), its prose folded into one rawText block,
+ *                  source_kind 'brain-bridge', metadata { brainType, brainId,
+ *                  brainTitle, brainTags }. This is the ingestion bridge that
+ *                  makes the catalog the universal sink for captured thoughts.
  *
  * Keeping this orchestration out of the route handlers lets the unit tests
  * mock the network/Whisper boundaries without spinning up Express.
@@ -22,6 +27,7 @@ import { randomUUID } from 'crypto';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import * as catalogDB from './catalogDB.js';
+import * as brainStorage from './brainStorage.js';
 import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
@@ -220,4 +226,90 @@ export async function ingestFromVoice(
     log: (s) => `🎙️ Catalog voice ingest: ${mediaKey} → scrap ${s.id} (${transcript.length} chars)`,
   });
   return { scrap, draft, mediaKey };
+}
+
+// Supported brain record types → their by-id storage getter. Mirrors
+// `CATALOG_BRAIN_INGEST_TYPES` in catalogValidation.js (the route validates the
+// type against that enum before we get here; this map is the resolution side).
+// We import the leaf `brainStorage` rather than `brain.js` so this stays a pure
+// read — no AI/classification side effects ride along.
+const BRAIN_INGEST_GETTERS = {
+  ideas: brainStorage.getIdeaById,
+  memories: brainStorage.getMemoryEntryById,
+  projects: brainStorage.getProjectById,
+  admin: brainStorage.getAdminById,
+  people: brainStorage.getPersonById,
+};
+
+/**
+ * Fold a brain record's prose into a single ingest-ready text block. Each brain
+ * type keeps its body in different fields (an idea's `oneLiner` + `notes`, a
+ * memory's `content`, a project/admin's `nextAction` + `notes`, a person's
+ * `context` + `followUps`), so map per-type rather than guessing. The record's
+ * title/name is prepended as context for the extractor, and any record tags ride
+ * along in metadata so the user can keep them on the committed ingredients.
+ * Returns `{ title, rawText, tags }`.
+ */
+export function brainRecordToIngestText(brainType, record) {
+  const title = (record?.title || record?.name || '').trim();
+  const parts = [];
+  const push = (v) => { if (typeof v === 'string' && v.trim()) parts.push(v.trim()); };
+  switch (brainType) {
+    case 'ideas':
+      push(record?.oneLiner);
+      push(record?.notes);
+      break;
+    case 'memories':
+      push(record?.content);
+      break;
+    case 'projects':
+    case 'admin':
+      if (record?.nextAction) push(`Next: ${record.nextAction}`);
+      push(record?.notes);
+      break;
+    case 'people':
+      push(record?.context);
+      if (Array.isArray(record?.followUps) && record.followUps.length) {
+        push(`Follow-ups: ${record.followUps.join('; ')}`);
+      }
+      break;
+    default:
+      // Best-effort for any future type the enum admits before this map does.
+      for (const k of ['oneLiner', 'content', 'notes', 'context', 'summary', 'description']) {
+        push(record?.[k]);
+      }
+  }
+  const body = parts.join('\n\n').trim();
+  const rawText = clampText(title ? `${title}\n\n${body}`.trim() : body);
+  const tags = Array.isArray(record?.tags) ? record.tags.filter((t) => typeof t === 'string') : [];
+  return { title: title || 'Brain entry', rawText, tags };
+}
+
+/**
+ * Ingest from an existing brain record. Resolves the record by `{ brainType,
+ * brainId }`, folds its prose into rawText, and runs the same scrap→extract
+ * pipeline as every other source — returning `{ scrap, draft }` so the client
+ * lands on the identical review phase. This is the brain → catalog bridge: a
+ * captured idea/journal/etc. becomes typed catalog ingredients the user reviews
+ * and commits, making the catalog the universal sink for creative atoms.
+ */
+export async function ingestFromBrain({ brainType, brainId, providerOverride } = {}) {
+  const getter = BRAIN_INGEST_GETTERS[brainType];
+  if (!getter) throw new Error(`unsupported brain type for catalog ingest: ${brainType}`);
+  const record = await getter(brainId);
+  if (!record) throw new Error(`brain ${brainType} entry not found: ${brainId}`);
+  // rawText is already trimmed by brainRecordToIngestText (and folds in the
+  // title), so a falsy check is sufficient to catch a record with no usable
+  // text at all (no title AND no body). A title-only record is intentionally
+  // ingestible — the user explicitly chose to send it.
+  const { title, rawText, tags } = brainRecordToIngestText(brainType, record);
+  if (!rawText) throw new Error('brain entry had no text to ingest');
+  return createScrapAndExtract({
+    title,
+    rawText,
+    sourceKind: 'brain-bridge',
+    metadata: { brainType, brainId, brainTitle: title, brainTags: tags },
+    providerOverride,
+    log: (s) => `🧠 Catalog brain ingest: ${brainType}/${brainId} → scrap ${s.id} (${rawText.length} chars)`,
+  });
 }

@@ -21,8 +21,9 @@ import { createSseRunner } from '../../lib/sseUtils.js';
 import { analyzeManuscriptCompleteness } from './arcPlanner.js';
 import { seedReviewFromFindings } from './manuscriptReview.js';
 import { recordTrendSnapshot } from './editorialScore.js';
-import { readReadinessGate } from '../../lib/editorial/index.js';
+import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
 import { getSettings } from '../settings.js';
+import { getSeries } from './series.js';
 
 const runner = createSseRunner({ logLabel: 'completeness review' });
 
@@ -78,7 +79,11 @@ export function startCompletenessReview(seriesId, options = {}) {
     // Revision-trend snapshot (#1316): this completeness run is a revision
     // boundary. Best-effort telemetry — never fail the run on a ledger write.
     const gate = readReadinessGate(await getSettings().catch(() => null)) || undefined;
-    await recordTrendSnapshot(seriesId, { runId: result.runId, gate, comments: review.comments }).catch((err) => {
+    // Series severity-weight override (#1616) so the persisted trend score
+    // matches the live computeHealth score the UI shows.
+    const series = await getSeries(seriesId).catch(() => null);
+    const weights = mergeSeverityWeights(series?.severityWeights);
+    await recordTrendSnapshot(seriesId, { runId: result.runId, gate, weights, comments: review.comments }).catch((err) => {
       console.error(`⚠️ editorial trend snapshot failed — series=${String(seriesId).slice(0, 12)} ${err.message}`);
     });
     broadcast({

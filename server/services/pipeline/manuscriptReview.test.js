@@ -104,6 +104,64 @@ describe('manuscriptReview — record-event emission on write', () => {
     expect(merged.comments.find((c) => c.id === 'c1').status).toBe('dismissed');
   });
 
+  it('persists a finding subtype and nulls absent/legacy ones (#1626)', async () => {
+    const seeded = await seedReviewFromFindings('ser-subtype', [
+      { category: 'dialogue', subtype: 'emotion-tell', problem: 'names the feeling', anchorQuote: 'I am angry' },
+      { category: 'dialogue', problem: 'no subtype given', anchorQuote: 'plain line' },
+    ]);
+    const byProblem = Object.fromEntries(seeded.comments.map((c) => [c.problem, c]));
+    expect(byProblem['names the feeling'].subtype).toBe('emotion-tell');
+    expect(byProblem['no subtype given'].subtype).toBeNull();
+
+    // A legacy/older-peer comment with no subtype field round-trips as null.
+    const merged = await mergeReviewFromSync('ser-subtype-legacy', {
+      schemaVersion: 1,
+      comments: [
+        { id: 'mrc-st', category: 'dialogue', problem: 'legacy dialogue note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' },
+      ],
+    });
+    expect(merged.comments.find((c) => c.id === 'mrc-st').subtype).toBeNull();
+  });
+
+  it('re-surfacing a finding adopts the run subtype on the existing comment (#1626)', async () => {
+    // A finding first raised BEFORE the on-the-nose check sub-classified its
+    // output — no subtype yet.
+    const seeded = await seedReviewFromFindings('ser-subtype-refresh', [
+      { checkId: 'dialogue.on-the-nose', category: 'dialogue', issueNumber: 3, problem: 'names the feeling', anchorQuote: 'I am angry' },
+    ]);
+    expect(seeded.comments[0].subtype).toBeNull();
+    const id = seeded.comments[0].id;
+
+    // The upgraded check re-reports the SAME finding (same key) now carrying a
+    // subtype — the merge path must adopt it onto the existing comment.
+    const next = await seedReviewFromFindings('ser-subtype-refresh', [
+      { checkId: 'dialogue.on-the-nose', category: 'dialogue', issueNumber: 3, subtype: 'emotion-tell', problem: 'names the feeling', anchorQuote: 'I am angry' },
+    ]);
+    const same = next.comments.find((c) => c.id === id);
+    expect(same).toBeDefined();
+    expect(same.subtype).toBe('emotion-tell');
+  });
+
+  it('re-surfacing a finding does NOT clobber a stored subtype back to null when the run omits it (#1626)', async () => {
+    // Run 1 classifies the finding.
+    const seeded = await seedReviewFromFindings('ser-subtype-preserve', [
+      { checkId: 'dialogue.on-the-nose', category: 'dialogue', issueNumber: 3, subtype: 'emotion-tell', problem: 'names the feeling', anchorQuote: 'I am angry' },
+    ]);
+    expect(seeded.comments[0].subtype).toBe('emotion-tell');
+    const id = seeded.comments[0].id;
+
+    // Run 2 re-surfaces the SAME finding (same key) but the non-deterministic LLM
+    // omits the subtype this time — the runner collapses absent AND off-list to
+    // null. The merge must PRESERVE the prior classification, not erase it (the
+    // badge would otherwise silently flicker off on re-review).
+    const next = await seedReviewFromFindings('ser-subtype-preserve', [
+      { checkId: 'dialogue.on-the-nose', category: 'dialogue', issueNumber: 3, problem: 'names the feeling', anchorQuote: 'I am angry' },
+    ]);
+    const same = next.comments.find((c) => c.id === id);
+    expect(same).toBeDefined();
+    expect(same.subtype).toBe('emotion-tell');
+  });
+
   it('persists replacementStrategy (explicit value, derived from category, and legacy fallback)', async () => {
     const seeded = await seedReviewFromFindings('ser-4', [
       { category: 'comic-structure', problem: 'page is prose', suggestion: 'Panel 1 …', anchorQuote: 'PAGE 5' },

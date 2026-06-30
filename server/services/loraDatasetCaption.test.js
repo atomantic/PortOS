@@ -4,7 +4,34 @@ import { describe, it, expect, vi } from 'vitest';
 // branches are testable without touching the network/DB. The module still
 // pulls in localLlm transitively at import; that's import-only (no calls fire
 // until resolveCaptionModel runs with our stub), so no mocks are needed.
-const { resolveCaptionModel, buildCaption, withCaptionVisionLock } = await import('./loraDatasetCaption.js');
+const {
+  resolveCaptionModel, buildCaption, withCaptionVisionLock, buildCaptionPrompt, CAPTION_PROMPT,
+} = await import('./loraDatasetCaption.js');
+
+describe('buildCaptionPrompt', () => {
+  it('tells the model to describe only what varies and omit fixed identity', () => {
+    const prompt = buildCaptionPrompt();
+    expect(prompt).toMatch(/ONLY what changes from shot to shot/i);
+    expect(prompt).toMatch(/Do NOT describe the subject's fixed identity/i);
+    // No bible signature → no explicit deny-list clause.
+    expect(prompt).not.toMatch(/signature features that are always present/i);
+  });
+
+  it('CAPTION_PROMPT is the no-signature base prompt', () => {
+    expect(CAPTION_PROMPT).toBe(buildCaptionPrompt());
+    expect(CAPTION_PROMPT).toBe(buildCaptionPrompt([]));
+  });
+
+  it('appends the signature features as an explicit do-not-mention list', () => {
+    const prompt = buildCaptionPrompt(['red cloak', 'woven crown', 'light leather armor']);
+    expect(prompt).toMatch(/do NOT mention these signature features that are always present: red cloak; woven crown; light leather armor\./);
+  });
+
+  it('drops blank/non-string fragments before building the list', () => {
+    const prompt = buildCaptionPrompt(['red cloak', '', '  ', null, 42, 'crown']);
+    expect(prompt).toMatch(/always present: red cloak; crown\./);
+  });
+});
 
 const VISION = [
   { providerId: 'lmstudio', backend: 'lmstudio', id: 'qwen2.5-vl-7b', name: 'Qwen2.5-VL 7B', vision: true },

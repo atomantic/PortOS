@@ -7,6 +7,8 @@ import {
   orderedChecks,
   checkCountSeries,
   countSparklineGeometry,
+  diffCountMaps,
+  snapshotDiff,
 } from './editorialHealth.js';
 
 describe('scoreBand', () => {
@@ -146,5 +148,82 @@ describe('countSparklineGeometry', () => {
     expect(countSparklineGeometry([]).points).toBe('');
     expect(countSparklineGeometry(undefined).coords).toEqual([]);
     expect(countSparklineGeometry([]).last).toBeNull();
+  });
+});
+
+describe('diffCountMaps', () => {
+  it('reports only the buckets whose count changed', () => {
+    const rows = diffCountMaps({ a: 2, b: 1, c: 3 }, { a: 5, b: 1, c: 0 });
+    // b unchanged (1→1) is dropped; a dropped 5→2, c rose 0→3
+    expect(rows.map((r) => r.key).sort()).toEqual(['a', 'c']);
+    const a = rows.find((r) => r.key === 'a');
+    expect(a).toMatchObject({ from: 5, to: 2, delta: -3 });
+    const c = rows.find((r) => r.key === 'c');
+    expect(c).toMatchObject({ from: 0, to: 3, delta: 3 });
+  });
+
+  it('treats a bucket absent on one side as 0', () => {
+    const rows = diffCountMaps({ added: 4 }, { removed: 2 });
+    expect(rows.find((r) => r.key === 'added')).toMatchObject({ from: 0, to: 4, delta: 4 });
+    expect(rows.find((r) => r.key === 'removed')).toMatchObject({ from: 2, to: 0, delta: -2 });
+  });
+
+  it('sorts by magnitude of change descending, then key', () => {
+    const rows = diffCountMaps({ big: 10, small: 2, tie: 1 }, { big: 0, small: 0, tie: 0, ties: 1 });
+    expect(rows.map((r) => r.key)).toEqual(['big', 'small', 'tie', 'ties']);
+  });
+
+  it('tolerates null/non-object maps', () => {
+    expect(diffCountMaps(null, undefined)).toEqual([]);
+    expect(diffCountMaps({ a: 1 }, null)).toEqual([{ key: 'a', from: 0, to: 1, delta: 1 }]);
+  });
+});
+
+describe('snapshotDiff', () => {
+  const point = {
+    score: 80, open: 3,
+    openBySeverity: { high: 0, medium: 1, low: 2 },
+    openByCategory: { continuity: 1, pacing: 2 },
+    openByCheck: { 'continuity.x': 1, 'pacing.y': 2 },
+  };
+  const prev = {
+    score: 70, open: 5,
+    openBySeverity: { high: 1, medium: 1, low: 3 },
+    openByCategory: { continuity: 3, pacing: 2 },
+    openByCheck: { 'continuity.x': 3, 'pacing.y': 2 },
+  };
+
+  it('returns null for a missing point', () => {
+    expect(snapshotDiff(null)).toBeNull();
+  });
+
+  it('diffs every dimension against the previous snapshot', () => {
+    const d = snapshotDiff(point, prev);
+    expect(d.hasPrevious).toBe(true);
+    expect(d.scoreDelta).toBe(10);
+    expect(d.openDelta).toBe(-2);
+    // severity: high 1→0, low 3→2 changed; medium unchanged
+    expect(d.bySeverity.map((r) => r.key).sort()).toEqual(['high', 'low']);
+    // category: continuity 3→1 changed; pacing unchanged
+    expect(d.byCategory).toEqual([{ key: 'continuity', from: 3, to: 1, delta: -2 }]);
+    // check: continuity.x 3→1 changed; pacing.y unchanged
+    expect(d.byCheck).toEqual([{ key: 'continuity.x', from: 3, to: 1, delta: -2 }]);
+  });
+
+  it('marks the first revision as having no previous (null deltas)', () => {
+    const d = snapshotDiff(point, null);
+    expect(d.hasPrevious).toBe(false);
+    expect(d.scoreDelta).toBeNull();
+    expect(d.openDelta).toBeNull();
+    // breakdown still computed as a pure first-revision delta (everything new)
+    expect(d.byCategory.find((r) => r.key === 'continuity')).toMatchObject({ from: 0, to: 1 });
+  });
+
+  it('returns byCheck:null when either snapshot lacks per-check telemetry', () => {
+    const noChecks = { ...point, openByCheck: null };
+    expect(snapshotDiff(point, noChecks).byCheck).toBeNull();
+    expect(snapshotDiff(noChecks, prev).byCheck).toBeNull();
+    // severity/category still diff even without per-check telemetry
+    expect(snapshotDiff(noChecks, prev).bySeverity.length).toBeGreaterThan(0);
   });
 });

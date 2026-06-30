@@ -9,9 +9,9 @@ export const updateBrainSettings = (settings) => request('/brain/settings', {
 });
 
 // Brain - Capture & Inbox
-export const captureBrainThought = (text, providerOverride, modelOverride) => request('/brain/capture', {
+export const captureBrainThought = (text, providerOverride, modelOverride, { creative } = {}) => request('/brain/capture', {
   method: 'POST',
-  body: JSON.stringify({ text, providerOverride, modelOverride })
+  body: JSON.stringify({ text, providerOverride, modelOverride, creative })
 });
 export const getBrainInbox = (options = {}) => {
   const params = new URLSearchParams();
@@ -42,6 +42,12 @@ export const updateBrainInboxEntry = (id, capturedText) => request(`/brain/inbox
 });
 export const deleteBrainInboxEntry = (id) => request(`/brain/inbox/${id}`, { method: 'DELETE' });
 export const markBrainInboxDone = (id) => request(`/brain/inbox/${id}/done`, { method: 'POST' });
+// Stamp a batch of creative notes as consumed once their catalog ingest commits.
+export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inbox/sent-to-catalog', {
+  method: 'POST',
+  body: JSON.stringify({ ids }),
+  ...options
+});
 
 // Brain - People
 export const getBrainPeople = () => request('/brain/people');

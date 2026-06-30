@@ -36,6 +36,17 @@ export async function listRaw() {
 }
 
 /**
+ * Raw `data` JSONB for one series only — uses the `idx_issues_series
+ * (series_id, number)` index instead of scanning + sanitizing the whole table.
+ * Returns live/ephemeral/tombstones (the service applies the `deleted` filter),
+ * matching `listRaw`'s contract but scoped.
+ */
+export async function listRawBySeries(seriesId) {
+  const { rows } = await query(`SELECT data FROM pipeline_issues WHERE series_id = $1`, [seriesId]);
+  return rows.map((r) => r.data);
+}
+
+/**
  * Upsert one record. `data` is written verbatim (lossless); the typed mirror
  * columns are bind-sanitized so a hand-edited/legacy record can't make the
  * write throw. `created_at` preserved on conflict.

@@ -13,15 +13,16 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ListChecks, Loader2, Play, Plus, Square } from 'lucide-react';
+import { ArrowLeft, ListChecks, Loader2, Play, Plus, Square, Undo2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import EditorialCheckCard from '../components/pipeline/editorial/EditorialCheckCard';
 import EditorialCustomCheckForm from '../components/pipeline/editorial/EditorialCustomCheckForm';
 import EditorialFindingsTriage from '../components/pipeline/editorial/EditorialFindingsTriage';
 import EditorialHealthPanel from '../components/pipeline/editorial/EditorialHealthPanel';
+import SeriesSeverityConfig from '../components/pipeline/editorial/SeriesSeverityConfig';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import TabPills from '../components/ui/TabPills';
-import { groupChecksByScope, normCategory } from '../lib/editorialChecks';
+import { groupChecksByScope, groupFindingsByCheck, normCategory, canonEntitiesFromUniverse } from '../lib/editorialChecks';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -38,6 +39,7 @@ import {
   getEditorialChecksRunStatus,
   editorialChecksRunSseUrl,
   getPipelineManuscriptReview,
+  getUniverse,
 } from '../services/api';
 
 export default function PipelineEditorialChecks() {
@@ -46,6 +48,13 @@ export default function PipelineEditorialChecks() {
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [savingIds, setSavingIds] = useState(() => new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  // Checks the user muted from the triage this session (#1602, lifted here for
+  // #1697). Disabling a check doesn't delete its persisted findings, so its triage
+  // group is hidden locally (keyed by checkId) until an undo, a fresh findings
+  // load, or a catalog re-enable brings it back. Owned here — not in the triage —
+  // so the health panel's filterable sets can subtract muted checks (the mute
+  // state and the filterable-set derivation must share one source of truth).
+  const [hiddenCheckIds, setHiddenCheckIds] = useState(() => new Set());
   // Below `lg` the catalog + findings columns stack into one; this segmented
   // switch picks which one is visible. Default to triage since that's the
   // page's primary mobile task (#1611). No URL param — it's a breakpoint-only
@@ -60,8 +69,23 @@ export default function PipelineEditorialChecks() {
   // Per-check nonce bumped on a FAILED series-override save so the check card can
   // revert its draft inputs to the persisted value (#1591).
   const [seriesResetNonces, setSeriesResetNonces] = useState(() => ({}));
+  // Bumped on a FAILED severity-config save (#1616) so the severity-tuning panel
+  // re-seeds its number-input drafts from the persisted (untouched) values.
+  const [severityResetNonce, setSeverityResetNonce] = useState(0);
+  // In-flight COUNT of severity-config saves (#1616), not set membership: two
+  // quick same-field edits (high then medium weight) queue two saves under the
+  // same field name, so a Set key would be deleted by the first save's `finally`
+  // while the second is still pending — re-enabling the run buttons mid-save and
+  // letting a run read stale config. A counter only reaches 0 when ALL queued
+  // severity saves have drained.
+  const [severitySaveCount, setSeveritySaveCount] = useState(0);
   const seriesId = searchParams.get('series') || '';
   const [comments, setComments] = useState([]);
+  // Canon entities (#1631) for the selected series' linked universe, flattened to
+  // a name→entity lookup so the triage can linkify entity references in findings.
+  // Empty until a series with a universe is selected; load failures degrade to no
+  // links (the findings still render).
+  const [canonEntities, setCanonEntities] = useState([]);
   const [loadingFindings, setLoadingFindings] = useState(false);
   // Bumped whenever the findings are (re)loaded so the health panel refetches
   // its score/trend in lockstep — a run that seeds new findings also moves the
@@ -91,6 +115,15 @@ export default function PipelineEditorialChecks() {
   );
   const enabledCount = useMemo(() => checks.filter((c) => c.enabled).length, [checks]);
   const scopeGroups = useMemo(() => groupChecksByScope(checks), [checks]);
+  // Per-check maturity / quality stats (#1629): group the loaded findings by
+  // check so each catalog card can show its findings count, dismissal rate, and
+  // false-positive rate. Keyed by checkId; a check with no findings is simply
+  // absent (the card renders its "untested" state). Findings are per-series, so
+  // this empties out — and the cards hide the strip — when no series is selected.
+  const statsByCheck = useMemo(() => {
+    const groups = groupFindingsByCheck(comments, checksById);
+    return Object.fromEntries(groups.map((g) => [g.checkId, g]));
+  }, [comments, checksById]);
   // The check/category values the health panel can deep-link to (#1606). The
   // panel's "Open by check/category" rows count OPEN findings, and the triage only
   // lists check-sourced findings (it drops null-checkId completeness/legacy ones).
@@ -102,13 +135,22 @@ export default function PipelineEditorialChecks() {
     () => comments.filter((c) => c?.checkId && c.status === 'open'),
     [comments],
   );
+  // Subtract checks the user muted this session (#1697): the triage hides their
+  // groups, so the health panel must not advertise a check/category whose only
+  // open findings are hidden — clicking such a row would deep-link to a triage
+  // view with nothing in it. A category stays filterable as long as ANY non-muted
+  // check still contributes an open finding to it.
+  const visibleOpenCheckSourced = useMemo(
+    () => (hiddenCheckIds.size ? openCheckSourced.filter((c) => !hiddenCheckIds.has(c.checkId)) : openCheckSourced),
+    [openCheckSourced, hiddenCheckIds],
+  );
   const triageFilterableCheckIds = useMemo(
-    () => new Set(openCheckSourced.map((c) => c.checkId)),
-    [openCheckSourced],
+    () => new Set(visibleOpenCheckSourced.map((c) => c.checkId)),
+    [visibleOpenCheckSourced],
   );
   const triageFilterableCategories = useMemo(
-    () => new Set(openCheckSourced.map((c) => normCategory(c))),
-    [openCheckSourced],
+    () => new Set(visibleOpenCheckSourced.map((c) => normCategory(c))),
+    [visibleOpenCheckSourced],
   );
   // Config saves read server settings, so a run that fires before a save lands
   // would use stale config — gate the run buttons while any save is in flight.
@@ -137,6 +179,12 @@ export default function PipelineEditorialChecks() {
   useEffect(() => { activeSeriesRef.current = seriesId; }, [seriesId]);
 
   const loadFindings = useCallback((id) => {
+    // The session mute is local to the currently-shown findings: a series switch,
+    // a fresh load, or a run-completion reload resets it. This happened for free
+    // while the set lived in the triage (it unmounted during the loading state and
+    // remounted with empty local state); now that the parent owns it (#1697), reset
+    // it explicitly so a mute can't bleed across series or outlive a reload.
+    setHiddenCheckIds((s) => (s.size ? new Set() : s));
     if (!id) { setComments([]); return; }
     setLoadingFindings(true);
     // getPipelineManuscriptReview has no silent option, so request() already
@@ -258,6 +306,51 @@ export default function PipelineEditorialChecks() {
     return result;
   }, []);
 
+  // ---- Session-local check mute (#1602), lifted from the triage (#1697). Hiding
+  // a check's triage group AND keeping the health panel's filterable sets honest
+  // both read `hiddenCheckIds`, so the state lives here and the action does too. ----
+  const unhideCheck = useCallback((checkId) => setHiddenCheckIds((s) => {
+    if (!s.has(checkId)) return s;
+    const next = new Set(s);
+    next.delete(checkId);
+    return next;
+  }), []);
+  const disableCheck = useCallback((checkId, label) => {
+    setHiddenCheckIds((s) => new Set(s).add(checkId));
+    const toastId = toast((t) => (
+      <span className="flex items-center gap-3 text-xs">
+        <span className="text-gray-200">Disabled <span className="font-medium text-white">{label}</span> — findings hidden</span>
+        <button
+          type="button"
+          onClick={() => { unhideCheck(checkId); handleToggle(checkId, true); toast.dismiss(t.id); }}
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"
+        >
+          <Undo2 size={12} /> Undo
+        </button>
+      </span>
+    ), { duration: 8000 });
+    // Optimistic hide above; reconcile if the persist fails (handleToggle resolves
+    // false on error and has already reverted + toasted) so a failed disable doesn't
+    // leave the group stuck hidden behind a dead undo toast.
+    Promise.resolve(handleToggle(checkId, false)).then((ok) => {
+      if (ok === false) { unhideCheck(checkId); toast.dismiss(toastId); }
+    });
+  }, [unhideCheck, handleToggle]);
+  // Keep the muted set honest against the live enabled-state: if a muted check is
+  // re-enabled elsewhere (the catalog toggle on this page, or a findings reload
+  // carrying fresh catalog rows), un-hide its group so visibility always follows
+  // the check's actual enabled state — never stranding a group the triage's empty
+  // state tells the user to restore from the catalog.
+  useEffect(() => {
+    setHiddenCheckIds((s) => {
+      if (!s.size) return s;
+      let changed = false;
+      const next = new Set();
+      s.forEach((id) => { if (checksById[id]?.enabled === false) next.add(id); else changed = true; });
+      return changed ? next : s;
+    });
+  }, [checksById]);
+
   const handleConfigSave = useCallback((checkId, nextConfig) => {
     setSavingIds((s) => new Set(s).add(checkId));
     patchEditorialCheck(checkId, { config: nextConfig }, { silent: true })
@@ -288,11 +381,39 @@ export default function PipelineEditorialChecks() {
   // what stops a B-reseed from poisoning A's queued PATCH). `patch === null`
   // clears the whole check. ----
   const selectedSeries = useMemo(() => series.find((s) => s.id === seriesId) || null, [series, seriesId]);
+  // Load the linked universe's canon once the series resolves (#1631). Guarded by a
+  // mounted flag keyed on universeId so a slow fetch for a series the user has since
+  // switched away from can't linkify the new series' findings with stale canon.
+  const universeId = selectedSeries?.universeId || '';
+  useEffect(() => {
+    if (!universeId) { setCanonEntities([]); return undefined; }
+    let active = true;
+    // Drop the previous universe's canon immediately so a series switch (A→B)
+    // whose findings fetch lands before this one can't linkify B's findings with
+    // A's entities — a brief no-chips window is correct, stale chips are not.
+    setCanonEntities([]);
+    getUniverse(universeId, { silent: true })
+      .then((universe) => { if (active) setCanonEntities(canonEntitiesFromUniverse(universe)); })
+      .catch(() => { if (active) setCanonEntities([]); });
+    return () => { active = false; };
+  }, [universeId]);
   const seriesOverrides = selectedSeries?.editorialCheckConfig && typeof selectedSeries.editorialCheckConfig === 'object'
     ? selectedSeries.editorialCheckConfig
     : null;
 
+  // Per-series severity-config overrides (#1616) — the STORED (not effective)
+  // severityWeights/blockingSeverities, keyed by seriesId, so a queued save
+  // composes its edit onto THIS series' freshest server-confirmed values at
+  // execution time (mirrors overrideMapsRef). Without this, two quick edits each
+  // build a full wholesale-replacement from props captured at event time and the
+  // second clobbers the first.
+  const seriesSeverityWeights = selectedSeries?.severityWeights && typeof selectedSeries.severityWeights === 'object'
+    ? selectedSeries.severityWeights : null;
+  const seriesBlockingSeverities = selectedSeries?.blockingSeverities && typeof selectedSeries.blockingSeverities === 'object'
+    ? selectedSeries.blockingSeverities : null;
+
   const overrideMapsRef = useRef({});
+  const severityFieldsRef = useRef({});
   const seriesSaveTailRef = useRef(Promise.resolve());
   // Seed/refresh ONLY the selected series' entry from its loaded record (covers
   // the async series-list load AND a server-confirmed save echo). Keying by id
@@ -300,6 +421,12 @@ export default function PipelineEditorialChecks() {
   useEffect(() => {
     if (seriesId) overrideMapsRef.current[seriesId] = seriesOverrides ? { ...seriesOverrides } : {};
   }, [seriesId, seriesOverrides]);
+  useEffect(() => {
+    if (seriesId) severityFieldsRef.current[seriesId] = {
+      severityWeights: seriesSeverityWeights ? { ...seriesSeverityWeights } : {},
+      blockingSeverities: seriesBlockingSeverities ? { ...seriesBlockingSeverities } : {},
+    };
+  }, [seriesId, seriesSeverityWeights, seriesBlockingSeverities]);
 
   // `patch` is a PARTIAL per-check override ({ [key]: value }) to merge, or `null`
   // to clear the whole check. Merging (rather than replacing the per-check entry)
@@ -334,6 +461,55 @@ export default function PipelineEditorialChecks() {
       })
       .finally(() => setSavingSeriesIds((s) => { const n = new Set(s); n.delete(checkId); return n; }));
   }, []);
+
+  // Per-series severity config (#1616): the health-score weights + per-gate
+  // blocking-severity sets live as top-level series fields (`severityWeights` /
+  // `blockingSeverities`). Saved through the SAME serialized silent tail as the
+  // per-check override so two quick edits can't reorder/clobber, NON-optimistic
+  // (the panel reverts to the persisted value on failure since the series record
+  // is left untouched). Counted in severitySaveCount so the run buttons stay
+  // gated until EVERY queued save lands (the autopilot reads the persisted
+  // series record, so starting a run mid-save would read stale config).
+  // `updater(currentStored)` composes the next STORED override from this series'
+  // freshest server-confirmed value at execution time (not from props captured
+  // when the user clicked), so two quick edits can't wholesale-clobber each other.
+  const handleSeriesFieldSave = useCallback((field, updater) => {
+    const sid = activeSeriesRef.current;
+    if (!sid) return;
+    setSeveritySaveCount((n) => n + 1);
+    seriesSaveTailRef.current = seriesSaveTailRef.current
+      .then(async () => {
+        const store = severityFieldsRef.current[sid] || {};
+        const current = (store[field] && typeof store[field] === 'object') ? store[field] : {};
+        const nextValue = updater({ ...current });
+        const saved = await updatePipelineSeries(sid, { [field]: nextValue }, { silent: true })
+          .catch((err) => {
+            toast.error(err.message || 'Failed to save severity config');
+            // Failure: the series record is untouched, but the WEIGHT number
+            // inputs may hold typed-but-unsaved drafts — bump the reset nonce so
+            // the panel re-seeds them. Only weights have free-text drafts (the
+            // blocking checkboxes are prop-driven), so only a weights failure
+            // needs it.
+            if (field === 'severityWeights') setSeverityResetNonce((n) => n + 1);
+            return null;
+          });
+        // On success sync THIS series' record + stored-override ref by id (keyed,
+        // never clobbers another series); on failure leave both untouched.
+        if (saved) {
+          severityFieldsRef.current[saved.id] = {
+            severityWeights: (saved.severityWeights && typeof saved.severityWeights === 'object') ? { ...saved.severityWeights } : {},
+            blockingSeverities: (saved.blockingSeverities && typeof saved.blockingSeverities === 'object') ? { ...saved.blockingSeverities } : {},
+          };
+          setSeries((rows) => rows.map((r) => (r.id === saved.id ? saved : r)));
+          // Weights change the health SCORE, so re-pull the panel's score/trend in
+          // lockstep (it only refetches on seriesId/refreshKey change). Blocking
+          // sets only gate the autopilot, not the score — no refresh needed.
+          if (field === 'severityWeights') setHealthRefresh((n) => n + 1);
+        }
+      })
+      .finally(() => setSeveritySaveCount((n) => Math.max(0, n - 1)));
+  }, []);
+  const severitySaving = severitySaveCount > 0;
 
   // ---- Custom-check authoring (#1346). The form is URL-driven (?custom=new |
   // ?custom=<checkId>) so it's deep-linkable, not a stateful modal. ----
@@ -446,7 +622,7 @@ export default function PipelineEditorialChecks() {
   // Gate runs on formSaving too: a run reads server-side settings, so starting
   // one while a custom-check create/edit PATCH is in flight would run the stale
   // (pre-save) definition. Mirrors the savingIds gate for per-check config saves.
-  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0;
+  const runDisabled = !seriesId || runActive || runStarting || anySaving || formSaving || savingSeriesIds.size > 0 || severitySaving;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -535,6 +711,15 @@ export default function PipelineEditorialChecks() {
         ) : null}
       </div>
 
+      {selectedSeries ? (
+        <SeriesSeverityConfig
+          series={selectedSeries}
+          onSaveField={handleSeriesFieldSave}
+          saving={severitySaving}
+          resetNonce={severityResetNonce}
+        />
+      ) : null}
+
       {loadingCatalog ? (
         <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading checks…</p>
       ) : (
@@ -587,10 +772,14 @@ export default function PipelineEditorialChecks() {
               <div key={group.scope} className="space-y-2">
                 <h3 className="text-[11px] font-medium uppercase tracking-wider text-gray-500">{group.label}</h3>
                 {group.checks.map((check) => (
-                  <div key={check.id} className="flex items-start gap-2">
+                  // A dual-scope check (#1628) is fanned into multiple sections, so
+                  // scope the per-row DOM ids (selection checkbox + the card's ids,
+                  // via `idScope`) by the section to keep them unique. The React key
+                  // and all state/selection keys stay `check.id` (the check identity).
+                  <div key={`${group.scope}-${check.id}`} className="flex items-start gap-2">
                     <input
                       type="checkbox"
-                      id={`sel-${check.id}`}
+                      id={`sel-${group.scope}-${check.id}`}
                       checked={selectedIds.has(check.id)}
                       disabled={!check.enabled}
                       onChange={() => toggleSelected(check.id)}
@@ -601,6 +790,9 @@ export default function PipelineEditorialChecks() {
                     <div className="min-w-0 flex-1">
                       <EditorialCheckCard
                         check={check}
+                        idScope={group.scope}
+                        stats={statsByCheck[check.id] || null}
+                        statsPending={loadingFindings}
                         saving={savingIds.has(check.id)}
                         onToggle={handleToggle}
                         onConfigSave={handleConfigSave}
@@ -631,7 +823,7 @@ export default function PipelineEditorialChecks() {
                 {loadingFindings ? (
                   <p className="flex items-center gap-2 text-sm text-gray-400"><Loader2 size={16} className="animate-spin" /> Loading findings…</p>
                 ) : (
-                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} onToggleCheckEnabled={handleToggle} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} />
+                  <EditorialFindingsTriage seriesId={seriesId} comments={comments} checksById={checksById} onCommentChange={handleCommentChange} hiddenCheckIds={hiddenCheckIds} onDisableCheck={disableCheck} onRunChecks={() => runChecks(null)} runDisabled={runDisabled || enabledCount === 0} universeId={universeId} canonEntities={canonEntities} />
                 )}
               </>
             )}

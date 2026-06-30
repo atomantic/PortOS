@@ -317,7 +317,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <label htmlFor={`issue-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">Issue Author Filter</label>
           <select
             id={`issue-author-filter-${taskType}`}
-            value={config.taskMetadata?.issueAuthorFilter || 'owner'}
+            value={config.taskMetadata?.issueAuthorFilter || 'self'}
             onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}
             disabled={updating}
             className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
@@ -327,7 +327,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             ))}
           </select>
           <p className="text-xs text-gray-500 mt-1">
-            {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'owner'))?.description}.
+            {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'self'))?.description}.
             {' '}This is the global default — individual apps can override it below.
           </p>
         </div>

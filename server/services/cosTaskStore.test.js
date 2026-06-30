@@ -60,7 +60,8 @@ import {
   updateTask,
   deleteTask,
   reorderTasks,
-  approveTask
+  approveTask,
+  mergePeerTasks
 } from './cosTaskStore.js';
 
 const USER_FILE = '/root/TASKS.md';
@@ -210,6 +211,12 @@ describe('cosTaskStore.addTask', () => {
     const { tasks } = await getUserTasks();
     expect(tasks[0].description).toBe('second');
   });
+
+  it('stamps a content-edit timestamp (updatedAt) from the injectable clock (#1714)', async () => {
+    const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+    const created = await addTask({ description: 'stamped', id: 'task-stamp' }, 'user', { now: NOW });
+    expect(created.metadata.updatedAt).toBe(new Date(NOW).toISOString());
+  });
 });
 
 describe('cosTaskStore.updateTask', () => {
@@ -257,6 +264,51 @@ describe('cosTaskStore.updateTask', () => {
     }, 'user');
     expect(renewed.metadata.claimedBy).toBe('instance-a');
     expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+  });
+
+  it('bumps updatedAt on a content edit from the injectable clock (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    await addTask({ description: 'edit me', id: 'task-edit' }, 'user', { now: T0 });
+    const updated = await updateTask('task-edit', { priority: 'HIGH' }, 'user', { now: T1 });
+    expect(updated.metadata.updatedAt).toBe(new Date(T1).toISOString());
+  });
+
+  it('does NOT bump updatedAt on a lease-renewal heartbeat that re-includes existing metadata (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    const T2 = Date.parse('2026-06-25T12:00:00.000Z');
+    // Task carries real non-claim content (context) so the heartbeat spread below
+    // actually re-includes a content key — the shape that broke the naive detector.
+    await addTask({ description: 'beat', id: 'task-beat', context: 'working on it' }, 'user', { now: T0 });
+    // Claiming the task is a content edit (status change) → stamp advances to T1.
+    await updateTask('task-beat', {
+      status: 'in_progress',
+      metadata: { claimedBy: 'a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z' }
+    }, 'user', { now: T1 });
+    // Real heartbeat shape (cos.js processOrphanedTasks once spread the whole
+    // metadata): { ...existing, ...freshLease }. The re-included unchanged keys
+    // (context, updatedAt) must NOT count as an edit — else every ~15min heartbeat
+    // bumps the stamp and a lease-renewing peer spuriously wins content ties.
+    const current = await getTaskById('task-beat');
+    const renewed = await updateTask('task-beat', {
+      metadata: { ...current.metadata, claimedBy: 'a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T01:00:00.000Z' }
+    }, 'user', { now: T2 });
+    expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+    expect(renewed.metadata.updatedAt).toBe(new Date(T1).toISOString()); // NOT bumped to T2
+  });
+
+  it('DOES bump updatedAt when a spread metadata patch actually changes a non-claim value (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    await addTask({ description: 'meta edit', id: 'task-meta', context: 'old' }, 'user', { now: T0 });
+    const current = await getTaskById('task-meta');
+    // Same spread shape as the heartbeat, but context genuinely changes → real edit.
+    const updated = await updateTask('task-meta', {
+      metadata: { ...current.metadata, context: 'new' }
+    }, 'user', { now: T1 });
+    expect(updated.metadata.context).toBe('new');
+    expect(updated.metadata.updatedAt).toBe(new Date(T1).toISOString());
   });
 
   it('returns an error object when the file is missing', async () => {
@@ -308,6 +360,14 @@ describe('cosTaskStore.approveTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'approved')).toBe(true);
   });
 
+  it('bumps the updatedAt LWW stamp on approval (approval is content) (#1714)', async () => {
+    const T0 = Date.parse('2026-06-25T00:00:00.000Z');
+    const T1 = Date.parse('2026-06-25T06:00:00.000Z');
+    await addTask({ description: 'need approve', id: 'sys-ap2', approvalRequired: true }, 'internal', { now: T0 });
+    const approved = await approveTask('sys-ap2', { now: T1 });
+    expect(approved.metadata.updatedAt).toBe(new Date(T1).toISOString());
+  });
+
   it('rejects a task that does not require approval', async () => {
     await addTask({ description: 'auto', id: 'sys-auto', approvalRequired: false }, 'internal');
     expect((await approveTask('sys-auto')).error).toBe('Task does not require approval');
@@ -345,5 +405,71 @@ describe('addTask — first-line dedup (source guards)', () => {
     const fnBody = STORE_SRC.slice(start, end === -1 ? undefined : end);
     expect(fnBody).toMatch(/t\.metadata\?\.app\s*\|\|\s*null/);
     expect(fnBody).toMatch(/taskData\.app\s*\|\|\s*null/);
+  });
+});
+
+// Receiver side of CoS task federation (#1712). Runs the REAL cosTaskMerge
+// against the in-memory file map so the read-merge-write round-trip + write-skip
+// are covered end-to-end (the merge rules themselves are unit-tested in
+// cosTaskMerge.test.js).
+describe('cosTaskStore.mergePeerTasks', () => {
+  const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+  const future = (ms) => new Date(NOW + ms).toISOString();
+
+  it('adopts a remote-only task into the file and emits tasks:changed', async () => {
+    await addTask({ description: 'local task', priority: 'LOW', id: 'task-local' }, 'user');
+    mock.events = [];
+    const remote = [{ id: 'task-remote', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'peer task', metadata: {} }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getUserTasks();
+    expect(after.tasks.map(t => t.id).sort()).toEqual(['task-local', 'task-remote']);
+    expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'peer-merged')).toBe(true);
+  });
+
+  it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
+    await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
+    mock.events = [];
+    const writeSpy = (await import('fs/promises')).writeFile;
+    writeSpy.mockClear();
+    const remote = [{ id: 'task-same', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'same', metadata: {} }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res).toEqual({ changed: false });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(mock.events.some(e => e.name === 'tasks:changed')).toBe(false);
+  });
+
+  it("never clobbers the local peer's live claim with a remote pending copy", async () => {
+    // Local task is claimed + in_progress (this instance is working it).
+    await addTask({ description: 'claimed work', id: 'task-c', priority: 'HIGH' }, 'user');
+    await updateTask('task-c', { status: 'in_progress', metadata: { claimedBy: 'instance-A', claimedAt: future(-1000), leaseExpiresAt: future(60_000) } }, 'user');
+    // Peer still thinks it's pending + unclaimed.
+    const remote = [{ id: 'task-c', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'claimed work', metadata: {} }];
+    await mergePeerTasks('user', remote, { now: NOW });
+    const after = await getUserTasks();
+    const merged = after.tasks.find(t => t.id === 'task-c');
+    expect(merged.status).toBe('in_progress');
+    expect(merged.metadata.claimedBy).toBe('instance-A');
+  });
+
+  it('creates the file when it does not exist yet and the peer has tasks', async () => {
+    const remote = [{ id: 'sys-x', taskType: 'internal', status: 'pending', priority: 'MEDIUM', description: 'new', metadata: {} }];
+    const res = await mergePeerTasks('internal', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getCosTasks();
+    expect(after.tasks.map(t => t.id)).toContain('sys-x');
+  });
+
+  it('adopts a metadata-less remote task through the real markdown generator without throwing', async () => {
+    // A cross-version/forked peer may advertise a task with no `metadata` (the
+    // wire schema marks it optional). generateTasksMarkdown does
+    // Object.entries(metadata) — undefined would throw and fail the whole merge.
+    const remote = [{ id: 'task-nometa', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'no metadata here' }];
+    const res = await mergePeerTasks('user', remote, { now: NOW });
+    expect(res.changed).toBe(true);
+    const after = await getUserTasks();
+    const adopted = after.tasks.find(t => t.id === 'task-nometa');
+    expect(adopted).toBeTruthy();
+    expect(adopted.description).toBe('no metadata here');
   });
 });

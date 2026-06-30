@@ -20,9 +20,11 @@ import { sanitizePeerForClient } from './instances.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
+import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -646,6 +648,9 @@ export function initSocket(io) {
   // Set up Writers-Room scene-image forwarding (broadcast to all clients)
   setupWritersRoomEventForwarding();
 
+  // Set up Music Video scene reference-frame forwarding (broadcast to all clients)
+  setupMusicVideoEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
@@ -681,6 +686,24 @@ function setupWritersRoomEventForwarding() {
   // so the boards update reactively without a refetch (#1363).
   writersRoomEvents.on('scene-image', (data) => {
     if (ioInstance) ioInstance.emit('writers-room:scene-image', data);
+  });
+}
+
+let musicVideoForwardingSetup = false;
+function setupMusicVideoEventForwarding() {
+  if (musicVideoForwardingSetup) return;
+  musicVideoForwardingSetup = true;
+  // A scene reference-frame render filed durably by musicVideoSceneImageHook —
+  // bridge it so the director board updates reactively without a refetch
+  // (#1760 Phase 1b).
+  musicVideoEvents.on('scene-image', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-image', data);
+  });
+  // A scene i2v clip filed durably by musicVideoSceneVideoHook — bridge it so
+  // the board picks up the resulting `videoHistoryId` without a refetch
+  // (#1760 Phase 1).
+  musicVideoEvents.on('scene-video', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-video', data);
   });
 }
 
@@ -974,5 +997,48 @@ function setupMediaGenEventForwarding() {
   });
   videoGenEvents.on('failed', (data) => {
     if (ioInstance) ioInstance.emit('video-gen:failed', data);
+  });
+
+  // Map a media-job kind to its gen-event namespace prefix. Only image/video
+  // jobs drive scene spinners and have `*-gen:*` consumers; the shared media
+  // queue also runs `training` (LoRA) jobs, which have their own UI and NO
+  // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
+  // (returning null skips them) rather than falling through to `image-gen:*`.
+  const genEvtPrefix = (kind) =>
+    kind === 'video' ? 'video-gen' : kind === 'image' ? 'image-gen' : null;
+
+  // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
+  // `generationId` (#1791). The internal gen modules emit started/progress/
+  // completed/failed but have NO 'canceled' — a job canceled *while queued*
+  // never starts a gen run, so it produces only `mediaJobEvents 'canceled'` and
+  // no socket frame at all, leaving per-scene render spinners stuck until the
+  // component remounts. Every client spinner already correlates by media-job id
+  // (`data.generationId === jobId`), so a single id-keyed event clears the right
+  // spinner across writers-room, music-video, and `useMediaJobProgress`
+  // consumers (catalog et al.) uniformly — no per-domain event needed. For a
+  // job canceled *while running* this fires alongside the gen module's `failed`;
+  // both clear the spinner and the handlers are idempotent.
+  mediaJobEvents.on('canceled', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:canceled`, { generationId: job.id });
+  });
+
+  // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
+  // `generationId` (#1799) — the failure-side analog of the canceled bridge
+  // above. A job that fails *before* the gen run starts (e.g. an unready BYOV
+  // runtime throws synchronously in the queue worker, or the watchdog times the
+  // job out) emits only `mediaJobEvents 'failed'` and never a `*-gen:failed`
+  // frame, so the scene button stays stuck on "Rendering…". Forward it with the
+  // same `{ generationId, error }` shape the gen modules use so the client's
+  // `onFailed` clears the spinner and can toast the reason. For a job that fails
+  // *while running* this fires alongside the gen module's own `failed`; both
+  // settle the spinner to 'failed' and the handler is idempotent.
+  mediaJobEvents.on('failed', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }

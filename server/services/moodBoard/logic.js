@@ -239,3 +239,97 @@ export function applyBoardRestore(board, patch) {
   next.updatedAt = nowIso();
   return next;
 }
+
+// ─── Pinterest board link (mood-board importer) ──────────────────────────────
+// A board can be linked to a public Pinterest board's RSS feed. The link is an
+// additive `pinterest` sub-object on the board record — it rides through
+// sanitizeBoardForSync's `...raw` spread, so it federates with the board (no
+// schema-version bump: full-record LWW, and an older peer preserves the unknown
+// key). `lastSyncedAt` tracks the most recent manual "Sync now".
+
+// Set (or replace) the Pinterest link. Preserve the prior sync timestamp only
+// when re-linking the SAME feed; pointing the board at a DIFFERENT Pinterest
+// board clears lastSyncedAt, otherwise the UI would claim the new board was
+// "last synced" at the old board's time before any sync has run.
+export function applyPinterestLink(board, { feedUrl, boardUrl }) {
+  const prior = board.pinterest || {};
+  const sameFeed = prior.feedUrl === feedUrl;
+  return {
+    ...board,
+    pinterest: {
+      feedUrl,
+      boardUrl: boardUrl ?? null,
+      lastSyncedAt: sameFeed ? (prior.lastSyncedAt ?? null) : null,
+    },
+    updatedAt: nowIso(),
+  };
+}
+
+// Self-heal a stale Pinterest feed (e.g. a section URL saved before section
+// detection, whose `/user/board/section.rss` feed Pinterest serves as HTML) to a
+// corrected `feedUrl`, but ONLY when the board's currently-persisted feed still
+// matches `fromFeedUrl` — the feed read at sync start. This guards the same
+// single-user re-entrancy race as appendPinterestPins: the sync's getBoard()
+// runs before this locked write, so the user can unlink or repoint the board in
+// between. Without the guard, applyPinterestLink would unconditionally rewrite
+// the link and resurrect/clobber the user's newer state. Returns changed:false
+// (no write) when the board was unlinked/repointed concurrently or is already
+// on the corrected feed. Returns { board, changed }.
+export function healPinterestFeedRecord(board, { fromFeedUrl, feedUrl, boardUrl }) {
+  if (board.pinterest?.feedUrl !== fromFeedUrl || fromFeedUrl === feedUrl) {
+    return { board, changed: false };
+  }
+  return { board: applyPinterestLink(board, { feedUrl, boardUrl }), changed: true };
+}
+
+// Remove the Pinterest link. Returns changed:false (no write) when the board
+// wasn't linked, so the db layer can skip a wasted row rewrite + peer push.
+export function clearPinterestLinkRecord(board) {
+  if (!board.pinterest) return { board, changed: false };
+  const next = { ...board };
+  delete next.pinterest;
+  next.updatedAt = nowIso();
+  return { board: next, changed: true };
+}
+
+/**
+ * Append already-downloaded Pinterest pins as image items, then stamp the sync
+ * timestamp. Each `imported` entry is `{ imageUrl, caption, source }` where
+ * `source` is the pin permalink — the dedupe key. Skips pins whose `source`
+ * already exists on the board (in-lock safety net; the service pre-dedupes
+ * before downloading) and respects MAX_ITEMS_PER_BOARD by truncating to the
+ * remaining capacity rather than throwing — a partial import beats a hard
+ * mid-sync failure. Always re-stamps `pinterest.lastSyncedAt` (even on zero new)
+ * so the UI reflects the check. Returns `{ board, added, aborted }`.
+ *
+ * `expectedFeedUrl` guards a single-user re-entrancy race: the feed fetch +
+ * image downloads run OUTSIDE the row lock, so the user can unlink or re-link
+ * the board mid-sync. When the persisted feed no longer matches the one this
+ * sync fetched, abort — append no pins and DON'T stamp lastSyncedAt — so stale
+ * pins never land on a board that was unlinked/repointed.
+ */
+export function appendPinterestPins(board, imported, { syncedAt = nowIso(), expectedFeedUrl = null } = {}) {
+  if (expectedFeedUrl && board.pinterest?.feedUrl !== expectedFeedUrl) {
+    return { board, added: 0, aborted: true };
+  }
+  const items = Array.isArray(board.items) ? board.items : [];
+  const seen = new Set(items.map((it) => it && it.source).filter(Boolean));
+  const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - items.length);
+  const fresh = [];
+  for (const imp of Array.isArray(imported) ? imported : []) {
+    if (fresh.length >= capacity) break;
+    if (imp.source && seen.has(imp.source)) continue;
+    if (imp.source) seen.add(imp.source);
+    fresh.push(normalizeItem(
+      { type: 'image', imageUrl: imp.imageUrl, caption: imp.caption ?? null, source: imp.source ?? null },
+      { id: `mbi-${randomUUID()}`, now: syncedAt },
+    ));
+  }
+  const next = {
+    ...board,
+    items: [...items, ...fresh],
+    pinterest: { ...(board.pinterest || {}), lastSyncedAt: syncedAt },
+    updatedAt: nowIso(),
+  };
+  return { board: next, added: fresh.length, aborted: false };
+}

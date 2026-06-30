@@ -41,6 +41,7 @@ export * from './graphSimulation.js';
 // === Generic UI / collection utilities ===
 export * from './applyManuscriptEdits.js';
 export * from './audioRecorder.js';
+export * from './boundedMap.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
@@ -81,6 +82,7 @@ export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './songProgress.js';
 export * from './syncCounts.js';
+export * from './terminalTheme.js';
 export * from './tribe.js';
 export * from './universeBuilderExpand.js';
 export * from './wrSceneCursor.js';

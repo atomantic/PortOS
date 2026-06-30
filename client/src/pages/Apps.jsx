@@ -272,7 +272,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleStop(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
                             aria-label={`Stop ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'stop'}
                           >
@@ -282,7 +282,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleRestart(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
                             aria-label={`Restart ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'restart'}
                           >
@@ -297,7 +297,7 @@ export default function Apps() {
                         <button
                           onClick={() => fetchApps()}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
                           aria-label={`${app.name} status unavailable — refresh`}
                           title="PM2 status could not be read — refresh to retry"
                         >
@@ -308,7 +308,7 @@ export default function Apps() {
                         <button
                           onClick={() => handleStart(app)}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
+                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
                           aria-label={`Start ${app.name}`}
                           aria-busy={actionLoading[app.id] === 'start'}
                         >
@@ -325,7 +325,7 @@ export default function Apps() {
                         {app.uiPort && (
                           <button
                             onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
-                            className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} UI`}
                           >
                             <ExternalLink size={14} aria-hidden="true" />
@@ -335,7 +335,7 @@ export default function Apps() {
                         {app.devUiPort && (
                           <button
                             onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
-                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
                             aria-label={`Launch ${app.name} Dev UI`}
                           >
                             <ExternalLink size={14} aria-hidden="true" />
@@ -362,7 +362,7 @@ export default function Apps() {
                           <button
                             onClick={() => app.archived ? handleUnarchive(app) : handleArchive(app)}
                             disabled={archiving[app.id]}
-                            className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
+                            className={`px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
                               app.archived
                                 ? 'bg-port-success/20 text-port-success border-port-success/30 hover:bg-port-success/30'
                                 : 'bg-port-border text-gray-400 border-port-border hover:text-white hover:bg-port-border/80'
@@ -376,7 +376,7 @@ export default function Apps() {
                         <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
                           <Link
                             to={`/apps/${app.id}/overview`}
-                            className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 inline-flex items-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                             aria-label={`Manage ${app.name}`}
                           >
                             Manage
@@ -384,7 +384,7 @@ export default function Apps() {
                           {app.id !== api.PORTOS_APP_ID && (
                             <button
                               onClick={() => setConfirmingDelete(app.id)}
-                              className="px-3 py-1.5 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-hidden focus:ring-2 focus:ring-port-error"
+                              className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-hidden focus:ring-2 focus:ring-port-error"
                               aria-label={`Delete ${app.name}`}
                             >
                               Delete
@@ -523,20 +523,20 @@ export default function Apps() {
                     <div className="flex flex-wrap gap-2 pt-2">
                       <button
                         onClick={() => api.openAppInEditor(app.id).catch(() => null)}
-                        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                        className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                       >
                         <Code size={14} aria-hidden="true" /> Open in Editor
                       </button>
                       <button
                         onClick={() => api.openAppFolder(app.id).catch(() => null)}
-                        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                        className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                       >
                         <FolderOpen size={14} aria-hidden="true" /> Open Folder
                       </button>
                       <button
                         onClick={() => handleUpdate(app)}
                         disabled={isOperating}
-                        className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                        className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
                         aria-label="Pull latest code, install dependencies, run setup, and restart"
                       >
                         <Download size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'update' ? 'animate-bounce' : ''} />
@@ -546,7 +546,7 @@ export default function Apps() {
                         <button
                           onClick={() => handleBuild(app)}
                           disabled={building[app.id]}
-                          className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors rounded-lg text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors rounded-lg text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                           aria-label={`Build production UI: ${app.buildCommand}`}
                         >
                           <Hammer size={14} aria-hidden="true" className={building[app.id] ? 'animate-bounce' : ''} />
@@ -559,7 +559,7 @@ export default function Apps() {
                           <button
                             onClick={() => handleRefreshConfig(app)}
                             disabled={refreshingConfig[app.id]}
-                            className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
                             aria-label="Re-scan ecosystem config for PM2 processes and ports"
                           >
                             <RefreshCw size={14} aria-hidden="true" className={refreshingConfig[app.id] ? 'animate-spin' : ''} />
@@ -569,7 +569,7 @@ export default function Apps() {
                             <button
                               onClick={() => handleStandardize(app)}
                               disabled={isOperating}
-                              className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                              className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
                               aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
                             >
                               <Wrench size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'standardize' ? 'animate-spin' : ''} />
@@ -585,7 +585,7 @@ export default function Apps() {
                             const xcodeprojName = app.name + '.xcodeproj';
                             window.open(`xcode://open?url=file://${app.repoPath}/${xcodeprojName}`, '_self');
                           }}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1"
+                          className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1"
                           aria-label={`Open ${app.name} in Xcode`}
                         >
                           <Smartphone size={14} aria-hidden="true" /> Open in Xcode

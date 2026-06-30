@@ -16,6 +16,10 @@ import {
   mergeBoardRecord,
   imageUrlToAppAsset,
   MAX_ITEMS_PER_BOARD,
+  applyPinterestLink,
+  healPinterestFeedRecord,
+  clearPinterestLinkRecord,
+  appendPinterestPins,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -229,5 +233,131 @@ describe('applyBoardRestore', () => {
   it('ignores a non-array items field', () => {
     const base = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), items: [{ id: 'x' }] };
     expect(applyBoardRestore(base, { items: 'nope' }).items).toEqual([{ id: 'x' }]);
+  });
+});
+
+describe('applyPinterestLink', () => {
+  const base = () => buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+
+  it('stores the feed + board URLs and seeds sync state', () => {
+    const next = applyPinterestLink(base(), { feedUrl: 'https://www.pinterest.com/j/b.rss', boardUrl: 'https://www.pinterest.com/j/b/' });
+    expect(next.pinterest).toEqual({
+      feedUrl: 'https://www.pinterest.com/j/b.rss',
+      boardUrl: 'https://www.pinterest.com/j/b/',
+      lastSyncedAt: null,
+    });
+    expect(next.updatedAt).not.toBe('t0');
+  });
+
+  it('preserves the prior sync timestamp when re-linking the SAME feed', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'f.rss', boardUrl: 'oldb', lastSyncedAt: 's1' } };
+    const next = applyPinterestLink(linked, { feedUrl: 'f.rss', boardUrl: 'newb' });
+    expect(next.pinterest).toMatchObject({ feedUrl: 'f.rss', lastSyncedAt: 's1' });
+  });
+
+  it('clears the sync timestamp when re-linking to a DIFFERENT feed', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'old.rss', boardUrl: 'oldb', lastSyncedAt: 's1' } };
+    const next = applyPinterestLink(linked, { feedUrl: 'new.rss', boardUrl: 'newb' });
+    expect(next.pinterest).toMatchObject({ feedUrl: 'new.rss', lastSyncedAt: null });
+  });
+});
+
+describe('healPinterestFeedRecord', () => {
+  const base = () => buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+  const heal = (b, link) => healPinterestFeedRecord(b, link);
+
+  it('rewrites to the corrected feed when the stored feed still matches', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'sec.rss', boardUrl: 'https://www.pinterest.com/j/b/s/', lastSyncedAt: null } };
+    const { board, changed } = heal(linked, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'https://www.pinterest.com/j/b/s/' });
+    expect(changed).toBe(true);
+    expect(board.pinterest.feedUrl).toBe('board.rss');
+  });
+
+  it('is a no-op (no resurrect) when the user unlinked concurrently', () => {
+    const unlinked = base(); // pinterest removed mid-sync
+    const out = heal(unlinked, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
+    expect(out.board).toBe(unlinked);
+    expect(out.board.pinterest).toBeUndefined();
+  });
+
+  it('is a no-op when the user repointed the board to a different feed', () => {
+    const repointed = { ...base(), pinterest: { feedUrl: 'other.rss', boardUrl: 'ob', lastSyncedAt: null } };
+    const out = heal(repointed, { fromFeedUrl: 'sec.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
+    expect(out.board.pinterest.feedUrl).toBe('other.rss');
+  });
+
+  it('is a no-op when already on the corrected feed (from === to)', () => {
+    const linked = { ...base(), pinterest: { feedUrl: 'board.rss', boardUrl: 'b', lastSyncedAt: 's1' } };
+    const out = heal(linked, { fromFeedUrl: 'board.rss', feedUrl: 'board.rss', boardUrl: 'b' });
+    expect(out.changed).toBe(false);
+  });
+});
+
+describe('clearPinterestLinkRecord', () => {
+  it('removes the pinterest field and bumps updatedAt', () => {
+    const linked = { ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }), pinterest: { feedUrl: 'f' } };
+    const { board, changed } = clearPinterestLinkRecord(linked);
+    expect(changed).toBe(true);
+    expect(board.pinterest).toBeUndefined();
+    expect(board.updatedAt).not.toBe('t0');
+  });
+
+  it('is a no-op when not linked', () => {
+    const board = buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+    const out = clearPinterestLinkRecord(board);
+    expect(out.changed).toBe(false);
+    expect(out.board).toBe(board);
+  });
+});
+
+describe('appendPinterestPins', () => {
+  const linked = () => ({
+    ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }),
+    pinterest: { feedUrl: 'f', boardUrl: 'b', lastSyncedAt: null },
+  });
+  const imp = (n) => ({ imageUrl: `/data/images/p${n}.jpg`, caption: `c${n}`, source: `https://www.pinterest.com/pin/${n}/` });
+
+  it('appends image items and stamps sync state', () => {
+    const { board, added } = appendPinterestPins(linked(), [imp(1), imp(2)], { syncedAt: 's1' });
+    expect(added).toBe(2);
+    expect(board.items.map((it) => it.source)).toEqual(['https://www.pinterest.com/pin/1/', 'https://www.pinterest.com/pin/2/']);
+    expect(board.items[0]).toMatchObject({ type: 'image', imageUrl: '/data/images/p1.jpg', caption: 'c1' });
+    expect(board.pinterest).toMatchObject({ lastSyncedAt: 's1' });
+  });
+
+  it('dedupes against existing item sources', () => {
+    const existing = { ...linked(), items: [{ id: 'mbi-x', type: 'image', source: 'https://www.pinterest.com/pin/1/' }] };
+    const { added, board } = appendPinterestPins(existing, [imp(1), imp(2)], { syncedAt: 's1' });
+    expect(added).toBe(1);
+    expect(board.items).toHaveLength(2);
+  });
+
+  it('stamps lastSyncedAt even when nothing new was added', () => {
+    const { board, added } = appendPinterestPins(linked(), [], { syncedAt: 's2' });
+    expect(added).toBe(0);
+    expect(board.pinterest).toMatchObject({ lastSyncedAt: 's2' });
+  });
+
+  it('truncates to MAX_ITEMS_PER_BOARD capacity', () => {
+    const full = { ...linked(), items: Array.from({ length: MAX_ITEMS_PER_BOARD - 1 }, (_, i) => ({ id: `e${i}`, type: 'image', source: `e${i}` })) };
+    const { added } = appendPinterestPins(full, [imp(1), imp(2), imp(3)], { syncedAt: 's1' });
+    expect(added).toBe(1);
+  });
+
+  it('aborts (no append, no stamp) when the link changed mid-sync', () => {
+    const b = { ...linked(), pinterest: { feedUrl: 'now.rss', lastSyncedAt: 'prev' } };
+    const { board, added, aborted } = appendPinterestPins(b, [imp(1)], { syncedAt: 's9', expectedFeedUrl: 'stale.rss' });
+    expect(aborted).toBe(true);
+    expect(added).toBe(0);
+    expect(board).toBe(b); // unchanged — no items appended, lastSyncedAt not bumped
+  });
+
+  it('proceeds when expectedFeedUrl matches the current link', () => {
+    const b = { ...linked(), pinterest: { feedUrl: 'now.rss', lastSyncedAt: 'prev' } };
+    const { added, aborted } = appendPinterestPins(b, [imp(1)], { syncedAt: 's9', expectedFeedUrl: 'now.rss' });
+    expect(aborted).toBe(false);
+    expect(added).toBe(1);
   });
 });

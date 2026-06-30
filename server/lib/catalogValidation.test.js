@@ -216,6 +216,58 @@ describe('catalogValidation — catalogIngredientQuerySchema', () => {
   it('rejects negative offset', () => {
     expect(() => catalogIngredientQuerySchema.parse({ offset: '-1' })).toThrow();
   });
+
+  it('preprocesses a CSV ids string into a trimmed string[]', () => {
+    const out = catalogIngredientQuerySchema.parse({ ids: 'a, b ,c' });
+    expect(out.ids).toEqual(['a', 'b', 'c']);
+  });
+
+  it('drops empty segments and collapses an all-blank ids string to undefined', () => {
+    expect(catalogIngredientQuerySchema.parse({ ids: 'a,,,b' }).ids).toEqual(['a', 'b']);
+    expect(catalogIngredientQuerySchema.parse({ ids: ' , , ' }).ids).toBeUndefined();
+    expect(catalogIngredientQuerySchema.parse({ ids: '' }).ids).toBeUndefined();
+  });
+
+  it('omits ids cleanly when absent', () => {
+    expect(catalogIngredientQuerySchema.parse({ limit: '10' }).ids).toBeUndefined();
+  });
+
+  it('caps ids at 50 entries (extra trimmed before length validation)', () => {
+    const csv = Array.from({ length: 80 }, (_, i) => `id${i}`).join(',');
+    const out = catalogIngredientQuerySchema.parse({ ids: csv });
+    expect(out.ids).toHaveLength(50);
+  });
+
+  it('rejects an oversized single id token (>64 chars)', () => {
+    expect(() => catalogIngredientQuerySchema.parse({ ids: 'x'.repeat(65) })).toThrow();
+  });
+
+  // --- Album/facet filters (#1762) ---
+  it('accepts a paired refKind + refId', () => {
+    const out = catalogIngredientQuerySchema.parse({ refKind: 'universe', refId: 'u-1' });
+    expect(out.refKind).toBe('universe');
+    expect(out.refId).toBe('u-1');
+  });
+
+  it('rejects refKind without refId (and vice versa)', () => {
+    expect(() => catalogIngredientQuerySchema.parse({ refKind: 'universe' })).toThrow();
+    expect(() => catalogIngredientQuerySchema.parse({ refId: 'u-1' })).toThrow();
+  });
+
+  it('coerces unlinked/orphaned booleanish strings', () => {
+    expect(catalogIngredientQuerySchema.parse({ unlinked: 'true' }).unlinked).toBe(true);
+    expect(catalogIngredientQuerySchema.parse({ orphaned: 'true' }).orphaned).toBe(true);
+    expect(catalogIngredientQuerySchema.parse({ unlinked: 'false' }).unlinked).toBe(false);
+  });
+
+  it('rejects combining the three album filters', () => {
+    expect(() => catalogIngredientQuerySchema.parse({ refKind: 'universe', refId: 'u-1', unlinked: 'true' })).toThrow();
+    expect(() => catalogIngredientQuerySchema.parse({ unlinked: 'true', orphaned: 'true' })).toThrow();
+  });
+
+  it('rejects an unknown refKind', () => {
+    expect(() => catalogIngredientQuerySchema.parse({ refKind: 'galaxy', refId: 'g-1' })).toThrow();
+  });
 });
 
 describe('catalogValidation — catalogIngredientLinkSchema', () => {

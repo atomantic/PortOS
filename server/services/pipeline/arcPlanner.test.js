@@ -2163,3 +2163,101 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     expect(f1.seasonId).toBe(v1.id); // the kept (lowest, unlocked) volume reused its id
   });
 });
+
+// Pure helpers extracted in #1544 to dedup the season-tree grouping (shared by
+// buildVerifyContext + buildBeatTree) and the episode-match logic (shared by
+// applyEpisodeResolutions + applyBeatResolutions). No I/O — tested directly.
+describe('arcPlanner — groupIssuesBySeasonTree (#1544)', () => {
+  const seasons = [
+    { id: 's1', number: 1, title: 'One' },
+    { id: 's2', number: 2, title: 'Two' },
+  ];
+  // Deliberately out of arcPosition order to prove the per-bucket sort.
+  const issues = [
+    { id: 'b', number: 2, seasonId: 's1', arcPosition: 2 },
+    { id: 'a', number: 1, seasonId: 's1', arcPosition: 1 },
+    { id: 'c', number: 3, seasonId: 's2', arcPosition: 1 },
+    { id: 'u', number: 9, seasonId: null, arcPosition: 1 },
+  ];
+  const opts = {
+    renderLeaf: (iss) => ({ number: iss.number }),
+    seasonFields: (s) => ({ number: s.number, title: s.title }),
+  };
+
+  it('buckets by seasonId and sorts each bucket by arcPosition', () => {
+    const tree = planner.groupIssuesBySeasonTree(seasons, issues, opts);
+    expect(tree[0]).toMatchObject({ number: 1, title: 'One' });
+    expect(tree[0].episodes.map((e) => e.number)).toEqual([1, 2]); // arcPosition order, not input order
+    expect(tree[1].episodes.map((e) => e.number)).toEqual([3]);
+  });
+
+  it('appends a null-seasonId bucket as the (ungrouped issues) node', () => {
+    const tree = planner.groupIssuesBySeasonTree(seasons, issues, opts);
+    const ungrouped = tree[tree.length - 1];
+    expect(ungrouped).toMatchObject({ number: null, title: '(ungrouped issues)' });
+    expect(ungrouped.episodes.map((e) => e.number)).toEqual([9]);
+  });
+
+  it('omits the ungrouped node when every issue has a season', () => {
+    const grouped = issues.filter((i) => i.seasonId);
+    const tree = planner.groupIssuesBySeasonTree(seasons, grouped, opts);
+    expect(tree.some((n) => n.title === '(ungrouped issues)')).toBe(false);
+  });
+
+  it('uses seasonFields for node shape and appends episodes last (key order)', () => {
+    const tree = planner.groupIssuesBySeasonTree(
+      [{ id: 's1', number: 1, title: 'One', status: 'active' }],
+      [],
+      { renderLeaf: opts.renderLeaf, seasonFields: (s) => ({ number: s.number, title: s.title, status: s.status }) },
+    );
+    expect(Object.keys(tree[0])).toEqual(['number', 'title', 'status', 'episodes']);
+  });
+});
+
+describe('arcPlanner — matchIssueForEpisodeEdit (#1544)', () => {
+  const issues = [
+    { id: 'a', number: 5, seasonId: 's1' },
+    { id: 'b', number: 5, seasonId: 's2' },
+    { id: 'c', number: 7, seasonId: 's1' },
+  ];
+  const seasonIdByNumber = new Map([[1, 's1'], [2, 's2']]);
+
+  it('requires the season match when the named season resolves', () => {
+    const m = planner.matchIssueForEpisodeEdit(issues, seasonIdByNumber, { seasonNumber: 2, episodeNumber: 5 });
+    expect(m?.id).toBe('b'); // not the global-first issue 5 (id 'a')
+  });
+
+  it('returns undefined (no number fallback) when the resolved season has no such issue', () => {
+    const m = planner.matchIssueForEpisodeEdit(issues, seasonIdByNumber, { seasonNumber: 1, episodeNumber: 99 });
+    expect(m).toBeUndefined();
+  });
+
+  it('matches on series-global number when no season is given', () => {
+    const m = planner.matchIssueForEpisodeEdit(issues, seasonIdByNumber, { episodeNumber: 7 });
+    expect(m?.id).toBe('c');
+  });
+
+  it('matches on number alone when the named season does not resolve', () => {
+    const m = planner.matchIssueForEpisodeEdit(issues, seasonIdByNumber, { seasonNumber: 99, episodeNumber: 5 });
+    expect(m?.id).toBe('a'); // first issue with number 5
+  });
+});
+
+describe('arcPlanner — seasonIdByNumberOf (#1544)', () => {
+  it('indexes only integer-numbered seasons', () => {
+    const map = planner.seasonIdByNumberOf({
+      seasons: [
+        { id: 's1', number: 1 },
+        { id: 's2', number: 2 },
+        { id: 'bad', number: null },
+        { id: 'bad2' },
+      ],
+    });
+    expect([...map.entries()]).toEqual([[1, 's1'], [2, 's2']]);
+  });
+
+  it('returns an empty map for a seasonless series', () => {
+    expect(planner.seasonIdByNumberOf({}).size).toBe(0);
+    expect(planner.seasonIdByNumberOf(null).size).toBe(0);
+  });
+});

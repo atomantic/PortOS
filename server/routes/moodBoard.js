@@ -15,6 +15,7 @@ import {
   moodBoardUpdateSchema,
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
+  moodBoardPinterestLinkSchema,
 } from '../lib/validation.js';
 import {
   listBoards,
@@ -25,6 +26,9 @@ import {
   addBoardItem,
   updateBoardItem,
   removeBoardItem,
+  linkPinterestBoard,
+  unlinkPinterestBoard,
+  syncPinterestBoard,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -72,6 +76,24 @@ router.patch('/:id/items/:itemId', asyncHandler(async (req, res) => {
 router.delete('/:id/items/:itemId', asyncHandler(async (req, res) => {
   const board = await removeBoardItem(req.params.id, req.params.itemId);
   res.json(board);
+}));
+
+// Link the board to a public Pinterest board's RSS feed.
+router.put('/:id/pinterest', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardPinterestLinkSchema, req.body);
+  const board = await linkPinterestBoard(req.params.id, data);
+  res.json(board);
+}));
+
+router.delete('/:id/pinterest', asyncHandler(async (req, res) => {
+  const board = await unlinkPinterestBoard(req.params.id);
+  res.json(board);
+}));
+
+// Manual "Sync now" — pull new pins from the linked feed into the board.
+router.post('/:id/pinterest/sync', asyncHandler(async (req, res) => {
+  const result = await syncPinterestBoard(req.params.id);
+  res.json(result);
 }));
 
 export default router;

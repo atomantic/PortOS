@@ -58,6 +58,20 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+# macOS GPU-watchdog mitigation (mlx #3267). The Metal/AGX driver kills sustained
+# LoRA training under the GPU watchdog ("Impacting Interactivity" → process kill,
+# and on M5-class silicon escalating to a `watchdogd` kernel panic + hard reboot;
+# see docs/research/2026-06-13-mflux-training-watchdog-panic.md). The MLX
+# maintainer's confirmed workaround is to relax the AGX CDM context-store timeout
+# so a long command buffer isn't treated as a stuck/interactivity-impacting one.
+# It is read by the driver at Metal context creation, so it MUST be set before
+# mlx initializes — we set it here at module load, and since the mflux-train
+# child Popen (below) inherits this process env, the child gets it too. setdefault
+# lets an explicit override (or =0 to disable) still win. NOTE: per mlx #3267 the
+# kill is at the IOGPU layer *above* the process boundary, so process-teardown
+# segmentation alone does NOT prevent it — this env var attacks the actual cause.
+os.environ.setdefault("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1")
+
 CHILD = None
 STOP_REQUESTED = False
 
@@ -616,6 +630,9 @@ def main():
     # Self-document the exact numerical stack BEFORE anything can fail — the run
     # log + any watchdog paniclog then carry the mflux/mlx/mlx-metal trio inline.
     emit_runtime_fingerprint()
+    # Self-document the GPU-watchdog mitigation too (mlx #3267) so a paniclog
+    # shows whether the AGX timeout relaxation was active for the crashed run.
+    log(f"STATUS:watchdog mitigation · AGX_RELAX_CDM_CTXSTORE_TIMEOUT={os.environ.get('AGX_RELAX_CDM_CTXSTORE_TIMEOUT', 'unset')}")
     output_dir = Path(args.output_dir)
     samples_dir = output_dir / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)

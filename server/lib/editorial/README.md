@@ -8,6 +8,15 @@ optional gate, and a `run(ctx)` that returns findings shaped for the existing
 the enabled checks, and seeds findings lives at
 `server/services/pipeline/editorial/checkRunner.js`.
 
+`scope` is a `series | issue | scene | noun` granularity. A check meaningful at
+more than one granularity may declare an **array** — `scope: ['series', 'issue']`
+(#1628) — instead of being split into two near-duplicate checks; the string form
+keeps working. `normalizeCheckScopes` / `primaryCheckScope` (in `checkRegistry.js`)
+normalize either form, the load-time guard validates every member, and
+`resolveCheckState` exposes both a single primary `scope` (for single-value
+consumers) and the full `scopes` array (the catalog and dry-run plan fan a
+dual-scope check across each of its declared scopes).
+
 This directory is **pure** (no side-effecting imports — only `zod` and the pure
 `estimateTokens` budgeter). LLM-kind checks get their model caller through
 `ctx.callStagedLLM` (or `ctx.callInlineLLM` for user-defined checks), and a
@@ -75,6 +84,39 @@ fitted *after* the findings digest so manuscript coverage and the findings diges
 both win when budget is tight. A single-chunk (whole-fits) run never summarizes,
 so it pays nothing. When the reverse-outline (#1349) or continuity-bible (#1305)
 artifacts land, either could feed this context more cheaply than a per-chunk call.
+
+## Inter-check context sharing (#1627)
+
+Within a single pass a check can read the findings produced by **other checks it
+explicitly depends on**, so compound signals are possible (e.g. on-the-nose
+dialogue that is *also* doing exposition for a setup another check flagged). The
+sharing is **opt-in and scoped**, which keeps every other check a pure function of
+its declared `sources` (order-independent):
+
+- A check declares `dependsOn: ['<otherCheckId>', …]` on its registry entry. The
+  runner topologically orders the pass (`orderChecksByDependencies`) so every
+  declared dependency runs **before** the dependent — independent checks keep their
+  exact registry order, so a pass where nothing opts in is unchanged.
+- During its `run(ctx)`, the dependent reads `ctx.priorFindings` — the stamped
+  findings (each carrying `checkId`) that its declared dependencies produced earlier
+  this pass — or `ctx.findingsByCheck('<id>')` for a single dependency's findings.
+  Both are **scoped to declared deps only**: a check that declares no `dependsOn`
+  always sees an empty `ctx.priorFindings`, and `findingsByCheck` returns `[]` for
+  any id the check didn't declare. The array and each finding are **frozen** — a
+  check may read but never mutate another check's already-seeded findings.
+- Degrade-tolerant: a dependency that is disabled, outside a targeted subset run, or
+  errored this pass simply contributes no findings (the dependent still runs). A
+  dependency **cycle** is a registry bug — it's logged and the cycle's members fall
+  back to registry order. The dependent must therefore tolerate missing prior
+  findings. `dependsOn` shape (string-array, no self-reference) is enforced at load.
+- **Staleness is dependency-aware.** Because a dependency-consuming finding can
+  change when its *dependency's* source content drifts (not only its own), the
+  staleness fingerprint and the per-source I/O gates fold in each check's transitive
+  declared-dependency sources (`effectiveCheckSources` in the runner). So a compound
+  finding goes stale exactly when any source it transitively depended on changes —
+  never falsely fresh, never falsely stale — computed identically at seed-time and
+  read-time. A check with no `dependsOn` is fingerprinted on its own `sources` as
+  before.
 
 ## Discovery rule
 
@@ -151,15 +193,16 @@ runner-injected `ctx.callInlineLLM` (an inline-prompt sibling of
 
 | Module | Purpose |
 |---|---|
-| `checkRegistry.js` | `EDITORIAL_CHECKS` array + `EDITORIAL_SOURCES` (the per-check `sources` vocabulary the staleness runner fingerprints, #1387) + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
+| `checkRegistry.js` | `EDITORIAL_CHECKS` array + `EDITORIAL_SOURCES` (the per-check `sources` vocabulary the staleness runner fingerprints, #1387) + fail-fast guards + lookup/state helpers (`getCheck`, `getCheckById`, `getAllChecks`, `listChecks`, `resolveCheckState`, `getEnabledChecks`, `resolveCheckConfig`, `orderChecksByDependencies` (the dependency topo-sort, #1627)). User-defined-check helpers (`buildCustomCheck`, `buildCustomCheckPrompt`, `readCustomCheckDefs`, `isCustomCheckId`, `isValidCustomCheckDef`). Ships two reference checks: `naming.dissimilar-names` (deterministic) and `prose.info-dumping` (LLM). |
 | `nameSimilarity.js` | Pure, dependency-free name-confusability primitives for `naming.dissimilar-names` (#1291): `normalizeName`, `vowelSkeleton`, `soundex` (phonetic key), `levenshtein` (edit distance), `nameSimilaritySignals` (the per-pair signal list, with option toggles), and `firstLetterHistogram` / `findFirstLetterClusters` (cast first-letter crowding). |
 | `cliches.js` | Pure, dependency-free cliché + overwriting primitives for `prose.cliches` and `prose.modifier-stacking` (#1308): `CLICHE_PHRASES` (seed stock-simile/idiom list), `findCliches` (whole-word phrase scan with house-style allow/extra lists), and `findModifierStacking` (cumulative no-comma runs of 3+ stacked adjectives/adverbs). The LLM sibling `prose.dead-metaphor` handles the judgment cases (mixed/dead metaphor, novel clichés, purple prose). |
 | `italicThoughts.js` | Pure, dependency-free italic-thought primitive for `prose.italic-thoughts` (#1300): `findItalicThoughts` (multi-word markdown `*…*` / `_…_` italic runs, dedup + word-count threshold so single-word emphasis, bold, and `snake_case` are skipped). The LLM siblings (`opening.wrong-start`, `prose.mirror-description`, `dialogue.pleasantries`, `prose.kill-your-darlings`) handle the judgment cases in the #1300 anti-pattern bundle. |
-| `proseTics.js` | Pure, dependency-free copy-edit prose-tic primitives for the #1306 line-edit group: `tokenizeWords` / `splitSentences` (shared tokenization), `findFilterWords` (`prose.filter-words`), `findCrutchWords` (`prose.crutch-words`), `findAdverbs` (`prose.adverbs` — `-ly` adverbs + dialogue-tag adverbs), `findPassiveVoice` (`prose.passive-voice` — be-verb + past-participle heuristic; classifies each hit `weak`/`stative`/`mood` + `byAgent` so #1593 context tuning can suppress intentional passive) and its `filterPassiveVoice` companion (drops `stative` predicate-adjectives + `mood` setting images unless `suppressIntentional` is off), `findGestures` (`prose.repeated-gestures` — gesture tally + body-part autonomy), plus the seed `FILTER_WORDS` / `CRUTCH_WORDS` / `GESTURE_WORDS` lists. The LLM sibling `prose.telling-emotion` handles the named-emotion judgment case. |
+| `proseTics.js` | Pure, dependency-free copy-edit prose-tic primitives for the #1306 line-edit group: `tokenizeWords` / `splitSentences` (shared tokenization), `findFilterWords` (`prose.filter-words`), `findHedgeWords` (`prose.hedge-words` — hedge/weasel distance markers: metaphorical distance, dialogue hedges, cognitive weasel words), `findCrutchWords` (`prose.crutch-words`), `findAdverbs` (`prose.adverbs` — `-ly` adverbs + dialogue-tag adverbs), `findPassiveVoice` (`prose.passive-voice` — be-verb + past-participle heuristic; classifies each hit `weak`/`stative`/`mood` + `byAgent` so #1593 context tuning can suppress intentional passive) and its `filterPassiveVoice` companion (drops `stative` predicate-adjectives + `mood` setting images unless `suppressIntentional` is off), `findGestures` (`prose.repeated-gestures` — gesture tally + body-part autonomy), plus the seed `FILTER_WORDS` / `HEDGE_WORDS` / `CRUTCH_WORDS` / `GESTURE_WORDS` lists. The LLM sibling `prose.telling-emotion` handles the named-emotion judgment case. |
 | `repetition.js` | Pure, dependency-free word-echo & rhythm primitives for #1306: `findWordEchoes` (`prose.word-echoes` — distinctive word repeated within a window), `findRepeatedOpeners` (runs of sentences sharing an opener, "He… He… He…"), and `measureSentenceRhythm` (`prose.sentence-rhythm` — sentence-length variation). Reuses `tokenizeWords` / `splitSentences` from `proseTics.js`. |
 | `comicPacing.js` | Pure, dependency-free comic-pacing primitives for the #1314 comic-pacing group: `isSplashPage`, `comicSpreadLayout` (recto/verso + spread + `beginsSpread` page-turn map), `summarizeComicPages`, `analyzePanelRhythm` (`comic.panel-rhythm` — splash overuse / back-to-back splashes / overcrowded pages / grid monotony), `comicPageTurnSummary` + `authoredRevealSummary` (LLM-context renderers for `comic.page-turn-beats`). Operates on already-parsed comic pages (the runner parses each issue's stored comic script and injects them as the `comicScript` source) so the editorial dir stays import-pure. |
 | `shotContinuity.js` | Pure, dependency-free storyboard shot-continuity primitives for the deterministic `visual.shot-continuity` check (#1315): `findAxisReversals` (180°-rule axis flips across a continuity-linked shot pair using `screenDirection`) and `findShotTypeMonotony` (a scene whose classified shots all share one `shotType`). Also `summarizeStoryboardShots` (#1466) — renders the collected `{ issueNumber, scene }` storyboard list into a compact per-scene shot block shared by the LLM siblings `visual.eyeline-match` (gaze reciprocity / eyeline-vs-screen-direction) and `visual.appearance-continuity` (#1467 — diffs the same entity's wardrobe/prop/setting descriptions across shots for contradictions). Reads the shot-grammar fields from `server/lib/shotGrammar.js`. |
 | `dialogue.js` | Pure, dependency-free dialogue-tag primitives for the #1307 dialogue-craft group: `findSaidBookisms` (`dialogue.said-bookisms` — ornate speech tags like *expostulated*/*opined* and non-speech tags like "she smiled", matched only when adjacent to a double-quote span) and `findUnattributedDialogueRuns` (`dialogue.attribution-clarity` — runs of consecutive untagged/unbeated dialogue lines where the speaker can't be tracked), plus `attributeDialogueByOwner` (the coarse per-character dialogue-line tally behind `cast.representation-balance`'s dialogue-share signal, #1312 — credits each quoted paragraph to the first owner named in its beat) and the seed `SAID_BOOKISMS` / `NON_SPEECH_TAGS` lists. Also `inventoryDialogueTags` + `splitScenes` + `findDialogueTagVariety` (`dialogue.tag-variety`, #1587 — per-scene tag inventory flagging within-scene **monotony** (one verb dominates) and **over-variation** (a fresh verb on nearly every line); collapses inflections onto a base lemma via `PLAIN_SPEECH_TAG_GROUPS`). The LLM siblings `dialogue.on-the-nose` (subtext-free / "as you know, Bob" dialogue) and `dialogue.voice-distinctiveness` (per-character voice against canon `speechPattern`/`speechAccent`) handle the judgment cases. |
 | `letteringDensity.js` | Pure, dependency-free comic lettering-density primitives for `comic.lettering-density` (#1313): `countWords`, `panelLetteringMetrics` (per-panel balloon/caption/SFX word + balloon tally over the `comicScriptParser` output), `analyzeComicLettering` (flags balloons/panels/pages over the configurable thresholds in `DEFAULT_LETTERING_THRESHOLDS`), `overflowSeverity` (severity scaled by how far over the limit), and `sanitizeLetteringThresholds`. Mirrored to `client/src/lib/letteringDensity.js` for the comic-script stage's inline warnings — keep the two in sync. |
 | `balloonAttribution.js` | Pure, dependency-free comic speech-balloon attribution primitives for `comic.balloon-attribution`: `analyzeBalloonAttribution` (flags a dialogue line whose speaker isn't shown in the panel description and carries no off-panel/broadcast cue — the case the image model mis-attributes to a visible character), `splitSpeaker`, `nameInText`, and `OFFPANEL_OK_MODIFIER` (the broadcast/off-panel/V.O./transmission modifier vocabulary — mirrors `visualStages.js` `BALLOON_STYLE_HINTS`, keep in sync). Severity scales `medium`/`low` by whether another canon character is visibly named in the panel. |
+| `severityConfig.js` | Pure per-series severity-config helpers (#1616): the frozen `DEFAULT_SEVERITY_WEIGHTS` (high:12/medium:5/low:1) + `DEFAULT_BLOCKING_SEVERITIES` per autopilot gate (`BLOCKING_GATES` = arc/beatContinuity/editorial), `mergeSeverityWeights` (merge a per-series weight override over the defaults — absent/invalid keys keep the default), `resolveBlockingSet` (the per-gate blocking `Set` — `Array.isArray` first so an explicit empty `[]` "nothing blocks" is distinct from an absent gate's default), and the wire bounders `sanitizeSeverityWeights` / `sanitizeBlockingSeverities` (persisted on the series record, gated at `pipelineSeries` v9). Reuses `CHECK_SEVERITIES` from `checkRegistry.js` as the canonical enum so the wire gate can't drift. |
 | `index.js` | Barrel re-export of the above. |

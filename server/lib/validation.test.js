@@ -581,10 +581,11 @@ describe('validation.js', () => {
     });
 
     it('should accept a valid issueAuthorFilter and drop invalid ones', () => {
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toEqual({ issueAuthorFilter: 'self' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'owner' })).toEqual({ issueAuthorFilter: 'owner' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any' })).toEqual({ issueAuthorFilter: 'any' });
-      // Arbitrary strings must not slip through (would silently read as "owner").
-      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toBeNull();
+      // Arbitrary strings must not slip through (would silently read as the default).
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'somebody-else' })).toBeNull();
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 42 })).toBeNull();
       expect(sanitizeTaskMetadata({ useWorktree: true, issueAuthorFilter: 'bogus' }))
         .toEqual({ useWorktree: true });
@@ -880,6 +881,16 @@ describe('validation.js', () => {
     it('the update schema still rejects bad enum values and unknown keys', () => {
       expect(editorialCustomCheckUpdateSchema.safeParse({ scope: 'bogus' }).success).toBe(false);
       expect(editorialCustomCheckUpdateSchema.safeParse({ nope: 1 }).success).toBe(false);
+    });
+
+    it('accepts a non-negative integer checkFindingsPauseThreshold and rejects bad shapes (#1613)', () => {
+      expect(pipelineEditorialChecksSettingsSchema.safeParse({ checkFindingsPauseThreshold: 0 }).success).toBe(true);
+      expect(pipelineEditorialChecksSettingsSchema.safeParse({ checkFindingsPauseThreshold: 25 }).success).toBe(true);
+      // additive + optional: omitting it is fine
+      expect(pipelineEditorialChecksSettingsSchema.safeParse({}).success).toBe(true);
+      // negative / non-integer are rejected
+      expect(pipelineEditorialChecksSettingsSchema.safeParse({ checkFindingsPauseThreshold: -1 }).success).toBe(false);
+      expect(pipelineEditorialChecksSettingsSchema.safeParse({ checkFindingsPauseThreshold: 2.5 }).success).toBe(false);
     });
 
     it('the settings slice accepts forward/older-peer custom-check shapes (lenient)', () => {

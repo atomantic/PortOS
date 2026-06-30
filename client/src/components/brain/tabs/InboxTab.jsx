@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import {
@@ -14,11 +15,14 @@ import {
   Trash2,
   Save,
   X,
+  Sparkles,
+  Library,
   Brain
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useLocalStorageBool } from '../../../hooks';
 
 import {
   DESTINATIONS,
@@ -28,7 +32,12 @@ import { timeAgo } from '../../../utils/formatters';
 import VoiceCapture from '../VoiceCapture';
 
 export default function InboxTab({ onRefresh, settings }) {
+  const navigate = useNavigate();
   const [inputText, setInputText] = useState('');
+  // Sticky "Creative" capture mode (shared localStorage key with Quick Capture):
+  // when on, captured thoughts are flagged so they can later be batch-sent to the
+  // creative catalog (vs todos/refs that stay out).
+  const [creative, setCreative] = useLocalStorageBool('brain.captureCreative', false);
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNeedsReview, setShowNeedsReview] = useState(true);
@@ -91,12 +100,13 @@ export default function InboxTab({ onRefresh, settings }) {
       id: tempId,
       capturedText: text,
       status: 'classifying',
-      capturedAt: new Date().toISOString()
+      capturedAt: new Date().toISOString(),
+      ...(creative ? { creative: true } : {})
     };
     setInputText('');
     setEntries(prev => [optimisticEntry, ...prev]);
 
-    const result = await api.captureBrainThought(text).catch(err => {
+    const result = await api.captureBrainThought(text, undefined, undefined, { creative }).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
       setEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
@@ -226,6 +236,28 @@ export default function InboxTab({ onRefresh, settings }) {
   const doneEntries = entries.filter(e => e.status === 'done');
   const errorEntries = entries.filter(e => e.status === 'error');
 
+  // Creative notes the user flagged at capture, not yet marked done and not yet
+  // consumed by a committed catalog ingest — the pool the "Send to Catalog" batch
+  // action draws from. `sentToCatalogAt` (stamped on commit, not navigation)
+  // drops a note out so it can't be accidentally re-sent. Pending (optimistic)
+  // entries are excluded so we never ship a thought the server hasn't confirmed.
+  const creativeEntries = entries.filter(
+    e => e.creative && e.status !== 'done' && !e.sentToCatalogAt && !String(e.id).startsWith('_pending_')
+  );
+  // Batch-send creative notes into the catalog ingest flow. We hand the combined
+  // text plus the source note ids to /catalog/ingest (router state) where the
+  // user runs extract→review→commit — turning loose creative thoughts into typed
+  // catalog ingredients. On commit the catalog page stamps these ids consumed.
+  const handleSendCreativeToCatalog = () => {
+    if (!creativeEntries.length) return;
+    const rawText = creativeEntries
+      .map(e => e.capturedText)
+      .filter(Boolean)
+      .join('\n\n---\n\n');
+    const creativeNoteIds = creativeEntries.map(e => e.id);
+    navigate('/catalog/ingest', { state: { prefill: { title: 'Creative notes from Brain', rawText, creativeNoteIds } } });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -263,6 +295,19 @@ export default function InboxTab({ onRefresh, settings }) {
           />
           <VoiceCapture onTranscript={handleVoiceTranscript} />
           <button
+            type="button"
+            onClick={() => setCreative(v => !v)}
+            aria-pressed={creative}
+            aria-label="Toggle creative capture mode"
+            className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm ${creative
+              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+              : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}
+            title="Creative mode: flag captures as creative ideas you can send to the Catalog"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span className="hidden sm:inline">Creative</span>
+          </button>
+          <button
             type="submit"
             disabled={!inputText.trim()}
             className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
@@ -273,11 +318,30 @@ export default function InboxTab({ onRefresh, settings }) {
         </div>
         <p className="mt-2 text-xs text-gray-500">
           Capture a thought — type or use the mic. AI will classify and route it automatically.
+          {creative && <span className="text-purple-300"> Creative mode on — captures are flagged for the Catalog.</span>}
           {settings?.confidenceThreshold && (
             <span> Confidence threshold: {Math.round(settings.confidenceThreshold * 100)}%</span>
           )}
         </p>
       </form>
+
+      {/* Creative batch action — appears once any captured note is flagged
+          creative. Sends them all into the catalog ingest review in one hop. */}
+      {creativeEntries.length > 0 && (
+        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+          <span className="text-sm text-purple-200 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 flex-shrink-0" />
+            {creativeEntries.length} creative {creativeEntries.length === 1 ? 'note' : 'notes'} ready to become catalog ingredients
+          </span>
+          <button
+            type="button"
+            onClick={handleSendCreativeToCatalog}
+            className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
+          >
+            <Library className="w-4 h-4" /> Send to Catalog
+          </button>
+        </div>
+      )}
 
       {/* Needs Review rail — right column on xl+, first after the form on mobile.
           Capped to the viewport and given its own scroll on xl+ so a long
@@ -603,7 +667,12 @@ export default function InboxTab({ onRefresh, settings }) {
                   >
                     <div className="flex items-start justify-between gap-2 mb-2">
                       <div className="flex-1">
-                        <p className="text-white">{entry.capturedText}</p>
+                        <p className="text-white">
+                          {entry.creative && (
+                            <Sparkles className="inline w-3.5 h-3.5 text-purple-300 mr-1.5 -mt-0.5" aria-label="Creative note" />
+                          )}
+                          {entry.capturedText}
+                        </p>
                         {entry.classification?.cleanedUp && entry.classification.cleanedUp !== entry.capturedText && (
                           <p className="text-sm text-gray-300 mt-1 pl-3 border-l-2 border-port-accent/30">
                             {entry.classification.cleanedUp}

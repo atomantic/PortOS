@@ -76,13 +76,25 @@ vi.mock('./manuscriptReview.js', () => ({
 // Drives whether the reverse-outline refresh step (#1349) thinks a scene-consuming
 // check is enabled. Default false so the existing conductor runs skip it cheaply.
 let reverseOutlineConsumed = false;
+// Gate-aware (#1614) signal: drives the consumption check when a gateCtx is
+// passed (the autopilot's Gate 3). `null` = mirror the sources-only signal, so
+// every pre-#1614 test keeps its existing behavior.
+let reverseOutlineConsumedGated = null;
 // Drives the perCheck array the editorial-checks pass sees, so a test can inject
 // an errored check and assert it surfaces in the run summary (#1573).
 let editorialChecksPerCheck = [];
+// Drives the findings the editorial-checks pass returns, so a test can inject
+// high-severity findings and assert the optional pause gate fires (#1613).
+let editorialChecksFindings = [];
 const checkRunnerSpies = {
-  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: [], perCheck: editorialChecksPerCheck, canceled: false })),
+  runEditorialChecks: vi.fn(async () => ({ runId: 'ec', findings: editorialChecksFindings, perCheck: editorialChecksPerCheck, canceled: false })),
   buildEditorialCheckPlan: vi.fn(async () => ({ seriesId: 's', checks: [], enabledCount: 0, consumesReverseOutline: reverseOutlineConsumed })),
-  enabledChecksConsumeReverseOutline: vi.fn(() => reverseOutlineConsumed),
+  enabledChecksConsumeReverseOutline: vi.fn((settings, checkIds, gateCtx) =>
+    (gateCtx != null && reverseOutlineConsumedGated !== null ? reverseOutlineConsumedGated : reverseOutlineConsumed)),
+  // Gate-context builder (#1614) — the SUT calls this before the gate-aware
+  // consumption re-check. Shape is irrelevant here (the consumption mock above
+  // ignores it); it only needs to resolve to a truthy ctx.
+  buildReverseOutlineGateContext: vi.fn(async (seriesId) => ({ seriesId, manuscript: 'x', canon: { characters: [] }, reverseOutline: [], reverseOutlinePlotlines: [] })),
   // Real pure impl (the module is fully mocked) so the SUT's error-summarizing
   // matches production behavior without pulling checkRunner's heavy imports.
   summarizeCheckErrors: (perCheck) => {
@@ -131,6 +143,17 @@ const checkSeriesCanonReadiness = vi.fn(async (seriesId) => ({
 }));
 vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
+// Pause-escalation notifications (#1615) — spy on the notification center so a
+// test can assert a pause posts a banner (and a clean run / opt-out does not).
+const addNotification = vi.fn(async () => ({ id: 'notif-1' }));
+const removeByMetadata = vi.fn(async () => ({ success: true, removed: 0 }));
+vi.mock('../notifications.js', () => ({
+  addNotification,
+  removeByMetadata,
+  NOTIFICATION_TYPES: { AUTOPILOT_PAUSED: 'autopilot_paused' },
+  PRIORITY_LEVELS: { HIGH: 'high', MEDIUM: 'medium', LOW: 'low', CRITICAL: 'critical' },
+}));
+
 // Mocked domainUsage binding, so a test can drive the budget per call.
 const { getDomainBudgetStatus } = await import('../domainUsage.js');
 // Mocked settings binding, so a test can drive the persisted convergence-round
@@ -174,8 +197,10 @@ beforeEach(() => {
   canonReady = true;
   canonUndescribed = [];
   reverseOutlineConsumed = false;
+  reverseOutlineConsumedGated = null;
   reverseOutlineState = { status: 'complete', stale: false };
   editorialChecksPerCheck = [];
+  editorialChecksFindings = [];
   nextTaskId = 0;
   autopilot.__testing.runs.clear();
   vi.clearAllMocks();
@@ -279,6 +304,52 @@ describe('resolveNextStep (pure)', () => {
       { readinessGate: 'bogus' },
       { pipelineEditorialChecks: { readinessGate: 'none' } },
     )).toBe('none');
+  });
+
+  it('resolveAutopilotCheckPauseThreshold: per-run option wins, else setting, else 0/off (#1613)', () => {
+    const { resolveAutopilotCheckPauseThreshold, DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD } = autopilot;
+    expect(DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD).toBe(0);
+    // per-run override wins (including an explicit 0 = off)
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 0 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } },
+    )).toBe(0);
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 8 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } },
+    )).toBe(8);
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotCheckPauseThreshold({}, { pipelineEditorialChecks: { checkFindingsPauseThreshold: 5 } })).toBe(5);
+    // 0/off when neither is set
+    expect(resolveAutopilotCheckPauseThreshold({}, null)).toBe(0);
+    // a non-integer at any layer falls through to the next
+    expect(resolveAutopilotCheckPauseThreshold(
+      { checkFindingsPauseThreshold: 2.5 },
+      { pipelineEditorialChecks: { checkFindingsPauseThreshold: 'x' } },
+    )).toBe(0);
+  });
+
+  it('resolveAutopilotNotifyOnPause: per-run option wins, else setting, else true/on (#1615)', () => {
+    const { resolveAutopilotNotifyOnPause, DEFAULT_NOTIFY_ON_PAUSE } = autopilot;
+    expect(DEFAULT_NOTIFY_ON_PAUSE).toBe(true);
+    // per-run override wins (including an explicit false = silence)
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: false },
+      { pipelineEditorialChecks: { notifyOnPause: true } },
+    )).toBe(false);
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: true },
+      { pipelineEditorialChecks: { notifyOnPause: false } },
+    )).toBe(true);
+    // persisted setting fills in when no per-run override
+    expect(resolveAutopilotNotifyOnPause({}, { pipelineEditorialChecks: { notifyOnPause: false } })).toBe(false);
+    // on by default when neither is set (the one opt-OUT autopilot gate)
+    expect(resolveAutopilotNotifyOnPause({}, null)).toBe(true);
+    // a non-boolean at any layer falls through to the next
+    expect(resolveAutopilotNotifyOnPause(
+      { notifyOnPause: 'yes' },
+      { pipelineEditorialChecks: { notifyOnPause: 1 } },
+    )).toBe(true);
   });
 
   it('regenerates the arc for an arc-only series with no volumes', () => {
@@ -407,6 +478,18 @@ describe('resolveNextStep (pure)', () => {
     expect(gateNote({ readinessGate: 'noOpenHighOrMedium' })).toMatch(/gate: noOpenHighOrMedium$/);
     // An invalid gate falls through to the default.
     expect(gateNote({ readinessGate: 'bogus' })).toMatch(/gate: noOpenHigh$/);
+  });
+
+  it('dry-run plan annotates the editorial-checks step with the pause threshold when armed (#1613)', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const noteFor = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts)
+      .find((p) => p.kind === 'editorialChecks')?.note;
+    // Off (default / 0) → no pause annotation.
+    expect(noteFor({})).not.toMatch(/pauses at/);
+    expect(noteFor({ checkFindingsPauseThreshold: 0 })).not.toMatch(/pauses at/);
+    // Armed → the threshold is surfaced in the note.
+    expect(noteFor({ checkFindingsPauseThreshold: 5 })).toMatch(/pauses at ≥ 5 high finding/);
   });
 
   it('asks to generate episodes for a season with no issues', () => {
@@ -933,6 +1016,105 @@ describe('autopilot conductor', () => {
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
   });
 
+  // Per-series blocking-severity sets (#1616).
+  it('arc gate: default blocks a medium finding (pauses)', async () => {
+    verifyFindings = [{ severity: 'medium', problem: 'soft beat', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('verifyArc');
+  });
+
+  it('arc gate: a per-series arc:[high] override lets a medium finding pass', async () => {
+    verifyFindings = [{ severity: 'medium', problem: 'soft beat', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { arc: ['high'] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    // medium no longer blocks arc → the run proceeds past arc to completion.
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('arc gate: an empty arc:[] override never blocks, even on a high finding', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { arc: [] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('beatContinuity gate: a per-series beatContinuity:[high] override lets a medium finding pass', async () => {
+    beatContinuityFindings = [{ severity: 'medium', problem: 'beat drift', location: 'I1' }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { beatContinuity: ['high'] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxBeatContinuityRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('editorial gate: an empty editorial:[] override never blocks, even on a high finding', async () => {
+    editorialFindings = [{ severity: 'high', problem: 'missing scene', issueNumber: 1 }];
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, { blockingSeverities: { editorial: [] } });
+    await autopilot.startSeriesAutopilot(seriesId, { maxEditorialRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('editorial gate: default blocks a high finding (pauses)', async () => {
+    editorialFindings = [{ severity: 'high', problem: 'missing scene', issueNumber: 1 }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxEditorialRounds: 1 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('editorialReview');
+  });
+
+  it('posts an in-app notification when a run pauses, with a resume link (#1615)', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    expect(addNotification).toHaveBeenCalledTimes(1);
+    const notif = addNotification.mock.calls[0][0];
+    expect(notif.type).toBe('autopilot_paused');
+    expect(notif.priority).toBe('high');
+    expect(notif.link).toBe(`/pipeline/series/${seriesId}`);
+    expect(notif.metadata?.autopilotPauseSeriesId).toBe(seriesId);
+    // prior pause banners for this series are cleared first so resume→pause leaves one
+    expect(removeByMetadata).toHaveBeenCalledWith('autopilotPauseSeriesId', seriesId);
+  });
+
+  it('does not notify on a clean complete (#1615)', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('clears any stale pause banner when a (resumed) execute run starts (#1615)', async () => {
+    // A resume reuses startSeriesAutopilot; clearing on start means a run that
+    // completes/errors without re-pausing doesn't leave a dead resume link.
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(removeByMetadata).toHaveBeenCalledWith('autopilotPauseSeriesId', seriesId);
+  });
+
+  it('does not notify when notifyOnPause is opted out for the run (#1615)', async () => {
+    verifyFindings = [{ severity: 'high', problem: 'plot hole', location: 'V1' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2, notifyOnPause: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
   it('uses the persisted maxArcVerifyRounds setting when no per-run override is given', async () => {
     // Strictly-decreasing blocking counts (4→3→2→1) so the loop runs to the cap
     // WITHOUT tripping the divergence guard (#1571) — this asserts the persisted
@@ -1225,6 +1407,52 @@ describe('autopilot conductor', () => {
     expect(generateReverseOutline).not.toHaveBeenCalled();
   });
 
+  it('skips the refresh when the only consumer is gated out for this series (#1614)', async () => {
+    // A check DECLARES the outline as a source (gate 1 passes) but its runtime
+    // gate declines for this series — so refreshing the (stale) outline would
+    // spend an LLM call no runnable check consumes.
+    reverseOutlineConsumed = true; // gate 1: a consumer declares the source
+    reverseOutlineConsumedGated = false; // gate 3: but every consumer is gated out
+    // A complete-but-stale outline WITH scenes — gate 3 only evaluates when
+    // there's scene content to gate against (a scene-less outline bootstraps).
+    reverseOutlineState = { status: 'complete', stale: true, scenes: [{ id: 'sc1' }] };
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(checkRunnerSpies.buildReverseOutlineGateContext).toHaveBeenCalled();
+    expect(generateReverseOutline).not.toHaveBeenCalled();
+  });
+
+  it('bootstraps a never-generated outline without the gate-aware skip (#1614)', async () => {
+    // `status:'none'` has no scenes to gate against — the outline-content gates
+    // would all falsely decline, so the first generation must NOT be gate-skipped.
+    reverseOutlineConsumed = true;
+    reverseOutlineConsumedGated = false; // would skip a complete outline, but...
+    reverseOutlineState = { status: 'none', stale: false }; // ...never generated yet
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(checkRunnerSpies.buildReverseOutlineGateContext).not.toHaveBeenCalled();
+    expect(generateReverseOutline).toHaveBeenCalledTimes(1);
+  });
+
+  it('forces a regen when a cached refresh is still stale against the live manuscript (#1614)', async () => {
+    reverseOutlineConsumed = true;
+    reverseOutlineState = { status: 'complete', stale: true, scenes: [{ id: 'sc1' }] };
+    // First generate() no-ops as cached (hash matched at generate time), but the
+    // live manuscript is still stale → the run forces one more regen.
+    generateReverseOutline
+      .mockImplementationOnce(async () => ({ status: 'complete', cached: true, stale: false }))
+      .mockImplementationOnce(async () => ({ status: 'complete', stale: false, scenes: [{ id: 'sc1' }] }));
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(generateReverseOutline).toHaveBeenCalledTimes(2);
+    expect(generateReverseOutline.mock.calls[0][1]).toMatchObject({ force: false });
+    expect(generateReverseOutline.mock.calls[1][1]).toMatchObject({ force: true });
+  });
+
   it('a budget-exhausted run does not pause at the no-op reverse-outline refresh (#1575 self-gating exemption)', async () => {
     // A subset run whose checks don't consume the outline makes the refresh a
     // guaranteed no-op. Budget goes exhausted right after the editorial-review
@@ -1308,6 +1536,35 @@ describe('autopilot conductor', () => {
     expect(second.alreadyRunning).toBe(true);
     expect(second.runId).toBe(first.runId);
     autopilot.cancelSeriesAutopilot(seriesId);
+  });
+
+  it('emits an immediate cancel:acknowledged frame on cancel (#1617)', async () => {
+    // Hold the run open at the arc verify step so cancel lands mid-run and the
+    // terminal `canceled` frame can't have fired yet.
+    verifyFindings = [{ severity: 'high', problem: 'x' }];
+    arcSpies.resolveVerifyIssues.mockImplementationOnce(() => new Promise(() => {})); // never resolves
+    const { seriesId } = await seedComplete();
+    const { runId } = await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 5 });
+    // Wait until the run is actually running (first frame emitted).
+    await waitFor(() => autopilot.__testing.runs.get(seriesId)?.lastPayload != null);
+
+    // Attach a fake SSE client so we can assert the ack reaches subscribers,
+    // not just the cached lastPayload.
+    const writes = [];
+    autopilot.attachClient(seriesId, {
+      writeHead: () => {},
+      write: (chunk) => writes.push(chunk),
+      end: () => {},
+      req: { on: () => {} },
+    });
+
+    const canceled = autopilot.cancelSeriesAutopilot(seriesId);
+    expect(canceled).toBe(true);
+    // Synchronous: broadcastSse sets lastPayload last, before the loop can run.
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('cancel:acknowledged');
+    expect(last?.runId).toBe(runId);
+    expect(writes.some((w) => w.includes('"type":"cancel:acknowledged"'))).toBe(true);
   });
 
   it('drafts cover + interior pages when includeVisual is set', async () => {
@@ -1506,6 +1763,48 @@ describe('autopilot conductor', () => {
     expect(done?.type).toBe('complete');
     expect(done?.editorialCheckErrors).toBe(0);
     expect(done?.editorialCheckErroredIds).toEqual([]);
+  });
+
+  it('pauses at editorialChecks when high findings ≥ the armed threshold (#1613)', async () => {
+    editorialChecksFindings = [
+      { severity: 'high', checkId: 'pacing', location: 'ch 1', problem: 'pacing stalls' },
+      { severity: 'high', checkId: 'continuity', location: 'ch 2', problem: 'timeline contradiction' },
+      { severity: 'medium', checkId: 'pacing', location: 'ch 3', problem: 'minor lull' },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false, checkFindingsPauseThreshold: 2 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('checkFindings');
+    expect(last?.scope).toBe('editorialChecks');
+    // Only the two HIGH findings are carried as residual (the medium is excluded).
+    expect(last?.residualFindings).toHaveLength(2);
+    expect(last.residualFindings.every((f) => f.severity === 'high')).toBe(true);
+    const marker = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(marker.status).toBe('paused');
+    expect(marker.pauseKind).toBe('checkFindings');
+  });
+
+  it('does NOT pause on high findings when the threshold is off by default (#1613)', async () => {
+    editorialChecksFindings = [
+      { severity: 'high', checkId: 'pacing', location: 'ch 1', problem: 'a' },
+      { severity: 'high', checkId: 'pacing', location: 'ch 2', problem: 'b' },
+      { severity: 'high', checkId: 'pacing', location: 'ch 3', problem: 'c' },
+    ];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    // No threshold → the checks pass stays advisory and the run completes.
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('does NOT pause when high findings fall below the armed threshold (#1613)', async () => {
+    editorialChecksFindings = [{ severity: 'high', checkId: 'pacing', location: 'ch 1', problem: 'a' }];
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false, checkFindingsPauseThreshold: 3 });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
   it('forwards a per-run editorialCheckIds subset to the checks pass + budget gate (#1575)', async () => {

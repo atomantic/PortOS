@@ -13,6 +13,7 @@ vi.mock('./brainStorage.js', () => {
     getInboxLogById: vi.fn(),
     getInboxLogCounts: vi.fn(),
     updateInboxLog: vi.fn(),
+    updateMany: vi.fn(),
     deleteInboxLog: vi.fn(),
     createPerson: vi.fn(),
     updatePerson: vi.fn(),
@@ -130,6 +131,7 @@ import {
   runWeeklyReview,
   retryClassification,
   markInboxDone,
+  markInboxSentToCatalog,
   updateInboxEntry,
   deleteInboxEntry,
   deleteMemoryEntry,
@@ -196,6 +198,26 @@ describe('brain service', () => {
             modelId: 'gpt-4'
           })
         })
+      );
+    });
+
+    it('flags the inbox entry when captured as creative', async () => {
+      storage.createInboxLog.mockResolvedValue({ id: 'inbox-004', status: 'classifying' });
+
+      await captureThought('a sentient city', undefined, undefined, { creative: true });
+
+      expect(storage.createInboxLog).toHaveBeenCalledWith(
+        expect.objectContaining({ creative: true })
+      );
+    });
+
+    it('omits the creative flag by default (non-creative captures stay unflagged)', async () => {
+      storage.createInboxLog.mockResolvedValue({ id: 'inbox-005', status: 'classifying' });
+
+      await captureThought('buy milk');
+
+      expect(storage.createInboxLog).toHaveBeenCalledWith(
+        expect.not.objectContaining({ creative: expect.anything() })
       );
     });
   });
@@ -515,6 +537,45 @@ describe('brain service', () => {
 
       expect(result).toBeNull();
       expect(storage.updateInboxLog).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // markInboxSentToCatalog
+  // ===========================================================================
+
+  describe('markInboxSentToCatalog', () => {
+    it('batches one updateMany stamping sentToCatalogAt on each id', async () => {
+      storage.updateMany.mockResolvedValue([
+        { id: 'inbox-001', sentToCatalogAt: 'x' },
+        { id: 'inbox-002', sentToCatalogAt: 'x' }
+      ]);
+
+      const result = await markInboxSentToCatalog(['inbox-001', 'inbox-002']);
+
+      expect(storage.updateMany).toHaveBeenCalledTimes(1);
+      expect(storage.updateMany).toHaveBeenCalledWith('inbox', [
+        { id: 'inbox-001', sentToCatalogAt: expect.any(String) },
+        { id: 'inbox-002', sentToCatalogAt: expect.any(String) }
+      ]);
+      expect(result).toHaveLength(2);
+    });
+
+    it('returns only the entries updateMany applied (missing ids skipped)', async () => {
+      storage.updateMany.mockResolvedValue([{ id: 'inbox-002', sentToCatalogAt: 'x' }]);
+
+      const result = await markInboxSentToCatalog(['gone', 'inbox-002']);
+
+      expect(result).toEqual([{ id: 'inbox-002', sentToCatalogAt: 'x' }]);
+    });
+
+    it('returns an empty array for an empty id list', async () => {
+      storage.updateMany.mockResolvedValue([]);
+
+      const result = await markInboxSentToCatalog([]);
+
+      expect(result).toEqual([]);
+      expect(storage.updateMany).toHaveBeenCalledWith('inbox', []);
     });
   });
 

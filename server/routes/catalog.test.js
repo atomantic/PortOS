@@ -19,7 +19,7 @@ import { describe, it, expect, afterAll, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
 
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
 // network round-trip and the assertions never inspect the vector.
@@ -275,5 +275,48 @@ describe.skipIf(!dbReady)('GET /api/catalog/ingredients/:id/details — batched 
   it('404s for an unknown ingredient id', async () => {
     const r = await request(makeApp()).get(`/api/catalog/ingredients/cat-chr-does-not-exist-${NONCE}/details`);
     expect(r.status).toBe(404);
+  });
+});
+
+describe.skipIf(!dbReady)('GET /api/catalog/facets + ingredient filters (#1762)', () => {
+  const UNI = `route-uni-${NONCE}`;
+  afterAll(async () => {
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [UNI]).catch(() => {});
+    await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
+  });
+
+  it('returns the facets envelope with universe membership + bucket counts', async () => {
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Route Universe ${NONCE}`]);
+    const linked = await catalogDB.createIngredient({ type: 'character', name: `Route Linked ${NONCE}`, tags: [`rt-${NONCE}`] });
+    const raw = await catalogDB.createIngredient({ type: 'idea', name: `Route Raw ${NONCE}` });
+    createdIngredientIds.add(linked.id);
+    createdIngredientIds.add(raw.id);
+    await catalogDB.linkIngredientToRef(linked.id, 'universe', UNI, 'cast-character');
+
+    const r = await request(makeApp()).get('/api/catalog/facets');
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body.types)).toBe(true);
+    expect(Array.isArray(r.body.universes)).toBe(true);
+    expect(Array.isArray(r.body.tags)).toBe(true);
+    expect(typeof r.body.total).toBe('number');
+    expect(typeof r.body.unlinkedCount).toBe('number');
+    expect(typeof r.body.orphanedCount).toBe('number');
+    const uni = r.body.universes.find((u) => u.refId === UNI);
+    expect(uni?.name).toBe(`Route Universe ${NONCE}`);
+    expect(uni?.count).toBeGreaterThanOrEqual(1);
+
+    // The ref filter lists only the linked ingredient.
+    const filtered = await request(makeApp()).get(`/api/catalog/ingredients?refKind=universe&refId=${UNI}`);
+    expect(filtered.status).toBe(200);
+    const ids = filtered.body.items.map((i) => i.id);
+    expect(ids).toContain(linked.id);
+    expect(ids).not.toContain(raw.id);
+  });
+
+  it('400s on an unpaired refKind and on combined album filters', async () => {
+    const noRefId = await request(makeApp()).get('/api/catalog/ingredients?refKind=universe');
+    expect(noRefId.status).toBe(400);
+    const combined = await request(makeApp()).get('/api/catalog/ingredients?unlinked=true&orphaned=true');
+    expect(combined.status).toBe(400);
   });
 });

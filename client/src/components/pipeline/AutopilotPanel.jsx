@@ -25,6 +25,12 @@ const ROUND_MAX = 20;
 const DEFAULT_ARC_ROUNDS = 3;
 const DEFAULT_EDITORIAL_ROUNDS = 2;
 const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
+// Editorial-checks pause threshold (#1613) — mirror the server default (0 = off).
+// Unlike the round bounds it has no upper cap; a large N is effectively off.
+const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
+// Pause-notification escalation (#1615) — mirror the server default (on). The one
+// autopilot setting that defaults ON: a zero-cost in-app banner when a run pauses.
+const DEFAULT_NOTIFY_ON_PAUSE = true;
 
 // Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
 // autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
@@ -36,23 +42,29 @@ const READINESS_GATE_LABELS = {
   noOpenHighOrMedium: 'No open High or Medium (strict)',
   none: 'None — skip the health gate',
 };
-const clampRound = (n, fallback) => {
-  // A blank/cleared field falls back to the default — NOT 0. (Number('') === 0,
-  // and 0 means "skip the gate", so without this a cleared input would silently
-  // disable a verification gate.) An explicitly typed 0 is still honored.
+// Clamp a number-input value to [min, max] integers, with a blank/invalid field
+// falling back to `fallback` (NOT min — for round gates fallback is the default,
+// not 0, so a cleared input never silently disables a gate; an explicitly typed 0
+// is still honored). `max === null` leaves the value uncapped.
+const clampNumber = (n, { fallback, min, max }) => {
   if (n === '' || n === null || n === undefined) return fallback;
   const v = Number(n);
   if (!Number.isFinite(v)) return fallback;
-  return Math.max(ROUND_MIN, Math.min(ROUND_MAX, Math.round(v)));
+  const rounded = Math.max(min, Math.round(v));
+  return max === null ? rounded : Math.min(max, rounded);
 };
+const clampRound = (n, fallback) => clampNumber(n, { fallback, min: ROUND_MIN, max: ROUND_MAX });
+// Pause threshold: blank → 0 (off), non-negative integer, no upper cap.
+const clampThreshold = (n) => clampNumber(n, { fallback: 0, min: 0, max: null });
 
-// A single convergence-round field for the Options popover. Allows '' mid-edit
-// (so the field can be cleared) and clamps + persists the chosen value on blur —
-// but ONLY when the user actually changed it. A bare focus+blur (tabbing through
-// Options) must not persist the display fallback or mark the field dirty, or it
-// would clobber a saved limit before settings load and block the load from
-// applying it.
-function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist }) {
+// A single numeric field for the Options popover (round bounds + the pause
+// threshold). Allows '' mid-edit (so the field can be cleared) and clamps +
+// persists the chosen value on blur — but ONLY when the user actually changed it.
+// A bare focus+blur (tabbing through Options) must not persist the display
+// fallback or mark the field dirty, or it would clobber a saved limit before
+// settings load and block the load from applying it. `max` caps the input (null =
+// uncapped); `clamp(value, defaultValue)` defaults to the round clamp.
+function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist, max = ROUND_MAX, clamp = clampRound }) {
   const dirtyRef = useRef(false);
   return (
     <div className="flex items-center gap-2">
@@ -61,13 +73,13 @@ function RoundInput({ id, label, settingKey, value, setValue, defaultValue, pers
         id={id}
         type="number"
         min={ROUND_MIN}
-        max={ROUND_MAX}
+        max={max ?? undefined}
         value={value}
         onChange={(e) => { dirtyRef.current = true; setValue(e.target.value === '' ? '' : Number(e.target.value)); }}
         onBlur={() => {
           if (!dirtyRef.current) return; // untouched — don't persist/clamp/mark dirty
           dirtyRef.current = false;
-          const v = clampRound(value, defaultValue);
+          const v = clamp(value, defaultValue);
           setValue(v);
           persist({ [settingKey]: v });
         }}
@@ -93,6 +105,8 @@ const STEP_LABELS = {
   scriptVerify: 'Verifying scripts',
   editorialReview: 'Editorial review',
   reverseOutline: 'Refreshing scene segmentation',
+  editorialChecks: 'Editorial checks',
+  editorialHealthGate: 'Editorial health gate',
   canonVerify: 'Checking canon descriptions',
   visualDraft: 'Drafting comic art',
 };
@@ -121,6 +135,8 @@ function frameLabel(f) {
     }
     case 'render:queued': return `Queued draft render: ${f.target}`;
     case 'gap:filed': return `Filed CoS task (${f.gapKind})`;
+    // #1617 — immediate cancel ack; the active step finishes before `canceled`.
+    case 'cancel:acknowledged': return 'Cancelling — finishing the active step…';
     case 'paused': return `Paused — ${f.reason}`;
     case 'complete': return f.dryRun ? 'Plan ready' : 'Complete';
     case 'canceled': return 'Canceled';
@@ -179,6 +195,15 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // option label so the user knows what the fallback is.
   const [readinessGate, setReadinessGate] = useState('');
   const [savedGate, setSavedGate] = useState('');
+  // Editorial-checks pause threshold (#1613). 0 = off (default): pause the run
+  // when the editorial-checks pass surfaces ≥ N high findings. Persisted like the
+  // round inputs (saved default + per-run override), so a raised value is reused
+  // on Resume.
+  const [checkPauseThreshold, setCheckPauseThreshold] = useState(DEFAULT_CHECK_PAUSE_THRESHOLD);
+  // Pause-notification escalation (#1615). Persisted like the round inputs (saved
+  // default + per-run override) but defaults ON — toggling off silences the
+  // in-app pause banner. Persisted on change so the choice is reused on Resume.
+  const [notifyOnPause, setNotifyOnPause] = useState(DEFAULT_NOTIFY_ON_PAUSE);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -187,6 +212,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const arcEditedRef = useRef(false);
   const editorialEditedRef = useRef(false);
   const beatContinuityEditedRef = useRef(false);
+  const checkPauseEditedRef = useRef(false);
+  const notifyEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
@@ -204,6 +231,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
         if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
         if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
+        if (!checkPauseEditedRef.current) setCheckPauseThreshold(Number.isInteger(pec.checkFindingsPauseThreshold) ? pec.checkFindingsPauseThreshold : DEFAULT_CHECK_PAUSE_THRESHOLD);
+        if (!notifyEditedRef.current) setNotifyOnPause(typeof pec.notifyOnPause === 'boolean' ? pec.notifyOnPause : DEFAULT_NOTIFY_ON_PAUSE);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
@@ -231,6 +260,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const editArcRounds = useCallback((v) => { arcEditedRef.current = true; setArcRounds(v); }, []);
   const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
   const editBeatContinuityRounds = useCallback((v) => { beatContinuityEditedRef.current = true; setBeatContinuityRounds(v); }, []);
+  const editCheckPauseThreshold = useCallback((v) => { checkPauseEditedRef.current = true; setCheckPauseThreshold(v); }, []);
+  // Boolean checkbox — persist immediately on toggle (no blur event) so the saved
+  // default tracks the choice and Resume reuses it.
+  const editNotifyOnPause = useCallback((v) => {
+    notifyEditedRef.current = true;
+    setNotifyOnPause(v);
+    persistRounds({ notifyOnPause: v });
+  }, [persistRounds]);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -306,6 +343,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (arcEditedRef.current) roundOverrides.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
     if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
     if (beatContinuityEditedRef.current) roundOverrides.maxBeatContinuityRounds = clampRound(beatContinuityRounds, DEFAULT_BEAT_CONTINUITY_ROUNDS);
+    // #1613 — the editorial-checks pause threshold persists + overrides like the
+    // round inputs (clamps to a non-negative integer; 0 = off).
+    if (checkPauseEditedRef.current) roundOverrides.checkFindingsPauseThreshold = clampThreshold(checkPauseThreshold);
+    // #1615 — pause notification toggle persists + overrides like the others, but
+    // is a plain boolean (no clamp). Untouched sends nothing → server default (on).
+    if (notifyEditedRef.current) roundOverrides.notifyOnPause = notifyOnPause;
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -321,7 +364,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, readinessGate, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, readinessGate, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -339,6 +382,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
 
   const ap = series.autopilot;
   const liveLabel = active ? (frameLabel(latest) || 'Working…') : null;
+  // #1617 — once the server acks the cancel, switch the Stop button to a
+  // disabled "Cancelling…" state so the user gets feedback (and can't re-fire
+  // cancel) while the active step finishes and the terminal frame arrives.
+  const canceling = active && latest?.type === 'cancel:acknowledged';
   const runLabel = ap?.status === 'paused' ? 'Resume autopilot'
     : ap?.status === 'done' ? 'Run autopilot again'
       : 'Run autopilot';
@@ -375,9 +422,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <button
               type="button"
               onClick={cancel}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-port-warning hover:text-white border border-port-warning/40 bg-port-bg hover:bg-port-warning/10"
+              disabled={canceling}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded text-xs text-port-warning hover:text-white border border-port-warning/40 bg-port-bg hover:bg-port-warning/10 disabled:opacity-50 disabled:hover:text-port-warning disabled:cursor-default"
             >
-              <X size={12} /> Stop
+              {canceling ? <Loader2 size={12} className="animate-spin" /> : <X size={12} />} {canceling ? 'Cancelling…' : 'Stop'}
             </button>
           )}
         </div>
@@ -393,6 +441,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           <label className="flex items-center gap-2 text-xs text-gray-300">
             <input type="checkbox" checked={fileGaps} onChange={(e) => setFileGaps(e.target.checked)} />
             File CoS tasks for gaps it can&apos;t resolve
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300">
+            <input type="checkbox" checked={notifyOnPause} onChange={(e) => editNotifyOnPause(e.target.checked)} />
+            Notify me when a run pauses (with a resume link)
           </label>
           <div className="flex flex-wrap gap-4 pt-1">
             <RoundInput
@@ -444,6 +496,22 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           </div>
           <p className="text-[11px] text-gray-500">
             The editorial-health bar this run must clear before drafting visuals. A per-run choice applies to this run only — it does not change the saved default.
+          </p>
+          <div className="pt-1">
+            <RoundInput
+              id="autopilot-check-pause-threshold"
+              label="Pause at high findings"
+              settingKey="checkFindingsPauseThreshold"
+              value={checkPauseThreshold}
+              setValue={editCheckPauseThreshold}
+              defaultValue={DEFAULT_CHECK_PAUSE_THRESHOLD}
+              persist={persistRounds}
+              max={null}
+              clamp={clampThreshold}
+            />
+          </div>
+          <p className="text-[11px] text-gray-500">
+            When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
           </p>
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.
@@ -526,6 +594,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 title="Auto-resolve stopped reducing blocking findings — needs a human edit, not more rounds"
               >
                 not converging
+              </span>
+            ) : null}
+            {ap.status === 'paused' && ap.pauseKind === 'checkFindings' ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] bg-port-warning/15 text-port-warning border border-port-warning/30"
+                title="Editorial checks surfaced too many High findings — address them (or raise the threshold) and resume"
+              >
+                high findings
               </span>
             ) : null}
           </div>

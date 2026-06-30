@@ -1,6 +1,7 @@
 // Pure helpers for the Editorial Checks page (#1285) — catalog grouping,
 // findings triage grouping, and manuscript deep-link building. No React, no
 // window: the page component and its unit tests both consume these.
+import { descriptorForCanonEntry } from './canonPrompt.js';
 
 // Scope display order + labels (mirrors server CHECK_SCOPES). A check whose
 // scope isn't one of these still renders, bucketed under its raw scope last.
@@ -62,13 +63,20 @@ export const SEVERITY_BADGE_CLASSES = Object.freeze({
  * Group catalog rows into ordered scope sections for the catalog view.
  * Returns `[{ scope, label, checks }]` in CHECK_SCOPE_ORDER, with any unknown
  * scope appended after the known ones (alphabetical). Empty scopes are omitted.
+ * A dual-scope check (#1628, `scopes: ['series','issue']`) appears once under
+ * EACH of its declared scopes; older rows carrying only a string `scope` fall
+ * back to that single scope.
  */
 export function groupChecksByScope(checks = []) {
   const byScope = new Map();
   for (const check of checks) {
-    const scope = check?.scope || 'other';
-    if (!byScope.has(scope)) byScope.set(scope, []);
-    byScope.get(scope).push(check);
+    const scopes = Array.isArray(check?.scopes) && check.scopes.length
+      ? check.scopes
+      : [check?.scope || 'other'];
+    for (const scope of scopes) {
+      if (!byScope.has(scope)) byScope.set(scope, []);
+      byScope.get(scope).push(check);
+    }
   }
   const known = CHECK_SCOPE_ORDER.filter((s) => byScope.has(s));
   const unknown = [...byScope.keys()].filter((s) => !CHECK_SCOPE_ORDER.includes(s)).sort();
@@ -161,6 +169,56 @@ export const checkFalsePositiveRate = (group) => {
   if (group.falsePositiveRate !== undefined) return group.falsePositiveRate;
   return group.total > 0 ? group.falsePositive / group.total : null;
 };
+
+/**
+ * Per-check dismissal rate (#1629): the fraction of a check's findings the user
+ * dismissed for ANY reason (the false-positive subset plus plain dismissals).
+ * `null` when the check has surfaced nothing yet, so callers can distinguish "no
+ * data" from a genuine 0% — a high dismissal rate flags a low-signal check even
+ * when the user didn't bother tagging each one a false positive.
+ */
+export const checkDismissalRate = (group) => {
+  if (!group || !group.total) return null;
+  return group.dismissed / group.total;
+};
+
+// A check needs at least this many findings before its rates are statistically
+// meaningful; below it the card shows an "unproven" badge instead of a rate the
+// user shouldn't yet trust (#1629).
+export const CHECK_MATURITY_MIN_SAMPLE = 5;
+// At or above this *dismissal* rate (on a proven sample) the check is "noisy" —
+// the signal users most want surfaced so they can deprioritize/mute it. Keyed on
+// the overall dismissal rate, not just the false-positive subset: a check the
+// user dismisses most of the time is low-signal whether or not they bothered to
+// tag each one a broken-check false positive. Since false positives are a subset
+// of dismissals, this strictly subsumes a high false-positive rate.
+export const CHECK_NOISY_DISMISSAL_RATE = 0.4;
+
+/**
+ * Per-check maturity / quality signal (#1629) — the trust descriptor surfaced in
+ * the catalog card so a user can tell a brand-new/unreliable check from a proven
+ * high-signal one. Pure over a findings group from `groupFindingsByCheck`.
+ * Returns:
+ *   findings           total findings this check has produced (for the series)
+ *   dismissalRate      dismissed / total, or null when no findings
+ *   falsePositiveRate  false-positive / total, or null when no findings
+ *   level              'new'      — no findings yet (untested, trust unknown)
+ *                      'unproven' — too few findings to judge (< MIN_SAMPLE)
+ *                      'noisy'    — proven sample the user dismisses a lot
+ *                      'reliable' — proven sample the user mostly keeps
+ */
+export function checkMaturity(group) {
+  const findings = group?.total || 0;
+  if (!findings) {
+    return { findings: 0, dismissalRate: null, falsePositiveRate: null, level: 'new' };
+  }
+  const falsePositiveRate = checkFalsePositiveRate(group);
+  const dismissalRate = checkDismissalRate(group);
+  let level = 'reliable';
+  if (findings < CHECK_MATURITY_MIN_SAMPLE) level = 'unproven';
+  else if ((dismissalRate || 0) >= CHECK_NOISY_DISMISSAL_RATE) level = 'noisy';
+  return { findings, dismissalRate, falsePositiveRate, level };
+}
 
 /**
  * Deep-link a finding into the manuscript editor: focuses the finding's issue
@@ -353,3 +411,115 @@ export function applyFindingsView(groups = [], filters = {}, sort = 'scope') {
   }
   return sortGroups(out, view);
 }
+
+// ---- Canon entity references in findings (#1631) ----------------------------
+// A continuity/character finding ("Aria's eye colour drifts") names canon
+// entities in free text but doesn't link them. These helpers detect a universe's
+// canon names inside finding text so the triage can render them as links into the
+// canon section, with the entity's descriptor as a hovercard. Pure (no React/DOM)
+// so the page, the triage row, and the unit tests all share one implementation.
+
+// The plural canon-trunk array keys on a universe record (universe.characters, …).
+const CANON_TRUNK_KEYS = Object.freeze(['characters', 'places', 'objects']);
+
+// Singular human label per trunk — used in the chip hovercard when an entry has
+// no descriptor yet.
+export const CANON_KIND_LABELS = Object.freeze({ characters: 'character', places: 'place', objects: 'object' });
+
+/**
+ * Flatten a universe record's canon arrays into a lookup list for linkifying
+ * findings. Each entry: `{ id, name, kind, descriptor }` — `kind` is the plural
+ * trunk key, `descriptor` the short bio used for the link hovercard. Entries with
+ * a too-short name (1 char would match noise) are dropped; the first entry to
+ * claim a name (case-insensitive) wins, so one name never links to two entities.
+ */
+export function canonEntitiesFromUniverse(universe) {
+  if (!universe || typeof universe !== 'object') return [];
+  const out = [];
+  const seen = new Set();
+  for (const key of CANON_TRUNK_KEYS) {
+    const list = Array.isArray(universe[key]) ? universe[key] : [];
+    for (const entry of list) {
+      const name = String(entry?.name || '').trim();
+      if (name.length < 2) continue;
+      const norm = name.toLowerCase();
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      out.push({
+        id: entry.ingredientId || entry.id || norm,
+        name,
+        kind: key,
+        descriptor: descriptorForCanonEntry(key, entry) || '',
+      });
+    }
+  }
+  return out;
+}
+
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Build a single case-insensitive, word-boundary-anchored matcher over every
+// canon name (longest first so "Jon Snow" wins over "Jon"), plus a lowercase
+// name→entity map. Returns `null` when there are no usable names.
+function buildCanonMatcher(entities = []) {
+  const byName = new Map();
+  const alts = [];
+  for (const e of [...entities].filter((e) => e?.name).sort((a, b) => b.name.length - a.name.length)) {
+    const key = e.name.toLowerCase();
+    if (byName.has(key)) continue;
+    byName.set(key, e);
+    alts.push(escapeRegExp(e.name));
+  }
+  if (!alts.length) return null;
+  // Unicode-aware boundaries: JS `\b` is ASCII-only, so accented/non-Latin names
+  // (Élodie, Søren, 李雷) would never match in finding text. Lookarounds that treat
+  // any Unicode letter/number as a "word" char anchor the match on real word
+  // edges across scripts. The `u` flag is required for the \p{…} classes.
+  return { byName, re: new RegExp(`(?<![\\p{L}\\p{N}])(${alts.join('|')})(?![\\p{L}\\p{N}])`, 'giu') };
+}
+
+/**
+ * Split `text` into segments, tagging runs that match a canon entity name so the
+ * caller can render them as links. Returns an array of `{ text }` (plain) and
+ * `{ text, entity }` (matched) segments that, concatenated, reproduce `text`
+ * exactly. Matching is whole-word and case-insensitive.
+ */
+export function linkifyCanonEntities(text, entities = []) {
+  const str = typeof text === 'string' ? text : '';
+  if (!str) return [];
+  const matcher = buildCanonMatcher(entities);
+  if (!matcher) return [{ text: str }];
+  const { byName, re } = matcher;
+  re.lastIndex = 0;
+  const segments = [];
+  let last = 0;
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    if (m.index > last) segments.push({ text: str.slice(last, m.index) });
+    segments.push({ text: m[0], entity: byName.get(m[0].toLowerCase()) });
+    last = m.index + m[0].length;
+  }
+  if (last < str.length) segments.push({ text: str.slice(last) });
+  return segments;
+}
+
+/**
+ * Unique canon entities referenced anywhere in `text`, in first-appearance order.
+ * Drives the per-finding "Canon" chip row — collapses repeated mentions of the
+ * same entity to one chip.
+ */
+export function canonReferencesInText(text, entities = []) {
+  const out = [];
+  const seen = new Set();
+  for (const seg of linkifyCanonEntities(text, entities)) {
+    if (seg.entity && !seen.has(seg.entity.id)) {
+      seen.add(seg.entity.id);
+      out.push(seg.entity);
+    }
+  }
+  return out;
+}
+
+/** Deep-link to a universe's canon section — the canon "page" for its entities. */
+export const canonEntityLink = (universeId) =>
+  universeId ? `/universes/${encodeURIComponent(universeId)}#canon` : null;

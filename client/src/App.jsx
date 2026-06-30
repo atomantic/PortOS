@@ -5,9 +5,12 @@ import { getSettings, updateSettings, getSelfInstance } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
 import Dashboard from './pages/Dashboard';
-import Apps from './pages/Apps';
-import Ambient from './pages/Ambient';
 import { lazyWithReload } from './utils/lazyWithReload';
+
+// Neither /apps nor /ambient is the landing route, so keep them out of the eager
+// entry chunk — lazy-load them like every other non-index page.
+const Apps = lazyWithReload(() => import('./pages/Apps'));
+const Ambient = lazyWithReload(() => import('./pages/Ambient'));
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
@@ -59,6 +62,7 @@ const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
 const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
+const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
@@ -93,6 +97,7 @@ const WritersRoomGuide = lazyWithReload(() => import('./pages/WritersRoomGuide')
 const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
 const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const Importer = lazyWithReload(() => import('./pages/Importer'));
+const StartStory = lazyWithReload(() => import('./pages/StartStory'));
 const StoryBuilder = lazyWithReload(() => import('./pages/StoryBuilder'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSeriesRoadmap'));
@@ -270,6 +275,7 @@ export default function App() {
             <Route path="creative-director" element={<CreativeDirector />} />
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+            <Route path="music-video" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
@@ -318,6 +324,7 @@ export default function App() {
           <Route path="sharing" element={<Sharing />} />
           <Route path="sharing/:section" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
+          <Route path="start-story" element={<StartStory />} />
           <Route path="story-builder" element={<StoryBuilder />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />

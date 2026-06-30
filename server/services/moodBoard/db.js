@@ -32,6 +32,10 @@ import {
   updateItem,
   removeItem,
   mergeBoardRecord,
+  applyPinterestLink,
+  healPinterestFeedRecord,
+  clearPinterestLinkRecord,
+  appendPinterestPins,
 } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -228,6 +232,49 @@ export async function updateBoardItem(id, itemId, patch) {
     return { board, result: item };
   });
   return result;
+}
+
+// ─── Pinterest board link (mood-board importer) ──────────────────────────────
+
+// Link (or re-link) the board to a Pinterest RSS feed.
+export async function setPinterestLink(id, link) {
+  const { board } = await withLockedBoard(id, (b) => ({ board: applyPinterestLink(b, link) }));
+  return board;
+}
+
+// Self-heal a stale feed URL under lock, skipping the write (and peer push) when
+// the user unlinked/repointed concurrently or it's already corrected (see
+// healPinterestFeedRecord). Returns { board, changed }.
+export async function healPinterestFeed(id, link) {
+  let changed = false;
+  const { board } = await withLockedBoard(id, (b) => {
+    const { board: next, changed: didChange } = healPinterestFeedRecord(b, link);
+    changed = didChange;
+    return { board: next, skipPersist: !didChange };
+  });
+  return { board, changed };
+}
+
+// Unlink. Skips the write (and peer push) when the board wasn't linked.
+export async function clearPinterestLink(id) {
+  const { board } = await withLockedBoard(id, (b) => {
+    const { board: next, changed } = clearPinterestLinkRecord(b);
+    return { board: next, skipPersist: !changed };
+  });
+  return board;
+}
+
+// Append the freshly-downloaded pins in ONE locked write (rather than N
+// addBoardItem round-trips) and stamp lastSyncedAt. Persists on every real sync
+// so a zero-new sync still records the check — but skips the write entirely when
+// appendPinterestPins aborts (the link changed mid-sync, see opts.expectedFeedUrl).
+// Returns { board, added, aborted }.
+export async function appendPinterestItems(id, imported, opts = {}) {
+  const { board, result } = await withLockedBoard(id, (b) => {
+    const { board: next, added, aborted } = appendPinterestPins(b, imported, opts);
+    return { board: next, result: { added, aborted }, skipPersist: aborted };
+  });
+  return { board, ...result };
 }
 
 export async function removeBoardItem(id, itemId) {

@@ -125,3 +125,70 @@ describe('Writers Room federation facade — file backend', () => {
     expect(await sync.diffWorkBodyManifest([{ ...entry, draftId: 'x/../y' }])).toEqual([]);
   });
 });
+
+// ---------- folders + exercises (body-less records, #1645) ----------
+
+const FOLDER = 'wr-folder-44444444-4444-4444-4444-444444444444';
+const EXERCISE = 'wr-ex-55555555-5555-5555-5555-555555555555';
+const folder = (extra = {}) => ({
+  id: FOLDER, name: 'Drafts', parentId: null, sortOrder: 0,
+  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', ...extra,
+});
+const exercise = (extra = {}) => ({
+  id: EXERCISE, workId: null, prompt: 'Write fast', durationSeconds: 600,
+  startingWords: 0, endingWords: null, wordsAdded: null, appendedText: null,
+  status: 'running', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: null, ...extra,
+});
+
+describe('Writers Room folder federation facade — file backend', () => {
+  beforeEach(() => {
+    rmSync(WR, { recursive: true, force: true });
+    _resetWritersRoomStore();
+    cj.__resetBaseHashCacheForTests();
+  });
+  afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
+
+  it('inserts a remote folder; LWW older-loses / newer-wins', async () => {
+    expect(await sync.mergeFoldersFromSync([folder()])).toEqual({ applied: true, count: 1 });
+    expect((await sync.getFolderForSync(FOLDER)).name).toBe('Drafts');
+    expect(await sync.mergeFoldersFromSync([folder({ updatedAt: '2026-01-01T00:00:00.000Z', name: 'Older' })])).toEqual({ applied: false, count: 0 });
+    expect(await sync.mergeFoldersFromSync([folder({ updatedAt: '2026-01-03T00:00:00.000Z', name: 'Newer' })])).toEqual({ applied: true, count: 1 });
+    expect((await sync.getFolderForSync(FOLDER)).name).toBe('Newer');
+  });
+
+  it('a newer tombstone hides the folder from live reads and prunes after the cutoff', async () => {
+    await sync.mergeFoldersFromSync([folder({ updatedAt: '2026-01-02T00:00:00.000Z' })]);
+    await sync.mergeFoldersFromSync([folder({ updatedAt: '2026-01-05T00:00:00.000Z', deleted: true, deletedAt: '2026-01-05T00:00:00.000Z' })]);
+    expect(await writersRoomStore().readFolder(FOLDER)).toBeNull(); // live read filters it
+    expect((await sync.listFolderIdsForSync())).not.toContain(FOLDER);
+    expect((await sync.listFolderIdsForSync({ includeDeleted: true }))).toContain(FOLDER);
+    expect(await sync.pruneTombstonedFolders(Date.parse('2026-01-04T00:00:00.000Z'))).toEqual({ pruned: 0 });
+    expect(await sync.pruneTombstonedFolders(Date.parse('2026-02-01T00:00:00.000Z'))).toEqual({ pruned: 1 });
+    expect(await sync.getFolderForSync(FOLDER)).toBeNull();
+  });
+});
+
+describe('Writers Room exercise federation facade — file backend', () => {
+  beforeEach(() => {
+    rmSync(WR, { recursive: true, force: true });
+    _resetWritersRoomStore();
+    cj.__resetBaseHashCacheForTests();
+  });
+  afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
+
+  it('inserts a remote exercise; the finish transition (finishedAt advances) wins LWW', async () => {
+    expect(await sync.mergeExercisesFromSync([exercise()])).toEqual({ applied: true, count: 1 });
+    // listExercisesForSync derives updatedAt from finishedAt ?? startedAt.
+    expect((await sync.listExercisesForSync()).find((e) => e.id === EXERCISE).updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    const finished = await sync.mergeExercisesFromSync([exercise({ status: 'finished', finishedAt: '2026-01-01T00:10:00.000Z', wordsAdded: 42 })]);
+    expect(finished).toEqual({ applied: true, count: 1 });
+    expect((await sync.getExerciseForSync(EXERCISE)).status).toBe('finished');
+  });
+
+  it('an older exercise push loses LWW against the finished local', async () => {
+    await sync.mergeExercisesFromSync([exercise({ status: 'finished', finishedAt: '2026-01-01T00:10:00.000Z' })]);
+    // A stale "running" push (older derived key) must not resurrect the running state.
+    expect(await sync.mergeExercisesFromSync([exercise()])).toEqual({ applied: false, count: 0 });
+    expect((await sync.getExerciseForSync(EXERCISE)).status).toBe('finished');
+  });
+});

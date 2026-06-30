@@ -76,7 +76,7 @@ vi.mock('../reverseOutline.js', () => ({ getReverseOutline: vi.fn(async () => ou
 let editorialState = { characters: [] };
 vi.mock('../editorialAnalysis.js', () => ({ getSeriesEditorial: vi.fn(async () => editorialState) }));
 
-const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, summarizeCheckErrors, previewCustomCheck } = await import('./checkRunner.js');
+const { runEditorialChecks, buildEditorialCheckPlan, getReviewWithStaleness, enabledChecksConsumeReverseOutline, buildReverseOutlineGateContext, summarizeCheckErrors, previewCustomCheck, buildScopedPriorFindings, effectiveCheckSources, __testing: checkRunnerTesting } = await import('./checkRunner.js');
 const { runStagedLLM, resolveStageContext } = await import('../../../lib/stageRunner.js');
 const { collectManuscriptSections } = await import('../arcPlanner.js');
 const { getSeriesCanon } = await import('../seriesCanon.js');
@@ -998,5 +998,252 @@ describe('enabledChecksConsumeReverseOutline (#1349)', () => {
   it('is false when every reverse-outline-consuming check is disabled', () => {
     const settings = disableWhere(consumesOutline);
     expect(enabledChecksConsumeReverseOutline(settings)).toBe(false);
+  });
+
+  // Gate-aware consumption (#1614): a supplied ctx narrows the signal to checks
+  // that would ACTUALLY run for this series. Because the refresh regenerates the
+  // outline, the test is "could a FRESH outline let this check run?" — a declining
+  // gate is re-evaluated against a permissive synthetic outline.
+  describe('gate-aware via ctx (#1614)', () => {
+    // A drafted manuscript re-opens the manuscript-gated outline consumers.
+    const liveCtx = { manuscript: 'The kingdom fell.', canon: { characters: [{ name: 'Bob' }] }, reverseOutline: [{ povCharacter: 'Bob' }], reverseOutlinePlotlines: [] };
+
+    it('sources-only signal is unchanged when no ctx is supplied', () => {
+      expect(enabledChecksConsumeReverseOutline({})).toBe(true);
+      expect(enabledChecksConsumeReverseOutline({}, null, null)).toBe(true);
+    });
+
+    it('is true when at least one consumer passes its gate against the ctx', () => {
+      expect(enabledChecksConsumeReverseOutline({}, null, liveCtx)).toBe(true);
+    });
+
+    it('keeps an outline-content-gated consumer that declines on the STALE outline (#1614, codex P2 r1)', () => {
+      // Scoped to pov.justified only — its gate reads ctx.reverseOutline; a stale
+      // outline with scenes but no POV tags makes it decline. A refresh might add
+      // POV, so the permissive re-eval flips it true → still a consumer (don't skip).
+      const onlyPov = disableWhere((c) => consumesOutline(c) && c.id !== 'pov.justified');
+      const staleNoPov = { manuscript: 'x', canon: { characters: [] }, series: {}, reverseOutline: [{ heading: 'h', summary: 's' }], reverseOutlinePlotlines: [] };
+      expect(enabledChecksConsumeReverseOutline(onlyPov, null, staleNoPov)).toBe(true);
+    });
+
+    it('drops a mixed-gate consumer blocked for an OUTLINE-INDEPENDENT reason (#1614, codex P2 r2)', () => {
+      // Scoped to endings.pov-switch — its gate needs POV scenes AND authored
+      // cliffhangers. With no cliffhangers, even a fresh (permissive) outline can't
+      // make it run, so a refresh would be wasted → NOT a consumer → false.
+      const onlyEndings = disableWhere((c) => consumesOutline(c) && c.id !== 'endings.pov-switch');
+      const noCliffhangers = { manuscript: 'x', canon: { characters: [] }, series: { arc: {} }, reverseOutline: [{ povCharacter: 'A' }], reverseOutlinePlotlines: [] };
+      expect(enabledChecksConsumeReverseOutline(onlyEndings, null, noCliffhangers)).toBe(false);
+    });
+
+    // Richness guard: the permissive synthetic outline must satisfy the outline
+    // half of EVERY consumer's gate — a too-sparse synthetic would wrongly DROP a
+    // check whose fresh outline would actually unblock it (a false skip, the
+    // dangerous direction). A fully-populated ctx + the synthetic must pass every
+    // consumer gate; a new check needing a scene field the synthetic lacks trips this.
+    it('permissive synthetic outline satisfies every consumer gate (no false drop)', () => {
+      const richCtx = {
+        manuscript: 'The kingdom fell. '.repeat(20),
+        canon: { characters: [{ name: 'Hero' }, { name: 'Villain' }] },
+        series: { styleGuide: { povPerson: 'third-limited' }, arc: { readerMap: { cliffhangers: [{ id: 'c1' }], beats: [{}] }, themes: ['t'], readerKnowledge: [] }, factCritical: true, characterArcs: [] },
+        ...checkRunnerTesting.PERMISSIVE_GATE_OUTLINE,
+      };
+      const consumers = listChecks().filter((c) => Array.isArray(c.sources)
+        && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'))
+        && typeof c.gate === 'function');
+      expect(consumers.length).toBeGreaterThan(0);
+      for (const check of consumers) {
+        expect(check.gate(richCtx), `${check.id} gate failed against permissive synthetic outline`).toBe(true);
+      }
+    });
+  });
+});
+
+describe('buildReverseOutlineGateContext (#1614)', () => {
+  it('assembles manuscript + canon + the passed outline scenes/plotlines', async () => {
+    const outline = { scenes: [{ povCharacter: 'Bob' }], plotlines: [{ id: 'p1' }] };
+    const ctx = await buildReverseOutlineGateContext('s1', { outline });
+    expect(ctx.manuscript).toContain('the kingdom fell');
+    expect(ctx.canon.characters.map((c) => c.name)).toContain('Alina');
+    expect(ctx.reverseOutline).toEqual(outline.scenes);
+    expect(ctx.reverseOutlinePlotlines).toEqual(outline.plotlines);
+  });
+
+  it('reads the stored outline when none is passed, and tolerates a missing one', async () => {
+    outlineState = { scenes: [{ povCharacter: 'Zog' }], plotlines: [] };
+    const ctx = await buildReverseOutlineGateContext('s1');
+    expect(ctx.reverseOutline).toEqual(outlineState.scenes);
+    // A non-array scenes/plotlines payload normalizes to empty arrays.
+    const ctx2 = await buildReverseOutlineGateContext('s1', { outline: { status: 'none' } });
+    expect(ctx2.reverseOutline).toEqual([]);
+    expect(ctx2.reverseOutlinePlotlines).toEqual([]);
+  });
+
+  // Contract guard (#1614): the autopilot evaluates consumer gates against this
+  // slim ctx, NOT the full buildEditorialContext. If a future reverse-outline
+  // consumer's gate reaches for a field the slim ctx omits (ctx.issues,
+  // ctx.editorialArcs, …), it would silently mis-evaluate against `undefined`
+  // and wrongly skip/force a refresh. Fail loudly here instead. The allowed set
+  // is exactly the keys buildReverseOutlineGateContext returns.
+  it('every reverse-outline consumer gate reads only slim-ctx keys', () => {
+    const ALLOWED = new Set(['seriesId', 'series', 'manuscript', 'canon', 'reverseOutline', 'reverseOutlinePlotlines']);
+    const base = {
+      seriesId: 's1',
+      series: { styleGuide: { povPerson: 'third-limited' } },
+      manuscript: 'The kingdom fell.',
+      canon: { characters: [{ name: 'Bob' }] },
+      reverseOutline: [{ povCharacter: 'Bob', heading: 'h' }],
+      reverseOutlinePlotlines: [{ id: 'p1' }],
+    };
+    const consumers = listChecks().filter((c) => Array.isArray(c.sources)
+      && (c.sources.includes('reverseOutline') || c.sources.includes('reverseOutline.plotlines'))
+      && typeof c.gate === 'function');
+    expect(consumers.length).toBeGreaterThan(0);
+    for (const check of consumers) {
+      const accessed = new Set();
+      // Record only TOP-LEVEL ctx key reads — nested reads (ctx.canon.characters)
+      // land on the real unproxied value, so they don't register.
+      const proxy = new Proxy(base, { get(t, k) { if (typeof k === 'string') accessed.add(k); return t[k]; } });
+      check.gate(proxy); // must also not throw against the slim ctx
+      const leaked = [...accessed].filter((k) => !ALLOWED.has(k));
+      expect(leaked, `${check.id} gate read non-slim ctx keys: ${leaked.join(', ')}`).toEqual([]);
+    }
+  });
+});
+
+// Inter-check context sharing (#1627) — dependency-scoped prior findings in ctx.
+describe('buildScopedPriorFindings (#1627)', () => {
+  const findings = [
+    { checkId: 'a', problem: 'x' }, { checkId: 'b', problem: 'y' }, { checkId: 'a', problem: 'z' },
+  ];
+  it('returns the shared empty (frozen) array when no deps are declared', () => {
+    const out = buildScopedPriorFindings(findings, []);
+    expect(out).toEqual([]);
+    expect(Object.isFrozen(out)).toBe(true);
+    expect(buildScopedPriorFindings(findings, undefined)).toEqual([]);
+  });
+  it('returns only the findings produced by the declared dependency ids', () => {
+    const out = buildScopedPriorFindings(findings, ['a']);
+    expect(out.map((f) => f.problem)).toEqual(['x', 'z']);
+    expect(out.every((f) => f.checkId === 'a')).toBe(true);
+  });
+  it('freezes the array AND each finding so a check can not mutate the accumulator', () => {
+    const out = buildScopedPriorFindings(findings, ['a', 'b']);
+    expect(Object.isFrozen(out)).toBe(true);
+    expect(out.every((f) => Object.isFrozen(f))).toBe(true);
+    expect(() => { out.push({}); }).toThrow();
+  });
+  it('returns empty when the accumulator holds nothing from the declared deps', () => {
+    expect(buildScopedPriorFindings(findings, ['zzz'])).toEqual([]);
+    expect(buildScopedPriorFindings([], ['a'])).toEqual([]);
+  });
+});
+
+describe('runEditorialChecks — ctx.priorFindings injection (#1627)', () => {
+  // The runner resolves checks from the LIVE registry objects, so we temporarily
+  // attach `dependsOn` / replace `run` on a real check and restore in `finally`.
+  const captureCtxFor = async (id, { dependsOn } = {}) => {
+    const check = getCheck(id);
+    const originalRun = check.run;
+    const hadDeps = Object.prototype.hasOwnProperty.call(check, 'dependsOn');
+    const originalDeps = check.dependsOn;
+    let ctx = null;
+    if (dependsOn) check.dependsOn = dependsOn;
+    check.run = vi.fn((c) => { ctx = c; return []; });
+    try {
+      await runEditorialChecks('s1');
+    } finally {
+      check.run = originalRun;
+      if (hadDeps) check.dependsOn = originalDeps; else delete check.dependsOn;
+    }
+    return ctx;
+  };
+
+  it('feeds a declared dependency\'s findings to the dependent (ordered + scoped + frozen)', async () => {
+    // info-dumping (LLM) declares it depends on naming (deterministic). The topo
+    // sort runs naming first, so its Alina/Alana findings are visible here.
+    const ctx = await captureCtxFor('prose.info-dumping', { dependsOn: ['naming.dissimilar-names'] });
+    expect(ctx, 'dependent ran').toBeTruthy();
+    expect(Array.isArray(ctx.priorFindings)).toBe(true);
+    expect(ctx.priorFindings.length).toBeGreaterThan(0);
+    expect(ctx.priorFindings.every((f) => f.checkId === 'naming.dissimilar-names')).toBe(true);
+    expect(Object.isFrozen(ctx.priorFindings)).toBe(true);
+    // findingsByCheck is scoped to declared deps: the declared id resolves, an
+    // undeclared id returns [] even if that check ran.
+    expect(ctx.findingsByCheck('naming.dissimilar-names').length).toBe(ctx.priorFindings.length);
+    expect(ctx.findingsByCheck('some.undeclared')).toEqual([]);
+  });
+
+  it('gives a check with no dependsOn an empty priorFindings even when earlier checks found things', async () => {
+    const ctx = await captureCtxFor('prose.info-dumping');
+    expect(ctx).toBeTruthy();
+    expect(ctx.priorFindings).toEqual([]);
+    expect(ctx.findingsByCheck('naming.dissimilar-names')).toEqual([]);
+  });
+});
+
+// Dependency-aware staleness fingerprint (#1627, codex review): a check that
+// declares dependsOn must fingerprint its dependencies' sources too, so a compound
+// finding goes stale when the DEPENDENCY's content drifts (not only its own).
+describe('effectiveCheckSources (#1627)', () => {
+  const map = (...checks) => new Map(checks.map((c) => [c.id, c]));
+  const A = { id: 'a', sources: ['canon'] };
+  const B = { id: 'b', sources: ['manuscript'], needsManuscript: true, dependsOn: ['a'] };
+  const C = { id: 'c', sources: ['reverseOutline'], dependsOn: ['b'] };
+
+  it('returns a check\'s own sources unchanged when it declares no dependencies', () => {
+    expect(effectiveCheckSources(A, map(A, B, C)).sort()).toEqual(['canon']);
+  });
+  it('returns own sources unchanged when no checkById map is provided (opt-out)', () => {
+    expect(effectiveCheckSources(B, null).sort()).toEqual(['manuscript']);
+  });
+  it('folds a declared dependency\'s sources into the effective set', () => {
+    expect(effectiveCheckSources(B, map(A, B, C)).sort()).toEqual(['canon', 'manuscript']);
+  });
+  it('folds transitively (c→b→a) so the whole dependency chain\'s sources count', () => {
+    expect(effectiveCheckSources(C, map(A, B, C)).sort()).toEqual(['canon', 'manuscript', 'reverseOutline']);
+  });
+  it('tolerates a dependency cycle without looping', () => {
+    const X = { id: 'x', sources: ['canon'], dependsOn: ['y'] };
+    const Y = { id: 'y', sources: ['manuscript'], needsManuscript: true, dependsOn: ['x'] };
+    expect(effectiveCheckSources(X, map(X, Y)).sort()).toEqual(['canon', 'manuscript']);
+  });
+  it('ignores a dependency absent from the registry map', () => {
+    const Z = { id: 'z', sources: ['canon'], dependsOn: ['missing'] };
+    expect(effectiveCheckSources(Z, map(Z)).sort()).toEqual(['canon']);
+  });
+});
+
+describe('runEditorialChecks — dependency-aware staleness (#1627)', () => {
+  // Stamp a finding via a real run with naming declaring a dependency on a
+  // manuscript-reading check, then flip ONLY the manuscript and confirm the
+  // dependent's finding is re-fingerprinted as stale (its own source is canon).
+  it('marks a dependency-consuming finding stale when the dependency\'s source drifts', async () => {
+    const naming = getCheck('naming.dissimilar-names');     // deterministic, sources: ['canon']
+    const infoDump = getCheck('prose.info-dumping');        // LLM, sources: ['manuscript']
+    const hadDeps = Object.prototype.hasOwnProperty.call(naming, 'dependsOn');
+    const originalDeps = naming.dependsOn;
+    naming.dependsOn = ['prose.info-dumping'];              // naming now depends on a manuscript reader
+    try {
+      // Seed: stamp findings with manuscript content fingerprinted into naming's hash.
+      await runEditorialChecks('s1');
+      const seeded = seedStore.find((f) => f.checkId === 'naming.dissimilar-names' && f.sourceContentHash);
+      expect(seeded, 'naming finding was seeded with a source hash').toBeTruthy();
+      reviewState = { comments: seedStore.map((f) => ({ ...f })) };
+
+      // No drift → naming finding reads fresh.
+      let annotated = await getReviewWithStaleness('s1');
+      let namingComment = annotated.comments.find((c) => c.checkId === 'naming.dissimilar-names');
+      expect(namingComment.stale).toBe(false);
+
+      // Drift ONLY the manuscript (naming's dependency's source, not naming's own).
+      collectManuscriptSections.mockResolvedValueOnce([
+        { number: 1, title: 'Pilot', stageId: 'prose', content: 'Entirely different manuscript text now.' },
+      ]);
+      annotated = await getReviewWithStaleness('s1');
+      namingComment = annotated.comments.find((c) => c.checkId === 'naming.dissimilar-names');
+      expect(namingComment.stale, 'compound finding stales on its dependency\'s source drift').toBe(true);
+    } finally {
+      if (hadDeps) naming.dependsOn = originalDeps; else delete naming.dependsOn;
+    }
   });
 });

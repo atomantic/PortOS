@@ -1,8 +1,16 @@
 # Draft upstream issue — M5 Max GPU watchdog kernel panic under sustained MLX LoRA training
 
-Copy-paste target: file against **mflux** (https://github.com/filipstrand/mflux/issues)
-and/or **mlx** (https://github.com/ml-explore/mlx/issues). Not yet filed — pending a
-telemetry-captured repro to disambiguate thermal vs driver (see incident doc).
+> **DO NOT FILE AS A NEW ISSUE — already contributed (updated 2026-06-27, #1329).**
+> A tracker search found existing open MLX issues that cover this:
+> **[mlx #3267](https://github.com/ml-explore/mlx/issues/3267)** (watchdog kills
+> LoRA training; confirmed workaround `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`) and
+> **[mlx #3186](https://github.com/ml-explore/mlx/issues/3186)** (IOGPU
+> `completeMemory()` kernel panic, filed with Apple as FB22091885). mflux itself
+> has no relevant issue. Our `watchdogd`-timeout reboot is a harsher manifestation
+> of #3267's watchdog mechanism, so we **posted a data-point comment on #3267**
+> ([issuecomment-4819498999](https://github.com/ml-explore/mlx/issues/3267#issuecomment-4819498999))
+> cross-referencing #3186 — NOT a fresh issue. The material below was the basis for
+> that comment; retained for reference.
 
 ---
 

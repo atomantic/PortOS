@@ -585,6 +585,115 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
     const result = await suggestModelTier('new-task');
     expect(result).toBeNull();
   });
+
+  it('should prefer the lightest tier when several clear the high-success threshold', async () => {
+    // heavy has the marginally-higher success rate, but light also clears 80% —
+    // we should route to light to avoid spending a heavier model for the same outcome.
+    const data = makeLearningData({
+      byTaskType: {
+        'docs-task': {
+          completed: 20, succeeded: 17, failed: 3,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 85
+        }
+      },
+      routingAccuracy: {
+        'docs-task': {
+          light: { succeeded: 9, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' }, // 82%
+          heavy: { succeeded: 8, failed: 1, lastAttempt: '2026-01-25T00:00:00.000Z' }  // 89%
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('docs-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('light');
+    expect(result.reason).toMatch(/lightest of 2 proven tiers/);
+  });
+
+  it('should rank routable thinking-level tier names by real cost, not as default-weight', async () => {
+    // routingAccuracy keys can be thinking-level names (high/xhigh), not just
+    // light/default/medium/heavy. xhigh (opus) is heavier than high (provider-
+    // heavy). Both clear 80%, so we must pick high — an earlier bug ranked every
+    // unmapped name at default-weight, which would have let xhigh win the tie.
+    const data = makeLearningData({
+      byTaskType: {
+        'reason-task': {
+          completed: 20, succeeded: 18, failed: 2,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 90
+        }
+      },
+      routingAccuracy: {
+        'reason-task': {
+          high: { succeeded: 9, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' },  // 82%
+          xhigh: { succeeded: 10, failed: 1, lastAttempt: '2026-01-25T00:00:00.000Z' }  // 91%
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('reason-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('high');
+  });
+
+  it('should not suggest a non-routable local-preferred tier (minimal/low) — picks the lightest tier the runtime can run', async () => {
+    // minimal/low resolve to a local model, but the learning→selection path
+    // doesn't switch providers for them, so suggesting minimal would make the
+    // selector fall through to the provider default. Even though minimal is the
+    // cheapest by cost, it must be excluded so the proven `light` tier wins.
+    const data = makeLearningData({
+      byTaskType: {
+        'local-task': {
+          completed: 20, succeeded: 18, failed: 2,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 90
+        }
+      },
+      routingAccuracy: {
+        'local-task': {
+          minimal: { succeeded: 10, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }, // 91%
+          light: { succeeded: 9, failed: 2, lastAttempt: '2026-01-25T00:00:00.000Z' }      // 82%
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('local-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('light');
+  });
+
+  it('should not prefer an unknown tier name as the cheapest', async () => {
+    // user-specified (and any future/unknown tier name) must rank as heaviest,
+    // so it never wins the "lightest proven tier" tie over a known-light tier.
+    const data = makeLearningData({
+      byTaskType: {
+        'pref-task': {
+          completed: 20, succeeded: 18, failed: 2,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 90
+        }
+      },
+      routingAccuracy: {
+        'pref-task': {
+          'user-specified': { succeeded: 10, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' }, // 91%
+          light: { succeeded: 9, failed: 2, lastAttempt: '2026-01-25T00:00:00.000Z' }              // 82%
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('pref-task');
+
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBe('light');
+  });
 });
 
 describe('TaskLearning - recalculateModelTierMetrics', () => {

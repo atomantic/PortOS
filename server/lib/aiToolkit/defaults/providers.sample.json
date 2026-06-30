@@ -38,6 +38,62 @@
       "secretEnvVars": ["AWS_BEARER_TOKEN_BEDROCK"],
       "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
     },
+    "claude-ollama": {
+      "id": "claude-ollama",
+      "name": "Claude Ollama (local model)",
+      "type": "cli",
+      "command": "claude",
+      "args": ["--print"],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_AUTH_TOKEN": "ollama",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+    },
+    "claude-ollama-tui": {
+      "id": "claude-ollama-tui",
+      "name": "Claude Ollama TUI (local model)",
+      "type": "tui",
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "ANTHROPIC_BASE_URL": "http://localhost:11434",
+        "ANTHROPIC_AUTH_TOKEN": "ollama",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
+    "opencode-ollama": {
+      "id": "opencode-ollama",
+      "name": "OpenCode Ollama (local model)",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"ollama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Ollama (local)\",\"options\":{\"baseURL\":\"http://localhost:11434/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
     "codex": {
       "id": "codex",
       "name": "Codex CLI",

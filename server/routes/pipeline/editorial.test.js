@@ -288,13 +288,15 @@ describe('editorial health (#1316)', () => {
     expect(res.body.seriesId).toBe('s1');
     expect(res.body.score).toBe(100);
     // No gate configured → service called with the default.
-    expect(getSeriesHealth).toHaveBeenCalledWith('s1', { gate: 'noOpenHigh' });
+    // #1616: the route also threads the series' merged severity weights (the mock
+    // series carries no override → the frozen defaults).
+    expect(getSeriesHealth).toHaveBeenCalledWith('s1', { gate: 'noOpenHigh', weights: { high: 12, medium: 5, low: 1 } });
   });
 
   it('GET .../editorial/health resolves the configured gate from settings', async () => {
     await request(app).patch('/api/pipeline/editorial/readiness-gate').send({ readinessGate: 'noOpenHighOrMedium' });
     await request(app).get('/api/pipeline/series/s1/editorial/health');
-    expect(getSeriesHealth).toHaveBeenLastCalledWith('s1', { gate: 'noOpenHighOrMedium' });
+    expect(getSeriesHealth).toHaveBeenLastCalledWith('s1', { gate: 'noOpenHighOrMedium', weights: { high: 12, medium: 5, low: 1 } });
   });
 
   it('GET .../editorial/health 404s a missing series', async () => {

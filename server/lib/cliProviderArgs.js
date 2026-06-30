@@ -16,7 +16,7 @@
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
 
 /**
@@ -60,6 +60,23 @@ export function buildCliArgs(provider) {
   // travels over stdin so large PortOS prompts do not hit OS argv limits.
   if (isAntigravityCliProvider(provider)) {
     return ensureAntigravityPrintArgs(baseArgs);
+  }
+
+  // OpenCode CLI (`opencode run`): the headless, non-interactive subcommand. It
+  // reads the prompt from stdin (the runner's shell-pipeline delivery, same as
+  // every other CLI here) and selects the model with `-m provider/model`. The
+  // OpenCode Ollama provider is namespaced `ollama/<model>` (see
+  // prefixOpencodeModel). Ensure the `run` subcommand leads the argv even if the
+  // saved provider.args dropped it. Model injection is gated on the user not
+  // having hard-coded a `--model`/`-m` of their own, mirroring the claude/gemini
+  // gate below.
+  if (isOpencodeCommand(provider?.command)) {
+    const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
+    const model = prefixOpencodeModel(provider, effectiveDefaultModel);
+    if (model && !hasModelFlag(baseArgs)) {
+      args.push('-m', model);
+    }
+    return args;
   }
 
   // Gemini CLI: prompt is piped via stdin directly. `-m <model>` is gemini-

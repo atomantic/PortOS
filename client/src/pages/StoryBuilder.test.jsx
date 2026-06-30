@@ -43,8 +43,15 @@ const api = vi.hoisted(() => ({
   generateImage: vi.fn(),
   updateUniverse: vi.fn(),
   updatePipelineSeries: vi.fn(),
+  listCatalogIngredientsByIds: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
+
+// useCatalogTypes fetches the merged registry; mock it to "no user types" so the
+// hook resolves deterministically to the built-in six (its static fallback).
+vi.mock('../services/apiCatalogTypes', () => ({
+  listCatalogTypes: vi.fn().mockResolvedValue({ types: [] }),
+}));
 
 // Spy on toast so the rejection tests can prove the catch-path notice fired —
 // the success path never toasts, so a specific toast.error message uniquely
@@ -64,10 +71,10 @@ vi.mock('../components/pipeline/ArcCanvas', () => ({
   default: ({ series }) => <div data-testid="arc-canvas">ArcCanvas[{series?.id}]</div>,
 }));
 
-import StoryBuilder from './StoryBuilder';
+import StoryBuilder, { composeSeedFromIngredients } from './StoryBuilder';
 
-const renderAt = (path) => render(
-  <MemoryRouter initialEntries={[path]}>
+const renderAt = (entry) => render(
+  <MemoryRouter initialEntries={[entry]}>
     <Routes>
       <Route path="/story-builder" element={<StoryBuilder />} />
       <Route path="/story-builder/:storyId/:step" element={<StoryBuilder />} />
@@ -102,6 +109,66 @@ beforeEach(() => {
   api.getUniverse.mockResolvedValue({ id: 'u1', logline: 'L', premise: 'P', styleNotes: 'S', influences: { embrace: [], avoid: [] }, characters: [] });
   api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS', readerMap: { hooks: [{ id: 'rm-1', label: 'Why?' }] } } });
   api.listPipelineIssues.mockResolvedValue([]);
+  api.listCatalogIngredientsByIds.mockResolvedValue([]);
+});
+
+describe('composeSeedFromIngredients', () => {
+  it('returns an empty string for no ingredients', () => {
+    expect(composeSeedFromIngredients([])).toBe('');
+    expect(composeSeedFromIngredients(null)).toBe('');
+  });
+
+  it('groups by type with a header line and a bullet (name: summary) per ingredient', () => {
+    const out = composeSeedFromIngredients([
+      { id: 'c1', name: 'Echo Saint', type: 'character', payload: { description: 'A wiry figure in a long coat.' } },
+      { id: 'c2', name: 'Mara', type: 'character', payload: { summary: 'Loyal to a fault.' } },
+      { id: 'p1', name: 'Old Harbor', type: 'place', payload: { description: 'Brine and rust.' } },
+    ]);
+    expect(out).toContain('Characters:');
+    expect(out).toContain('- Echo Saint: A wiry figure in a long coat.');
+    expect(out).toContain('- Mara: Loyal to a fault.');
+    expect(out).toContain('Places:');
+    expect(out).toContain('- Old Harbor: Brine and rust.');
+  });
+
+  it('uses a character\'s physicalDescription (its primary content key), not just description', () => {
+    // A normal Catalog character stores its body prose under physicalDescription;
+    // payloadSnippet follows the type's snippetFallbackKeys so it is included.
+    const out = composeSeedFromIngredients([
+      { id: 'c1', name: 'Vance', type: 'character', payload: { physicalDescription: 'Scarred, silver-eyed, never still.' } },
+    ]);
+    expect(out).toContain('- Vance: Scarred, silver-eyed, never still.');
+  });
+
+  it('honors a user-defined type resolver (custom label + snippetFallbackKeys)', () => {
+    // A user-defined `faction` type whose body field is `creed` — the resolver
+    // (useCatalogTypes().getType) carries its snippetFallbackKeys + label.
+    const resolve = (id) => (id === 'faction'
+      ? { id: 'faction', label: 'Faction', snippetFallbackKeys: ['creed', 'description'] }
+      : undefined);
+    const out = composeSeedFromIngredients(
+      [{ id: 'f1', name: 'The Tide', type: 'faction', payload: { creed: 'The sea remembers.' } }],
+      resolve,
+    );
+    expect(out).toContain('Factions:');
+    expect(out).toContain('- The Tide: The sea remembers.');
+  });
+
+  it('truncates each summary to ~120 chars and the whole text to 4000', () => {
+    const long = 'x'.repeat(500);
+    const out = composeSeedFromIngredients([{ id: 'c1', name: 'Big', type: 'idea', payload: { description: long } }]);
+    // payloadSnippet caps at 120 with an ellipsis (117 chars + '…').
+    expect(out).toContain(`- Big: ${'x'.repeat(117)}…`);
+    expect(out).not.toContain('x'.repeat(118));
+    expect(out.length).toBeLessThanOrEqual(4000);
+  });
+
+  it('falls back to just the name when no summary field is present', () => {
+    const out = composeSeedFromIngredients([{ id: 'o1', name: 'Relic', type: 'object', payload: {} }]);
+    expect(out).toContain('Objects:');
+    expect(out).toContain('- Relic');
+    expect(out).not.toContain('- Relic:');
+  });
 });
 
 describe('StoryBuilder — index', () => {
@@ -110,6 +177,33 @@ describe('StoryBuilder — index', () => {
     expect(await screen.findByLabelText('Universe / story name')).toBeTruthy();
     expect(screen.getByText('Start from an idea')).toBeTruthy();
     expect(screen.getByText('Import a finished work')).toBeTruthy();
+  });
+
+  it('remix handoff: hydrates selected ingredients into chips + a prefilled seed, and forwards the ids on create', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    api.listCatalogIngredientsByIds.mockResolvedValue([
+      { id: 'i-1', name: 'Echo Saint', type: 'character', payload: { description: 'A wiry figure in a long coat.' } },
+      { id: 'i-2', name: 'Old Harbor', type: 'place', payload: { summary: 'Brine and rust.' } },
+    ]);
+    api.createStorySession.mockResolvedValue({ id: 'stb-remix', currentStep: 'idea' });
+
+    renderAt({ pathname: '/story-builder', state: { remix: { ingredientIds: ['i-1', 'i-2'] } } });
+
+    // The batch endpoint is hit with the handed-off ids.
+    await waitFor(() => expect(api.listCatalogIngredientsByIds).toHaveBeenCalledWith(['i-1', 'i-2'], expect.objectContaining({ silent: true })));
+    // Chip list + count.
+    expect(await screen.findByText('Seeding from 2 ingredients')).toBeTruthy();
+    // The seed textarea is prefilled from the composed summary.
+    const seed = screen.getByLabelText('Starter idea');
+    await waitFor(() => expect(seed.value).toContain('Echo Saint'));
+    expect(seed.value).toContain('Characters:');
+
+    fireEvent.change(screen.getByLabelText('Universe / story name'), { target: { value: 'Salt Run' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create & begin/i }));
+    await waitFor(() => expect(api.createStorySession).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Salt Run', catalogIngredientIds: ['i-1', 'i-2'] }),
+      expect.objectContaining({ silent: true }),
+    ));
   });
 
   it('import tab: analyze → preview → import & build creates an import-mode session', async () => {

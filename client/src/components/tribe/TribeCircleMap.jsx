@@ -33,6 +33,20 @@ const nodeRadius = (i) => NODE_R[i] ?? NODE_R[NODE_R.length - 1];
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// Theme-reactive SVG colors. Hardcoded dark hexes washed out on the day themes
+// (a near-white card with a dark label halo and pale-gray node text), so these
+// resolve through the active theme's CSS variables instead. var() only evaluates
+// in a CSS context, so these go through the `style` prop (via the helpers below),
+// NOT as fill="…"/stroke="…" presentation attributes — see ScoreSheet.jsx for the
+// same constraint and pattern.
+const HALO = 'rgb(var(--port-card))'; // label outline = card bg, so it masks nodes without showing as an outline
+const NODE_INK = 'rgb(var(--port-text))';
+const MUTED_INK = 'rgb(var(--port-text-muted))';
+const ACCENT = 'rgb(var(--port-accent))';
+// Colour goes through `style`; geometry/opacity stay as attributes.
+const fillStyle = (color, extra) => ({ fill: color, ...extra });
+const strokeStyle = (color, extra) => ({ stroke: color, ...extra });
+
 // Place node `slot` of `total` inside ring `ringIndex`'s annular band — the empty
 // disk just inside its labeled circle — rather than on the ring line itself.
 // Equal-area radius (sqrt-spaced) keeps the band evenly filled as a person count
@@ -182,9 +196,8 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
                   className="uppercase tracking-wider"
                   // Halo (card-bg stroke painted under the fill) keeps the label
                   // legible over any node that lands near it on a dense ring.
-                  stroke="#1a1a1a"
                   strokeWidth="3"
-                  style={{ paintOrder: 'stroke' }}
+                  style={strokeStyle(HALO, { paintOrder: 'stroke' })}
                 >
                   {ring.label}
                 </text>
@@ -197,21 +210,19 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
             x={CENTER}
             y={EDGE_PAD + 14}
             textAnchor="middle"
-            fill="#94a3b8"
             fillOpacity="0.8"
             fontSize="13"
             fontWeight="600"
             className="uppercase tracking-wider"
-            stroke="#1a1a1a"
             strokeWidth="3"
-            style={{ paintOrder: 'stroke' }}
+            style={{ fill: MUTED_INK, stroke: HALO, paintOrder: 'stroke' }}
           >
             External
           </text>
 
           {/* Center "Me" hub. */}
-          <circle cx={CENTER} cy={CENTER} r={HUB_R} fill="#3b82f6" fillOpacity="0.15" stroke="#3b82f6" strokeOpacity="0.6" />
-          <text x={CENTER} y={CENTER + 5} textAnchor="middle" fill="#bfdbfe" fontSize="15" fontWeight="700">Me</text>
+          <circle cx={CENTER} cy={CENTER} r={HUB_R} fillOpacity="0.15" strokeOpacity="0.6" style={{ fill: ACCENT, stroke: ACCENT }} />
+          <text x={CENTER} y={CENTER + 5} textAnchor="middle" fontSize="15" fontWeight="700" style={fillStyle(ACCENT)}>Me</text>
 
           {/* People nodes — Dunbar rings (banded) and external (open outer region). */}
           {placed.nodes.map(({ contact, ringIdx, isExternal, r: baseR, x, y }) => {
@@ -253,7 +264,7 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
                   <text
                     textAnchor="middle"
                     dy="0.35em"
-                    fill="#e5e7eb"
+                    style={fillStyle(NODE_INK)}
                     fontSize={isExternal ? 8 : (ringIdx < 2 ? 11 : 9)}
                     fontWeight="600"
                     pointerEvents="none"
@@ -276,9 +287,9 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
               transform: 'translate(-50%, calc(-100% - 14px))',
             }}
           >
-            <p className="font-semibold text-white">{hoveredNode.contact.name || 'Unnamed person'}</p>
+            <p className="font-semibold text-port-text">{hoveredNode.contact.name || 'Unnamed person'}</p>
             {hoveredNode.contact.relationship && (
-              <p className="mt-0.5 text-gray-400">{hoveredNode.contact.relationship}</p>
+              <p className="mt-0.5 text-port-text-muted">{hoveredNode.contact.relationship}</p>
             )}
             <p className={`mt-1 ${contactStatus(hoveredNode.contact).tone}`}>
               {contactStatus(hoveredNode.contact).label}
@@ -290,8 +301,8 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
       {/* Legend + at-a-glance ring counts. */}
       <aside className="grid content-start gap-4">
         <div className="rounded border border-port-border bg-port-card p-4">
-          <h3 className="text-sm font-semibold text-white">Rings</h3>
-          <p className="mt-1 text-xs text-gray-500">Closer rings need more frequent care.</p>
+          <h3 className="text-sm font-semibold text-port-text">Rings</h3>
+          <p className="mt-1 text-xs text-port-text-muted">Closer rings need more frequent care.</p>
           <div className="mt-3 grid gap-2">
             {RINGS.map((ring) => {
               const count = contacts.filter((c) => c.ring === ring.id).length;
@@ -301,7 +312,7 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
                     <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ring.hex }} aria-hidden="true" />
                     <span className={ring.tone}>{ring.label}</span>
                   </span>
-                  <span className="text-gray-400">{ring.cap == null ? count : `${count} / ${ring.cap}`}</span>
+                  <span className="text-port-text-muted">{ring.cap == null ? count : `${count} / ${ring.cap}`}</span>
                 </div>
               );
             })}
@@ -309,10 +320,10 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
         </div>
 
         <div className="rounded border border-port-border bg-port-card p-4">
-          <h3 className="text-sm font-semibold text-white">Node fill — energy</h3>
+          <h3 className="text-sm font-semibold text-port-text">Node fill — energy</h3>
           <div className="mt-3 grid gap-2">
             {ENERGY.map((energy) => (
-              <div key={energy.id} className="flex items-center gap-2 text-xs text-gray-400">
+              <div key={energy.id} className="flex items-center gap-2 text-xs text-port-text-muted">
                 <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: energy.hex }} aria-hidden="true" />
                 {energy.label}
               </div>
@@ -321,7 +332,7 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
         </div>
 
         <div className="rounded border border-port-border bg-port-card p-4">
-          <h3 className="text-sm font-semibold text-white">Node outline — cadence</h3>
+          <h3 className="text-sm font-semibold text-port-text">Node outline — cadence</h3>
           <div className="mt-3 grid gap-2">
             {[
               { state: 'overdue', label: 'Overdue' },
@@ -329,7 +340,7 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
               { state: 'steady', label: 'On track' },
               { state: 'missing', label: 'No touchpoint' },
             ].map((row) => (
-              <div key={row.state} className="flex items-center gap-2 text-xs text-gray-400">
+              <div key={row.state} className="flex items-center gap-2 text-xs text-port-text-muted">
                 <span className="inline-block h-3 w-3 rounded-full border-2" style={{ borderColor: STATUS_HEX[row.state] }} aria-hidden="true" />
                 {row.label}
               </div>

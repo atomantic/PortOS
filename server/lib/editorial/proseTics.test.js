@@ -3,12 +3,14 @@ import {
   tokenizeWords,
   splitSentences,
   findFilterWords,
+  findHedgeWords,
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
   filterPassiveVoice,
   findGestures,
   FILTER_WORDS,
+  HEDGE_WORDS,
   CRUTCH_WORDS,
 } from './proseTics.js';
 
@@ -63,9 +65,48 @@ describe('findFilterWords', () => {
     expect(findFilterWords('The sawmill was loud.')).toEqual([]);
   });
 
+  it('flags modal-perception phrase additions ("could see", "found himself")', () => {
+    const entries = findFilterWords('She could see the door; he found himself running.').map((h) => h.entry);
+    expect(entries).toContain('could see');
+    expect(entries).toContain('found himself');
+  });
+
   it('seed list is frozen and lowercase', () => {
     expect(Object.isFrozen(FILTER_WORDS)).toBe(true);
     for (const w of FILTER_WORDS) expect(w).toBe(w.toLowerCase());
+  });
+});
+
+describe('findHedgeWords', () => {
+  it('flags metaphorical-distance, hedge, and weasel markers', () => {
+    const entries = findHedgeWords(
+      'It was as if he knew. Part of him almost felt it. I kind of think so, no doubt.',
+    ).map((h) => h.entry);
+    expect(entries).toContain('as if');
+    expect(entries).toContain('part of him');
+    expect(entries).toContain('almost');
+    expect(entries).toContain('kind of');
+    expect(entries).toContain('no doubt');
+  });
+
+  it('matches multi-word phrases whole, longest-first ("as if" not bare "if")', () => {
+    const hits = findHedgeWords('She moved as if weightless.');
+    expect(hits.map((h) => h.anchor.toLowerCase())).toContain('as if');
+  });
+
+  it('respects allowWords and extraWords', () => {
+    expect(findHedgeWords('Almost there.', { allowWords: ['almost'] })).toEqual([]);
+    const extra = findHedgeWords('It was basically fine.', { extraWords: ['basically'] });
+    expect(extra.map((h) => h.entry)).toContain('basically');
+  });
+
+  it('does not match substrings (almsot/almost boundary)', () => {
+    expect(findHedgeWords('The almshouse stood empty.')).toEqual([]);
+  });
+
+  it('seed list is frozen and lowercase', () => {
+    expect(Object.isFrozen(HEDGE_WORDS)).toBe(true);
+    for (const w of HEDGE_WORDS) expect(w).toBe(w.toLowerCase());
   });
 });
 
@@ -125,6 +166,18 @@ describe('findAdverbs', () => {
 
   it('respects allowWords', () => {
     const hits = findAdverbs('She ran quickly.', { allowWords: ['quickly'] });
+    expect(hits).toEqual([]);
+  });
+
+  it('flags non-ly adverbs supplied via extraWords', () => {
+    // "fast" is a real adverb the -ly heuristic misses; the series can add it.
+    expect(findAdverbs('She ran fast.')).toEqual([]);
+    const hits = findAdverbs('She ran fast.', { extraWords: ['fast'] });
+    expect(hits.map((h) => h.word.toLowerCase())).toContain('fast');
+  });
+
+  it('allowWords still wins over an extraWords entry', () => {
+    const hits = findAdverbs('She ran fast.', { extraWords: ['fast'], allowWords: ['fast'] });
     expect(hits).toEqual([]);
   });
 });
@@ -212,6 +265,24 @@ describe('findPassiveVoice', () => {
     const [hit] = findPassiveVoice('She was exhausted. By morning the fog had lifted.');
     expect(hit.byAgent).toBe(false);
     expect(hit.classification).toBe('stative');
+  });
+
+  it('mutes an allow-listed participle (archaic/adjectival -ed form)', () => {
+    // "blessed" trips the bare -ed heuristic; a series can allow-list it.
+    expect(findPassiveVoice('She was blessed.').map((h) => h.participle)).toContain('blessed');
+    expect(findPassiveVoice('She was blessed.', { allowWords: ['blessed'] })).toEqual([]);
+  });
+
+  it('recognizes a series-specific irregular participle via extraWords', () => {
+    // "hewn" is an irregular participle the -ed/known-irregular heuristic misses.
+    expect(findPassiveVoice('The beam was hewn from oak.')).toEqual([]);
+    const hits = findPassiveVoice('The beam was hewn from oak.', { extraWords: ['hewn'] });
+    expect(hits.map((h) => h.participle)).toContain('hewn');
+  });
+
+  it('allowWords wins over extraWords for participle recognition', () => {
+    const hits = findPassiveVoice('The beam was hewn.', { extraWords: ['hewn'], allowWords: ['hewn'] });
+    expect(hits).toEqual([]);
   });
 });
 

@@ -29,6 +29,33 @@ vi.mock('../lib/stageRunner.js', () => ({
   extractJson: (raw) => JSON.parse(raw),
 }));
 
+// catalogDB is Postgres-backed — mock it so the service test never touches the
+// real DB (#1761). listIngredients (the batch resolve) and linkIngredientsToSeries
+// (the batch link) are spies the tests program per case; the type→role vocabulary
+// itself is covered in catalogDB.test.js.
+const catalogMocks = vi.hoisted(() => {
+  const listIngredients = vi.fn();
+  return {
+    listIngredients,
+    linkIngredientsToSeries: vi.fn(),
+    // resolveIngredientsByIds is the shared resolver storyBuilder now delegates
+    // to (#1808). Mirror the real dedupe + pick-order logic but route the batch
+    // fetch through the mocked listIngredients so every existing per-case
+    // `listIngredients.mockResolvedValue(...)` + call-args assertion still drives
+    // it unchanged.
+    resolveIngredientsByIds: vi.fn(async (ids) => {
+      const list = [...new Set((Array.isArray(ids) ? ids : [])
+        .filter((id) => typeof id === 'string' && id.trim())
+        .map((id) => id.trim()))];
+      if (list.length === 0) return [];
+      const { items } = await listIngredients({ ids: list, limit: list.length });
+      const byId = new Map((items || []).map((ing) => [ing.id, ing]));
+      return list.map((id) => byId.get(id)).filter(Boolean);
+    }),
+  };
+});
+vi.mock('./catalogDB.js', () => catalogMocks);
+
 const sb = await import('./storyBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');
 const universeSvc = await import('./universeBuilder.js');
@@ -38,6 +65,13 @@ beforeEach(() => {
   fileStore.clear();
   uuidCounter = 0;
   stageRunnerSpy = undefined;
+  catalogMocks.listIngredients.mockReset();
+  catalogMocks.linkIngredientsToSeries.mockReset();
+  // Default: the batch resolve returns nothing (each test overrides as needed),
+  // and the batch link echoes back the ingredients it was handed.
+  catalogMocks.listIngredients.mockResolvedValue({ items: [] });
+  catalogMocks.linkIngredientsToSeries.mockImplementation(async (_seriesId, ings) =>
+    (Array.isArray(ings) ? ings.filter((i) => i && i.id) : []));
 });
 
 describe('storyBuilder — CRUD', () => {
@@ -113,6 +147,150 @@ describe('storyBuilder — CRUD', () => {
     await sb.deleteStorySession(s.id);
     await expect(sb.getStorySession(s.id)).rejects.toMatchObject({ code: sb.ERR_NOT_FOUND });
     expect((await sb.listStorySessions()).map((x) => x.id)).not.toContain(s.id);
+  });
+});
+
+describe('storyBuilder — catalog ingredient linking (#1761)', () => {
+  it('is a no-op when catalogIngredientIds is absent (back-compat)', async () => {
+    await sb.createStorySession({ title: 'Plain', seedIdea: 'a seed' });
+    expect(catalogMocks.listIngredients).not.toHaveBeenCalled();
+    expect(catalogMocks.linkIngredientsToSeries).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op for an empty catalogIngredientIds array', async () => {
+    await sb.createStorySession({ title: 'Plain', seedIdea: 'a seed', catalogIngredientIds: [] });
+    expect(catalogMocks.listIngredients).not.toHaveBeenCalled();
+    expect(catalogMocks.linkIngredientsToSeries).not.toHaveBeenCalled();
+  });
+
+  it('batch-resolves the ids and delegates linking in pick order', async () => {
+    const items = [
+      { id: 'cat-c', type: 'character', name: 'Mira', payload: {} },
+      { id: 'cat-p', type: 'place', name: 'Foundry', payload: {} },
+      { id: 'cat-o', type: 'object', name: 'Key', payload: {} },
+      { id: 'cat-x', type: 'scene', name: 'Opening', payload: {} },
+    ];
+    // Return the batch out of order to prove the resolver restores pick order.
+    catalogMocks.listIngredients.mockResolvedValue({ items: [items[2], items[0], items[3], items[1]] });
+
+    const s = await sb.createStorySession({
+      title: 'Linked', seedIdea: 'seed',
+      catalogIngredientIds: ['cat-c', 'cat-p', 'cat-o', 'cat-x'],
+    });
+
+    // ONE batch query (not N getIngredient round-trips).
+    expect(catalogMocks.listIngredients).toHaveBeenCalledTimes(1);
+    expect(catalogMocks.listIngredients).toHaveBeenCalledWith({ ids: ['cat-c', 'cat-p', 'cat-o', 'cat-x'], limit: 4 });
+    // ONE batch link with the resolved ingredients in the user's pick order.
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledTimes(1);
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, items);
+  });
+
+  it('skips ids the batch omits (missing / soft-deleted) without throwing', async () => {
+    // listIngredients already excludes soft-deleted rows, so the batch only
+    // returns the live one — the resolver drops the absent ids.
+    catalogMocks.listIngredients.mockResolvedValue({
+      items: [{ id: 'cat-live', type: 'character', name: 'Live', payload: {} }],
+    });
+
+    const s = await sb.createStorySession({
+      title: 'Sparse', seedIdea: 'seed',
+      catalogIngredientIds: ['cat-live', 'cat-dead', 'cat-missing'],
+    });
+
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledTimes(1);
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [
+      { id: 'cat-live', type: 'character', name: 'Live', payload: {} },
+    ]);
+  });
+
+  it('de-dupes repeated ids (off-UI API callers) so the link + seed are not doubled', async () => {
+    catalogMocks.listIngredients.mockResolvedValue({
+      items: [{ id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A foreman.' } }],
+    });
+
+    const s = await sb.createStorySession({
+      title: 'Dupes', // blank seed so the composed fallback is observable
+      catalogIngredientIds: ['cat-c', 'cat-c', 'cat-c'],
+    });
+
+    // Resolver collapses the dupes to one id before the batch query.
+    expect(catalogMocks.listIngredients).toHaveBeenCalledWith({ ids: ['cat-c'], limit: 1 });
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [
+      { id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A foreman.' } },
+    ]);
+    // The composed premise lists the ingredient exactly once, not three times.
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.premise.match(/- Mira:/g)).toHaveLength(1);
+  });
+
+  it('composes a fallback seed from ingredients when seedIdea is blank', async () => {
+    catalogMocks.listIngredients.mockResolvedValue({ items: [
+      { id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'A weary foundry foreman.' } },
+      { id: 'cat-p', type: 'place', name: 'Foundry', payload: { summary: 'A silent ironworks.' } },
+    ] });
+
+    const s = await sb.createStorySession({
+      title: 'Composed', // no seedIdea
+      catalogIngredientIds: ['cat-c', 'cat-p'],
+    });
+
+    const series = await seriesSvc.getSeries(s.seriesId);
+    const universe = await universeSvc.getUniverse(s.universeId);
+    expect(series.premise).toContain('Characters:');
+    expect(series.premise).toContain('- Mira: A weary foundry foreman.');
+    expect(series.premise).toContain('Places:');
+    expect(series.premise).toContain('- Foundry: A silent ironworks.');
+    // The same composed seed feeds the universe starter prompt.
+    expect(universe.starterPrompt).toBe(series.premise);
+    // The user-facing seedIdea on the session stays the (empty) original.
+    expect(s.seedIdea).toBe('');
+  });
+
+  it('keeps the user seedIdea when one is provided (no fallback compose)', async () => {
+    const ing = { id: 'cat-c', type: 'character', name: 'Mira', payload: { description: 'desc' } };
+    catalogMocks.listIngredients.mockResolvedValue({ items: [ing] });
+
+    const s = await sb.createStorySession({
+      title: 'WithSeed', seedIdea: 'the foundry goes silent',
+      catalogIngredientIds: ['cat-c'],
+    });
+
+    const series = await seriesSvc.getSeries(s.seriesId);
+    expect(series.premise).toBe('the foundry goes silent');
+    // Still links the ingredient.
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
+  });
+
+  it('still creates + saves the session when linking fails (best-effort, no orphan)', async () => {
+    const ing = { id: 'cat-c', type: 'character', name: 'Mira', payload: {} };
+    catalogMocks.listIngredients.mockResolvedValue({ items: [ing] });
+    // A transient ref-insert failure must NOT reject the create (that would
+    // orphan the just-minted universe/series with no session pointing at them).
+    catalogMocks.linkIngredientsToSeries.mockRejectedValue(new Error('ref insert boom'));
+
+    const s = await sb.createStorySession({
+      title: 'Resilient', seedIdea: 'seed',
+      catalogIngredientIds: ['cat-c'],
+    });
+
+    // Session was saved despite the link failure, and the shells exist.
+    expect(s.id).toMatch(/^stb-/);
+    expect((await sb.listStorySessions()).map((x) => x.id)).toContain(s.id);
+    expect(await seriesSvc.getSeries(s.seriesId)).toBeTruthy();
+    expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
+  });
+
+  it('does not link in import mode', async () => {
+    const universe = await universeSvc.createUniverse({ name: 'U' });
+    const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
+    await sb.createStorySession({
+      title: 'Imported', intakeMode: 'import',
+      universeId: universe.id, seriesId: series.id,
+      catalogIngredientIds: ['cat-c'],
+    });
+    expect(catalogMocks.listIngredients).not.toHaveBeenCalled();
+    expect(catalogMocks.linkIngredientsToSeries).not.toHaveBeenCalled();
   });
 });
 

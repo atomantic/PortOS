@@ -6,6 +6,7 @@
  * Word-level scanners backing the deterministic "copy-edit" check group in
  * checkRegistry.js:
  *   - findFilterWords()  → `prose.filter-words`   (distancing verbs)
+ *   - findHedgeWords()   → `prose.hedge-words`    (hedge / weasel distance markers)
  *   - findCrutchWords()  → `prose.crutch-words`   (intensifiers / fillers)
  *   - findAdverbs()      → `prose.adverbs`        (-ly adverbs + dialogue-tag adverbs)
  *   - findPassiveVoice() → `prose.passive-voice`  (be-verb + past-participle heuristic)
@@ -31,6 +32,35 @@ export const FILTER_WORDS = Object.freeze([
   'saw', 'watched', 'noticed', 'realized', 'realised', 'felt', 'heard',
   'seemed', 'looked', 'wondered', 'thought', 'knew', 'decided', 'sensed',
   'observed', 'spotted', 'glimpsed', 'began to', 'started to',
+  // Modal-perception and reflexive constructions are the same distancing tic in
+  // phrase form ("she could see the door" → "the door stood open"; "he found
+  // himself running" → "he ran"). Matched as whole phrases (longest-first).
+  'could see', 'could hear', 'could feel', 'could smell', 'could tell',
+  'found himself', 'found herself', 'found themselves', 'found myself',
+]);
+
+// Hedge / weasel distance markers (#1621) — the SECOND distancing bucket that
+// `prose.filter-words` (perception verbs) misses. Three families of softeners
+// that quietly back the reader out of the moment:
+//   - metaphorical distance — "it was as if he knew", "somewhere deep inside",
+//     "almost felt", "part of him";
+//   - dialogue / cognitive hedges — "I kind of think", "sort of felt",
+//     "more or less", "I suppose";
+//   - cognitive weasel words — "surely", "no doubt", "obviously", "of course".
+// Density-scaled like the other word lists and user-extendable (extraWords) /
+// mutable (allowWords). Multi-word entries match as whole phrases with flexible
+// internal whitespace, longest-first (so "as if" wins over a bare "if").
+export const HEDGE_WORDS = Object.freeze([
+  // Metaphorical distance — narration that gestures AT a feeling from arm's length.
+  'as if', 'as though', 'almost', 'somehow', 'somewhat', 'deep inside',
+  'deep down', 'somewhere inside', 'somewhere deep', 'part of him',
+  'part of her', 'part of them', 'something inside', 'in a way', 'in some way',
+  // Dialogue / cognitive hedges — the speaker (or narrator) softens the claim.
+  'kind of', 'sort of', 'more or less', 'i guess', 'i suppose', 'i think',
+  'i feel like', 'maybe', 'perhaps', 'possibly', 'probably',
+  // Cognitive weasel words — assert certainty in place of earning it on the page.
+  'surely', 'no doubt', 'obviously', 'clearly', 'of course', 'naturally',
+  'undoubtedly', 'evidently', 'presumably', 'needless to say', 'arguably',
 ]);
 
 // Crutch / filler words — intensifiers and hedges that almost always delete
@@ -155,6 +185,12 @@ function normalizeWord(p) {
   return typeof p === 'string' ? p.trim().toLowerCase() : '';
 }
 
+// Normalize a house-style/extra word list into a Set for O(1) membership in the
+// token-loop scanners. Tolerates a non-array (returns an empty Set).
+function toWordSet(words) {
+  return new Set((Array.isArray(words) ? words : []).map(normalizeWord).filter(Boolean));
+}
+
 /**
  * Tokenize prose into words with their absolute character offsets. Apostrophes
  * are kept inside a word ("couldn't") so contractions stay whole. Exported so
@@ -202,7 +238,7 @@ export function splitSentences(text) {
 // with flexible internal whitespace (like ./cliches.js). Returns null when the
 // effective list (seed + extra − allow) is empty.
 function buildListMatcher(seed, opts = {}) {
-  const allow = new Set((Array.isArray(opts.allowWords) ? opts.allowWords : []).map(normalizeWord).filter(Boolean));
+  const allow = toWordSet(opts.allowWords);
   const extra = (Array.isArray(opts.extraWords) ? opts.extraWords : []).map(normalizeWord).filter(Boolean);
   const seen = new Set();
   const entries = [];
@@ -246,6 +282,18 @@ export function findFilterWords(text, opts = {}) {
 }
 
 /**
+ * Hedge / weasel distance-marker occurrences (#1621). One entry per match. Shares
+ * the same allow/extra plumbing as the other word lists, so a series can mute a
+ * noisy default ("almost") or add house-style hedges.
+ * @param {string} text
+ * @param {{ allowWords?: string[], extraWords?: string[] }} [opts]
+ * @returns {Array<{ entry: string, index: number, anchor: string }>}
+ */
+export function findHedgeWords(text, opts = {}) {
+  return scanList(text, HEDGE_WORDS, opts);
+}
+
+/**
  * Crutch/filler-word occurrences. Bare "that" is included only when
  * `opts.includeThat` is true (off by default — grammatical "that" is noisy).
  * @param {string} text
@@ -276,18 +324,21 @@ function isLyAdverb(lower) {
  * bucket on tags by default.
  *
  * @param {string} text
- * @param {{ allowWords?: string[] }} [opts] allowWords mutes specific adverbs.
+ * @param {{ allowWords?: string[], extraWords?: string[] }} [opts] allowWords mutes
+ *   specific adverbs; extraWords flags series-specific words that the `-ly`
+ *   heuristic misses (irregular adverbs like "fast"/"well"/"hard").
  * @returns {Array<{ word: string, index: number, anchor: string, dialogueTag: boolean, tagAdverbKind: ('reporting'|'emotion'|null) }>}
  */
 export function findAdverbs(text, opts = {}) {
   const tokens = tokenizeWords(text);
   if (!tokens.length) return [];
-  const allow = new Set((Array.isArray(opts.allowWords) ? opts.allowWords : []).map(normalizeWord).filter(Boolean));
+  const allow = toWordSet(opts.allowWords);
+  const extra = toWordSet(opts.extraWords);
   const tagSet = new Set(DIALOGUE_TAGS);
   const out = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const t = tokens[i];
-    if (!isLyAdverb(t.lower) || allow.has(t.lower)) continue;
+    if ((!isLyAdverb(t.lower) && !extra.has(t.lower)) || allow.has(t.lower)) continue;
     const prev = i > 0 ? tokens[i - 1].lower : '';
     const dialogueTag = tagSet.has(prev);
     const tagAdverbKind = dialogueTag
@@ -363,12 +414,21 @@ function hasSettingSubject(tokens, i) {
  * an intervening adverb, "decorated elaborately by Mira").
  *
  * @param {string} text
+ * @param {{ allowWords?: string[], extraWords?: string[] }} [opts] allowWords mutes
+ *   participles a series never wants flagged (archaic/house-style "-ed" forms read
+ *   as adjectives — "blessed", "beloved"); extraWords adds domain-specific irregular
+ *   participles the "-ed"/known-irregular heuristic misses ("begun", "hewn").
  * @returns {Array<{ index: number, anchor: string, be: string, participle: string, classification: ('weak'|'stative'|'mood'), byAgent: boolean }>}
  */
-export function findPassiveVoice(text) {
+export function findPassiveVoice(text, opts = {}) {
   const tokens = tokenizeWords(text);
   if (!tokens.length) return [];
   const beSet = new Set(BE_VERBS);
+  const allow = toWordSet(opts.allowWords);
+  const extra = toWordSet(opts.extraWords);
+  // A participle is recognized when the heuristic OR a series `extraWords` entry
+  // matches, unless the series allow-listed it.
+  const isParticiple = (lower) => (isPastParticiple(lower) || extra.has(lower)) && !allow.has(lower);
   const out = [];
   for (let i = 0; i < tokens.length; i += 1) {
     if (!beSet.has(tokens[i].lower)) continue;
@@ -376,7 +436,7 @@ export function findPassiveVoice(text) {
     let j = i + 1;
     let skipped = 0;
     while (j < tokens.length && skipped < 2 && isLyAdverb(tokens[j].lower)) { j += 1; skipped += 1; }
-    if (j < tokens.length && isPastParticiple(tokens[j].lower) && !beSet.has(tokens[j].lower)) {
+    if (j < tokens.length && isParticiple(tokens[j].lower) && !beSet.has(tokens[j].lower)) {
       const start = tokens[i].index;
       const end = tokens[j].index + tokens[j].word.length;
       const participle = tokens[j].lower;
@@ -452,7 +512,7 @@ function inflect(base) {
 
 // Gesture matcher: each base verb plus its regular inflections (see inflect()).
 function gestureMatcher(seed, opts = {}) {
-  const allow = new Set((Array.isArray(opts.allowWords) ? opts.allowWords : []).map(normalizeWord).filter(Boolean));
+  const allow = toWordSet(opts.allowWords);
   const extra = (Array.isArray(opts.extraWords) ? opts.extraWords : []).map(normalizeWord).filter(Boolean);
   const seen = new Set();
   const forms = [];
@@ -494,7 +554,7 @@ export function findGestures(text, opts = {}) {
   const gestures = [];
   if (matcher) {
     // Map each inflected surface form back to its base for tally grouping.
-    const allow = new Set((Array.isArray(opts.allowWords) ? opts.allowWords : []).map(normalizeWord).filter(Boolean));
+    const allow = toWordSet(opts.allowWords);
     const extra = (Array.isArray(opts.extraWords) ? opts.extraWords : []).map(normalizeWord).filter(Boolean);
     const formToBase = new Map();
     for (const b of [...GESTURE_WORDS, ...extra]) {

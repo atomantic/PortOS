@@ -46,6 +46,18 @@ describe('pipeline issues store facade — file backend', () => {
     expect((await s.loadAll()).map((r) => r.id).sort()).toEqual(['iss-1', 'iss-2']);
   });
 
+  it('loadAllForSeries returns only the requested series, sanitized', async () => {
+    const s = getIssuesStore(passthroughSanitize);
+    await s.saveOneNow('iss-1', { id: 'iss-1', seriesId: 'ser-1', title: 'One' });
+    await s.saveOneNow('iss-2', { id: 'iss-2', seriesId: 'ser-2', title: 'Two' });
+    await s.saveOneNow('iss-3', { id: 'iss-3', seriesId: 'ser-1', title: 'Three' });
+    const ser1 = await s.loadAllForSeries('ser-1');
+    expect(ser1.map((r) => r.id).sort()).toEqual(['iss-1', 'iss-3']);
+    expect(ser1.every((r) => r._sanitized === true)).toBe(true);
+    expect((await s.loadAllForSeries('ser-2')).map((r) => r.id)).toEqual(['iss-2']);
+    expect(await s.loadAllForSeries('ser-missing')).toEqual([]);
+  });
+
   it('deleteOne removes the record', async () => {
     const s = getIssuesStore(passthroughSanitize);
     await s.saveOneNow('iss-1', { id: 'iss-1', seriesId: 'ser-1', title: 'X' });

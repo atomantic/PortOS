@@ -21,6 +21,7 @@ import {
   INGREDIENT_TYPE_IDS,
   FTS_PAYLOAD_FIELDS,
   getCatalogType,
+  payloadSnippet,
   ingredientIdPrefix,
   currentPayloadSchemaVersion,
   upgradePayload,
@@ -368,5 +369,33 @@ describe('catalogTypes — media kinds', () => {
       expect(clientKind.label).toBe(serverKind.label);
       expect(clientKind.accept).toBe(serverKind.accept);
     }
+  });
+});
+
+describe('payloadSnippet', () => {
+  it('follows a type\'s snippetFallbackKeys — character body text lives under physicalDescription', () => {
+    // A character's primary prose key is physicalDescription, NOT description.
+    expect(payloadSnippet({ physicalDescription: 'Scarred and silver-eyed.' }, 'character'))
+      .toBe('Scarred and silver-eyed.');
+    // Falls through the chain to description/summary when the primary is absent.
+    expect(payloadSnippet({ summary: 'Loyal to a fault.' }, 'character')).toBe('Loyal to a fault.');
+  });
+
+  it('collapses whitespace and truncates to max with an ellipsis', () => {
+    expect(payloadSnippet({ description: 'a   b\n c' }, 'place')).toBe('a b c');
+    const out = payloadSnippet({ description: 'x'.repeat(200) }, 'idea', 120);
+    expect(out).toBe(`${'x'.repeat(117)}…`); // 117 chars + 1-char ellipsis
+    expect(out.length).toBeLessThanOrEqual(120);
+  });
+
+  it('returns empty for a non-object payload or no matching key', () => {
+    expect(payloadSnippet(null, 'character')).toBe('');
+    expect(payloadSnippet({ unrelated: 'x' }, 'character')).toBe('');
+  });
+
+  it('mirrors the client helper output', async () => {
+    const client = await import('../../client/src/lib/catalogTypes.js');
+    const payload = { physicalDescription: 'A wiry figure in a long coat, never still.' };
+    expect(payloadSnippet(payload, 'character')).toBe(client.payloadSnippet(payload, 'character'));
   });
 });

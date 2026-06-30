@@ -4,7 +4,9 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
-import { autoCleanGeneratedImage, stripPngC2PAChunk } from './imageClean.js';
+import {
+  autoCleanGeneratedImage, stripPngC2PAChunk, stripPngMetadataChunks, cleanImageBuffer,
+} from './imageClean.js';
 
 let sandbox;
 let pngFixture;
@@ -273,5 +275,125 @@ describe('stripPngC2PAChunk', () => {
     expect(stripPngC2PAChunk(null).stripped).toBe(false);
     expect(stripPngC2PAChunk(undefined).stripped).toBe(false);
     expect(stripPngC2PAChunk('a string').stripped).toBe(false);
+  });
+
+  it('leaves text/exif chunks in place (caBX-only scope)', () => {
+    const textChunk = makePngChunk('tEXt', Buffer.from('Comment\0note', 'latin1'));
+    const polluted = injectChunkBeforeIEND(pngFixture, textChunk);
+    const result = stripPngC2PAChunk(polluted);
+    // stripPngC2PAChunk only targets caBX — a text chunk is untouched.
+    expect(result.stripped).toBe(false);
+    expect(result.data).toBe(polluted);
+  });
+});
+
+describe('stripPngMetadataChunks', () => {
+  it('strips caBX + text + exif chunks and reports which types it dropped', () => {
+    const caBX = makePngChunk('caBX', Buffer.alloc(20, 0xCA));
+    const text = makePngChunk('tEXt', Buffer.from('Author\0secret', 'latin1'));
+    const exif = makePngChunk('eXIf', Buffer.alloc(16, 0x07));
+    const polluted = injectChunkBeforeIEND(
+      injectChunkBeforeIEND(injectChunkBeforeIEND(pngFixture, caBX), text), exif,
+    );
+    const result = stripPngMetadataChunks(polluted);
+    expect(result.stripped).toBe(true);
+    expect(result.droppedTypes.sort()).toEqual(['caBX', 'eXIf', 'tEXt']);
+    // All three ancillary chunks gone → output equals the clean fixture.
+    expect(result.data.equals(pngFixture)).toBe(true);
+  });
+
+  it('is a no-op when only critical chunks are present', () => {
+    const result = stripPngMetadataChunks(pngFixture);
+    expect(result.stripped).toBe(false);
+    expect(result.droppedTypes).toEqual([]);
+    expect(result.data).toBe(pngFixture);
+  });
+});
+
+describe('cleanImageBuffer (composable steps)', () => {
+  it('throws VALIDATION_ERROR on an empty buffer', async () => {
+    await expect(cleanImageBuffer(Buffer.alloc(0))).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('throws UNSUPPORTED_FORMAT on non-image input', async () => {
+    await expect(cleanImageBuffer(Buffer.from('nope'))).rejects.toMatchObject({ code: 'UNSUPPORTED_FORMAT' });
+  });
+
+  it('default (metadata only) losslessly strips a caBX chunk without re-encoding pixels', async () => {
+    const caBX = makePngChunk('caBX', Buffer.alloc(32, 0xCA));
+    const polluted = injectChunkBeforeIEND(pngFixture, caBX);
+    const result = await cleanImageBuffer(polluted);
+    expect(result.c2paStripped).toBe(true);
+    expect(result.steps.map((s) => s.step)).toEqual(['metadata']);
+    expect(result.steps[0].status).toBe('applied');
+    // Lossless: byte-identical to the clean fixture (no decode/re-encode).
+    expect(result.data.equals(pngFixture)).toBe(true);
+    expect(result.width).toBe(32);
+    expect(result.height).toBe(32);
+  });
+
+  it('metadata-only on a clean PNG reports a noop and returns the input', async () => {
+    const result = await cleanImageBuffer(pngFixture, { metadata: true, denoise: false });
+    expect(result.steps[0].status).toBe('noop');
+    expect(result.data).toBe(pngFixture);
+  });
+
+  it('denoise re-encodes (output differs) and reports both steps when metadata is also on', async () => {
+    const result = await cleanImageBuffer(pngFixture, { metadata: true, denoise: true });
+    expect(result.steps.map((s) => s.step)).toEqual(['metadata', 'denoise']);
+    // A re-encode produces a different buffer object than the input.
+    expect(result.data).not.toBe(pngFixture);
+    expect(result.width).toBe(32);
+    expect(result.height).toBe(32);
+  });
+
+  it('rejects a PNG with a readable header but corrupt pixel data on the lossless path', async () => {
+    // Header (IHDR) stays valid so .metadata() succeeds, but the IDAT stream is
+    // corrupted — the lossless path must decode-validate and reject it rather
+    // than pass the broken bytes through as a "cleaned" download.
+    const corrupt = Buffer.from(pngFixture);
+    const start = Math.floor(corrupt.length * 0.5);
+    for (let i = start; i < start + 40 && i < corrupt.length - 12; i += 1) corrupt[i] ^= 0xff;
+    await expect(cleanImageBuffer(corrupt, { metadata: true, denoise: false }))
+      .rejects.toMatchObject({ code: 'INVALID_IMAGE' });
+  });
+
+  it('reports the unavoidable metadata strip even when only denoise is selected', async () => {
+    const caBX = makePngChunk('caBX', Buffer.alloc(16, 0xCA));
+    const polluted = injectChunkBeforeIEND(pngFixture, caBX);
+    const result = await cleanImageBuffer(polluted, { metadata: false, denoise: true });
+    // The denoise re-encode strips caBX/metadata regardless — the report must
+    // not imply metadata survived.
+    expect(result.steps.map((s) => s.step)).toEqual(['metadata', 'denoise']);
+    expect(result.c2paStripped).toBe(true);
+    const meta = result.steps.find((s) => s.step === 'metadata');
+    expect(meta.detail).toContain('unavoidable');
+  });
+
+  it('bakes orientation into pixels (lossy) when a PNG carries a non-default EXIF orientation', async () => {
+    // 4×8 PNG re-emitted with EXIF Orientation=6 (rotate 90° CW). A pure chunk
+    // strip would drop the tag and visibly rotate it, so the metadata-only path
+    // must bake the rotation → output is 8×4 and flagged lossy.
+    const raw = await sharp({
+      create: { width: 4, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    }).png().toBuffer();
+    const oriented = await sharp(raw).withMetadata({ orientation: 6 }).png().toBuffer();
+
+    const result = await cleanImageBuffer(oriented, { metadata: true, denoise: false });
+    expect(result.width).toBe(8);
+    expect(result.height).toBe(4);
+    const meta = result.steps.find((s) => s.step === 'metadata');
+    expect(meta.lossless).toBe(false);
+    // The baked output no longer carries an active orientation tag.
+    const outOrientation = (await sharp(result.data).metadata()).orientation;
+    expect(outOrientation === undefined || outOrientation === 1).toBe(true);
+  });
+
+  it('no steps selected returns the input untouched with an empty report', async () => {
+    const result = await cleanImageBuffer(pngFixture, { metadata: false, denoise: false });
+    expect(result.steps).toEqual([]);
+    expect(result.data).toBe(pngFixture);
+    expect(result.sizeAfter).toBe(result.sizeBefore);
+    expect(result.width).toBe(32);
   });
 });

@@ -24,6 +24,24 @@ describe('EditorialCheckCard', () => {
     expect(onToggle).toHaveBeenCalledWith('naming.dissimilar-names', false);
   });
 
+  it('scopes its DOM ids by idScope so a fanned dual-scope check stays unique (#1628)', () => {
+    const onSeveritySave = vi.fn();
+    const { container } = render(
+      <EditorialCheckCard check={check} idScope="issue" onToggle={vi.fn()} onConfigSave={vi.fn()} onSeveritySave={onSeveritySave} />,
+    );
+    // The severity control's id folds in the section scope; the label still pairs.
+    const select = screen.getByRole('combobox', { name: /severity for/i });
+    expect(select.id).toBe('sev-issue-naming.dissimilar-names');
+    expect(container.querySelector('label[for="sev-issue-naming.dissimilar-names"]')).not.toBeNull();
+    // The config input id is scoped too.
+    fireEvent.click(screen.getByRole('button', { name: /configure/i }));
+    expect(screen.getByLabelText('Minimum shared signals to flag').id)
+      .toBe('cfg-issue-naming.dissimilar-names-minSharedSignals');
+    // The API callback still uses the bare check id, not the scoped DOM id.
+    fireEvent.change(select, { target: { value: 'high' } });
+    expect(onSeveritySave).toHaveBeenCalledWith('naming.dissimilar-names', 'high');
+  });
+
   it('commits a clamped config value on blur, merged onto the existing config', () => {
     const onConfigSave = vi.fn();
     render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={onConfigSave} />);
@@ -172,6 +190,54 @@ describe('EditorialCheckCard', () => {
       fireEvent.click(overrideBtn);
       fireEvent.click(screen.getByRole('button', { name: /reset to global/i }));
       expect(onSeriesConfigSave).toHaveBeenCalledWith('naming.dissimilar-names', null);
+    });
+  });
+
+  describe('per-check maturity / quality strip (#1629)', () => {
+    it('hides the strip when no series is selected (findings are per-series)', () => {
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} stats={{ total: 10, dismissed: 5, falsePositive: 5 }} />);
+      expect(screen.queryByText(/finding/i)).toBeNull();
+      expect(screen.queryByText(/untested|reliable|noisy|unproven/i)).toBeNull();
+    });
+
+    it('shows "untested" with a series but no findings for this check', () => {
+      render(<EditorialCheckCard check={check} onToggle={vi.fn()} onConfigSave={vi.fn()} seriesId="ser-1" stats={null} />);
+      expect(screen.getByText(/untested/i)).toBeInTheDocument();
+      expect(screen.getByText(/no findings yet for this series/i)).toBeInTheDocument();
+    });
+
+    it('surfaces findings count, dismissal rate, and FP rate with a noisy badge', () => {
+      render(
+        <EditorialCheckCard
+          check={check}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          seriesId="ser-1"
+          stats={{ total: 10, dismissed: 6, falsePositive: 5 }}
+        />,
+      );
+      expect(screen.getByText(/noisy/i)).toBeInTheDocument();
+      expect(screen.getByText(/10 findings/i)).toBeInTheDocument();
+      expect(screen.getByText(/60% dismissed/i)).toBeInTheDocument();
+      expect(screen.getByText(/50% FP/i)).toBeInTheDocument();
+    });
+
+    it('shows a loading placeholder (not stale counts) while findings are pending', () => {
+      // `stats` still holds the previous series' findings during the fetch; the
+      // strip must not render those counts/badge — it shows a placeholder instead.
+      render(
+        <EditorialCheckCard
+          check={check}
+          onToggle={vi.fn()}
+          onConfigSave={vi.fn()}
+          seriesId="ser-2"
+          statsPending
+          stats={{ total: 10, dismissed: 6, falsePositive: 5 }}
+        />,
+      );
+      expect(screen.getByText(/loading findings/i)).toBeInTheDocument();
+      expect(screen.queryByText(/noisy/i)).toBeNull();
+      expect(screen.queryByText(/10 findings/i)).toBeNull();
     });
   });
 });

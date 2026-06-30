@@ -61,6 +61,17 @@ DEPS_CHANGED_UNKNOWN=0
 workspace_deps_changed() {
   local dir="$1"
   [ "$DEPS_CHANGED_UNKNOWN" = "1" ] && return 0
+  # RECONCILE (issue #1779): a bare `git pull` (no update.sh) leaves stale
+  # node_modules even though HEAD already advanced — so the commit diff above is
+  # empty (especially if the user also restarted). PortOS passes the workspaces
+  # whose installed deps are stale (detected via npm's install receipt) in
+  # PORTOS_FORCE_CLEAN_WORKSPACES so they get the from-scratch reinstall here
+  # regardless of the diff. Tokens are dir names (".","client","server","autofixer").
+  if [ -n "${PORTOS_FORCE_CLEAN_WORKSPACES:-}" ]; then
+    case ",${PORTOS_FORCE_CLEAN_WORKSPACES}," in
+      *",${dir},"*) return 0 ;;
+    esac
+  fi
   local rel="package.json"
   [ "$dir" != "." ] && rel="${dir#./}/package.json"
   printf '%s\n' "$DEPS_CHANGED_FILES" | grep -qx "$rel"

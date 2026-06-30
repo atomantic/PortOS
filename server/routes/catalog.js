@@ -33,6 +33,7 @@ import {
   catalogUrlIngestSchema,
   catalogFileIngestSchema,
   catalogVoiceIngestSchema,
+  catalogBrainIngestSchema,
   catalogUserTypeSchema,
   catalogUserTypesSettingsSchema,
   REF_KINDS,
@@ -43,7 +44,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
-import { ingestFromUrl, ingestFromFile, ingestFromVoice } from '../services/catalogIngestSources.js';
+import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -138,6 +139,14 @@ router.post('/ingest/voice', asyncHandler(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// Brain → catalog bridge: ingest an existing brain record (idea/memory/etc.)
+// through the same extraction pipeline so it lands on the identical review phase.
+router.post('/ingest/brain', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogBrainIngestSchema, req.body);
+  const result = await ingestFromBrain(body);
+  res.status(201).json(result);
+}));
+
 router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   validateRequest(catalogScrapCommitSchema, req.body);
   const scrap = await catalogDB.getScrap(req.params.id);
@@ -187,12 +196,24 @@ router.get('/tags', asyncHandler(async (req, res) => {
 router.get('/ingredients', asyncHandler(async (req, res) => {
   const params = validateRequest(catalogIngredientQuerySchema, req.query);
   res.json(await catalogDB.listIngredients({
+    ids: params.ids,
     type: params.type,
     tag: params.tag,
     query: params.q,
+    refKind: params.refKind,
+    refId: params.refId,
+    unlinked: params.unlinked === true,
+    orphaned: params.orphaned === true,
     limit: params.limit ?? 50,
     offset: params.offset ?? 0,
   }));
+}));
+
+// Faceted counts for the Catalog filter dropdowns + album headers (#1762):
+// type/universe/series/tag facets plus the unlinked ("Raw") and orphaned bucket
+// counts, in one round-trip. Live universes/series only.
+router.get('/facets', asyncHandler(async (_req, res) => {
+  res.json(await catalogDB.getCatalogFacets());
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {

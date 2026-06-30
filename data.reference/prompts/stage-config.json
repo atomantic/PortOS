@@ -583,6 +583,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-interiority-balance": {
+      "name": "Pipeline — Editorial Check: Interiority balance (description vs. POV reaction)",
+      "description": "Editorial check (#1623): flags visually dense but emotionally empty scenes — prose heavy on setting, blocking, and physical detail yet light on the viewpoint character's reaction, emotion, or thought, so description swamps interiority. Judges the description-to-interiority ratio within each scene. Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent). Distinct from sensory.balance (the senses) and interiority.protagonist (whole-issue interiority absence). Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-arc-transitions": {
       "name": "Pipeline — Editorial Check: Character-arc transitions",
       "description": "Editorial check (#1293): scans each character's scenes for genuine change moments (decision, realization, point-of-no-return, relapse, sacrifice) and proposes transition beats with anchor quotes. Reconciles detected change moments against the authored per-character arcs (series.characterArcs) and flags flat arcs — a carrying character with no transition scenes. Reads the stitched manuscript plus the reverse-outline scene map (degrading to a whole-issue scan when absent). Returns issue-anchored findings.",
@@ -621,6 +628,13 @@
     "pipeline-editorial-object-backstory": {
       "name": "Pipeline — Editorial Check: Attachment backstory consistency",
       "description": "Editorial check (#1288): flags object↔character attachments whose origin story contradicts the attached character's established background — conflicting people, places, eras, or timelines. Canon-only (no manuscript). Returns canon-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-object-weight-proportionality": {
+      "name": "Pipeline — Editorial Check: Object narrative-weight proportionality",
+      "description": "Editorial check (#1624): flags objects whose narrative weight is out of proportion to their prominence — a minor object given a disproportionate backstory or significance (over-weighted plot machinery), or a prominent/decisive object with little established lineage to earn it (under-established payoff). Weighs each object's manuscript prominence against the depth of backstory/significance the prose and canon establish. Reads the stitched manuscript plus the canon object↔character attachment summary. Distinct from objects.unmotivated-interaction (a single unmotivated beat) and objects.backstory-consistency (a contradicted origin). Returns issue-anchored findings.",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -740,6 +754,20 @@
     "pipeline-editorial-comic-prose-sync": {
       "name": "Pipeline — Editorial Check: Comic ↔ prose synchronization (hybrid issues)",
       "description": "Editorial check (#1589): cross-media consistency for hybrid comic+prose issues. Pairs each issue's prose narration with its authoritative comic pages (description + dialogue + caption + SFX) and flags SUBSTANTIVE divergences — a plot beat the prose narrates that no panel shows, panel dialogue that contradicts the prose (different words or a different speaker), or a chronology disagreement across the two media. Tuned to ignore ordinary medium-translation compression/reordering; reads the per-issue manuscript prose + comicScript.pacing. Runs one model call per hybrid issue. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-pacing-escalation-curve": {
+      "name": "Pipeline — Editorial Check: Pacing / intensity escalation curve",
+      "description": "Editorial check (#1618): scores each issue's dramatic intensity and flags a series-wide escalation curve that fails to build — flat intensity (issue 1 reads as intensely as issue N), a front-loaded climax (the biggest beat lands early), or stakes that plateau or de-escalate across the arc. Reads the stitched manuscript plus the reverse-outline scene map and a deterministic per-issue conflict-marker density tally (a grounding hint confirmed against the prose); degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-arc-regression": {
+      "name": "Pipeline — Editorial Check: Character-arc regression / premature closure",
+      "description": "Editorial check (#1619): judges the SHAPE of each character's arc across the whole series and flags an unmotivated regression (growth then a purposeless revert, distinct from a dramatized relapse), a circular arc (ends where it began), or premature closure (the arc resolves early then goes flat for the rest of the series). Reads the stitched manuscript plus the reverse-outline scene map and the authored per-character arcs (series.characterArcs); degrades to a whole-manuscript scan when no outline or authored arcs exist. Whole-arc verdicts are gated to the final manuscript part. Returns character-anchored findings.",
       "model": "default",
       "returnsJson": true,
       "variables": []

@@ -30,6 +30,7 @@ import { getSettings } from '../settings.js';
 import { enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
+import { sleepDisplayForTraining, wakeDisplay } from './displayPower.js';
 import {
   TRAINING_DEFAULTS,
   TRAINING_RUNTIMES,
@@ -147,7 +148,9 @@ const stampDatasetTrainingStatus = (run, jobId) =>
  * creates the run record, and enqueues the training job. Returns
  * `{ runId, jobId, position }` (202-shaped).
  */
-export async function startTrainingRun({ datasetId, baseModelId, name = null, params = {} }) {
+export async function startTrainingRun({
+  datasetId, baseModelId, name = null, params = {}, acknowledgeCaptionLeak = false,
+}) {
   const settings = await getSettings();
   const pythonPath = settings?.imageGen?.local?.pythonPath || null;
   // Engine pick: prefer mflux's MLX trainer when the user's mflux install
@@ -155,7 +158,7 @@ export async function startTrainingRun({ datasetId, baseModelId, name = null, pa
   // torch/diffusers trainer in venv-flux2.
   const mlxAvailable = isMfluxTrainAvailable(pythonPath);
   const routing = resolveTrainingRuntime(baseModelId, getImageModels(), { mlxAvailable });
-  const { dataset } = await validateDatasetReady(datasetId);
+  const { dataset } = await validateDatasetReady(datasetId, { acknowledgeCaptionLeak });
 
   if (routing.runtime === TRAINING_RUNTIMES.FLUX2) {
     const healthy = await isFlux2VenvHealthy();
@@ -183,6 +186,11 @@ export async function startTrainingRun({ datasetId, baseModelId, name = null, pa
     character: dataset.character,
     datasetId,
     triggerWord: dataset.triggerWord,
+    // Persist whether the launch opted past the caption identity-leak gate, so
+    // the staging re-validation can skip the gate for THIS run without also
+    // skipping it for ordinary queued runs whose captions were edited (leaky)
+    // while waiting in the queue.
+    captionLeakAcknowledged: acknowledgeCaptionLeak === true,
     params: mergedParams,
     progress: { step: 0, totalSteps: mergedParams.steps, loss: null, lastCheckpointStep: null },
     artifacts: { dir: `training-runs/${runId}`, checkpoints: [], samples: [] },
@@ -259,7 +267,9 @@ export async function resumeTrainingRun(runId, { auto = false } = {}) {
 
   // Re-validate dataset readiness + ownership exactly like a fresh launch — the
   // dataset may have been edited, deleted, or reassigned since the run failed.
-  const { dataset } = await validateDatasetReady(run.datasetId);
+  // Skip the caption-leak gate: this run already cleared it at first launch,
+  // and resume shouldn't re-block on captions the user already accepted.
+  const { dataset } = await validateDatasetReady(run.datasetId, { acknowledgeCaptionLeak: true });
   if (!sameCharacter(dataset.character, run.character)) {
     throw new ServerError('Dataset was reassigned to a different subject — start a fresh run.', {
       status: 409, code: 'DATASET_REASSIGNED',
@@ -445,11 +455,20 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     return;
   }
 
-  // Re-validate — the dataset may have been edited/deleted while queued.
+  // Re-validate — the dataset may have been edited/deleted while queued. Skip
+  // the caption identity-leak gate ONLY for a run that already opted past it:
+  // one launched with an explicit "Train anyway" (persisted on the record) or a
+  // resume (its captions already trained once). An ordinary clean-at-launch run
+  // is still re-checked here, so captions edited leaky while it sat in the queue
+  // are caught instead of training silently.
+  const skipCaptionLeakGate = run.captionLeakAcknowledged === true || resumeCheckpoint != null;
   let manifest;
   let dataset;
   try {
-    ({ dataset, manifest } = await validateDatasetReady(run.datasetId));
+    ({ dataset, manifest } = await validateDatasetReady(
+      run.datasetId,
+      { acknowledgeCaptionLeak: skipCaptionLeakGate },
+    ));
   } catch (err) {
     return failBeforeSpawn(err.message);
   }
@@ -609,13 +628,26 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   activeProcess = proc;
   activeJobId = jobId;
 
-  // Keep the Mac awake for the duration of the training child (display can
-  // sleep; system must not). Best-effort — caffeinate exits with the child.
+  // Keep the Mac awake for the duration of the training child (idle + system
+  // sleep held off) — but DELIBERATELY let the *display* sleep. An active
+  // display makes WindowServer contend for the GPU, which triggers the watchdog
+  // kernel panic during heavy training (mlx #3267; see the incident doc). The
+  // flags are `-is`, NOT `-dis`: `-d` would force the display awake and is what
+  // was crashing the box. We then proactively sleep the display below so the
+  // protection doesn't wait on the OS idle timeout. Best-effort — caffeinate
+  // exits with the child.
   if (platform() === 'darwin' && proc.pid) {
-    const caf = spawn('caffeinate', ['-dis', '-w', String(proc.pid)], { stdio: 'ignore' });
+    const caf = spawn('caffeinate', ['-is', '-w', String(proc.pid)], { stdio: 'ignore' });
     caf.on('error', () => {});
     caf.unref();
   }
+  // Sleep the display now (Apple Silicon, opt-out via settings.loraTraining
+  // .displaySleep) so sustained GPU training never competes with the display.
+  // The close handler wakes it when the run finishes. Gated on proc.pid (like
+  // the caffeinate spawn above) so a failed launch that emits 'error' without a
+  // 'close' never sleeps a display nothing will wake. Re-sleeping a still-running
+  // run on reattach is harmless (pmset displaysleepnow is idempotent).
+  if (proc.pid) sleepDisplayForTraining(settings);
 
   // Debounced run-record progress mirror (~2s). Per-step DB writes from a
   // hot loop are the high-frequency-write anti-pattern; SSE is the live
@@ -763,6 +795,11 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   proc.on('error', (err) => {
     stopStallWatchdog();
     if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
+    // Terminal too (no 'close' follows an 'error'), so wake the display here as
+    // well — no-op unless we actually slept it (proc.pid was set). Without this,
+    // a pid-bearing process that errors instead of closing would leave the
+    // display asleep.
+    wakeDisplay(settings);
     // A launch failure after the run was marked `running` — a genuine spawn
     // error, or (with spawnDetached) the control dir failing to create/clear.
     // Route through the same terminal cleanup as pre-spawn failures so the run
@@ -782,7 +819,20 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
     // escape the event handler (unhandled rejection kills the process on Node ≥15).
     Promise.resolve(flushProgress())
       .then(() => finalizeTraining({ jobId, runId, code, signal, state: getState(), stallKilled }))
+      .then((resumed) => {
+        // Wake the display now the run is over so the user sees the result —
+        // but NOT when finalize actually enqueued a stall-watchdog auto-resume
+        // (it re-spawns and re-sleeps the display for the next attempt). Gating
+        // on the returned `resumed` flag, not raw `stallKilled`, ensures a
+        // budget-exhausted or failed resume (terminal, no re-spawn) still wakes.
+        // Best-effort, darwin-only.
+        if (!resumed) wakeDisplay(settings);
+      })
       .catch((err) => {
+        // A finalize/flush rejection is still a terminal end with no auto-resume
+        // enqueued, so wake the display here too — otherwise this error path
+        // would leave it asleep (no .then ran). No-op unless we slept it.
+        wakeDisplay(settings);
         console.error(`❌ training [${shortId(jobId)}] finalize failed: ${err?.message}`);
         fail(`finalize failed: ${err?.message}`);
       });
@@ -797,20 +847,26 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
  * leaves the run in its finalize-set `failed` state for manual resume. Runs
  * outside the request lifecycle (called from the close handler), so it owns its
  * own error handling rather than bubbling.
+ *
+ * Returns true ONLY when a resume was actually enqueued (a fresh trainer will
+ * re-spawn). The close handler relies on this to decide whether to wake the
+ * display: a budget-exhausted or failed resume does NOT re-spawn, so the display
+ * must be woken just like any other terminal end — gating on raw `stallKilled`
+ * would leave it asleep forever on those paths.
  */
 async function autoResumeAfterStall(runId, jobId) {
   const run = await runsDb.getRun(runId).catch(() => null);
-  if (!run) return;
+  if (!run) return false;
   const autoCount = run.resume?.autoCount || 0;
   if (autoCount >= STALL_MAX_AUTO_RESUMES) {
     console.log(`⚠️ training [${shortId(jobId)}] stall auto-resume budget exhausted (${autoCount}/${STALL_MAX_AUTO_RESUMES}) — leaving run failed for manual resume`);
-    return;
+    return false;
   }
   // resumeTrainingRun requires a failed/canceled status + a resumable checkpoint;
   // finalize has already flipped the run to failed by the time this runs.
-  await resumeTrainingRun(runId, { auto: true }).then(
-    (res) => console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`),
-    (err) => console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`),
+  return resumeTrainingRun(runId, { auto: true }).then(
+    (res) => { console.log(`🔁 training [${shortId(jobId)}] auto-resumed run ${shortId(runId)} from step ${res.fromStep} (attempt ${autoCount + 1}/${STALL_MAX_AUTO_RESUMES})`); return true; },
+    (err) => { console.error(`❌ training [${shortId(jobId)}] stall auto-resume failed: ${err?.message} — run stays failed for manual resume`); return false; },
   );
 }
 
@@ -911,7 +967,10 @@ async function finalizeTraining({ jobId, runId, code, signal, state, stallKilled
   // resumeTrainingRun's status precondition is satisfied — auto-resume from the
   // newest checkpoint. Bounded by STALL_MAX_AUTO_RESUMES; awaited so the resume
   // (re-enqueue + run-record flip back to queued) completes within finalize.
-  if (stallKilled) await autoResumeAfterStall(runId, jobId);
+  // Return whether a resume was actually enqueued so the close handler knows NOT
+  // to wake the display in that case (the re-spawn re-sleeps it); every other
+  // terminal path falls through to the implicit `undefined` (falsy) → wake.
+  if (stallKilled) return autoResumeAfterStall(runId, jobId);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
@@ -9,23 +9,25 @@ import { sameJsonShape } from '../lib/sameJsonShape';
 
 import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
 
-import OverviewTab from '../components/digital-twin/tabs/OverviewTab';
-import DocumentsTab from '../components/digital-twin/tabs/DocumentsTab';
-import TestTab from '../components/digital-twin/tabs/TestTab';
-import EnrichTab from '../components/digital-twin/tabs/EnrichTab';
-import TasteTab from '../components/digital-twin/tabs/TasteTab';
-import AccountsTab from '../components/digital-twin/tabs/AccountsTab';
-import InterviewTab from '../components/digital-twin/tabs/InterviewTab';
-import VoiceStyleTab from '../components/digital-twin/tabs/VoiceStyleTab';
-import AppearanceTab from '../components/digital-twin/tabs/AppearanceTab';
-import IdentityTab from '../components/digital-twin/tabs/IdentityTab';
-import PersonasTab from '../components/digital-twin/tabs/PersonasTab';
-import GoalsTab from '../components/digital-twin/tabs/GoalsTab';
-import AutobiographyTab from '../components/digital-twin/tabs/AutobiographyTab';
-import ImportTab from '../components/digital-twin/tabs/ImportTab';
-import ExportTab from '../components/digital-twin/tabs/ExportTab';
-import LegacyExportTab from '../components/digital-twin/tabs/LegacyExportTab';
-import TimeCapsuleTab from '../components/digital-twin/tabs/TimeCapsuleTab';
+// Lazy-load tab bodies so opening any one tab doesn't pull in all 17 — a user
+// typically views 1–2 of them. The page itself is already a lazy route chunk.
+const OverviewTab = lazy(() => import('../components/digital-twin/tabs/OverviewTab'));
+const DocumentsTab = lazy(() => import('../components/digital-twin/tabs/DocumentsTab'));
+const TestTab = lazy(() => import('../components/digital-twin/tabs/TestTab'));
+const EnrichTab = lazy(() => import('../components/digital-twin/tabs/EnrichTab'));
+const TasteTab = lazy(() => import('../components/digital-twin/tabs/TasteTab'));
+const AccountsTab = lazy(() => import('../components/digital-twin/tabs/AccountsTab'));
+const InterviewTab = lazy(() => import('../components/digital-twin/tabs/InterviewTab'));
+const VoiceStyleTab = lazy(() => import('../components/digital-twin/tabs/VoiceStyleTab'));
+const AppearanceTab = lazy(() => import('../components/digital-twin/tabs/AppearanceTab'));
+const IdentityTab = lazy(() => import('../components/digital-twin/tabs/IdentityTab'));
+const PersonasTab = lazy(() => import('../components/digital-twin/tabs/PersonasTab'));
+const GoalsTab = lazy(() => import('../components/digital-twin/tabs/GoalsTab'));
+const AutobiographyTab = lazy(() => import('../components/digital-twin/tabs/AutobiographyTab'));
+const ImportTab = lazy(() => import('../components/digital-twin/tabs/ImportTab'));
+const ExportTab = lazy(() => import('../components/digital-twin/tabs/ExportTab'));
+const LegacyExportTab = lazy(() => import('../components/digital-twin/tabs/LegacyExportTab'));
+const TimeCapsuleTab = lazy(() => import('../components/digital-twin/tabs/TimeCapsuleTab'));
 
 export default function DigitalTwin() {
   const { tab } = useParams();
@@ -145,7 +147,9 @@ export default function DigitalTwin() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">
-        {renderTabContent()}
+        <Suspense fallback={<div className="flex justify-center py-12"><BrailleSpinner text="Loading" /></div>}>
+          {renderTabContent()}
+        </Suspense>
       </div>
     </div>
   );

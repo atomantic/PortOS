@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
 import {
   EDITORIAL_CHECKS,
   EDITORIAL_SOURCES,
   CHECK_SCOPES,
   CHECK_KINDS,
+  normalizeCheckScopes,
+  primaryCheckScope,
   getCheck,
   listChecks,
   assertValidChecks,
@@ -13,6 +15,7 @@ import {
   resolveCheckSeverity,
   getEnabledChecks,
   applySeriesCheckConfig,
+  orderChecksByDependencies,
   buildCustomCheck,
   buildCustomCheckPrompt,
   isValidCustomCheckDef,
@@ -36,6 +39,7 @@ import {
   characterVoiceProfiles,
   intendedVoiceSummary,
   plotlineCoverageSummary,
+  conflictIntensityTally,
   scenePovSummary,
   secondaryCharacterPresenceSummary,
   declaredThemesSummary,
@@ -47,6 +51,7 @@ import {
   renderComicForProseSync,
   proseSyncPairs,
   PROSE_SYNC_PROSE_CHAR_CAP,
+  ON_THE_NOSE_SUBTYPES,
 } from './checkRegistry.js';
 
 const NAMING = 'naming.dissimilar-names';
@@ -57,7 +62,9 @@ const ENDINGS_CLIFF = 'endings.cliffhanger';
 const POV_SWITCH = 'endings.pov-switch';
 const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
+const INTERIORITY_BALANCE = 'scene.interiority-balance';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
+const PACING_ESCALATION = 'pacing.escalation-curve';
 const HEAD_HOPPING = 'pov.head-hopping';
 const THEME_COHERENCE = 'theme.coherence';
 const UNMODELED_NAMES = 'roster.unmodeled-names';
@@ -155,6 +162,22 @@ describe('editorial check registry — fail-fast guards', () => {
     expect(() => assertValidChecks([{ ...valid, scope: 'galaxy' }])).toThrow(/invalid scope/);
   });
 
+  it('accepts an array scope of valid members (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'issue'] }])).not.toThrow();
+  });
+
+  it('throws on an empty array scope (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: [] }])).toThrow(/invalid scope/);
+  });
+
+  it('throws when an array scope has an unknown member (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'galaxy'] }])).toThrow(/invalid scope/);
+  });
+
+  it('throws on duplicate scopes in an array (#1628)', () => {
+    expect(() => assertValidChecks([{ ...valid, scope: ['series', 'series'] }])).toThrow(/duplicate scopes/);
+  });
+
   it('throws on an invalid kind', () => {
     expect(() => assertValidChecks([{ ...valid, kind: 'magic' }])).toThrow(/invalid kind/);
   });
@@ -204,6 +227,38 @@ describe('editorial check registry — fail-fast guards', () => {
   });
 });
 
+describe('editorial check registry — scope normalization (#1628)', () => {
+  it('normalizeCheckScopes wraps a string in a single-element array', () => {
+    expect(normalizeCheckScopes('series')).toEqual(['series']);
+  });
+
+  it('normalizeCheckScopes returns array scopes in canonical CHECK_SCOPES order', () => {
+    // Declared issue-before-series, but canonical order is series→issue.
+    expect(normalizeCheckScopes(['issue', 'series'])).toEqual(['series', 'issue']);
+  });
+
+  it('normalizeCheckScopes drops unknown members and empty/absent input returns []', () => {
+    expect(normalizeCheckScopes(['series', 'galaxy'])).toEqual(['series']);
+    expect(normalizeCheckScopes('galaxy')).toEqual([]);
+    expect(normalizeCheckScopes([])).toEqual([]);
+    expect(normalizeCheckScopes(null)).toEqual([]);
+    expect(normalizeCheckScopes(undefined)).toEqual([]);
+  });
+
+  it('primaryCheckScope returns the first canonical scope (or null)', () => {
+    expect(primaryCheckScope('issue')).toBe('issue');
+    expect(primaryCheckScope(['issue', 'series'])).toBe('series');
+    expect(primaryCheckScope([])).toBe(null);
+    expect(primaryCheckScope('galaxy')).toBe(null);
+  });
+
+  it('every built-in check normalizes to a non-empty scope set', () => {
+    for (const check of EDITORIAL_CHECKS) {
+      expect(normalizeCheckScopes(check.scope).length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('editorial check registry — config + state resolution', () => {
   it('resolveCheckConfig fills schema defaults', () => {
     const cfg = resolveCheckConfig(getCheck(NAMING), undefined);
@@ -224,6 +279,17 @@ describe('editorial check registry — config + state resolution', () => {
     expect(naming.config.minSharedSignals).toBe(3);
     // Unconfigured check keeps its default-enabled state.
     expect(rows.find((r) => r.id === INFODUMP).enabled).toBe(true);
+  });
+
+  it('resolveCheckState exposes a primary scope string + a scopes array (#1628)', () => {
+    const rows = resolveCheckState({});
+    for (const row of rows) {
+      expect(typeof row.scope).toBe('string');
+      expect(Array.isArray(row.scopes)).toBe(true);
+      expect(row.scopes.length).toBeGreaterThan(0);
+      // The primary scope is the first entry of the normalized set.
+      expect(row.scope).toBe(row.scopes[0]);
+    }
   });
 
   it('resolveCheckState surfaces each check\'s serializable configFields', () => {
@@ -585,7 +651,8 @@ describe('pov.head-hopping — LLM check (#1311)', () => {
 describe.each([
   { id: SENSORY_BALANCE, severityDefault: 'low', label: 'sensory.balance' },
   { id: WHITE_ROOM, severityDefault: 'medium', label: 'scene.white-room' },
-])('$label — scene-grounding LLM check (#1309)', ({ id, severityDefault }) => {
+  { id: INTERIORITY_BALANCE, severityDefault: 'medium', label: 'scene.interiority-balance' },
+])('$label — scene-grounding LLM check (#1309 / #1623)', ({ id, severityDefault }) => {
   const wholeCtx = (overrides = {}) => ({
     manuscript: '# Issue 1\n\n"We have to go," she said.',
     reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'The void', setting: '', charactersPresent: ['Mara'] }],
@@ -980,6 +1047,133 @@ describe('plot.structure-momentum — LLM check (#1310)', () => {
     });
     await getCheck(PLOT_STRUCTURE).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('pacing.escalation-curve — LLM check (#1618)', () => {
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nThings happened to her, and then more things happened.',
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    series: {},
+    reverseOutline: [{ sequence: 0, issueNumber: 1, heading: 'Opening', setting: 'a dock', plotlineId: 'a' }],
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nThings happened to her.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped LLM check reading manuscript + outline', () => {
+    const check = getCheck(PACING_ESCALATION);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('pacing');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(PACING_ESCALATION);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('passes the manuscript, scene map, and conflict-marker tally to the model and forces the pacing category', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      manuscript: '# Issue 1\n\nThey shared tea and spoke softly.\n\n# Issue 2\n\nHe drew his knife and the gun fired; blood, screams, a desperate fight to the death.',
+      planManuscriptChunks: async (_stage, opts) => {
+        // Scene map + intensity tally both ride as trimmable context.
+        expect(opts.context).toHaveProperty('sceneMap');
+        expect(opts.context).toHaveProperty('intensityTally');
+        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        return ['# Issue 2\n\nHe drew his knife and the gun fired.'];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return { content: { findings: [{ severity: 'high', issueNumber: 2, location: 'Front-loaded climax — Issue 2', problem: 'The peak lands early' }] } };
+      },
+    });
+    const findings = await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.manuscript).toBe('# Issue 2\n\nHe drew his knife and the gun fired.');
+    expect(seenVars.sceneMap).toContain('Issue 1: Opening');
+    // Both issues land in the tally; issue 2's conflict words score higher.
+    expect(seenVars.intensityTally).toContain('Issue 1');
+    expect(seenVars.intensityTally).toContain('Issue 2');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('pacing');
+    expect(findings[0].location).toBe('Front-loaded climax — Issue 2');
+  });
+
+  it('passes empty context vars when the series has no outline and the manuscript has no issue headers', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      manuscript: 'Plain prose with no issue headers at all.',
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.sceneMap).toBe('');
+    expect(seenVars.intensityTally).toBe('');
+  });
+
+  it('marks a single-chunk run as the final part so whole-curve judgments are enabled', async () => {
+    let seenVars = null;
+    const ctx = wholeCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = wholeCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(PACING_ESCALATION).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
+  });
+});
+
+describe('conflictIntensityTally (#1618)', () => {
+  it('returns an empty string for a missing, empty, or header-less manuscript', () => {
+    expect(conflictIntensityTally(undefined)).toBe('');
+    expect(conflictIntensityTally('')).toBe('');
+    expect(conflictIntensityTally('   ')).toBe('');
+    expect(conflictIntensityTally('Just prose, no issue headers anywhere.')).toBe('');
+  });
+
+  it('tallies conflict markers per issue, in numeric order, normalized per 1k words', () => {
+    const manuscript = [
+      '# Issue 1 — Quiet (prose)',
+      'They shared tea and spoke softly about the garden.',
+      '# Issue 2 — Storm (prose)',
+      'He drew his knife and the gun fired; blood, screams, a desperate fight to the death.',
+    ].join('\n\n');
+    const out = conflictIntensityTally(manuscript);
+    const lines = out.split('\n').filter((l) => l.startsWith('- Issue'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('Issue 1');
+    expect(lines[1]).toContain('Issue 2');
+    // Issue 1 has no markers; Issue 2 has several (knife, gun, fired, blood, screams, desperate, fight, death).
+    expect(lines[0]).toContain('0 conflict markers');
+    expect(lines[1]).toMatch(/[1-9]\d* conflict markers/);
+  });
+
+  it('sums a repeated issue header (chunk boundary mid-issue) into one bucket', () => {
+    const manuscript = [
+      '# Issue 1',
+      'He drew his knife.',
+      '# Issue 1',
+      'The gun fired and blood spilled.',
+    ].join('\n\n');
+    const out = conflictIntensityTally(manuscript);
+    const lines = out.split('\n').filter((l) => l.startsWith('- Issue'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('Issue 1');
+    // knife + gun + fired + blood = 4 markers merged across the two header sections.
+    expect(lines[0]).toContain('4 conflict markers');
   });
 });
 
@@ -2723,6 +2917,149 @@ describe('pov.justified — deterministic check', () => {
   });
 });
 
+describe('pov.economy — deterministic check (#1620)', () => {
+  const POV = 'pov.economy';
+  // Build a scene for a POV holder in a given issue. `seq` keeps first-appearance
+  // order stable; `anchorQuote` lets the late-intro anchor assertion bite.
+  const scene = (pov, issueNumber, over = {}) => ({
+    heading: `${pov}-pov i${issueNumber}`, issueNumber, sequence: 0, anchorQuote: 'q', povCharacter: pov, ...over,
+  });
+  // Distinct alphabetic names — `normalizeName` strips digits, so "P1".."P8" would
+  // all collapse to one holder. Real viewpoint rosters use names, so the fixtures do too.
+  const NAMES = ['Aria', 'Bram', 'Cael', 'Dara', 'Enzo', 'Faye', 'Gwen', 'Hugo', 'Ivy', 'Jonas', 'Kira', 'Liam'];
+  // N POV holders, one scene each, spread one-per-issue across issues 1..issueCount.
+  const roster = (povCount, issueCount) => {
+    const out = [];
+    for (let i = 0; i < issueCount; i += 1) {
+      // Only the first `povCount` holders are distinct viewpoints; the rest reuse
+      // NAMES[0] so issue count grows without adding POVs.
+      out.push(scene(i < povCount ? NAMES[i] : NAMES[0], i + 1));
+    }
+    return out;
+  };
+  const runEcon = (scenes, config = {}) =>
+    getCheck(POV).run({ reverseOutline: scenes, config, severityDefault: 'low' });
+
+  it('declares reverseOutline as its only source and is a series-scope deterministic check', () => {
+    const c = getCheck(POV);
+    expect(c.scope).toBe('series');
+    expect(c.kind).toBe('deterministic');
+    expect(c.sources).toEqual(['reverseOutline']);
+    expect(c.defaultEnabled).toBe(true);
+    // Must NOT pull in the manuscript corpus — purely structural over the outline.
+    expect(c.sources).not.toContain('manuscript');
+  });
+
+  it('gate requires at least one POV-tagged scene', () => {
+    const c = getCheck(POV);
+    expect(c.gate({ reverseOutline: [] })).toBe(false);
+    expect(c.gate({ reverseOutline: [scene('', 1)] })).toBe(false);
+    expect(c.gate({ reverseOutline: [scene('Aria', 1)] })).toBe(true);
+  });
+
+  it('flags too many POVs for the run length (8 across 12 issues)', () => {
+    const findings = runEcon(roster(8, 12));
+    const crowded = findings.filter((f) => /more viewpoints than the run length/.test(f.problem));
+    expect(crowded).toHaveLength(1);
+    expect(crowded[0].location).toBe('Series');
+    expect(crowded[0].category).toBe('arc');
+    expect(crowded[0].severity).toBe('low');
+    // 12 * 0.5 = budget 6, so 8 POVs > 6.
+    expect(crowded[0].problem).toMatch(/8 POV characters across 12 issues/);
+    expect(crowded[0].problem).toMatch(/supports about 6/);
+  });
+
+  it('does NOT flag a roster that fits the run length (6 across 12 issues)', () => {
+    const findings = runEcon(roster(6, 12));
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('never flags 1–2 POVs as a crowd even at a high ratio (2 across 3 issues)', () => {
+    // 2/3 shares the same 0.67 ratio as 8/12, but two viewpoints is not a crowd —
+    // the absolute floor (3) suppresses it.
+    const findings = runEcon([scene('A', 1), scene('B', 2), scene('A', 3)]);
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('skips the economy verdict for a run shorter than minIssues', () => {
+    // 4 POVs but only 2 issues (< default minIssues 3) → no count finding.
+    const findings = runEcon([scene('A', 1), scene('B', 1), scene('C', 2), scene('D', 2)]);
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('respects a custom maxPovPerIssue (ensemble tuning suppresses the crowd flag)', () => {
+    // 8/12 trips at the 0.5 default but not at 1.0 (budget 12).
+    expect(runEcon(roster(8, 12), { maxPovPerIssue: 1.0 })
+      .filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('flags a late-introduced, underdeveloped POV (first appears in issue 11 of 12)', () => {
+    // A 12-issue run carried by P1, plus a drive-by viewpoint that first shows up
+    // in issue 11 with a single scene.
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Latecomer', 11));
+    const findings = runEcon(scenes);
+    const late = findings.filter((f) => /introduced too late to develop/.test(f.problem));
+    expect(late).toHaveLength(1);
+    expect(late[0].problem).toMatch(/"Latecomer" first takes the viewpoint in issue 11 of 1–12/);
+    expect(late[0].issueNumber).toBe(11);
+    expect(late[0].location).toBe('Issue 11: Latecomer-pov i11');
+    expect(late[0].anchorQuote).toBe('q');
+  });
+
+  it('does NOT flag a late POV that is well developed (above the underdevelopment threshold)', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    // Latecomer first appears late but holds 3 scenes (> lateIntroMaxScenes 2).
+    scenes.push(scene('Latecomer', 11));
+    scenes.push(scene('Latecomer', 11, { heading: 'Latecomer-pov i11b' }));
+    scenes.push(scene('Latecomer', 12));
+    const findings = runEcon(scenes);
+    expect(findings.filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('does NOT flag an early POV introduced before the late-intro window', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    // First appears in issue 8 of 12 → position (8-1)/11 = 0.64 < 0.8.
+    scenes.push(scene('Earlybird', 8));
+    const findings = runEcon(scenes);
+    expect(findings.filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('lateIntroMaxScenes=0 disables the late-introduction check', () => {
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Latecomer', 11));
+    expect(runEcon(scenes, { lateIntroMaxScenes: 0 })
+      .filter((f) => /introduced too late to develop/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('stays silent on both signals when the outline carries no issue numbers', () => {
+    // No issue length to judge against → neither count nor timing can fire.
+    const scenes = NAMES.slice(0, 8).map((n) => scene(n, null));
+    expect(runEcon(scenes)).toEqual([]);
+  });
+
+  it('collapses casing/spacing variants of a POV name into one holder', () => {
+    // Three spellings of one viewpoint across a 12-issue run → one holder, not three.
+    const scenes = [];
+    for (let i = 1; i <= 12; i += 1) scenes.push(scene('Lead', i));
+    scenes.push(scene('Aria', 2));
+    scenes.push(scene('  aria ', 5));
+    scenes.push(scene('ARIA', 9));
+    const findings = runEcon(scenes);
+    // 2 holders (Lead, Aria) over 12 issues → under budget 6, no crowd finding.
+    expect(findings.filter((f) => /more viewpoints than the run length/.test(f.problem))).toHaveLength(0);
+  });
+
+  it('tolerates an empty / malformed outline', () => {
+    expect(runEcon([])).toEqual([]);
+    expect(runEcon([null, 'x', {}, scene('', 1)])).toEqual([]);
+  });
+});
+
 describe('arc.transitions — LLM check (#1293)', () => {
   const ARC = 'arc.transitions';
   const baseCtx = (overrides = {}) => ({
@@ -2802,6 +3139,98 @@ describe('arc.transitions — LLM check (#1293)', () => {
     });
     const findings = await getCheck(ARC).run(ctx);
     expect(findings).toEqual([]);
+  });
+});
+
+describe('arc.regression — LLM check (#1619)', () => {
+  const REG = 'arc.regression';
+  const baseCtx = (overrides = {}) => ({
+    manuscript: '# Issue 1\n\nMara vowed to change, and for a while she did.',
+    series: { characterArcs: [] },
+    reverseOutline: [],
+    config: { maxFindings: 12 },
+    severityDefault: 'medium',
+    planManuscriptChunks: async () => [overrides.manuscript ?? '# Issue 1\n\nMara vowed to change.'],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as a series-scoped arc LLM check reading manuscript + outline + characterArcs', () => {
+    const check = getCheck(REG);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('series');
+    expect(check.category).toBe('arc');
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.characterArcs']);
+    expect(check.needsManuscript).toBe(true);
+  });
+
+  it('only runs when there is drafted prose to scan', () => {
+    const check = getCheck(REG);
+    expect(check.gate({ manuscript: '   ' })).toBe(false);
+    expect(check.gate({ manuscript: '# Issue 1\n\nprose' })).toBeTruthy();
+  });
+
+  it('emits arc-category findings and ships the manuscript + both context blocks', async () => {
+    const ctx = baseCtx({
+      callStagedLLM: async (_stage, vars) => {
+        expect(vars).toHaveProperty('manuscript');
+        expect(vars).toHaveProperty('sceneMap');
+        expect(vars).toHaveProperty('characterArcs');
+        return { content: { findings: [{ severity: 'high', issueNumber: 3, location: 'Mara — premature closure', problem: 'Her arc resolves in issue 3 then goes flat' }] } };
+      },
+    });
+    const findings = await getCheck(REG).run(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('arc');
+    expect(findings[0].location).toBe('Mara — premature closure');
+  });
+
+  it('renders the authored character arcs into the prompt vars', async () => {
+    let capturedArcs = null;
+    const ctx = baseCtx({
+      series: {
+        characterArcs: [
+          { characterName: 'Mara', want: 'revenge', transitions: [{ kind: 'sacrifice', label: 'spares the killer', atIssue: 6 }] },
+        ],
+      },
+      callStagedLLM: async (_stage, vars) => { capturedArcs = vars.characterArcs; return { content: { findings: [] } }; },
+    });
+    await getCheck(REG).run(ctx);
+    expect(capturedArcs).toContain('- Mara');
+    expect(capturedArcs).toContain('wants: revenge');
+  });
+
+  it('degrades gracefully when no authored arcs or outline exist', async () => {
+    const ctx = baseCtx({
+      series: {},
+      reverseOutline: undefined,
+      callStagedLLM: async (_stage, vars) => {
+        expect(vars.characterArcs).toBe('');
+        expect(vars.sceneMap).toBe('');
+        return { content: { findings: [] } };
+      },
+    });
+    const findings = await getCheck(REG).run(ctx);
+    expect(findings).toEqual([]);
+  });
+
+  it('marks a single-chunk run as the final part so whole-arc verdicts are enabled', async () => {
+    let seenVars = null;
+    const ctx = baseCtx({
+      callStagedLLM: async (_stage, vars) => { seenVars = vars; return { content: { findings: [] } }; },
+    });
+    await getCheck(REG).run(ctx);
+    expect(seenVars.finalPart).toBe('true');
+  });
+
+  it('flags only the LAST part as final across a chunked manuscript', async () => {
+    const finals = [];
+    const ctx = baseCtx({
+      planManuscriptChunks: async () => ['# Issue 1\n\np1', '# Issue 2\n\np2', '# Issue 3\n\np3'],
+      callStagedLLM: async (_stage, vars) => { finals.push(vars.finalPart); return { content: { findings: [] } }; },
+    });
+    await getCheck(REG).run(ctx);
+    expect(finals).toEqual(['', '', 'true']);
   });
 });
 
@@ -3073,6 +3502,72 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
   });
 });
 
+describe('objects.weight-proportionality — LLM check (#1624)', () => {
+  const baseCtx = (overrides = {}) => {
+    const manuscript = overrides.manuscript ?? 'The locket — three generations of her line had guarded it — caught the light, then she pocketed it and forgot it.';
+    return {
+      manuscript,
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence', origin: 'pried from her grandmother\'s coffin', role: 'talisman' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      // Default chunker: a single whole-corpus chunk.
+      planManuscriptChunks: async () => [manuscript],
+      callStagedLLM: async () => ({ content: { findings: [] } }),
+      ...overrides,
+    };
+  };
+
+  it('passes the manuscript AND the full per-object weight summary (incl. origin lineage + role) to the model', async () => {
+    let vars = null;
+    await getCheck('objects.weight-proportionality').run(baseCtx({
+      callStagedLLM: async (_stage, v) => { vars = v; return { content: { findings: [] } }; },
+    }));
+    expect(vars.manuscript).toContain('locket');
+    expect(vars.objects).toContain('Locket');
+    expect(vars.objects).toContain('Mara'); // resolved character name, not the id
+    // The recorded lineage/backstory the over-weighted verdict depends on (#1624 review):
+    expect(vars.objects).toContain('pried from her grandmother'); // attachment origin
+    expect(vars.objects).toContain('talisman'); // attachment role archetype
+  });
+
+  it('budgets the objects summary as prompt overhead and re-sends it on every chunk', async () => {
+    let sawObjectsContext = false;
+    const objectsSeen = [];
+    await getCheck('objects.weight-proportionality').run(baseCtx({
+      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.prototype.hasOwnProperty.call(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
+      callStagedLLM: async (_stage, v) => { objectsSeen.push(v.objects); return { content: { findings: [] } }; },
+    }));
+    expect(sawObjectsContext).toBe(true);
+    expect(objectsSeen).toHaveLength(2);
+    expect(objectsSeen.every((o) => o.includes('Locket'))).toBe(true);
+  });
+
+  it('shapes findings into the plot category and respects maxFindings', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const findings = await getCheck('objects.weight-proportionality').run(baseCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    }));
+    expect(findings).toHaveLength(4);
+    expect(findings.every((f) => f.category === 'plot')).toBe(true);
+  });
+
+  it('keeps a model-supplied issue number (manuscript-scoped findings)', async () => {
+    const findings = await getCheck('objects.weight-proportionality').run(baseCtx({
+      callStagedLLM: async () => ({ content: { findings: [{ severity: 'medium', issueNumber: 7, problem: 'climactic relic, no setup', anchorQuote: 'the relic' }] } }),
+    }));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(7);
+  });
+
+  it('gates off when the manuscript is empty', () => {
+    expect(getCheck('objects.weight-proportionality').gate(baseCtx({ manuscript: '   ' }))).toBe(false);
+  });
+});
+
 describe('cross-chunk continuity digest (#1383)', () => {
   describe('editorialPriorFindingsDigest formatter', () => {
     it('returns empty string for no / non-array findings', () => {
@@ -3206,6 +3701,34 @@ describe('cross-chunk continuity digest (#1383)', () => {
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
 
+  it('objects.weight-proportionality feeds the prior-chunk digest to later chunks and gates finalPart to the last chunk', async () => {
+    const seen = [];
+    const finalFlags = [];
+    await getCheck('objects.weight-proportionality').run({
+      config: { maxFindings: 12 },
+      severityDefault: 'low',
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+      planManuscriptChunks: async () => ['CHUNK_ONE', 'CHUNK_TWO'],
+      callStagedLLM: async (_stage, vars) => {
+        seen.push(vars.manuscript);
+        finalFlags.push(vars.finalPart);
+        // Only the first chunk surfaces a finding, so the digest fed to chunk two carries it.
+        const findings = seen.length === 1
+          ? [{ severity: 'low', issueNumber: 1, problem: 'locket over-weighted', anchorQuote: 'the locket' }]
+          : [];
+        return { content: { findings } };
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(seen[1]).toContain('EARLIER parts of this manuscript');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+    // The whole-corpus verdict is gated: only the FINAL chunk is flagged finalPart.
+    expect(finalFlags).toEqual(['', 'true']);
+  });
+
   it('prose.info-dumping stays per-chunk — no digest is prepended (its problems are localized)', async () => {
     const { seen } = await runTwoChunks(INFODUMP, {
       manuscript: 'CHUNK_ONE',
@@ -3315,6 +3838,21 @@ describe('cross-chunk clean-setup digest (#1403)', () => {
     });
     expect(seen[0]).toBe('CHUNK_ONE');
     expect(setupPrompts).toHaveLength(1);
+    expect(seen[1]).toContain('Setup already established in EARLIER parts');
+    expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
+  });
+
+  it('objects.weight-proportionality rolls a setup summary forward keyed on object weight/prominence', async () => {
+    const { seen, setupPrompts } = await runTwoChunksWithSetup('objects.weight-proportionality', {
+      canon: {
+        objects: [{ id: 'o1', name: 'Locket', significance: 'an ancestral heirloom', attachments: [{ characterId: 'c1', emotion: 'reverence' }] }],
+        characters: [{ id: 'c1', name: 'Mara' }],
+      },
+    });
+    expect(seen[0]).toBe('CHUNK_ONE');
+    expect(setupPrompts).toHaveLength(1);
+    // The setup focus tracks each object's prominence + established lineage so the final part can weigh a late payoff.
+    expect(setupPrompts[0]).toMatch(/prominent or decisive/);
     expect(seen[1]).toContain('Setup already established in EARLIER parts');
     expect(seen[1].endsWith('CHUNK_TWO')).toBe(true);
   });
@@ -3920,6 +4458,56 @@ describe('style.reading-level — deterministic check (#1303)', () => {
     expect(findings[0].problem).toMatch(/below/i);
   });
 
+  // Per-scene reading-level variance (#1625). A scene-broken manuscript so
+  // `splitScenes` yields >1 measurable scene; `minSceneWords` lowered because the
+  // SIMPLE fixture is ~110 words (under the 120 default). A scene-level finding is
+  // identified by its "— scene N" location.
+  const sceneFindings = (findings) => findings.filter((f) => /— scene \d/i.test(f.location));
+  const BREAK = '\n\n* * *\n\n';
+
+  it('flags a single scene that swings ABOVE the target band', () => {
+    // Two calm scenes + one dense scene; the dense one breaks the band even if the
+    // averaged whole-corpus grade would not.
+    const manuscript = [MEDIUM, MEDIUM, DENSE].join(BREAK);
+    const findings = run({ readingLevel: 6 }, manuscript, { sceneTolerance: 3, minSceneWords: 20 });
+    const scenes = sceneFindings(findings);
+    expect(scenes.length).toBeGreaterThanOrEqual(1);
+    const above = scenes.find((f) => /above the target band/i.test(f.problem));
+    expect(above).toBeTruthy();
+    expect(above.location).toMatch(/— scene \d/i);
+    expect(above.anchorQuote).toBeTruthy();
+    expect(above.issueNumber).toBeNull();
+  });
+
+  it('flags a single scene that swings BELOW the target band', () => {
+    const manuscript = [DENSE, DENSE, SIMPLE].join(BREAK);
+    const findings = run({ readingLevel: 12 }, manuscript, { sceneTolerance: 3, minSceneWords: 20 });
+    const below = sceneFindings(findings).find((f) => /below the target band/i.test(f.problem));
+    expect(below).toBeTruthy();
+    expect(below.anchorQuote).toBeTruthy();
+  });
+
+  it('reports no per-scene findings when every scene sits within the band', () => {
+    const manuscript = [MEDIUM, MEDIUM, MEDIUM].join(BREAK);
+    const findings = run({ readingLevel: 7 }, manuscript, { tolerance: 6, sceneTolerance: 6, minSceneWords: 20 });
+    expect(sceneFindings(findings)).toHaveLength(0);
+  });
+
+  it('caps per-scene findings at maxSceneFindings (worst swings first)', () => {
+    // Six out-of-band dense scenes, cap of 2 → at most 2 scene findings.
+    const manuscript = Array(6).fill(DENSE).join(BREAK);
+    const findings = run({ readingLevel: 3 }, manuscript, { tolerance: 12, sceneTolerance: 4, minSceneWords: 20, maxSceneFindings: 2 });
+    expect(sceneFindings(findings)).toHaveLength(2);
+  });
+
+  it('does not emit per-scene findings for a single-scene manuscript', () => {
+    // No scene dividers → one scene → only the whole-corpus check can fire.
+    const findings = run({ readingLevel: 3 }, DENSE, { tolerance: 2, sceneTolerance: 1, minSceneWords: 20 });
+    expect(sceneFindings(findings)).toHaveLength(0);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].location).toMatch(/whole-corpus/i);
+  });
+
   it('is enabled by default', () => {
     expect(check.defaultEnabled).toBe(true);
   });
@@ -4170,6 +4758,7 @@ describe('prose.cliches / prose.modifier-stacking / prose.dead-metaphor (#1308)'
 
 describe('copy-edit prose-tic bundle (#1306)', () => {
   const FILTER = 'prose.filter-words';
+  const HEDGE = 'prose.hedge-words';
   const CRUTCH = 'prose.crutch-words';
   const ADVERBS = 'prose.adverbs';
   const PASSIVE = 'prose.passive-voice';
@@ -4177,9 +4766,9 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
   const ECHOES = 'prose.word-echoes';
   const RHYTHM = 'prose.sentence-rhythm';
   const TELLING = 'prose.telling-emotion';
-  const DETERMINISTIC = [FILTER, CRUTCH, ADVERBS, PASSIVE, GESTURES, ECHOES, RHYTHM];
+  const DETERMINISTIC = [FILTER, HEDGE, CRUTCH, ADVERBS, PASSIVE, GESTURES, ECHOES, RHYTHM];
 
-  it('registers all eight as manuscript style checks of the right kind', () => {
+  it('registers all deterministic prose-tic checks as manuscript style checks of the right kind', () => {
     for (const id of DETERMINISTIC) {
       const c = getCheck(id);
       expect(c.kind, id).toBe('deterministic');
@@ -4207,6 +4796,23 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     const filler = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
     const sections = [{ number: 1, content: `She saw it. ${filler}` }];
     expect(getCheck(FILTER).run({ sections, config: { densityPer1000: 6 }, severityDefault: 'low' })).toEqual([]);
+  });
+
+  it('prose.hedge-words flags hedge/weasel markers above the density threshold and anchors to the issue', () => {
+    // 4 hedge markers ("as if", "part of him", "almost", "no doubt") in ~13 words.
+    const sections = [{ number: 5, content: 'It was as if part of him almost knew, no doubt of it.' }];
+    const findings = getCheck(HEDGE).run({ sections, config: {}, severityDefault: 'low' });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issueNumber).toBe(5);
+    expect(findings[0].category).toBe('style');
+    expect(/hedge\/weasel/i.test(findings[0].problem)).toBe(true);
+    expect(findings[0].anchorQuote.toLowerCase()).toBe('as if');
+  });
+
+  it('prose.hedge-words stays silent below the density threshold', () => {
+    const filler = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
+    const sections = [{ number: 1, content: `It was as if true. ${filler}` }];
+    expect(getCheck(HEDGE).run({ sections, config: { densityPer1000: 7 }, severityDefault: 'low' })).toEqual([]);
   });
 
   it('prose.crutch-words excludes "that" unless includeThat is set', () => {
@@ -4249,6 +4855,16 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     expect(/adverb-laden/i.test(tag.problem)).toBe(true);
   });
 
+  it('prose.adverbs flags an extraWords adverb the -ly heuristic misses', () => {
+    // "fast" is a real adverb without an -ly suffix; a series adds it via extraWords.
+    const sections = [{ number: 4, content: 'He ran fast. She ran fast. They drove fast.' }];
+    const off = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
+    expect(off).toEqual([]);
+    const on = getCheck(ADVERBS).run({ sections, config: { densityPer1000: 0, extraWords: 'fast' }, severityDefault: 'low' });
+    expect(on).toHaveLength(1);
+    expect(on[0].anchorQuote.toLowerCase()).toBe('fast');
+  });
+
   it('prose.passive-voice flags above the rate threshold', () => {
     const sections = [{ number: 1, content: 'The door was opened. The vase was broken. It was forgotten.' }];
     const findings = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0 }, severityDefault: 'low' });
@@ -4265,6 +4881,24 @@ describe('copy-edit prose-tic bundle (#1306)', () => {
     // With the context tuning off, the raw heuristic counts all three.
     const raw = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false }, severityDefault: 'low' });
     expect(/3 passive constructions/.test(raw[0].problem)).toBe(true);
+  });
+
+  it('prose.passive-voice mutes an allow-listed participle', () => {
+    // "was blessed" trips the raw heuristic; allow-listing it silences the check.
+    const sections = [{ number: 1, content: 'She was blessed. He was blessed. They were blessed.' }];
+    const raw = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false }, severityDefault: 'low' });
+    expect(raw).toHaveLength(1);
+    const allowed = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false, allowWords: 'blessed' }, severityDefault: 'low' });
+    expect(allowed).toEqual([]);
+  });
+
+  it('prose.passive-voice recognizes a series-specific irregular participle via extraWords', () => {
+    const sections = [{ number: 1, content: 'The beam was hewn. The post was hewn. The plank was hewn by hand.' }];
+    const off = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false }, severityDefault: 'low' });
+    expect(off).toEqual([]);
+    const on = getCheck(PASSIVE).run({ sections, config: { densityPer1000: 0, suppressIntentional: false, extraWords: 'hewn' }, severityDefault: 'low' });
+    expect(on).toHaveLength(1);
+    expect(/passive/i.test(on[0].problem)).toBe(true);
   });
 
   it('prose.repeated-gestures tallies a gesture across the manuscript and flags body-part autonomy', () => {
@@ -4534,6 +5168,41 @@ describe('dialogue-craft bundle (#1307)', () => {
       expect(findings[0].category).toBe('dialogue');
       expect(findings[0].issueNumber).toBe(1);
     });
+
+    it('stamps a recognized subtype on each finding (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', subtype: 'emotion-tell', issueNumber: 1, problem: 'names the feeling', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings).toHaveLength(1);
+      expect(findings[0].subtype).toBe('emotion-tell');
+    });
+
+    it('drops an off-list subtype to null (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', subtype: 'made-up-label', issueNumber: 1, problem: 'on the nose', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings[0].subtype).toBeNull();
+    });
+
+    it('defaults subtype to null when the model omits it (#1626)', async () => {
+      const ctx = wholeCtx({
+        callStagedLLM: async () => ({
+          content: { findings: [{ severity: 'low', issueNumber: 1, problem: 'on the nose', anchorQuote: 'I am angry' }] },
+        }),
+      });
+      const findings = await getCheck(ON_THE_NOSE).run(ctx);
+      expect(findings[0].subtype).toBeNull();
+    });
+
+    it('only declares the three documented subtypes', () => {
+      expect(ON_THE_NOSE_SUBTYPES).toEqual(['exposition', 'emotion-tell', 'relationship-report']);
+    });
   });
 
   describe('dialogue.voice-distinctiveness — LLM check', () => {
@@ -4571,6 +5240,8 @@ describe('dialogue-craft bundle (#1307)', () => {
       expect(seenVars.voiceProfiles).toContain('clipped, profane');
       expect(findings).toHaveLength(1);
       expect(findings[0].category).toBe('dialogue');
+      // A check that doesn't declare subtypes carries a clean null (#1626).
+      expect(findings[0].subtype).toBeNull();
     });
   });
 
@@ -5100,5 +5771,76 @@ describe('cast.representation-balance — deterministic check (#1312)', () => {
   it('tolerates empty canon / sections / outline without throwing', () => {
     expect(() => runRep({ characters: [] })).not.toThrow();
     expect(runRep({ characters: [{}, { name: '' }] }, { sections: [sec(1, 'x')] })).toEqual([]);
+  });
+});
+
+// Inter-check context sharing — dependency ordering (#1627).
+describe('orderChecksByDependencies (#1627)', () => {
+  // A pair is just `{ check: { id, dependsOn? } }` here — ordering reads only those.
+  const pair = (id, dependsOn) => ({ check: dependsOn ? { id, dependsOn } : { id } });
+  const ids = (pairs) => pairs.map((p) => p.check.id);
+
+  it('keeps registry order when no check declares a dependency (stable, identity)', () => {
+    const input = [pair('a'), pair('b'), pair('c')];
+    expect(ids(orderChecksByDependencies(input))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('emits a declared dependency BEFORE the dependent even when registry order is reversed', () => {
+    // b depends on a, but is listed first — a must be pulled ahead of b.
+    const out = orderChecksByDependencies([pair('b', ['a']), pair('a'), pair('c')]);
+    expect(ids(out).indexOf('a')).toBeLessThan(ids(out).indexOf('b'));
+    // c (independent) stays in its relative slot — only b waited on something.
+    expect(ids(out)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('orders a transitive chain c→b→a so every dependency precedes its dependent', () => {
+    const out = ids(orderChecksByDependencies([pair('c', ['b']), pair('b', ['a']), pair('a')]));
+    expect(out.indexOf('a')).toBeLessThan(out.indexOf('b'));
+    expect(out.indexOf('b')).toBeLessThan(out.indexOf('c'));
+  });
+
+  it('ignores a dependency that is absent from the run (disabled / subset) and still runs the dependent', () => {
+    // b depends on z, which isn't in the enabled set — b still runs, order preserved.
+    const out = orderChecksByDependencies([pair('a'), pair('b', ['z'])]);
+    expect(ids(out)).toEqual(['a', 'b']);
+  });
+
+  it('breaks a dependency cycle by falling back to registry order without throwing or spinning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = orderChecksByDependencies([pair('a', ['b']), pair('b', ['a']), pair('c')]);
+    // c (independent) is placed; the cyclic a/b are flushed in registry order.
+    expect(ids(out).sort()).toEqual(['a', 'b', 'c']);
+    expect(out).toHaveLength(3);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('returns a copy for trivial inputs and never mutates the caller array', () => {
+    expect(orderChecksByDependencies([])).toEqual([]);
+    const one = [pair('a')];
+    const out = orderChecksByDependencies(one);
+    expect(out).not.toBe(one);
+    expect(ids(out)).toEqual(['a']);
+    expect(orderChecksByDependencies(null)).toEqual([]);
+  });
+});
+
+// dependsOn shape is validated at registry load (#1627).
+describe('assertValidChecks — dependsOn shape (#1627)', () => {
+  const base = {
+    id: 'x.test', label: 'X', scope: 'series', kind: 'deterministic', category: 'c',
+    severityDefault: 'low', run: () => [], configSchema: z.object({}), sources: ['canon'],
+  };
+  it('accepts an absent or string-array dependsOn', () => {
+    expect(() => assertValidChecks([base])).not.toThrow();
+    expect(() => assertValidChecks([{ ...base, dependsOn: ['naming.dissimilar-names'] }])).not.toThrow();
+  });
+  it('rejects a non-array or non-string-element dependsOn', () => {
+    expect(() => assertValidChecks([{ ...base, dependsOn: 'a' }])).toThrow(/dependsOn must be an array/);
+    expect(() => assertValidChecks([{ ...base, dependsOn: [1] }])).toThrow(/dependsOn must be an array/);
+    expect(() => assertValidChecks([{ ...base, dependsOn: [''] }])).toThrow(/dependsOn must be an array/);
+  });
+  it('rejects a self-reference', () => {
+    expect(() => assertValidChecks([{ ...base, dependsOn: ['x.test'] }])).toThrow(/cannot depend on itself/);
   });
 });

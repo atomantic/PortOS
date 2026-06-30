@@ -34,7 +34,8 @@ export const NOTIFICATION_TYPES = {
   BRIEFING_READY: 'briefing_ready',
   AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt',
   PLAN_QUESTION: 'plan_question',
-  AGENT_WARNING: 'agent_warning'
+  AGENT_WARNING: 'agent_warning',
+  AUTOPILOT_PAUSED: 'autopilot_paused'
 };
 
 // Priority levels
@@ -195,18 +196,22 @@ export async function removeNotification(id) {
 export async function removeByMetadata(field, value) {
   return withLock(async () => {
     const data = await loadNotifications();
-    const before = data.notifications.length;
+    // Capture the ids being removed so live clients can prune their local list.
+    // Emitting only 'count-changed' updates the unread badge but leaves the
+    // removed items rendered in the notification center until a reload — the
+    // socket bridge fans 'removed' (not 'count-changed') to the client list.
+    const removedIds = data.notifications.filter(n => n.metadata?.[field] === value).map(n => n.id);
 
     data.notifications = data.notifications.filter(n => n.metadata?.[field] !== value);
 
-    const removed = before - data.notifications.length;
-    if (removed > 0) {
+    if (removedIds.length > 0) {
       await saveNotifications(data);
-      console.log(`🔔 Removed ${removed} notifications with ${field}=${value}`);
+      console.log(`🔔 Removed ${removedIds.length} notifications with ${field}=${value}`);
+      for (const id of removedIds) notificationEvents.emit('removed', { id });
       notificationEvents.emit('count-changed', await getUnreadCount());
     }
 
-    return { success: true, removed };
+    return { success: true, removed: removedIds.length };
   });
 }
 

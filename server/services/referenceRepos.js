@@ -7,9 +7,12 @@
  * copying upstream verbatim.
  * (e.g., PortOS itself watches `phosphene` for video-gen ideas). The
  * `reference-watch` scheduled task asks this service to fetch each ref
- * and find commits since `lastReviewedSha`. The CoS sub-agent then
- * appends slug-tagged `[ref-watch-…]` checklist items to PLAN.md in the
- * target app's repo, which `/claim` / `plan-task` picks up later.
+ * and find commits since `lastReviewedSha`. The CoS sub-agent then records
+ * slug-tagged `[ref-watch-…]` proposals in the target app's CONFIGURED work
+ * tracker — PLAN.md, GitHub Issues, GitLab Issues, or JIRA (resolved via
+ * `resolveAppWorkTracker`) — which `/claim` / `plan-task` / `claim-issue*`
+ * picks up later. The destination-specific guidance is injected into the
+ * prompt's `{trackerInstructions}` block by `triggerReferenceAnalysis`.
  *
  * Storage: refs live inline on each app in data/apps.json under the
  * `referenceRepos` array — fits the existing per-app config model and
@@ -30,6 +33,7 @@ import {
   updateApp,
 } from './apps.js';
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { resolveAppWorkTracker } from '../lib/workTracker.js';
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
 
@@ -493,7 +497,8 @@ export async function checkReferenceRepo(appId, refId) {
 
 /**
  * Mark a ref as reviewed up to the given SHA — called after a CoS
- * sub-agent finishes appending PLAN.md items for the new commits, or by
+ * sub-agent finishes recording proposals (PLAN.md items / GitHub|GitLab
+ * issues / JIRA tickets) for the new commits, or by
  * the UI's "mark as reviewed" button. SHA must match a real commit visible from
  * the ref's working tree (verified via `git cat-file -e <sha>^{commit}`
  * against the managed clone or the user-supplied local path).
@@ -569,6 +574,60 @@ export function formatReferenceForPrompt(ref, snapshot) {
   return lines.join('\n');
 }
 
+// The reference-watch prompt's {trackerInstructions} block — where the agent
+// records its Adopt/Maybe proposals. v3 of the prompt no longer hardcodes
+// PLAN.md: it injects the block matching the app's RESOLVED work tracker, so an
+// app configured for GitHub issues gets `gh issue create` proposals instead of
+// a PLAN.md checklist. The blocks carry {appName}/{repoPath} placeholders that
+// the shared replace chain in triggerReferenceAnalysis expands (it substitutes
+// {trackerInstructions} FIRST so these inner placeholders are filled too).
+const TRACKER_INSTRUCTIONS = {
+  plan: `This app records autonomous work in **PLAN.md** at the repo root ({repoPath}).
+
+- **Inventory:** Read PLAN.md from {repoPath}. Every existing checkbox carries a \`[<slug>]\` ID — collect the \`[ref-watch-…]\` ones so you don't duplicate. If PLAN.md does not exist, create it with a single top-level heading (\`# {appName} — Development Plan\`) and a \`## Next Up\` section before appending.
+- **Record** each proposal as a slug-tagged checklist item appended to the \`## Next Up\` section:
+  \`\`\`markdown
+  - [ ] [<slug>] **<Short title.>** From \`reference-watch\` review of <ref name> (commit(s) \`<sha>\` [+ \`<sha>\` …], <today's date>). <1–2 sentences.> Fix: <files + functions in {appName}>. <Estimated scope.>
+  \`\`\`
+  Place **Maybe — needs human call** items in a \`### Trigger-gated (waiting for a precondition)\` subsection if one exists; otherwise append them under \`## Next Up\`.
+- **Finalize:** Commit the PLAN.md edit with message \`docs(reference-watch): propose <N> item(s) from <ref names>\`. Do NOT create branches or PRs — \`/claim\` (or the \`plan-task\` agent) picks the slugs up later.`,
+
+  github: `This app tracks autonomous work in **GitHub Issues** (via the \`gh\` CLI), NOT PLAN.md — do NOT edit PLAN.md.
+
+- **Inventory:** From {repoPath}, resolve the repo (\`gh repo view --json nameWithOwner -q .nameWithOwner\`) and list existing reference-watch issues so you don't duplicate: \`gh issue list --state all --search "ref-watch in:title" --limit 100 --json number,title\`. Each carries a \`[ref-watch-…]\` slug in its title — collect them. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly.
+- **Record** each proposal as a new GitHub issue. Ensure the label exists first (\`gh label create reference-watch --description "Proposed from a reference-repo watch" --force\`), then:
+  \`\`\`bash
+  gh issue create --title "[<slug>] <Short title>" --label reference-watch --body "<body>"
+  \`\`\`
+  The body must contain the provenance (ref + commit SHA(s) + today's date), the 1–2 sentence rationale, the \`Fix:\` line naming the {appName} files/functions to change, and the estimated scope. For **Maybe — needs human call** items, also add \`--label needs-decision\` (create it the same way if absent) and end the body with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no PLAN.md, no branches, no PRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue\` flow) picks them up later.`,
+
+  gitlab: `This app tracks autonomous work in **GitLab Issues** (via the \`glab\` CLI), NOT PLAN.md — do NOT edit PLAN.md.
+
+- **Inventory:** From {repoPath}, confirm the forge (\`glab repo view\`) and list existing reference-watch issues so you don't duplicate: \`glab issue list --label reference-watch --per-page 100 -F json\` (also scan titles for the \`[ref-watch-…]\` slug). Collect the existing slugs. If \`glab\` is not authenticated or the remote is not GitLab, exit cleanly.
+- **Record** each proposal as a new GitLab issue:
+  \`\`\`bash
+  glab issue create --title "[<slug>] <Short title>" --label reference-watch --description "<body>"
+  \`\`\`
+  (Run \`glab issue create --help\` if a flag is rejected — glab's flags evolve.) The body must contain the provenance (ref + commit SHA(s) + today's date), the 1–2 sentence rationale, the \`Fix:\` line naming the {appName} files/functions to change, and the estimated scope. For **Maybe — needs human call** items, also add \`--label needs-decision\` and end the body with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no PLAN.md, no branches, no MRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue-gitlab\` flow) picks them up later.`,
+
+  jira: `This app tracks autonomous work in **JIRA**. Create one JIRA issue per proposal in the app's configured project using whatever JIRA CLI/REST this environment provides. **If no JIRA credentials are available, fall back to recording proposals in PLAN.md at {repoPath} (slug-tagged \`- [ ] [<slug>] …\` checklist items under \`## Next Up\`, committed) and say so in your final summary.**
+
+- **Inventory:** Search existing JIRA issues (and PLAN.md, if you fall back) for the \`[ref-watch-…]\` slug so you don't duplicate; collect the existing slugs.
+- **Record** each proposal as a new JIRA issue whose summary starts with the \`[<slug>]\` tag. The description must contain the provenance (ref + commit SHA(s) + today's date), the 1–2 sentence rationale, the \`Fix:\` line naming the {appName} files/functions to change, and the estimated scope. For **Maybe — needs human call** items, end the description with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no branches, no PRs — the tickets (or the committed PLAN.md fallback) ARE the deliverable. The \`claim-issue-jira\` flow picks them up later.`,
+};
+
+/**
+ * Pick the {trackerInstructions} block for a resolved work tracker, falling back
+ * to the PLAN.md block for an unknown/missing tracker (matches the v3 prompt's
+ * read-only-on-source, write-to-tracker contract). Exported for tests.
+ */
+export function formatTrackerInstructions(tracker) {
+  return TRACKER_INSTRUCTIONS[tracker] || TRACKER_INSTRUCTIONS.plan;
+}
+
 /**
  * Trigger a CoS analysis task for a single reference repo after a successful
  * check found new commits. Builds the reference-watch prompt with the snapshot
@@ -587,9 +646,17 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
   const { getTaskPrompt } = await import('./taskPromptService.js');
 
   const referenceDataBlock = formatReferenceForPrompt(ref, snapshot);
+  // Resolve where THIS app records autonomous work (PLAN.md / GitHub / GitLab /
+  // JIRA) so the agent files proposals into the configured tracker instead of
+  // always appending to PLAN.md. Never throws — degrades to the PLAN.md block.
+  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan' }));
+  const trackerInstructionsBlock = formatTrackerInstructions(workTracker.resolved);
   const promptTemplate = await getTaskPrompt('reference-watch');
-  // Use arrow replacers to avoid $& / $1 interpretation in replacement strings
+  // Use arrow replacers to avoid $& / $1 interpretation in replacement strings.
+  // {trackerInstructions} is substituted FIRST so the {appName}/{repoPath}
+  // placeholders inside the injected block are expanded by the later replacers.
   const fullPrompt = promptTemplate
+    .replace(/\{trackerInstructions\}/g, () => trackerInstructionsBlock)
     .replace(/\{appName\}/g, () => app.name)
     .replace(/\{repoPath\}/g, () => app.repoPath)
     .replace(/\{appId\}/g, () => app.id)
@@ -609,11 +676,15 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
       repoPath: app.repoPath,
       analysisType: 'reference-watch',
       autoGenerated: true,
-      // The reference-watch prompt v2 instructs the agent to APPEND
-      // slug-tagged checklist items to PLAN.md (and commit). readOnly:true
-      // would inject the "do not modify or commit files" guard into the
-      // system prompt and the agent would refuse to write the PLAN
-      // entries — defeating the whole flow. Mark writable.
+      // Resolved work tracker the prompt told the agent to file proposals into
+      // (PLAN.md / GitHub / GitLab / JIRA) — recorded for traceability.
+      workTracker: workTracker.resolved,
+      // The reference-watch prompt v3 instructs the agent to record proposals in
+      // the resolved tracker: the PLAN.md path APPENDS slug-tagged checklist
+      // items (and commits); the GitHub/GitLab paths shell out to `gh`/`glab
+      // issue create`. readOnly:true would inject the "do not modify or commit
+      // files" guard into the system prompt and the agent would refuse to
+      // write/commit/shell — defeating the whole flow. Mark writable.
       readOnly: false,
       context: fullPrompt,
     },

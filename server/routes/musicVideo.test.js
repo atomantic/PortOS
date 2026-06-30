@@ -1,0 +1,198 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+
+vi.mock('../services/musicVideo/projects.js', () => ({
+  listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
+  getProject: vi.fn(),
+  createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
+  updateProject: vi.fn(async (id, p) => ({ id, ...p })),
+  deleteProject: vi.fn(async () => ({ ok: true })),
+  setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
+  addProjectScene: vi.fn(async (id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
+  updateScene: vi.fn(async (id, sceneId, p) => ({ sceneId, ...p })),
+  deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
+  reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+}));
+
+vi.mock('../services/musicVideo/audioAnalysis.js', () => ({
+  analyzeAudioFile: vi.fn(),
+}));
+
+vi.mock('../services/tracks/index.js', () => ({
+  getTrack: vi.fn(),
+}));
+
+// Mock the render service so the route test doesn't pull the real ffmpeg/
+// video-history/spawn graph; the route's job is to dispatch + stream.
+vi.mock('../services/musicVideo/render.js', () => ({
+  renderMusicVideo: vi.fn(async () => ({ jobId: 'job-1' })),
+  attachRenderSseClient: vi.fn(() => true),
+  cancelRender: vi.fn(() => true),
+}));
+
+import * as svc from '../services/musicVideo/projects.js';
+import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
+import { getTrack } from '../services/tracks/index.js';
+import * as renderSvc from '../services/musicVideo/render.js';
+import musicVideoRoutes from './musicVideo.js';
+
+describe('musicVideo routes', () => {
+  let app;
+  beforeEach(() => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/music-video', musicVideoRoutes);
+    vi.clearAllMocks();
+  });
+
+  it('GET / lists projects', async () => {
+    const r = await request(app).get('/api/music-video');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([{ id: 'mv-1', name: 'A' }]);
+  });
+
+  it('GET /:id 404s when missing', async () => {
+    svc.getProject.mockResolvedValue(null);
+    const r = await request(app).get('/api/music-video/mv-x');
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('NOT_FOUND');
+  });
+
+  it('POST / creates after Zod validation', async () => {
+    const r = await request(app).post('/api/music-video').send({ name: 'New', mode: 'director' });
+    expect(r.status).toBe(201);
+    expect(r.body.name).toBe('New');
+  });
+
+  it('POST / rejects an invalid body (unknown mode)', async () => {
+    const r = await request(app).post('/api/music-video').send({ name: 'New', mode: 'wat' });
+    expect(r.status).toBe(400);
+    expect(svc.createProject).not.toHaveBeenCalled();
+  });
+
+  it('POST / rejects a missing name', async () => {
+    const r = await request(app).post('/api/music-video').send({ mode: 'director' });
+    expect(r.status).toBe(400);
+  });
+
+  it('PATCH /:id updates', async () => {
+    const r = await request(app).patch('/api/music-video/mv-1').send({ name: 'Renamed' });
+    expect(r.status).toBe(200);
+    expect(r.body.name).toBe('Renamed');
+  });
+
+  it('DELETE /:id soft-deletes', async () => {
+    const r = await request(app).delete('/api/music-video/mv-1');
+    expect(r.status).toBe(200);
+    expect(svc.deleteProject).toHaveBeenCalledWith('mv-1');
+  });
+
+  describe('POST /:id/analyze', () => {
+    it('400s when the project has no audio source', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: null, uploadedAudioFilename: null });
+      const r = await request(app).post('/api/music-video/mv-1/analyze');
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('NO_AUDIO');
+    });
+
+    it('404s when the linked track is missing', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't-gone' });
+      getTrack.mockResolvedValue(null);
+      const r = await request(app).post('/api/music-video/mv-1/analyze');
+      expect(r.status).toBe(404);
+    });
+
+    it('400s on a path-traversal audio filename', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', uploadedAudioFilename: '../../etc/passwd' });
+      const r = await request(app).post('/api/music-video/mv-1/analyze');
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('422s when the analyzer cannot decode', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      analyzeAudioFile.mockResolvedValue(null);
+      const r = await request(app).post('/api/music-video/mv-1/analyze');
+      expect(r.status).toBe(422);
+      expect(r.body.code).toBe('ANALYZE_FAILED');
+    });
+
+    it('caches the analysis and returns the updated project', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      const analysis = { bpm: 120, beats: [0], downbeats: [0], sections: [], durationSec: 5 };
+      analyzeAudioFile.mockResolvedValue(analysis);
+      const r = await request(app).post('/api/music-video/mv-1/analyze');
+      expect(r.status).toBe(200);
+      expect(r.body.audioAnalysis).toEqual(analysis);
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+    });
+  });
+
+  describe('scene board', () => {
+    it('POST /:id/scenes adds a scene', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes').send({ prompt: 'wide shot' });
+      expect(r.status).toBe(201);
+      expect(r.body.prompt).toBe('wide shot');
+    });
+
+    it('POST /:id/scenes rejects endSec < startSec', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes').send({ startSec: 9, endSec: 1 });
+      expect(r.status).toBe(400);
+      expect(svc.addProjectScene).not.toHaveBeenCalled();
+    });
+
+    it('PATCH /:id/scenes/:sceneId updates a scene', async () => {
+      const r = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ prompt: 'new' });
+      expect(r.status).toBe(200);
+      expect(r.body.prompt).toBe('new');
+    });
+
+    it('DELETE /:id/scenes/:sceneId removes a scene', async () => {
+      const r = await request(app).delete('/api/music-video/mv-1/scenes/mvs-1');
+      expect(r.status).toBe(200);
+      expect(svc.deleteScene).toHaveBeenCalledWith('mv-1', 'mvs-1');
+    });
+
+    it('POST /:id/scenes/reorder reorders', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes/reorder').send({ sceneIds: ['b', 'a'] });
+      expect(r.status).toBe(200);
+      expect(r.body.scenes.map((s) => s.sceneId)).toEqual(['b', 'a']);
+    });
+
+    it('POST /:id/scenes/reorder rejects an empty list', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes/reorder').send({ sceneIds: [] });
+      expect(r.status).toBe(400);
+    });
+  });
+
+  describe('render (#1760 Phase 2)', () => {
+    it('POST /:id/render kicks off the render and returns the jobId', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/render').send({});
+      expect(r.status).toBe(200);
+      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1');
+      expect(r.body).toEqual({ jobId: 'job-1' });
+    });
+
+    it('POST /:id/render does not collide with /:id/scenes', async () => {
+      await request(app).post('/api/music-video/mv-1/render').send({});
+      // The render handler ran, not the scene handler.
+      expect(svc.addProjectScene).not.toHaveBeenCalled();
+    });
+
+    it('POST /render/:jobId/cancel cancels the job', async () => {
+      const r = await request(app).post('/api/music-video/render/job-1/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(renderSvc.cancelRender).toHaveBeenCalledWith('job-1');
+      expect(r.body).toEqual({ ok: true });
+    });
+
+    it('GET /render/:jobId/events 404s for an unknown job', async () => {
+      renderSvc.attachRenderSseClient.mockReturnValueOnce(false);
+      const r = await request(app).get('/api/music-video/render/nope/events');
+      expect(r.status).toBe(404);
+    });
+  });
+});

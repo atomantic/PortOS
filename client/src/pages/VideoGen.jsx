@@ -766,9 +766,12 @@ export default function VideoGen() {
   // transformer (the route only checks file-exists + ltx2) and fail the render.
   // Video LoRAs always carry an explicit `ltx-video` family (HF import sets it),
   // so an exact-match filter here is the correct strict mode.
-  const videoLoras = loraFamily
-    ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
-    : [];
+  const videoLoras = useMemo(
+    () => (loraFamily
+      ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
+      : []),
+    [availableLoras, loraFamily],
+  );
 
   // Installed LTX-video LoRAs regardless of the selected model's runtime. When
   // the user picks an LTX-2.x model whose runtime can't fuse LoRAs (a quantized
@@ -777,8 +780,11 @@ export default function VideoGen() {
   // unavailable and point at the models that CAN run it. The `/ltx-?2/i` scope
   // matches the server's LTX-2.x capability family (see isMlxVideoLtxLoraCapable)
   // so the hint never fires for a non-LTX-2.x model where the advice wouldn't apply.
-  const installedVideoLoras = availableLoras.filter(
-    (l) => (l.loraCompatKey || l.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO,
+  const installedVideoLoras = useMemo(
+    () => availableLoras.filter(
+      (l) => (l.loraCompatKey || l.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO,
+    ),
+    [availableLoras],
   );
   // Gated on the quantized-mlx_video case specifically (runtime mlx_video +
   // loraFamily null = a quantized LTX-2.x model) so the hint copy's "quantized

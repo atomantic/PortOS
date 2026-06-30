@@ -259,18 +259,23 @@ function CoverArt({ record, label, className = '', placeholderClassName = '' }) 
 export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const seasons = useMemo(() => series.seasons || [], [series.seasons]);
   const [activeSeasonId, setActiveSeasonId] = useState(seasons[0]?.id || null);
-  // Stale seasonIds (e.g. after a verify-resolve season rewrite) bucket under
-  // null so they show as ungrouped instead of vanishing into an un-iterated key.
-  const validSeasonIds = new Set(seasons.map((s) => s.id));
-  const issuesBySeason = new Map();
-  for (const iss of issues) {
-    const key = iss.seasonId && validSeasonIds.has(iss.seasonId) ? iss.seasonId : null;
-    if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
-    issuesBySeason.get(key).push(iss);
-  }
-  for (const list of issuesBySeason.values()) {
-    list.sort((a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0));
-  }
+  // Bucket + sort issues by season once per (seasons, issues) change rather than
+  // on every render. Stale seasonIds (e.g. after a verify-resolve season rewrite)
+  // bucket under null so they show as ungrouped instead of vanishing into an
+  // un-iterated key.
+  const issuesBySeason = useMemo(() => {
+    const validSeasonIds = new Set(seasons.map((s) => s.id));
+    const map = new Map();
+    for (const iss of issues) {
+      const key = iss.seasonId && validSeasonIds.has(iss.seasonId) ? iss.seasonId : null;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(iss);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0));
+    }
+    return map;
+  }, [seasons, issues]);
   const ungroupedIssues = issuesBySeason.get(null) || [];
   const activeSeason = seasons.find((s) => s.id === activeSeasonId) || seasons[0] || null;
 

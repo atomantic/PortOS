@@ -26,6 +26,7 @@ import {
 import { listImageGallery } from '../services/apiImageVideo';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
@@ -49,6 +50,7 @@ function refPath(refKind, refId) {
     case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
     case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
     case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
+    case 'creative-director': return `/media/creative-director/${encodeURIComponent(refId)}/overview`;
     case 'writers-room':
     case 'writersRoom':    return '/writers-room';
     default:               return null;
@@ -59,26 +61,48 @@ function REFKIND_LABEL(kind) {
   if (kind === 'universe')   return 'Universes';
   if (kind === 'series')     return 'Series';
   if (kind === 'issue')      return 'Issues';
+  if (kind === 'creative-director') return 'Creative Director';
   if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
   return kind;
 }
 
 // Build the image-generation prompt source from the (live, editable) payload:
 // the type's primary content field first, then a curated set of *visual*
-// description fields, so a character renders from physicalDescription and a
-// place/object/idea from description/summary. Intentionally narrower than the
-// type's full snippetFallbackKeys — keys like `role`/`notes`/`significance`
-// describe the entity but don't depict it, and would seed weak prompts.
-// Returns '' when nothing usable is present — the generate button gates on it.
-const GENERATION_DESCRIPTION_KEYS = ['physicalDescription', 'description', 'summary'];
-function deriveGenerationDescription(payload, typeDef) {
-  if (!payload || typeof payload !== 'object') return '';
-  const keys = [typeDef?.primaryContentKey, ...GENERATION_DESCRIPTION_KEYS].filter(Boolean);
-  for (const k of keys) {
-    const v = payload[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
+// description fields, so a character renders from its full appearance and a
+// place/object/idea from description/summary. The keys are the ones that DEPICT a
+// subject — `role`/`notes`/`significance` describe the entity but don't depict it
+// and would seed weak prompts, so they're excluded. Unlike the old single-field
+// derive, this folds EVERY populated visual field together (#1809) so a character
+// renders from physicalDescription PLUS visualNotes/visualIdentity/etc., and
+// appends the ingredient's tags as extra prompt tokens. Capped so a verbose canon
+// entry can't blow up the prompt. Returns '' when nothing usable is present (the
+// editor prefill falls back to the name alone). Exported for unit tests.
+export const GENERATION_VISUAL_KEYS = [
+  'physicalDescription', 'visualNotes', 'visualIdentity',
+  'silhouetteNotes', 'postureNotes', 'specialTraits',
+  'description', 'summary',
+];
+const GENERATION_SEED_MAX = 700;
+export function buildGenerationPromptSeed(payload, typeDef, tags = []) {
+  const parts = [];
+  if (payload && typeof payload === 'object') {
+    const keys = [typeDef?.primaryContentKey, ...GENERATION_VISUAL_KEYS].filter(Boolean);
+    const seen = new Set();
+    for (const k of keys) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const v = payload[k];
+      if (typeof v === 'string' && v.trim()) parts.push(v.trim());
+    }
   }
-  return '';
+  const tagList = Array.isArray(tags)
+    ? tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
+    : [];
+  let seed = parts.join('. ');
+  if (tagList.length) seed = seed ? `${seed}. ${tagList.join(', ')}` : tagList.join(', ');
+  return seed.length > GENERATION_SEED_MAX
+    ? `${seed.slice(0, GENERATION_SEED_MAX - 1).trimEnd()}…`
+    : seed;
 }
 
 export default function CatalogIngredient() {
@@ -331,8 +355,10 @@ export default function CatalogIngredient() {
   const isUserType = typeDef.system === false;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
   // Prompt source for the Media panel's "Generate" affordance — derived from the
-  // currently-edited payload so tweaks to the description feed the next render.
-  const genDescription = deriveGenerationDescription(payload, typeDef);
+  // currently-edited payload + the live `tags` state (NOT record.tags) so unsaved
+  // tweaks to the description or tags feed the next render's default prompt. The
+  // user can still edit the composed prompt before generating (#1809).
+  const genDescription = buildGenerationPromptSeed(payload, typeDef, tags);
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
   // of `{ refKind, refId, role }` or a server-grouped shape.
@@ -466,6 +492,7 @@ export default function CatalogIngredient() {
           genIngredientId={record.id}
           genName={name}
           genDescription={genDescription}
+          genUniverseId={universeRef?.refId || null}
           onGenerated={handleGeneratedImage}
         />
 
@@ -852,23 +879,58 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
 // `MediaJobThumb` surfaces the live diffusion preview and fires `onFilename`
 // once complete, which routes to `onComplete` to attach it onto the ingredient.
 // Disabled when the description is blank — there's nothing to render from.
-function GenerateImageControl({ ingredientId, name, description, onComplete }) {
+function GenerateImageControl({ ingredientId, name, description, universeId, onComplete }) {
   const mountedRef = useMounted();
   const [jobId, setJobId] = useState(null);
   const [starting, setStarting] = useState(false);
-  const canGenerate = !!(description && description.trim());
+  // Editable-prompt panel state (#1809): the user opens an inline editor,
+  // tweaks the auto-composed prompt, then renders — instead of firing a fixed
+  // prompt on the first click.
+  const [editing, setEditing] = useState(false);
+  const [prefilling, setPrefilling] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState('');
 
-  const handleGenerate = async () => {
-    if (!canGenerate) {
-      toast.error('Add a description before generating an image');
+  // Open the editor and prefill the prompt with the composed default: the
+  // ingredient's visual seed + tags, layered on the linked universe's style
+  // preset (fetched lazily — the page deliberately doesn't load the universe up
+  // front). A failed/missing universe just omits the preset; the seed still
+  // renders. Don't clobber a prompt the user already edited (re-open keeps it).
+  const openEditor = async () => {
+    setEditing(true);
+    if (prompt.trim()) return; // keep prior edits when re-opening
+    setPrefilling(true);
+    let universe = null;
+    if (universeId) {
+      universe = await getUniverse(universeId, { silent: true }).catch(() => null);
+    }
+    const styled = composeCanonStyledPrompt({
+      name: name || 'Subject',
+      description: description || '',
+      universe,
+    });
+    if (!mountedRef.current) return;
+    // The textarea is editable during the (awaited) universe fetch, so the user
+    // may have started typing before it resolved — apply the composed prefill
+    // only when the field is still empty, via a functional updater that reads
+    // the latest state (the closure's `prompt` is stale across the await).
+    // Trim a dangling "Name:" when the ingredient had no visual description yet.
+    setPrompt((cur) => (cur.trim() ? cur : (styled.prompt || name || '').replace(/:\s*$/, '')));
+    setNegativePrompt((cur) => (cur.trim() ? cur : (styled.negativePrompt || '')));
+    setPrefilling(false);
+  };
+
+  const handleRender = async () => {
+    const finalPrompt = prompt.trim();
+    if (!finalPrompt) {
+      toast.error('Enter a prompt before generating an image');
       return;
     }
     setStarting(true);
-    const styled = composeCanonStyledPrompt({ name: name || 'Subject', description, universe: null });
     const queued = await generateImage(
       {
-        prompt: styled.prompt,
-        negativePrompt: styled.negativePrompt || undefined,
+        prompt: finalPrompt,
+        negativePrompt: negativePrompt.trim() || undefined,
         // Durable attach (#1359): tag the queued job with the target ingredient
         // so the server-side completion hook files the render even if this page
         // unmounts before a long local/Codex render finishes. The onComplete
@@ -881,6 +943,7 @@ function GenerateImageControl({ ingredientId, name, description, onComplete }) {
     if (!mountedRef.current) return;
     setStarting(false);
     if (!queued) return;
+    setEditing(false);
     if (queued.jobId) {
       // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
       // which fires onFilename on completion to attach the result optimistically.
@@ -917,30 +980,72 @@ function GenerateImageControl({ ingredientId, name, description, onComplete }) {
   }, []);
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="relative inline-flex items-center gap-2">
       {jobId && (
         <MediaJobThumb jobId={jobId} label="Generated image" size="xs"
           onFilename={handleFilename} onStatus={handleStatus} />
       )}
-      <button
-        type="button"
-        onClick={handleGenerate}
-        disabled={!canGenerate || starting || !!jobId}
-        title={canGenerate
-          ? 'Generate an image from this item’s description'
-          : 'Add a description first to generate an image'}
-        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {starting || jobId
-          ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-          : <Sparkles size={12} aria-hidden="true" />}
-        {jobId ? 'Generating…' : 'Generate'}
-      </button>
+      {!editing && (
+        <button
+          type="button"
+          onClick={openEditor}
+          disabled={starting || !!jobId}
+          title="Compose a prompt and generate an image for this item"
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {jobId
+            ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            : <Sparkles size={12} aria-hidden="true" />}
+          {jobId ? 'Generating…' : 'Generate'}
+        </button>
+      )}
+
+      {editing && (
+        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] rounded-lg border border-port-border bg-port-card p-3 shadow-xl space-y-2"
+          style={{ top: '100%' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-white">Generate image</span>
+            {prefilling && <Loader2 size={12} className="animate-spin text-gray-400" aria-hidden="true" />}
+          </div>
+          <label className="block">
+            <span className="text-[11px] text-gray-400">Prompt</span>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={4}
+              placeholder="Describe the image to render…"
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-gray-400">Negative prompt (optional)</span>
+            <textarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={2}
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+            />
+          </label>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setEditing(false)}
+              className="text-xs px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white">
+              Cancel
+            </button>
+            <button type="button" onClick={handleRender} disabled={starting || prefilling || !prompt.trim()}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed">
+              {starting
+                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                : <Sparkles size={12} aria-hidden="true" />}
+              Render
+            </button>
+          </div>
+        </div>
+      )}
     </span>
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, onGenerated }) {
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const list = Array.isArray(media) ? media : [];
@@ -963,7 +1068,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
         <div className="flex items-center gap-2">
-          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} onComplete={onGenerated} />
+          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery

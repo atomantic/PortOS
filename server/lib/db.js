@@ -833,6 +833,25 @@ async function ensureSchemaImpl() {
     `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
     `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE`,
 
+    // Music Video projects (issue #1760). The director scene board's db-primary
+    // record: id/status/created_at/updated_at mirrored as columns, the full
+    // project (track link, cached audioAnalysis, scenes[]) in `data` JSONB —
+    // same shape as creative_director_projects. The soft-delete tombstone trio is
+    // present so peer-sync federation (a follow-up) is additive. Mirrors the
+    // music_video_projects block in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS music_video_projects (
+      id TEXT PRIMARY KEY,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE music_video_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+    `CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE`,
+
     // Mood boards (issue #911). A dedicated inspiration/mood-board canvas,
     // distinct from raw Media History, for collecting visual + textual
     // references that feed the Create suite. One row per board, the full record
@@ -1128,9 +1147,16 @@ async function ensureSchemaImpl() {
       sort_order INTEGER DEFAULT 0,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wr_folders_parent ON writers_room_folders (parent_id, sort_order)`,
+    // Idempotent upgrade for installs predating folder federation (#1645): without
+    // the soft-delete columns an old install boots the new code and hard-DELETEs a
+    // folder (no tombstone) — peers never learn it was removed and resurrect it.
+    `ALTER TABLE writers_room_folders ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE writers_room_folders ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
 
     // Work manifests. The drafts[] array moves OUT of `data` into
     // writers_room_draft_versions (the one decomposition — draft versions are a
@@ -1191,9 +1217,16 @@ async function ensureSchemaImpl() {
       status VARCHAR(16),
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       started_at TIMESTAMPTZ,
-      finished_at TIMESTAMPTZ
+      finished_at TIMESTAMPTZ,
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
     )`,
     `CREATE INDEX IF NOT EXISTS idx_wr_exercises_work ON writers_room_exercises (work_id, started_at DESC)`,
+    // Idempotent upgrade for installs predating exercise federation (#1645). The
+    // tombstone columns let a peer's deletion propagate (LWW never propagates a
+    // hard delete); no current path deletes an exercise but a future peer might.
+    `ALTER TABLE writers_room_exercises ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE writers_room_exercises ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
 
     // LoRA training runs (character LoRA training). MUST live here, not only
     // in init-db.sql — init-db.sql runs only on fresh `db.sh setup-native`

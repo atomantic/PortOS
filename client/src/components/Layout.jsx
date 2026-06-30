@@ -60,6 +60,7 @@ import {
   Shield,
   Lock,
   Wand2,
+  Rocket,
   Zap,
   Inbox,
   RefreshCw,
@@ -138,7 +139,6 @@ const navItems = [
       { to: '/brain/config', label: 'Config', icon: Settings },
       { to: '/brain/daily-log', label: 'Daily Log', icon: NotebookPen },
       { to: '/brain/digest', label: 'Digest', icon: Calendar },
-      { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
       { to: '/brain/feeds', label: 'Feeds', icon: Rss },
       { to: '/brain/graph', label: 'Graph', icon: Network },
       { to: '/brain/import', label: 'Import', icon: Upload },
@@ -146,9 +146,6 @@ const navItems = [
       { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/brain/links', label: 'Links', icon: Link2 },
       { to: '/brain/memory', label: 'Memory', icon: Database },
-      { to: '/messages/inbox', label: 'Messages', icon: Inbox },
-      { to: '/messages/config', label: 'Messages Config', icon: Settings },
-      { to: '/messages/sync', label: 'Messages Sync', icon: RefreshCw },
       { to: '/brain/notes', label: 'Notes', icon: FileText },
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
@@ -195,6 +192,17 @@ const navItems = [
     ],
   },
   {
+    label: 'Comms',
+    icon: MessagesSquare,
+    defaultTo: '/messages/inbox',
+    children: [
+      { to: '/messages/config', label: 'Config', icon: Settings },
+      { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
+      { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
+      { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
+    ],
+  },
+  {
     label: 'Create',
     icon: Sparkles,
     defaultTo: '/media',
@@ -206,9 +214,11 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/mood-boards', label: 'Mood Boards', icon: Palette },
       { to: '/music', label: 'Music', icon: Mic },
+      { to: '/media/music-video', label: 'Music Video', icon: Music },
       { to: '/rounds', label: 'Rounds', icon: Music },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
+      { to: '/start-story', label: 'Start a Story', icon: Rocket },
       { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen },
@@ -861,7 +871,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] w-full max-w-full overflow-x-hidden bg-port-bg flex">
+    <div className="h-screen h-[100dvh] print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"

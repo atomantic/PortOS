@@ -67,7 +67,15 @@ export const inboxLogRecordSchema = z.object({
   status: inboxStatusEnum,
   filed: filedSchema.optional(),
   correction: correctionSchema.optional(),
-  error: errorSchema.optional()
+  error: errorSchema.optional(),
+  // User-marked creative note (see captureInputSchema.creative). Drives the
+  // "Send creative notes to Catalog" batch action in the inbox.
+  creative: z.boolean().optional(),
+  // ISO timestamp stamped once this creative note's catalog ingest COMMITS
+  // (not on mere navigation). Drives the inbox's "already consumed" filter so a
+  // batch-sent note drops out of the "ready to become ingredients" banner and
+  // can't be accidentally re-sent. Absent ⇒ still re-sendable.
+  sentToCatalogAt: z.string().datetime().optional()
 });
 
 // People Record schema
@@ -171,7 +179,11 @@ export const reviewRecordSchema = z.object({
 export const captureInputSchema = z.object({
   text: z.string().min(1).max(10000),
   providerOverride: z.string().optional(),
-  modelOverride: z.string().optional()
+  modelOverride: z.string().optional(),
+  // Opt-in flag: the user marked this note as a creative idea at capture time
+  // (vs a todo/reference). Creative notes are later batch-sendable into the
+  // creative catalog as ingredients (see catalog brain-bridge ingest).
+  creative: z.boolean().optional()
 });
 
 // Resolve review input schema
@@ -193,6 +205,13 @@ export const fixInputSchema = z.object({
 export const updateInboxInputSchema = z.object({
   capturedText: z.string().min(1).max(10000)
 });
+
+// Batch mark a set of creative inbox notes as consumed by a catalog ingest that
+// just committed. Bounded to keep a malformed/runaway payload from stamping the
+// whole inbox in one call.
+export const markInboxSentToCatalogSchema = z.object({
+  ids: z.array(z.string().guid()).min(1).max(200)
+}).strict();
 
 // Create/Update People input schema
 export const peopleInputSchema = z.object({

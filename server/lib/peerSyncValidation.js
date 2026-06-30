@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -225,6 +225,29 @@ const writersRoomWorkPushSchema = z.object({
   ...peerSyncPushBase,
   ...draftBodyManifestField,
 }).strict();
+// Writers Room folders + exercises (#1645) push the bare record — body-less, no
+// asset manifest entries, no draft bodies, no bundled children. The base shape
+// alone suffices (`.strict()` rejects smuggled bundle/draftBody keys, same
+// posture as author/moodBoard). assetManifest is still required by the base but
+// the sender always ships `[]`.
+const writersRoomFolderPushSchema = z.object({
+  kind: z.literal('writersRoomFolder'),
+  ...peerSyncPushBase,
+}).strict();
+const writersRoomExercisePushSchema = z.object({
+  kind: z.literal('writersRoomExercise'),
+  ...peerSyncPushBase,
+}).strict();
+// Music Video projects (#1770) push the bare record (metadata + beat-aligned
+// scenes[]) — no bundled children/linked collection. #1772 bundles referenced
+// media (uploaded audio as a `music` entry, rendered scene clips as `video`
+// entries) via the base `assetManifest`, which already accepts both kinds; no
+// project-specific manifest field is needed (`.strict()` still rejects smuggled
+// bundle keys, same posture as creativeDirectorProject/writersRoomFolder).
+const musicVideoProjectPushSchema = z.object({
+  kind: z.literal('musicVideoProject'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -236,13 +259,16 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   creativeDirectorProjectPushSchema,
   moodBoardPushSchema,
   writersRoomWorkPushSchema,
+  writersRoomFolderPushSchema,
+  writersRoomExercisePushSchema,
+  musicVideoProjectPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 
@@ -265,6 +291,80 @@ export const peerLibraryManifestSchema = z.object({
   schemaVersion: z.number().int().min(0).max(1_000_000),
   manifestHash: hex64,
   assets: z.array(peerAssetManifestEntrySchema).max(100_000),
+}).strict();
+
+// --- Completed-agent CoS history federation (#1650) ----------------------
+// A full-sync peer advertises its date-bucketed completed-agent archives at
+// GET /api/peer-sync/cos-history-manifest; a receiver (only for peers it flags
+// fullSync) diffs the entries vs local disk and receiver-pulls the missing
+// archive files. Archives live at data/cos/agents/<date>/<agentId>/<file> —
+// nested paths, NOT flat basenames — so each entry carries the path segments,
+// validated here AND re-scrubbed in the service before any FS op (the
+// "parse-not-existsSync" guard). Exported so the service + byte route share one
+// source of truth for the allowlists.
+export const COS_ARCHIVE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// agentIds are `agent-<id>` — alphanumerics, `_` and `-` only. NO dots, so a
+// `..` traversal can't form, and NO slash. Capped well above any real id.
+export const COS_AGENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+// The exact set of files an archive holds (cosAgents.js). A fixed enum is the
+// tightest possible filename allowlist.
+export const COS_ARCHIVE_FILES = Object.freeze(['metadata.json', 'output.txt', 'prompt.txt']);
+const peerCosHistoryManifestEntrySchema = z.object({
+  date: z.string().regex(COS_ARCHIVE_DATE_RE),
+  agentId: z.string().regex(COS_AGENT_ID_RE),
+  file: z.enum(['metadata.json', 'output.txt', 'prompt.txt']),
+  sha256: hex64,
+}).strict();
+export const peerCosHistoryManifestSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  manifestHash: hex64,
+  entries: z.array(peerCosHistoryManifestEntrySchema).max(150_000),
+}).strict();
+
+// --- Live CoS task-list + claim-metadata federation (#1712) --------------
+// A full-sync peer advertises its live task backlog (both the user TASKS.md and
+// the internal COS-TASKS.md) at GET /api/peer-sync/cos-tasks; a receiver (only
+// for peers it flags fullSync) runs a claim-aware per-task LWW merge into its own
+// task files (see cosTaskStore.mergePeerTasks). Unlike the cos-history archives
+// this is NOT byte replication — both peers mutate the files live and each task
+// carries claim/lease metadata (#1563), so the merge unions by id and respects
+// `leaseExpiresAt` so a peer's fresh claim is never clobbered.
+//
+// Each entry mirrors a parsed task (taskParser.parseTasksMarkdown output) plus a
+// `taskType` discriminator telling the receiver which file it belongs in.
+// `metadata` is permissive (task metadata shapes vary — context, reviewers[],
+// screenshots[], claim fields) and is re-escaped/re-parsed safely on the
+// receiver's next file read, so we only bound the key length + entry count here.
+// `.strict()` on the entry rejects a smuggled extra top-level field; the metadata
+// record stays open.
+const TASK_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
+const TASK_PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const peerCosTaskEntrySchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  taskType: z.enum(['user', 'internal']),
+  status: z.enum(TASK_STATUSES),
+  priority: z.enum(TASK_PRIORITIES),
+  description: z.string().max(20_000),
+  approvalRequired: z.boolean().optional(),
+  autoApproved: z.boolean().optional(),
+  // `.default({})` so a sender that omits metadata yields `{}` rather than
+  // undefined — the receiver's markdown generator does Object.entries(metadata)
+  // and would otherwise throw, failing the whole file merge (the merge layer
+  // also defends, but normalizing at the boundary is cheaper + clearer).
+  //
+  // The newest-edit-wins stamp (`metadata.updatedAt`, #1714) rides here verbatim:
+  // it lives in metadata (not a top-level entry field) so it survives the TASKS.md
+  // markdown round-trip the receiver re-reads, and is already covered by the
+  // permissive value schema + the listHash's `JSON.stringify(metadata)`.
+  metadata: z.record(z.string().min(1).max(120), z.any()).optional().default({}),
+}).strict();
+export const peerCosTasksSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  listHash: hex64,
+  // A pathological backlog can't force unbounded merge work; the sender logs +
+  // truncates beyond its own cap (kept under the byte cap the receiver enforces
+  // on the response). 50k is far beyond any realistic single-user backlog.
+  tasks: z.array(peerCosTaskEntrySchema).max(50_000),
 }).strict();
 
 export const peerPullMetadataSchema = z.object({

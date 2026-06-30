@@ -17,7 +17,16 @@ vi.mock('../services/creativeDirector/completionHook.js', () => ({
   advanceAfterSceneSettled: vi.fn(async () => undefined),
 }));
 
+// Mock the auto-cast service so the route test doesn't pull the real
+// catalogDB/embeddings graph; the route's job here is to validate + dispatch.
+vi.mock('../services/creativeDirector/autoCast.js', () => ({
+  suggestCastForBrief: vi.fn(async () => [{ ingredient: { id: 'c1', type: 'character', name: 'Mara', payload: {} }, rrfScore: 0.5, searchMethod: 'hybrid' }]),
+  applyAutoCastToProject: vi.fn(async () => ({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] })),
+  toSuggestionView: (hit) => ({ ingredientId: hit.ingredient.id, name: hit.ingredient.name, type: hit.ingredient.type, score: hit.rrfScore, searchMethod: hit.searchMethod }),
+}));
+
 import * as cdService from '../services/creativeDirector/local.js';
+import * as autoCast from '../services/creativeDirector/autoCast.js';
 import * as hook from '../services/creativeDirector/completionHook.js';
 import creativeDirectorRoutes from './creativeDirector.js';
 
@@ -239,6 +248,49 @@ describe('creativeDirector routes', () => {
         .send({ status: 'failed' });
       expect(r.status).toBe(200);
       expect(hook.advanceAfterSceneSettled).toHaveBeenCalledWith('cd-1');
+    });
+  });
+
+  describe('POST /auto-cast/suggest (#1810)', () => {
+    it('400s when brief is missing', async () => {
+      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({});
+      expect(r.status).toBe(400);
+      expect(autoCast.suggestCastForBrief).not.toHaveBeenCalled();
+    });
+
+    it('returns slimmed suggestions for a brief (no full ingredient leak)', async () => {
+      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({ brief: 'rain noir' });
+      expect(r.status).toBe(200);
+      expect(autoCast.suggestCastForBrief).toHaveBeenCalledWith({ brief: 'rain noir', types: undefined, limit: undefined });
+      expect(r.body.suggestions).toEqual([
+        { ingredientId: 'c1', name: 'Mara', type: 'character', score: 0.5, searchMethod: 'hybrid' },
+      ]);
+      expect(r.body.suggestions[0]).not.toHaveProperty('payload');
+    });
+
+    it('is not shadowed by the /:id param route', async () => {
+      // /auto-cast/suggest must hit the literal handler, not POST /:id/auto-cast
+      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({ brief: 'x' });
+      expect(r.status).toBe(200);
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/auto-cast (#1810)', () => {
+    it('applies auto-cast to the project and returns the result', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ limit: 5 });
+      expect(r.status).toBe(200);
+      expect(autoCast.applyAutoCastToProject).toHaveBeenCalledWith('cd-1', { brief: undefined, types: undefined, limit: 5 });
+      expect(r.body.added).toEqual([{ ingredientId: 'p1' }]);
+    });
+
+    it('400s on an over-cap limit', async () => {
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ limit: 999 });
+      expect(r.status).toBe(400);
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
     });
   });
 });

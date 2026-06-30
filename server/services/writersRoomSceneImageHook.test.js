@@ -117,4 +117,37 @@ describe('writersRoomSceneImageHook', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(emitted).toHaveLength(0);
   });
+
+  it('does not let an older render (earlier queuedAt) overwrite a newer scene frame (#1791)', async () => {
+    // Newer render lands first, then an out-of-order older one completes.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', id: 'b', params: { writersRoom: tag() }, result: { filename: 'new.png' },
+      queuedAt: '2026-06-29T00:00:02.000Z',
+    });
+    await waitFor(() => persistSceneImage.mock.calls.length > 0);
+    mediaJobEvents.emit('completed', {
+      kind: 'image', id: 'a', params: { writersRoom: tag() }, result: { filename: 'old.png' },
+      queuedAt: '2026-06-29T00:00:01.000Z',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // The newer frame persisted; the older one was dropped (never re-persisted).
+    expect(persistSceneImage).toHaveBeenCalledTimes(1);
+    expect(persistSceneImage.mock.calls[0][2].filename).toBe('new.png');
+    expect(emitted.map((e) => e.image.filename)).toEqual(['new.png']);
+  });
+
+  it('newest-wins is per scene — an older render on a DIFFERENT scene still applies', async () => {
+    mediaJobEvents.emit('completed', {
+      kind: 'image', id: 'b', params: { writersRoom: tag({ sceneId: 's1' }) }, result: { filename: 'new.png' },
+      queuedAt: '2026-06-29T00:00:02.000Z',
+    });
+    await waitFor(() => persistSceneImage.mock.calls.length > 0);
+    // Older queuedAt but a different sceneId — must NOT be dropped.
+    mediaJobEvents.emit('completed', {
+      kind: 'image', id: 'a', params: { writersRoom: tag({ sceneId: 's2' }) }, result: { filename: 'other.png' },
+      queuedAt: '2026-06-29T00:00:01.000Z',
+    });
+    await waitFor(() => persistSceneImage.mock.calls.length > 1);
+    expect(persistSceneImage).toHaveBeenCalledTimes(2);
+  });
 });

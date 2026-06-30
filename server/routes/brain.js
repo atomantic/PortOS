@@ -21,6 +21,7 @@ import {
   resolveReviewInputSchema,
   fixInputSchema,
   updateInboxInputSchema,
+  markInboxSentToCatalogSchema,
   inboxQuerySchema,
   peopleInputSchema,
   projectInputSchema,
@@ -66,8 +67,8 @@ const router = Router();
  * Capture a thought, classify it, and store it
  */
 router.post('/capture', asyncHandler(async (req, res) => {
-  const { text, providerOverride, modelOverride } = validateRequest(captureInputSchema, req.body);
-  const result = await brainService.captureThought(text, providerOverride, modelOverride);
+  const { text, providerOverride, modelOverride, creative } = validateRequest(captureInputSchema, req.body);
+  const result = await brainService.captureThought(text, providerOverride, modelOverride, { creative });
   res.json(result);
 }));
 
@@ -136,6 +137,17 @@ router.post('/inbox/:id/done', asyncHandler(async (req, res) => {
     throw new ServerError('Inbox entry not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json(result);
+}));
+
+/**
+ * POST /api/brain/inbox/sent-to-catalog
+ * Mark a batch of creative inbox notes as consumed by a committed catalog ingest.
+ * Literal path — declared before the `/inbox/:id` routes so it isn't shadowed.
+ */
+router.post('/inbox/sent-to-catalog', asyncHandler(async (req, res) => {
+  const { ids } = validateRequest(markInboxSentToCatalogSchema, req.body);
+  const updated = await brainService.markInboxSentToCatalog(ids);
+  res.json({ updated, count: updated.length });
 }));
 
 /**

@@ -122,11 +122,31 @@ export async function selectModelForTask(task, provider, agent = {}) {
       light: provider.lightModel
     };
 
+    // The learning store also records thinking-level tier names (minimal/low/
+    // high/xhigh) that aren't in tierToModel — resolve those through
+    // getModelForLevel so a proven thinking-level suggestion is honored
+    // instead of silently falling through to the provider default.
+    //
+    // EXCEPT the local-preferred levels (minimal/low): getModelForLevel maps
+    // them to the cross-provider 'lmstudio' sentinel, but this path keeps the
+    // active provider as-is (the localPreferred flag isn't wired to switch
+    // providers). Handing resolveAgentProviderAndModel a sentinel a cloud
+    // provider can't run makes it fall back to the default model while still
+    // recording the local tier — polluting routing accuracy. So treat the
+    // sentinel as unresolvable here: such a suggestion falls through to the
+    // provider default with an accurate tier, exactly as before this change.
+    const LOCAL_SENTINEL_MODELS = new Set(['lmstudio']);
+    const resolveTierModel = (tier) => {
+      const model = tierToModel[tier] ?? getModelForLevel(tier, provider);
+      return model && !LOCAL_SENTINEL_MODELS.has(model) ? model : null;
+    };
+
     // If we have a specific tier suggestion, use it
-    if (suggested && tierToModel[suggested]) {
+    const suggestedModel = suggested ? resolveTierModel(suggested) : null;
+    if (suggestedModel) {
       console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})`);
       return {
-        model: tierToModel[suggested],
+        model: suggestedModel,
         tier: suggested,
         reason: 'learning-suggested',
         learningReason,

@@ -106,6 +106,7 @@ import videoGenRoutes from './routes/videoGen.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+import musicVideoRoutes from './routes/musicVideo.js';
 import moodBoardRoutes from './routes/moodBoard.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
@@ -118,6 +119,8 @@ import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
+import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
+import { initMusicVideoSceneVideoHook } from './services/musicVideoSceneVideoHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -164,6 +167,7 @@ import { getSettings as getInitSettings } from './services/settings.js';
 import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice } from './services/catalogUserTypes/store.js';
 import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
+import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
@@ -532,6 +536,7 @@ app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
@@ -674,6 +679,11 @@ const removeMarker = () => unlink(updateMarkerPath).catch(e => {
 // Clear stale updateInProgress if the server was killed mid-update
 clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
 
+// Capture the commit this process booted at, so /api/update/status can detect
+// a bare `git pull` that advanced on-disk HEAD without restarting (issue #1779).
+// Best-effort — a tarball/non-git install just yields no boot commit.
+captureBootCommit().catch(err => console.error(`❌ Boot commit capture failed: ${err.message}`));
+
 // Start periodic update checker (checks GitHub releases every 30 min)
 startUpdateScheduler();
 
@@ -796,6 +806,16 @@ ensureSelf()
     // onto its analysis snapshot + work collection on completion, even if the
     // editor unmounted mid-render (#1363). Also depends on the queue being loaded.
     initWritersRoomSceneImageHook();
+    // Music Video scene-image hook — durably files a queued reference-frame
+    // render onto its project scene's `referenceImageId` on completion, even if
+    // the director board unmounted mid-render (#1760 Phase 1b). Also depends on
+    // the queue being loaded.
+    initMusicVideoSceneImageHook();
+    // Music Video scene-video hook — durably files a queued i2v scene clip onto
+    // its project scene's `videoHistoryId` on completion, even if the director
+    // board unmounted mid-render (#1760 Phase 1). Also depends on the queue
+    // being loaded.
+    initMusicVideoSceneVideoHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.

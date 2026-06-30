@@ -63,6 +63,37 @@ async function saveAgentIndex() {
   });
 }
 
+/**
+ * Merge a batch of {agentId, date} pairs into the agent index. Used by the
+ * peer-sync CoS-history receiver (#1650): after pulling a peer's completed-agent
+ * archives onto local disk, the date-bucket index must learn the new agentIds so
+ * the history UI lists them. Idempotent union — only valid YYYY-MM-DD-bucketed
+ * pairs are accepted. Returns the number of NEW entries added.
+ *
+ * A pre-existing agentId is treated as already-owned and is NEVER overwritten,
+ * even when the incoming `date` differs: agent ids are generated independently
+ * per instance, so an id collision (or a restored local archive) must not be able
+ * to repoint a local agent's bucket at a peer's date — that would make
+ * `getAgent()` read the wrong (or non-existent) directory and hide the local
+ * agent's own history. First write wins; the local entry is authoritative.
+ */
+export async function addAgentArchivesToIndex(pairs) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return 0;
+  const idx = await loadAgentIndex();
+  let added = 0;
+  for (const pair of pairs) {
+    const agentId = pair?.agentId;
+    const date = pair?.date;
+    if (typeof agentId !== 'string' || !agentId) continue;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (idx.has(agentId)) continue; // already owned — never overwrite (id is authoritative)
+    idx.set(agentId, date);
+    added += 1;
+  }
+  if (added > 0) await saveAgentIndex();
+  return added;
+}
+
 // Resolve the correct directory for an agent (running = flat, completed = date bucket)
 function getAgentDir(agentId, dateString) {
   if (dateString) return join(AGENTS_DIR, dateString, agentId);
@@ -292,7 +323,10 @@ export async function completeAgent(agentId, result = {}) {
     }
 
     await saveState(state);
-    cosEvents.emit('agent:completed', state.agents[agentId]);
+    // `agent:completed` is intentionally emitted later, after the domain-usage
+    // ledger is updated (see the recordDomainUsage block below, #1683). Do NOT
+    // move it back here. `agent:updated` carries no scheduling side effect, so it
+    // stays inside the lock.
     cosEvents.emit('agent:updated', state.agents[agentId]);
 
     // Determine date bucket from completedAt
@@ -335,9 +369,21 @@ export async function completeAgent(agentId, result = {}) {
   // tasks) — the same set the CoS auto-run gate withholds when over budget —
   // toward the domain's actions/minutes ledger. Recorded outside the state lock
   // (separate ledger file + write tail) so it never serializes against state.json.
+  //
+  // This MUST land before the `agent:completed` emit below: that event's handler
+  // schedules `dequeueNextTask()`, whose daily action-budget gate reads this
+  // ledger. Recording first ensures the gate counts the just-finished action, so
+  // a perpetual drain can't admit one spawn past `maxActionsPerDay` at the
+  // boundary (#1683).
   if (completed?.metadata?.taskType && completed.metadata.taskType !== 'user') {
     await recordDomainUsage('cos', { actions: 1, ms: Number(result.duration) || 0 })
       .catch(err => console.error(`❌ Failed to record CoS budget usage for ${agentId}: ${err.message}`));
+  }
+
+  // Emit now that the ledger reflects this action (#1683). Fires for every
+  // completed agent, matching prior behavior — only the timing moved.
+  if (completed) {
+    cosEvents.emit('agent:completed', completed);
   }
 
   return completed;

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSyn
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { runMigrations } from './run-migrations.js';
+import { runMigrations, listPendingMigrations } from './run-migrations.js';
 
 describe('runMigrations corrupt applied-list recovery', () => {
   let rootDir;
@@ -107,5 +107,62 @@ export const md5 = (s) => s;
 
     expect(ran).toBe(1); // only 001-fixture.js ran
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+  });
+});
+
+describe('listPendingMigrations', () => {
+  let rootDir;
+  let dataDir;
+  let migrationsDir;
+  let appliedFile;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'list-pending-'));
+    dataDir = join(rootDir, 'data');
+    migrationsDir = join(rootDir, 'migrations');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(migrationsDir, { recursive: true });
+    appliedFile = join(dataDir, 'migrations.applied.json');
+    // Migration content is irrelevant — listPendingMigrations never imports them.
+    writeFileSync(join(migrationsDir, '001-a.js'), 'export default { async up() {} };');
+    writeFileSync(join(migrationsDir, '002-b.js'), 'export default { async up() {} };');
+    writeFileSync(join(migrationsDir, '003-c.js'), 'export default { async up() {} };');
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it('returns all migrations as pending when the applied-list is missing', async () => {
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['001-a.js', '002-b.js', '003-c.js']);
+  });
+
+  it('returns only the migrations not in the applied-list, in sorted order', async () => {
+    writeFileSync(appliedFile, JSON.stringify(['001-a.js']) + '\n');
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['002-b.js', '003-c.js']);
+  });
+
+  it('returns empty when every migration is applied', async () => {
+    writeFileSync(appliedFile, JSON.stringify(['001-a.js', '002-b.js', '003-c.js']) + '\n');
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual([]);
+  });
+
+  it('excludes *.test.js and `_`-prefixed helper files', async () => {
+    writeFileSync(join(migrationsDir, '001-a.test.js'), '// test');
+    writeFileSync(join(migrationsDir, '_lib.js'), 'export const x = 1;');
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['001-a.js', '002-b.js', '003-c.js']);
+  });
+
+  it('treats a corrupt applied-list as empty WITHOUT mutating it (read-only)', async () => {
+    writeFileSync(appliedFile, '{ not valid json');
+    const pending = await listPendingMigrations({ rootDir, migrationsDir });
+    expect(pending).toEqual(['001-a.js', '002-b.js', '003-c.js']);
+    // Read-only: the corrupt file must NOT be renamed aside.
+    expect(readdirSync(dataDir).some(f => f.includes('corrupt'))).toBe(false);
+    expect(existsSync(appliedFile)).toBe(true);
   });
 });

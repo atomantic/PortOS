@@ -5,9 +5,11 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
+import { useThemeContext } from '../components/ThemeContext';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
+import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 20;
@@ -26,6 +28,10 @@ const QUICK_COMMANDS = [
   { label: 'git pull', command: 'git pull --rebase --autostash' },
   { label: 'npm test', command: 'npm test' },
   { label: 'npm run dev', command: 'npm run dev' },
+  // Claude Code slash-command shortcuts — typed + submitted into an interactive
+  // `claude` session. The flags are double-dash (`--`); keep them verbatim.
+  { label: '/do:next', command: '/do:next --issues --self --review-with=claude,codex --merge' },
+  { label: '/remote-control', command: '/remote-control' },
 ];
 
 // Hot buttons for arrow / Enter entry — handy on touch devices and for driving TUI
@@ -42,13 +48,24 @@ const NAV_KEYS = [
   { label: 'Enter', Icon: CornerDownLeft, seq: '\r' },
 ];
 
-// Read a CSS custom property as hex (e.g., '--port-bg' → '#0f0f0f')
-const getThemeHex = (varName) => {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
-  if (!raw) return '#000000';
-  const parts = raw.split(' ').map(Number);
-  if (parts.length !== 3) return '#000000';
-  return '#' + parts.map(n => n.toString(16).padStart(2, '0')).join('');
+// Read the active theme's colors off the document and assemble the xterm palette.
+// The day/night mode comes from the `data-port-theme-mode` attribute applyTheme()
+// stamps on <html>, so this stays correct without threading React state in.
+// Background/foreground prefer the dedicated --port-terminal-* tokens (hand-tuned
+// per theme) and fall back to the page bg/text.
+const readTerminalTheme = () => {
+  const root = document.documentElement;
+  const mode = root.dataset.portThemeMode === 'day' ? 'day' : 'night';
+  const css = (varName) => getComputedStyle(root).getPropertyValue(varName).trim();
+  return buildTerminalTheme({
+    bg: parseCssColorToHex(css('--port-terminal-bg') || css('--port-bg'), '#070707'),
+    fg: parseCssColorToHex(css('--port-terminal-text') || css('--port-text'), '#e5e5e5'),
+    accent: parseCssColorToHex(css('--port-accent')),
+    card: parseCssColorToHex(css('--port-card')),
+    error: parseCssColorToHex(css('--port-error')),
+    success: parseCssColorToHex(css('--port-success')),
+    warning: parseCssColorToHex(css('--port-warning')),
+  }, mode);
 };
 
 const formatAge = (createdAt) => {
@@ -110,6 +127,8 @@ export default function Shell() {
   // Cleared by any user-initiated start/attach action.
   const userIdleRef = useRef(false);
   const socket = useSocket();
+  const { themeId, theme: activeTheme } = useThemeContext();
+  const themeMode = activeTheme?.mode ?? 'night';
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
@@ -202,42 +221,12 @@ export default function Shell() {
   useEffect(() => {
     if (!terminalRef.current || termInstanceRef.current) return;
 
-    const bg = getThemeHex('--port-bg');
-    const fg = getThemeHex('--port-text');
-    const accent = getThemeHex('--port-accent');
-    const card = getThemeHex('--port-card');
-    const error = getThemeHex('--port-error');
-    const success = getThemeHex('--port-success');
-    const warning = getThemeHex('--port-warning');
-
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
       fontSize: 14,
       fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
-      theme: {
-        background: bg,
-        foreground: fg,
-        cursor: accent,
-        cursorAccent: bg,
-        selectionBackground: accent + '40',
-        black: card,
-        red: error,
-        green: success,
-        yellow: warning,
-        blue: accent,
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: fg,
-        brightBlack: '#404040',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#fbbf24',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
-        brightWhite: '#ffffff'
-      },
+      theme: readTerminalTheme(),
       scrollback: 5000,
       allowProposedApi: true
     });
@@ -264,24 +253,61 @@ export default function Shell() {
     };
   }, []);
 
+  // Re-skin the live terminal when the user switches themes. The terminal is
+  // created once (above), so without this the xterm palette would stay frozen at
+  // whatever theme was active on mount — most visibly, a dark terminal stranded in
+  // a daytime theme. Depends on themeId (catches sibling day↔day / night↔night
+  // swaps that change accent/bg) and themeMode (catches the day/night palette flip).
+  useEffect(() => {
+    if (termInstanceRef.current) {
+      termInstanceRef.current.options.theme = readTerminalTheme();
+    }
+  }, [themeId, themeMode]);
+
+  // Refit the terminal to its container and tell the PTY about the new size.
+  const refitTerminal = useCallback(() => {
+    if (!fitAddonRef.current || !termInstanceRef.current) return;
+    fitAddonRef.current.fit();
+    if (socket && sessionIdRef.current) {
+      socket.emit('shell:resize', {
+        sessionId: sessionIdRef.current,
+        cols: termInstanceRef.current.cols,
+        rows: termInstanceRef.current.rows
+      });
+    }
+  }, [socket]);
+
   // Handle window resize
   useEffect(() => {
-    const handleResize = () => {
-      if (fitAddonRef.current && termInstanceRef.current) {
-        fitAddonRef.current.fit();
-        if (socket && sessionIdRef.current) {
-          socket.emit('shell:resize', {
-            sessionId: sessionIdRef.current,
-            cols: termInstanceRef.current.cols,
-            rows: termInstanceRef.current.rows
-          });
-        }
-      }
-    };
+    window.addEventListener('resize', refitTerminal);
+    return () => window.removeEventListener('resize', refitTerminal);
+  }, [refitTerminal]);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [socket]);
+  // Refit whenever the terminal *container* changes size — not just the window.
+  // The toolbars (session tabs, live-run banner, quick-commands bar) mount
+  // conditionally on `connected`, which shrinks the flex-1 terminal box after the
+  // one-shot mount fit() has already run. Without re-fitting, xterm keeps its
+  // taller row count and overflows below the fold, hiding the prompt and breaking
+  // scrollback. A ResizeObserver catches every such reflow (the user's "resize the
+  // window and it appears" glitch). rAF-guarded so fit()'s own DOM mutation can't
+  // re-enter the observer in a tight loop.
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let frame = null;
+    const observer = new ResizeObserver(() => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        refitTerminal();
+      });
+    });
+    observer.observe(el);
+    return () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [refitTerminal]);
 
   // Handle terminal input
   useEffect(() => {
@@ -329,7 +355,14 @@ export default function Shell() {
     setPendingAttach('new');
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear(): the xterm instance is reused across every session,
+      // and a full-screen TUI (a watched agent-tui claude/codex run) leaves DEC
+      // private modes ON — mouse-motion tracking, focus reporting, bracketed
+      // paste, alt-screen. clear() only wipes the viewport, so those modes would
+      // persist into this fresh shell and make xterm inject escape-sequence
+      // reports (mouse/focus events) as INPUT, echoing as accumulating garbage
+      // at the prompt. reset() restores the terminal to a clean initial state.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mStarting shell session...\x1b[0m');
     }
     const opts = initialOptsRef.current || {};
@@ -346,7 +379,10 @@ export default function Shell() {
     setPendingAttach(sessionId);
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear() — drop any DEC private modes (mouse/focus tracking,
+      // alt-screen) the previously-viewed session left active so they can't
+      // bleed into this one as injected escape-sequence input. See startSession.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mAttaching to session...\x1b[0m');
     }
     // claim:true → server refuses to displace a different socket. Used by auto-pick
@@ -536,7 +572,12 @@ export default function Shell() {
       cancelPendingAttach();
       activateSession(sid);
       if (termInstanceRef.current) {
-        termInstanceRef.current.clear();
+        // reset() not clear(): wipe modes/parser state from the prior session
+        // before repainting this one's buffer, so a previously-viewed full-screen
+        // TUI's lingering mouse/focus tracking can't inject garbage here. The
+        // freshly-painted bufferedOutput re-establishes whatever modes THIS
+        // session legitimately uses. See startSession for the full rationale.
+        termInstanceRef.current.reset();
         if (bufferedOutput) {
           termInstanceRef.current.write(bufferedOutput);
         }

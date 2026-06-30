@@ -20,6 +20,56 @@ const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
 
 const execFileAsync = promisify(execFile);
 
+// Tool-use (function-calling) capable model families. Inlined here because the
+// aiToolkit is self-contained (no imports out to server/lib). MIRROR of
+// TOOL_USE_RE in server/lib/localModelHeuristics.js and isToolUseModel in
+// client/src/utils/providers.js — keep all three in lockstep.
+const TOOL_USE_RE = new RegExp([
+  'qwen',
+  'llama-?3\\.[1-9]', 'llama-?4',
+  'mistral', 'mixtral', 'ministral', 'codestral', 'devstral', 'magistral',
+  'command-?r', 'command-?a',
+  'firefunction', 'functionary', 'watt-tool', 'hermes',
+  'glm-?4',
+  'granite-?3',
+  'gpt-oss',
+  'nemotron',
+  'smollm2',
+  'deepseek-v3', 'deepseek-r1',
+].join('|'), 'i');
+
+/**
+ * A `claude` CLI/TUI provider is "Ollama-backed" — the Claude Ollama
+ * pattern — when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL
+ * points at an Ollama daemon. Such a provider runs the full Claude Code harness
+ * but generates tokens from a local model, so its model list must come from
+ * Ollama (filtered to tool-use-capable models) rather than the static Anthropic list.
+ */
+function isOllamaBackedProvider(provider) {
+  if (provider?.ollamaBacked === true) return true;
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || '');
+  return /:11434\b/.test(base) || /ollama/i.test(base);
+}
+
+/** Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`). */
+function ollamaBaseFromProvider(provider) {
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
+  return base.replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+
+/**
+ * Whether an Ollama model supports tool use. Prefers the authoritative `tools`
+ * capability from /api/show (a non-empty capabilities array without `tools` is
+ * an explicit negative); falls back to the id heuristic when capabilities are
+ * unavailable (daemon hiccup / older Ollama).
+ */
+function ollamaModelSupportsTools(id, capabilities) {
+  if (Array.isArray(capabilities) && capabilities.length > 0) {
+    return capabilities.some((c) => String(c).toLowerCase() === 'tools');
+  }
+  return TOOL_USE_RE.test(String(id || ''));
+}
+
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
@@ -324,6 +374,9 @@ export function createProviderService(config = {}) {
         contextWindow: providerData.contextWindow || null,
         timeout: providerData.timeout || 300000,
         enabled: providerData.enabled !== false,
+        // Claude Ollama marker — preserve so adopting the sample via POST drives
+        // ollama-backed model refresh (see isOllamaBackedProvider).
+        ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],
@@ -386,25 +439,58 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'cli' || provider.type === 'tui') {
+        // Resolve the command on PATH. Windows has no `which` — it ships `where`
+        // instead — so a `which` lookup there always fails and falsely reports the
+        // command "not found in PATH" even when it resolves fine from a shell.
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
-        const { stdout } = await execFileAsync('which', [provider.command])
+        const lookup = process.platform === 'win32' ? 'where' : 'which';
+        const { stdout } = await execFileAsync(lookup, [provider.command])
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
-        if (!stdout.trim()) {
+        // `where` lists every match (one per line); `which` prints one. Take the
+        // first non-empty line as the resolved absolute path.
+        const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+
+        if (!commandPath) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
+        // Track whether the resolved path could actually be spawned. A bare PATH
+        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims,
+        // which execFile (shell:false) — and the agent runner, which also spawns
+        // shell:false — cannot launch. Without this, a non-spawnable shim falls
+        // through to `version: 'available'` and the Test button reports a provider
+        // the runner can never actually invoke as usable.
+        let everSpawned = false;
         const tryVersion = async (flag) => {
-          const out = await execFileAsync(provider.command, [flag]).catch(() => null);
-          return out?.stdout?.trim() || null;
+          // Invoke the resolved path so Windows runs the exact `.exe` we found —
+          // execFile won't re-apply PATHEXT to a bare command name.
+          try {
+            const out = await execFileAsync(commandPath, [flag]);
+            everSpawned = true;
+            return out?.stdout?.trim() || null;
+          } catch (err) {
+            // A numeric `code` is a non-zero EXIT — the process DID run (it just
+            // doesn't support this flag), so the path is spawnable. A string code
+            // (ENOENT/EACCES) or a spawn error means it could not be launched.
+            if (typeof err?.code === 'number') everSpawned = true;
+            return null;
+          }
         };
-        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v')) || 'available';
+        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v'));
+
+        if (!everSpawned) {
+          return {
+            success: false,
+            error: `Resolved '${provider.command}' to ${commandPath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+          };
+        }
 
         return {
           success: true,
-          path: stdout.trim(),
-          version: versionOut
+          path: commandPath,
+          version: versionOut || 'available'
         };
       }
 
@@ -445,6 +531,11 @@ export function createProviderService(config = {}) {
           models = await this._refreshAPIProviderModels(provider);
         } else if (provider.type === 'cli') {
           models = await this._refreshCLIProviderModels(provider);
+        } else if (provider.type === 'tui' && isOllamaBackedProvider(provider)) {
+          // TUI providers normally don't refresh (their model is fixed by the
+          // CLI/config), but the Claude-Ollama TUI variant still needs its
+          // tool-use-capable Ollama model list pulled live, same as the CLI one.
+          models = await this._fetchOllamaToolCapableModels(provider);
         }
       } catch (error) {
         console.error(`Failed to refresh models for ${provider.name}:`, error.message);
@@ -507,6 +598,14 @@ export function createProviderService(config = {}) {
     async _refreshCLIProviderModels(provider) {
       const providerName = provider.name.toLowerCase();
 
+      // Claude Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
+      // installed Ollama models (filtered to tool-use-capable ones — the agent
+      // harness depends on reliable tool-calling) instead of the static Anthropic
+      // list. Checked BEFORE the generic claude branch below.
+      if (isOllamaBackedProvider(provider)) {
+        return await this._fetchOllamaToolCapableModels(provider);
+      }
+
       if (providerName.includes('claude') || provider.command === 'claude') {
         return await this._fetchAnthropicModels(provider);
       }
@@ -520,6 +619,33 @@ export function createProviderService(config = {}) {
       }
 
       throw new Error('Model refresh not supported for this CLI provider');
+    },
+
+    async _fetchOllamaToolCapableModels(provider) {
+      const base = ollamaBaseFromProvider(provider);
+      const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (!res?.ok) {
+        throw new Error(`Ollama unreachable at ${base} (HTTP ${res?.status || 'error'})`);
+      }
+      const data = await res.json().catch(() => null);
+      const names = (data?.models || []).map(m => m.name || m.model).filter(Boolean);
+
+      // Query /api/show per model for the authoritative `tools` capability; fall
+      // back to the id heuristic when the daemon doesn't answer. Filter to
+      // tool-use-capable models only — a Claude harness on a non-tool model
+      // "runs" but silently fails to edit files.
+      const checked = await Promise.all(names.map(async (name) => {
+        const showRes = await fetch(`${base}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name, name }),
+          signal: AbortSignal.timeout(8000)
+        }).catch(() => null);
+        const showData = showRes?.ok ? await showRes.json().catch(() => null) : null;
+        const capabilities = Array.isArray(showData?.capabilities) ? showData.capabilities : null;
+        return ollamaModelSupportsTools(name, capabilities) ? name : null;
+      }));
+      return checked.filter(Boolean);
     },
 
     async _fetchAnthropicModels(_provider) {

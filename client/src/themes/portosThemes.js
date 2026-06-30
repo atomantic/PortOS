@@ -113,6 +113,11 @@ export const THEMES = {
       '--port-on-accent': '255 255 255',
       ...baseStatusColors,
       '--port-success': '22 163 74',
+      // Darken warning to amber-700 (+ white on-warning) like the other day themes —
+      // the base bright amber (#f59e0b) washes out as foreground on the light bg,
+      // most visibly as ANSI yellow in the shell terminal, which tracks --port-warning.
+      '--port-warning': '180 83 9',
+      '--port-on-warning': '255 255 255',
       '--port-error': '220 38 38',
     },
     tokens: {

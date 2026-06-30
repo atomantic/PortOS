@@ -20,6 +20,7 @@ import { REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
+import { mergeTaskLists } from './cosTaskMerge.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -32,6 +33,61 @@ export const PRIORITY_VALUES = {
   'MEDIUM': 2,
   'LOW': 1
 };
+
+const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
+
+// Legacy fields an `updateTask` patch may carry directly (vs nested under
+// `metadata`); they're normalized into `metadata` on write. Listed once so the
+// content-edit detector and the normalizer below can't drift apart.
+const LEGACY_DIRECT_FIELDS = ['context', 'model', 'provider', 'app'];
+
+// Equality for metadata values across a fresh markdown re-parse: primitives by
+// ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
+// sides are independent parses with different references but equal content.
+const metaValueEqual = (a, b) => {
+  if (a === b) return true;
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return false;
+};
+
+/**
+ * Does an `updateTask` patch change a task's EDITABLE CONTENT (vs only its
+ * claim/lease metadata)? Used to decide whether to bump the `updatedAt` LWW stamp
+ * (#1714). A claim-only write — most importantly the periodic lease-renewal
+ * heartbeat — must NOT bump the stamp: a heartbeat is not a content edit, and
+ * letting it advance `updatedAt` would make a lease-renewing peer spuriously win
+ * same-status content ties over the other peer's genuine edit.
+ *
+ * Crucially, the heartbeat does NOT pass a claim-only patch — `cos.js`
+ * `processOrphanedTasks` spreads the WHOLE existing metadata plus the fresh lease
+ * (`{ ...task.metadata, ...renewal }`). So presence of a non-claim key is not
+ * enough to call it an edit; we must compare VALUES against the task's current
+ * metadata and treat a key as content only when it actually changed. The edit
+ * stamp itself is never content. Status/priority/description/approval changes and
+ * legacy direct fields are always edits when present (callers only pass those
+ * with intent).
+ *
+ * @param {object} updates           the updateTask patch
+ * @param {object} existingMetadata  the task's current persisted metadata
+ */
+function isContentEdit(updates, existingMetadata = {}) {
+  if (!updates || typeof updates !== 'object') return false;
+  if (updates.status !== undefined) return true;
+  if (updates.description !== undefined) return true;
+  if (updates.priority !== undefined) return true;
+  if (updates.approvalRequired !== undefined || updates.autoApproved !== undefined) return true;
+  if (LEGACY_DIRECT_FIELDS.some(f => updates[f] !== undefined)) return true;
+  if (updates.metadata && typeof updates.metadata === 'object') {
+    const existing = (existingMetadata && typeof existingMetadata === 'object') ? existingMetadata : {};
+    for (const [key, value] of Object.entries(updates.metadata)) {
+      if (CLAIM_KEY_SET.has(key) || key === 'updatedAt') continue; // claim keys + the stamp never count
+      if (!metaValueEqual(value, existing[key])) return true;      // a non-claim key counts only if it CHANGED
+    }
+  }
+  return false;
+}
 
 /**
  * Get user tasks from TASKS.md
@@ -113,7 +169,7 @@ export async function getTaskById(taskId) {
  * submitted task starts instantly instead of waiting for the next evaluation
  * interval.
  */
-export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null } = {}) {
+export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -196,6 +252,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
     if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
+    // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
+    // at creation so a freshly-added task always carries a stamp; the merge treats
+    // an absent stamp as oldest, so this also keeps a stamped task from losing a
+    // same-status tie to a legacy peer's un-stamped copy. `now` is injectable so
+    // the markdown output stays deterministic under test. Raw tasks (pre-built by
+    // the caller) keep whatever stamp they arrive with.
+    metadata.updatedAt = new Date(now).toISOString();
 
     // Create the new task
     newTask = {
@@ -235,7 +298,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
 /**
  * Update an existing task
  */
-export async function updateTask(taskId, updates, taskType = 'user') {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -262,10 +325,9 @@ export async function updateTask(taskId, updates, taskType = 'user') {
     ...(updates.metadata || {})
   };
   // Handle legacy fields that may be passed directly in updates
-  if (updates.context !== undefined) updatedMetadata.context = updates.context || undefined;
-  if (updates.model !== undefined) updatedMetadata.model = updates.model || undefined;
-  if (updates.provider !== undefined) updatedMetadata.provider = updates.provider || undefined;
-  if (updates.app !== undefined) updatedMetadata.app = updates.app || undefined;
+  for (const f of LEGACY_DIRECT_FIELDS) {
+    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] || undefined;
+  }
 
   // Clear blocked/failure metadata when transitioning out of blocked status
   if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
@@ -285,6 +347,15 @@ export async function updateTask(taskId, updates, taskType = 'user') {
     for (const key of CLAIM_METADATA_KEYS) {
       delete updatedMetadata[key];
     }
+  }
+
+  // Bump the content-edit stamp (#1714) on a genuine content change so the peer's
+  // claim-aware merge can resolve a same-status edit by newest-edit-wins. Compared
+  // against the task's CURRENT metadata so a lease-renewal heartbeat that re-includes
+  // unchanged metadata doesn't read as an edit (see isContentEdit). `now` is
+  // injectable for deterministic test output.
+  if (isContentEdit(updates, tasks[taskIndex].metadata)) {
+    updatedMetadata.updatedAt = new Date(now).toISOString();
   }
 
   // Clean undefined values from metadata
@@ -313,6 +384,51 @@ export async function updateTask(taskId, updates, taskType = 'user') {
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'updated', task: updatedTask });
   return updatedTask;
+  });
+}
+
+/**
+ * Merge a full-sync peer's task list into one local task file (#1712).
+ *
+ * The receiver side of CoS task federation: `syncCosTasksFromPeer` fetches the
+ * peer's live backlog and hands the tasks for ONE file (user vs internal) here.
+ * The read-merge-write runs under `withStateLock` so it serializes against the
+ * spawn path's claim writes (agentLifecycle → updateTask, also lock-held) — the
+ * merge always sees, and merges against, the freshest persisted claim metadata.
+ *
+ * Idempotent + write-skipping: the claim-aware merge (cosTaskMerge) is pure and
+ * deterministic, so we compare the GENERATED markdown before/after (not the raw
+ * file bytes — pre-existing formatting drift shouldn't force a write) and only
+ * persist + emit `tasks:changed` when the merge actually changed something.
+ *
+ * @param {'user'|'internal'} taskType  which file to merge into
+ * @param {Array} remoteTasks           peer tasks for this file (wire-validated)
+ * @param {{ now?: number }} [opts]     injectable clock for deterministic tests
+ * @returns {Promise<{ changed: boolean, count?: number }>}
+ */
+export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
+  return withStateLock(async () => {
+    const state = await loadState();
+    const filePath = taskType === 'user'
+      ? join(ROOT_DIR, state.config.userTasksFile)
+      : join(ROOT_DIR, state.config.cosTasksFile);
+
+    const localTasks = existsSync(filePath)
+      ? parseTasksMarkdown(await readFile(filePath, 'utf-8'))
+      : [];
+
+    const merged = mergeTaskLists(localTasks, remoteTasks, { now });
+
+    const includeApprovalFlags = taskType === 'internal';
+    const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
+    const mergedMarkdown = generateTasksMarkdown(merged, includeApprovalFlags);
+    // Nothing the peer sent changed our state — skip the write (and the event
+    // that would wake the scheduler) so a steady-state sweep is a pure no-op.
+    if (mergedMarkdown === localMarkdown) return { changed: false };
+
+    await writeFile(filePath, mergedMarkdown);
+    cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
+    return { changed: true, count: merged.length };
   });
 }
 
@@ -401,7 +517,7 @@ export async function reorderTasks(taskIds) {
  * fires `dequeueNextTask` off that so the newly approved task can spawn
  * immediately.
  */
-export async function approveTask(taskId) {
+export async function approveTask(taskId, { now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = join(ROOT_DIR, state.config.cosTasksFile);
@@ -422,11 +538,15 @@ export async function approveTask(taskId) {
     return { error: 'Task does not require approval' };
   }
 
-  // Update approval flags
+  // Update approval flags. Approval is editable content (the merge's
+  // contentSignature counts the approval flags), so bump the `updatedAt` LWW
+  // stamp (#1714) too — otherwise an approval on one peer would lose a same-status
+  // tie to a stale edit on the other instead of winning as the newest edit.
   tasks[taskIndex] = {
     ...tasks[taskIndex],
     approvalRequired: false,
-    autoApproved: true
+    autoApproved: true,
+    metadata: { ...tasks[taskIndex].metadata, updatedAt: new Date(now).toISOString() }
   };
 
   // Write back to file

@@ -124,7 +124,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // last-writer-wins the loss back onto the newer peer. Bump makes the older peer
   // reject the ahead-version series transfer instead. Per-category gate → only
   // series sync pauses with old peers.
-  pipelineSeries: 8,
+  // v9 = `series.severityWeights` + `series.blockingSeverities` added (#1616) —
+  // per-series overrides of the editorial health-score severity weights (default
+  // high:12/medium:5/low:1) and of which severities count as blocking for each
+  // autopilot gate (arc/beatContinuity/editorial). Both default to `{}` (no
+  // override → frozen defaults apply). Same silent-strip-then-LWW corruption as
+  // editorialCheckConfig: a ≤v8 peer that re-sanitizes a series through its
+  // severityWeights/blockingSeverities-unaware `sanitizeSeries` would drop the
+  // overrides and last-writer-wins the loss back onto the newer peer. Bump makes
+  // the older peer reject the ahead-version series transfer instead. Per-category
+  // gate → only series sync pauses with old peers.
+  pipelineSeries: 9,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
@@ -315,9 +325,41 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // work-shape change MUST bump this to 2 then. The work manifest (metadata +
   // decomposed draft-version metadata in drafts[]) is LWW-overwritten whole; the
   // file-primary `.md` draft prose bodies ride a separate body manifest (SHA256
-  // diff + receiver-pull), never round-tripped through the record. Folders +
-  // exercises are NOT federated yet (they lack soft-delete columns).
+  // diff + receiver-pull), never round-tripped through the record.
   writersRoomWorks: 1,
+  // v1 = Writers Room folders (PostgreSQL `writers_room_folders`) federated via
+  // the per-record peer-sync push pipeline (record kind `writersRoomFolder`,
+  // #1645 — follow-up to #1565). Same posture as `writersRoomWorks`: a brand-NEW
+  // synced record type with its own per-category gate, so a v1 sender pushing to
+  // a ≤v0 (pre-feature) receiver is sender-ahead on `writersRoomFolders` and gets
+  // a 412 (only that category pauses); a v1 receiver still accepts a ≤v0 sender.
+  // Folders are body-less (no file-primary `.md`, no asset manifest) and
+  // LWW-overwritten whole. The FIRST incompatible folder-shape change MUST bump
+  // this to 2. Federating folders requires the soft-delete tombstone columns
+  // (deleted/deleted_at) added in the same change — the LWW merge never
+  // propagates a hard delete.
+  writersRoomFolders: 1,
+  // v1 = Writers Room exercises (PostgreSQL `writers_room_exercises`) federated
+  // via the per-record peer-sync push pipeline (record kind `writersRoomExercise`,
+  // #1645). Body-less + LWW-overwritten whole, same per-category gate semantics as
+  // `writersRoomFolders`. Exercises predate federation and carry no
+  // `updatedAt`/`createdAt` — the wire sanitizer derives a stable LWW key from
+  // their existing `startedAt`/`finishedAt` (see sanitizeExerciseForSync). The
+  // FIRST incompatible exercise-shape change MUST bump this to 2.
+  writersRoomExercises: 1,
+  // v1 = Music Video projects (PostgreSQL `music_video_projects`) federated via
+  // the per-record peer-sync push pipeline (record kind `musicVideoProject`, sync
+  // category `musicVideoProjects`, #1770 — follow-up to #1760 Phase 1). Same
+  // posture as `creativeDirectorProjects`/`writersRoomFolders`: a brand-NEW synced
+  // record type with its own per-category gate — a v1 sender pushing to a ≤v0
+  // (pre-feature) receiver is sender-ahead on `musicVideoProjects` and gets a 412
+  // (only that category pauses); a v1 receiver still accepts a ≤v0 sender
+  // (pre-feature peers never push a `musicVideoProject`). The project body
+  // (metadata + beat-aligned scenes) is LWW-overwritten whole; referenced media
+  // (uploaded audio, scene images/rendered videos) is NOT bundled in this phase —
+  // it federates via its own channels / a follow-up. The FIRST incompatible
+  // project-shape change MUST bump this to 2.
+  musicVideoProjects: 1,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -332,6 +374,33 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // can't route (directoryForAssetKind returns null) — and does NOT require a
   // bump on its own.
   mediaLibrary: 1,
+  // v1 = completed-agent CoS history federation (#1650, part of epic #1561). NOT
+  // a record kind — it's the wire contract for the archive manifest a full-sync
+  // peer advertises at GET /api/peer-sync/cos-history-manifest. The receiver-pull
+  // sweep (syncCosHistoryFromPeer) reads the sender's advertised `schemaVersion`
+  // and GENTLY SKIPS (logs, no reject) a sender ahead of its local `cosHistory` —
+  // same posture as `mediaLibrary` above, because a history sweep is best-effort
+  // background convergence, not an authoritative record transfer. The archive
+  // BYTES (metadata.json / output.txt / prompt.txt) are version-agnostic; only
+  // the MANIFEST envelope shape is gated, so the FIRST incompatible
+  // manifest-shape change (new required entry field, segment semantics) MUST bump
+  // this to 2.
+  cosHistory: 1,
+  // v1 = live CoS task-list + claim-metadata federation (#1712, second half of
+  // #1650, part of epic #1561). NOT a record kind — it's the wire contract for
+  // the task payload a full-sync peer advertises at GET /api/peer-sync/cos-tasks.
+  // Unlike the immutable, append-only `cosHistory` archives (pure byte
+  // replication), the task files (data/COS-TASKS.md / data/TASKS.md) are mutated
+  // live by BOTH peers and carry `claimedBy`/`claimedAt`/`leaseExpiresAt` (#1563),
+  // so they ride a claim-aware per-task LWW merge (syncCosTasksFromPeer →
+  // cosTaskStore.mergePeerTasks), not the asset path. The receiver reads the
+  // sender's advertised `schemaVersion` and GENTLY SKIPS (logs, no reject) a
+  // sender ahead of its local `cosTasks` — same posture as `mediaLibrary` /
+  // `cosHistory`, because a task sweep is best-effort background convergence, not
+  // an authoritative record transfer. Only the payload envelope + task-entry
+  // shape is gated; the FIRST incompatible change (new required entry field, new
+  // claim semantics) MUST bump this to 2.
+  cosTasks: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -378,6 +447,9 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   creativeDirectorProject: Object.freeze(['creativeDirectorProjects']),
   moodBoard: Object.freeze(['moodBoards']),
   writersRoomWork: Object.freeze(['writersRoomWorks']),
+  writersRoomFolder: Object.freeze(['writersRoomFolders']),
+  writersRoomExercise: Object.freeze(['writersRoomExercises']),
+  musicVideoProject: Object.freeze(['musicVideoProjects']),
 });
 
 /**
@@ -392,12 +464,20 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   it and GENTLY SKIPS a sender ahead of its local version (see
  *   syncMediaLibraryFromPeer) — there is no push to gate, so it has no entry in
  *   RECORD_KIND_SCHEMA_CATEGORIES by design.
+ * - `cosHistory` (#1650): the completed-agent CoS history archive manifest a
+ *   full-sync peer advertises at GET /api/peer-sync/cos-history-manifest. Same
+ *   receiver-pull shape as `mediaLibrary` (see syncCosHistoryFromPeer) — no push
+ *   to gate, so no RECORD_KIND_SCHEMA_CATEGORIES entry.
+ * - `cosTasks` (#1712): the live CoS task-list + claim-metadata payload a
+ *   full-sync peer advertises at GET /api/peer-sync/cos-tasks. Receiver-pull +
+ *   claim-aware per-task merge (see syncCosTasksFromPeer) — no push to gate, so
+ *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

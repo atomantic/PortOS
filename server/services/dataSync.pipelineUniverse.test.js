@@ -1053,12 +1053,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
       issues: [],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 1, mediaCollections: 1 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 10, pipelineIssues: 1, mediaCollections: 1 } } });
     expect(result.applied).toBe(false);
     expect(result.blockedBySchema).toBeDefined();
     // The reported gap is scoped to the relevant category — NOT mis-attributed.
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'pipelineSeries', senderV: 9, receiverV: 8 },
+      { category: 'pipelineSeries', senderV: 10, receiverV: 9 },
     ]);
     expect(readSeriesState()).toEqual([]); // nothing written
   });
@@ -1107,11 +1107,32 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // manifest). Gated at applyIncomingPush via compareSchemaVersions /
       // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomWork.
       'writersRoomWorks',
+      // Writers Room folders + exercises (#1645) → per-record peer-push only (no
+      // 60s file-snapshot category; both are body-less). Gated at
+      // applyIncomingPush via compareSchemaVersions /
+      // RECORD_KIND_SCHEMA_CATEGORIES.writersRoomFolder / .writersRoomExercise.
+      'writersRoomFolders',
+      'writersRoomExercises',
+      // Music Video projects (#1770) → per-record peer-push only (no 60s
+      // file-snapshot category). Gated at applyIncomingPush via
+      // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject.
+      'musicVideoProjects',
       // Standalone media library (#1566) → its own receiver-pull endpoint
       // (GET /api/peer-sync/library-manifest), NOT the file-snapshot transfer.
       // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's
       // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
       'mediaLibrary',
+      // Completed-agent CoS history (#1650) → its own receiver-pull endpoint
+      // (GET /api/peer-sync/cos-history-manifest), NOT the file-snapshot transfer.
+      // Versioned for the manifest envelope and gated by syncCosHistoryFromPeer's
+      // gentle skip-if-ahead; declared non-record in NON_RECORD_SCHEMA_CATEGORIES.
+      'cosHistory',
+      // Live CoS task list + claim metadata (#1712) → its own receiver-pull
+      // endpoint (GET /api/peer-sync/cos-tasks) with a claim-aware per-task merge,
+      // NOT the file-snapshot transfer. Versioned for the payload envelope and
+      // gated by syncCosTasksFromPeer's gentle skip-if-ahead; declared non-record
+      // in NON_RECORD_SCHEMA_CATEGORIES.
+      'cosTasks',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

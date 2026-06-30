@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom';
 import { filterSelectableModels } from '../utils/providers';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
@@ -26,11 +26,13 @@ import {
   setStorySessionSync, reconcileStorySession, storyStepProgressSseUrl,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
-  getProviders,
+  getProviders, listCatalogIngredientsByIds,
 } from '../services/api';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import { BEAT_KIND_COLORS, getBeatKindColor } from '../lib/beatColors';
+import { getCatalogType, payloadSnippet } from '../lib/catalogTypes';
+import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 
 // Mirror Importer.jsx's commit picker — only these arc fields are sent on commit.
 const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
@@ -50,6 +52,54 @@ const pickArcFields = (arc) => {
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short story', novel: 'Novel', screenplay: 'Screenplay', 'comic-script': 'Comic script',
 };
+
+// Compose a starter-idea prefill from a set of catalog ingredients (the Catalog
+// "Remix into… → Story Builder" handoff). Ingredients are grouped by type, with
+// a header line per group (e.g. `Characters:`) and one bullet per ingredient
+// (`- {name}: {summary}`) where the summary comes from payloadSnippet — the
+// type's snippetFallbackKeys, so a character's `physicalDescription` is included.
+// The whole composed text is capped at 4000 chars to match the seedIdea field.
+// Pure — unit-tested in StoryBuilder.test.jsx; mirrors the server composer.
+const SEED_MAX_CHARS = 4000;
+const SEED_SUMMARY_CHARS = 120;
+
+// "character" → "Characters:" — prefer the catalog registry's canonical label
+// (so idea/scene/concept get proper plurals), naive-pluralizing a user-defined
+// type's id as a fallback. `resolveType` (the merged useCatalogTypes registry)
+// covers user-defined types; falls back to the built-in registry. Mirrors
+// `seedGroupHeading` in server storyBuilder.js.
+function seedGroupHeading(type, resolveType) {
+  const typeDef = (resolveType && resolveType(type)) || getCatalogType(type);
+  const base = typeDef?.label || (type ? `${type.charAt(0).toUpperCase()}${type.slice(1)}` : 'Other');
+  return base.endsWith('s') ? base : `${base}s`;
+}
+
+// `resolveType` is the merged catalog-type registry (useCatalogTypes().getType)
+// so a user-defined type's label + snippetFallbackKeys are honored; without it
+// the built-in six are used.
+export function composeSeedFromIngredients(ingredients, resolveType = null) {
+  const list = Array.isArray(ingredients) ? ingredients : [];
+  if (list.length === 0) return '';
+  // Preserve first-seen group order so the prefill reads in selection order.
+  const groups = new Map();
+  for (const ing of list) {
+    if (!ing) continue;
+    const type = (ing.type || 'other').trim() || 'other';
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(ing);
+  }
+  const lines = [];
+  for (const [type, members] of groups) {
+    lines.push(`${seedGroupHeading(type, resolveType)}:`);
+    for (const ing of members) {
+      const name = (ing.name || '').trim() || '(untitled)';
+      const summary = payloadSnippet(ing.payload, ing.type, SEED_SUMMARY_CHARS, resolveType);
+      lines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trim().slice(0, SEED_MAX_CHARS);
+}
 
 // Shared AI provider + model picker. The selection applies to EVERY Story
 // Builder operation (idea expand, aesthetic, arc, reader map, character refine,
@@ -95,20 +145,71 @@ function ProviderModelPicker({ value, onChange }) {
 
 function StoryBuilderIndex() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  // Merged catalog-type registry (system + user-defined) so the remix seed
+  // prefill honors a user-defined type's snippetFallbackKeys, not just the six.
+  // `loading` gates the prefill until the merged registry resolves (below).
+  const { getType, loading: typesLoading } = useCatalogTypes();
+  // The "Start a Story" onramp can deep-link here with a pre-chosen universe
+  // (?universeId=…); pass it through so the new session attaches to it instead
+  // of auto-creating a fresh universe. The create schema already accepts it.
+  const onrampUniverseId = searchParams.get('universeId') || undefined;
   const [sessions, setSessions] = useState([]);
   const [mode, setMode] = useState('seed');
   const [title, setTitle] = useState('');
   const [seedIdea, setSeedIdea] = useState('');
   const [creating, setCreating] = useState(false);
+  // Catalog "Remix into… → Story Builder" handoff. The ingredient ids arrive in
+  // the generic `location.state.remix.ingredientIds`; we hydrate them via the
+  // batch endpoint for the chip list + the seed prefill, and forward the ids on
+  // create so the server can attach them to the new session.
+  const [remixIds, setRemixIds] = useState([]);
+  const [remixIngredients, setRemixIngredients] = useState([]);
 
   useEffect(() => {
     listStorySessions({ silent: true }).then(setSessions).catch(() => setSessions([]));
   }, []);
 
+  // Consume the remix handoff once at mount, then clear the history state so a
+  // refresh doesn't re-seed (mirrors CatalogIngest's prefill-consume pattern).
+  useEffect(() => {
+    const ids = location.state?.remix?.ingredientIds;
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const cleanIds = ids.filter(Boolean).slice(0, 50);
+    if (cleanIds.length === 0) return;
+    setRemixIds(cleanIds);
+    listCatalogIngredientsByIds(cleanIds, { silent: true })
+      .then((res) => setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])))
+      .catch(() => {});
+    // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
+    navigate('.', { replace: true, state: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Compose the seed prefill once the ingredients are hydrated AND the catalog
+  // type registry has loaded — so a user-defined type's custom summary field is
+  // honored rather than dropped while useCatalogTypes() still has only its
+  // built-in fallback. Kept separate from the one-shot fetch above so it can
+  // re-run when the registry resolves. Prefill only if the user hasn't typed a
+  // seed — don't clobber (and the guard makes a second run idempotent).
+  useEffect(() => {
+    if (typesLoading || remixIngredients.length === 0) return;
+    setSeedIdea((prev) => (prev.trim() ? prev : composeSeedFromIngredients(remixIngredients, getType)));
+  }, [typesLoading, remixIngredients, getType]);
+
   const create = async () => {
     if (!title.trim()) { toast.error('Give your story a working title'); return; }
     setCreating(true);
-    const created = await createStorySession({ title: title.trim(), seedIdea: seedIdea.trim() }, { silent: true })
+    const created = await createStorySession(
+      {
+        title: title.trim(),
+        seedIdea: seedIdea.trim(),
+        universeId: onrampUniverseId,
+        ...(remixIds.length ? { catalogIngredientIds: remixIds } : {}),
+      },
+      { silent: true },
+    )
       .catch((err) => { toast.error(err?.message || 'Failed to create'); return null; });
     setCreating(false);
     if (created) navigate(`/story-builder/${created.id}/idea`);
@@ -140,6 +241,24 @@ function StoryBuilderIndex() {
 
         {mode === 'seed' ? (
           <div className="p-4 space-y-3">
+            {remixIngredients.length > 0 && (
+              <div className="rounded border border-port-accent/40 bg-port-accent/10 px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-port-accent mb-1.5">
+                  Seeding from {remixIngredients.length} ingredient{remixIngredients.length === 1 ? '' : 's'}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {remixIngredients.map((ing) => (
+                    <span
+                      key={ing.id}
+                      className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-200"
+                    >
+                      <Sparkles className="w-3 h-3 text-port-accent" aria-hidden="true" />
+                      {ing.name || '(untitled)'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div>
               <label htmlFor="stb-title" className="block text-sm text-gray-400 mb-1">Universe / story name</label>
               <input

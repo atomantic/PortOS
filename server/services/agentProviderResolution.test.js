@@ -46,7 +46,7 @@ describe('resolveAgentProviderAndModel', () => {
   });
 
   it('resolves the active provider + selected model on the happy path', async () => {
-    const provider = { id: 'p1', type: 'api', models: ['m-default'] };
+    const provider = { id: 'p1', type: 'cli', models: ['m-default'] };
     getActiveProvider.mockResolvedValue(provider);
     const r = await resolveAgentProviderAndModel(TASK);
     expect(r.ok).toBe(true);
@@ -56,7 +56,7 @@ describe('resolveAgentProviderAndModel', () => {
   });
 
   it('fails with providerId + status when unavailable and no fallback exists', async () => {
-    const provider = { id: 'p1', type: 'api' };
+    const provider = { id: 'p1', type: 'cli' };
     getActiveProvider.mockResolvedValue(provider);
     isProviderAvailable.mockReturnValue(false);
     getProviderStatus.mockReturnValue({ message: 'usage-limit', reason: 'limit' });
@@ -71,8 +71,8 @@ describe('resolveAgentProviderAndModel', () => {
   });
 
   it('switches to the fallback provider and pins its model when one is available', async () => {
-    const primary = { id: 'p1', type: 'api' };
-    const fallback = { id: 'p2', type: 'api', models: ['fb-model'] };
+    const primary = { id: 'p1', type: 'cli' };
+    const fallback = { id: 'p2', type: 'cli', models: ['fb-model'] };
     getActiveProvider.mockResolvedValue(primary);
     isProviderAvailable.mockReturnValue(false);
     getProviderStatus.mockReturnValue({ message: 'rate-limit', reason: 'rl' });
@@ -87,8 +87,8 @@ describe('resolveAgentProviderAndModel', () => {
   });
 
   it('honors a user-specified provider and clears any fallback pin', async () => {
-    const active = { id: 'p1', type: 'api' };
-    const chosen = { id: 'p-user', type: 'api', models: ['m-default'] };
+    const active = { id: 'p1', type: 'cli' };
+    const chosen = { id: 'p-user', type: 'cli', models: ['m-default'] };
     getActiveProvider.mockResolvedValue(active);
     getProviderById.mockResolvedValue(chosen);
 
@@ -105,8 +105,8 @@ describe('resolveAgentProviderAndModel', () => {
     // ever blocking the task (regression: the override used to run after the
     // active-provider availability check, so a pinned-but-healthy provider
     // still failed when the active one was down).
-    const active = { id: 'p-active', type: 'api' };
-    const chosen = { id: 'p-user', type: 'api', models: ['m-default'] };
+    const active = { id: 'p-active', type: 'cli' };
+    const chosen = { id: 'p-user', type: 'cli', models: ['m-default'] };
     getActiveProvider.mockResolvedValue(active);
     getProviderById.mockResolvedValue(chosen);
     isProviderAvailable.mockImplementation((id) => id === 'p-user'); // active down, pinned up
@@ -119,7 +119,7 @@ describe('resolveAgentProviderAndModel', () => {
   });
 
   it('honors a pinned provider even when no active provider is configured', async () => {
-    const chosen = { id: 'p-user', type: 'api', models: ['m-default'] };
+    const chosen = { id: 'p-user', type: 'cli', models: ['m-default'] };
     getActiveProvider.mockResolvedValue(null); // no active provider at all
     getProviderById.mockResolvedValue(chosen);
 
@@ -128,8 +128,37 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.provider).toBe(chosen);
   });
 
+  it('rejects an api-type provider (no file-writing harness) with a clear error', async () => {
+    // Ollama / LM Studio over HTTP return plain text and can't run file-writing
+    // agent tasks. Guard so they never reach the CLI spawn path.
+    const provider = { id: 'ollama', type: 'api', models: ['qwen2.5:7b'] };
+    getActiveProvider.mockResolvedValue(provider);
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('ollama');
+    expect(r.error).toContain('no file-writing harness');
+    // Guard fires before model selection — never spawns.
+    expect(selectModelForTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects an api-type provider even when reached via the fallback chain', async () => {
+    const primary = { id: 'p1', type: 'cli' };
+    const apiFallback = { id: 'lmstudio', type: 'api', models: ['m'] };
+    getActiveProvider.mockResolvedValue(primary);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'down', reason: 'x' });
+    getAllProviders.mockResolvedValue({ providers: [primary, apiFallback] });
+    getFallbackProvider.mockResolvedValue({ provider: apiFallback, model: 'm', source: 'provider' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('lmstudio');
+    expect(r.error).toContain('no file-writing harness');
+  });
+
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {
-    const provider = { id: 'p1', type: 'api', models: ['only-this'], heavyModel: 'heavy-x' };
+    const provider = { id: 'p1', type: 'cli', models: ['only-this'], heavyModel: 'heavy-x' };
     getActiveProvider.mockResolvedValue(provider);
     selectModelForTask.mockResolvedValue({ model: 'not-listed', tier: 'heavy', reason: 'heavy task' });
 

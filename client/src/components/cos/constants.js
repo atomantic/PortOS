@@ -87,9 +87,11 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
 ];
 
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
-// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'owner' = only claim issues
-// the repo owner filed (matches /claim --issues); 'any' = claim any open issue.
+// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues
+// YOU filed (the slashdo /do:next --self security boundary; the default);
+// 'owner' = only claim issues the repo owner filed; 'any' = claim any open issue.
 export const ISSUE_AUTHOR_FILTER_OPTIONS = [
+  { value: 'self', label: 'Filed by me only', description: 'Only claim open issues you filed (the /do:next --self security boundary — avoids acting on work embedded in a third party\'s issue)' },
   { value: 'owner', label: 'Owner-filed only', description: 'Only claim open issues filed by the repository owner/creator' },
   { value: 'any', label: 'Any author', description: 'Claim the next eligible open issue regardless of who filed it' }
 ];

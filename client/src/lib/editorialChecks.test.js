@@ -3,6 +3,9 @@ import {
   groupChecksByScope,
   groupFindingsByCheck,
   checkFalsePositiveRate,
+  checkDismissalRate,
+  checkMaturity,
+  CHECK_MATURITY_MIN_SAMPLE,
   openFindingsTotal,
   findingManuscriptLink,
   scopeLabel,
@@ -12,6 +15,10 @@ import {
   applyFindingsView,
   normalizeFindingSort,
   findingIssueKey,
+  canonEntitiesFromUniverse,
+  linkifyCanonEntities,
+  canonReferencesInText,
+  canonEntityLink,
 } from './editorialChecks.js';
 
 const checks = [
@@ -31,6 +38,20 @@ describe('groupChecksByScope', () => {
   it('omits scopes with no checks and tolerates an empty list', () => {
     expect(groupChecksByScope([{ id: 'x', scope: 'noun' }]).map((g) => g.scope)).toEqual(['noun']);
     expect(groupChecksByScope()).toEqual([]);
+  });
+
+  it('fans a dual-scope check into each of its scopes (#1628)', () => {
+    const dual = { id: 'r.reciprocity', label: 'Reciprocity', scopes: ['series', 'issue'], kind: 'llm' };
+    const groups = groupChecksByScope([dual]);
+    expect(groups.map((g) => g.scope)).toEqual(['issue', 'series']);
+    // The same check appears under BOTH sections.
+    expect(groups.find((g) => g.scope === 'issue').checks).toContain(dual);
+    expect(groups.find((g) => g.scope === 'series').checks).toContain(dual);
+  });
+
+  it('falls back to the string scope when no scopes array is present (#1628)', () => {
+    // Older API rows / peers carry only a string `scope`.
+    expect(groupChecksByScope([{ id: 'x', scope: 'issue' }]).map((g) => g.scope)).toEqual(['issue']);
   });
 });
 
@@ -127,6 +148,50 @@ describe('checkFalsePositiveRate', () => {
   it('returns null when the check has no findings yet', () => {
     expect(checkFalsePositiveRate({ total: 0, falsePositive: 0 })).toBeNull();
     expect(checkFalsePositiveRate(null)).toBeNull();
+  });
+});
+
+describe('checkDismissalRate (#1629)', () => {
+  it('is dismissed/total over every dismissal, not just false positives', () => {
+    expect(checkDismissalRate({ total: 4, dismissed: 3 })).toBe(0.75);
+  });
+
+  it('returns null (not 0) with no findings, so "no data" stays distinct from 0%', () => {
+    expect(checkDismissalRate({ total: 0, dismissed: 0 })).toBeNull();
+    expect(checkDismissalRate(null)).toBeNull();
+  });
+});
+
+describe('checkMaturity (#1629)', () => {
+  it('reports "new" with no findings and null rates', () => {
+    expect(checkMaturity(null)).toEqual({ findings: 0, dismissalRate: null, falsePositiveRate: null, level: 'new' });
+    expect(checkMaturity({ total: 0 }).level).toBe('new');
+  });
+
+  it('reports "unproven" below the minimum sample even with a high FP rate', () => {
+    const m = checkMaturity({ total: CHECK_MATURITY_MIN_SAMPLE - 1, dismissed: 2, falsePositive: 2 });
+    expect(m.level).toBe('unproven');
+    expect(m.findings).toBe(CHECK_MATURITY_MIN_SAMPLE - 1);
+  });
+
+  it('reports "noisy" once a proven sample crosses the dismissal threshold', () => {
+    const m = checkMaturity({ total: 10, dismissed: 6, falsePositive: 5 });
+    expect(m.level).toBe('noisy');
+    expect(m.falsePositiveRate).toBe(0.5);
+    expect(m.dismissalRate).toBe(0.6);
+  });
+
+  it('reports "noisy" on a high dismissal rate even with zero false positives', () => {
+    // The user dismisses most findings for reasons other than "broken check" —
+    // still low-signal, so the badge must not stay "reliable".
+    const m = checkMaturity({ total: 10, dismissed: 8, falsePositive: 0 });
+    expect(m.level).toBe('noisy');
+    expect(m.dismissalRate).toBe(0.8);
+    expect(m.falsePositiveRate).toBe(0);
+  });
+
+  it('reports "reliable" for a proven, mostly-kept check', () => {
+    expect(checkMaturity({ total: 12, dismissed: 1, falsePositive: 0 }).level).toBe('reliable');
   });
 });
 
@@ -329,5 +394,76 @@ describe('applyFindingsView', () => {
       'scope',
     );
     expect(view.flatMap((g) => g.comments.map((c) => c.id))).toEqual(['b2']);
+  });
+});
+
+describe('canon entity references in findings (#1631)', () => {
+  const universe = {
+    characters: [
+      { id: 'ch1', name: 'Aria', physicalDescription: 'silver-haired pilot' },
+      { id: 'ch2', name: 'Jon', physicalDescription: '' },
+      { id: 'ch3', name: 'Jon Snow', physicalDescription: 'brooding ranger' },
+      { name: 'X' }, // too short — dropped
+    ],
+    places: [{ ingredientId: 'pl1', id: 'local-1', name: 'The Atrium', description: 'glass dome' }],
+    objects: [{ id: 'ob1', name: 'Aria' }], // duplicate name — first (character) wins
+  };
+
+  it('flattens canon arrays, drops 1-char names, dedupes by name, prefers ingredientId', () => {
+    const entities = canonEntitiesFromUniverse(universe);
+    expect(entities.map((e) => e.name)).toEqual(['Aria', 'Jon', 'Jon Snow', 'The Atrium']);
+    const aria = entities.find((e) => e.name === 'Aria');
+    expect(aria.kind).toBe('characters');
+    expect(aria.descriptor).toContain('silver-haired pilot');
+    expect(entities.find((e) => e.name === 'The Atrium').id).toBe('pl1');
+  });
+
+  it('returns [] for a missing/invalid universe', () => {
+    expect(canonEntitiesFromUniverse(null)).toEqual([]);
+    expect(canonEntitiesFromUniverse('nope')).toEqual([]);
+    expect(canonEntitiesFromUniverse({})).toEqual([]);
+  });
+
+  it('linkifies whole-word, case-insensitive matches and reproduces the text exactly', () => {
+    const entities = canonEntitiesFromUniverse(universe);
+    const segs = linkifyCanonEntities("aria visits The Atrium with Mariana", entities);
+    expect(segs.map((s) => s.text).join('')).toBe("aria visits The Atrium with Mariana");
+    const linked = segs.filter((s) => s.entity).map((s) => [s.text, s.entity.name]);
+    // "aria" matches (case-insensitive); "Mariana" does NOT (word-boundary, not substring "Aria").
+    expect(linked).toEqual([['aria', 'Aria'], ['The Atrium', 'The Atrium']]);
+  });
+
+  it('prefers the longest name so a multi-word entity wins over its substring', () => {
+    const entities = canonEntitiesFromUniverse(universe);
+    const segs = linkifyCanonEntities('Jon Snow returns', entities);
+    const linked = segs.filter((s) => s.entity);
+    expect(linked).toHaveLength(1);
+    expect(linked[0].entity.name).toBe('Jon Snow');
+  });
+
+  it('collapses repeated mentions to unique references in first-appearance order', () => {
+    const entities = canonEntitiesFromUniverse(universe);
+    const refs = canonReferencesInText('Aria and Aria meet Jon at The Atrium', entities);
+    expect(refs.map((e) => e.name)).toEqual(['Aria', 'Jon', 'The Atrium']);
+  });
+
+  it('matches accented / non-ASCII names (Unicode-aware boundaries, not ASCII \\b)', () => {
+    const entities = canonEntitiesFromUniverse({ characters: [{ id: 'e1', name: 'Élodie' }, { id: 'e2', name: 'Søren' }] });
+    const refs = canonReferencesInText('Élodie argues with Søren at dawn', entities);
+    expect(refs.map((e) => e.name)).toEqual(['Élodie', 'Søren']);
+    // Still whole-word: a name embedded in a longer accented word does not match.
+    expect(canonReferencesInText('Élodies', entities)).toEqual([]);
+  });
+
+  it('handles empty/no-entity inputs without throwing', () => {
+    expect(linkifyCanonEntities('', [])).toEqual([]);
+    expect(linkifyCanonEntities('plain text', [])).toEqual([{ text: 'plain text' }]);
+    expect(canonReferencesInText('', canonEntitiesFromUniverse(universe))).toEqual([]);
+  });
+
+  it('builds a canon-section deep link (or null without a universe)', () => {
+    expect(canonEntityLink('u-1')).toBe('/universes/u-1#canon');
+    expect(canonEntityLink('')).toBeNull();
+    expect(canonEntityLink(null)).toBeNull();
   });
 });

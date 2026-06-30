@@ -260,6 +260,9 @@ const DEFAULT_SYNC_CATEGORIES = {
   creativeDirectorProjects: false,
   moodBoards: false,
   writersRoomWorks: false,
+  writersRoomFolders: false,
+  writersRoomExercises: false,
+  musicVideoProjects: false,
   catalog: false
 };
 
@@ -294,6 +297,9 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['creativeDirectorProjects', 'creativeDirectorProject'],
   ['moodBoards', 'moodBoard'],
   ['writersRoomWorks', 'writersRoomWork'],
+  ['writersRoomFolders', 'writersRoomFolder'],
+  ['writersRoomExercises', 'writersRoomExercise'],
+  ['musicVideoProjects', 'musicVideoProject'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {

@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
@@ -405,15 +405,18 @@ export function buildTuiInvocation(provider, model) {
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
-  // Map a bare Claude id to its Bedrock form when the box is in Bedrock mode
-  // (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
+  // OpenCode TUI: namespace the bare Ollama id (`opencode --model ollama/<id>`).
+  // Otherwise map a bare Claude id to its Bedrock form when the box is in Bedrock
+  // mode (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
   // claude-code-tui runner.
-  const injectedModel = shouldInject
-    ? resolveBedrockCliModel(effectiveModel, {
-      env: { ...process.env, ...provider?.envVars },
-      providerId: provider?.id,
-    })
-    : effectiveModel;
+  const injectedModel = !shouldInject
+    ? effectiveModel
+    : isOpencodeCommand(command)
+      ? prefixOpencodeModel(provider, effectiveModel)
+      : resolveBedrockCliModel(effectiveModel, {
+        env: { ...process.env, ...provider?.envVars },
+        providerId: provider?.id,
+      });
   const args = shouldInject ? [...baseArgs, '--model', injectedModel] : baseArgs;
   return { command, args };
 }

@@ -16,14 +16,16 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Activity, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import { Activity, Loader2, TrendingUp, TrendingDown, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { getEditorialHealth, setEditorialReadinessGate } from '../../../services/api';
 import { FINDING_FILTER_PARAMS, FINDINGS_TRIAGE_ANCHOR_ID } from '../../../lib/editorialChecks';
+import { timeAgo } from '../../../utils/formatters';
 import {
   scoreBand,
   deltaDisplay,
   sparklineGeometry,
+  snapshotDiff,
   orderedCategories,
   orderedChecks,
   checkCountSeries,
@@ -51,15 +53,77 @@ function SeverityBreakdown({ openBySeverity }) {
   );
 }
 
-function Sparkline({ points }) {
+// The score sparkline (#1316), with clickable revision points (#1630): each
+// recorded snapshot is a focusable dot the user can select to drill into that
+// revision's open-finding breakdown + diff vs the prior run. `selectedIndex`
+// indexes into the SAME filtered point list the panel passes (geometry drops
+// non-finite scores), so the panel can map a clicked dot back to its snapshot.
+// Clicking the active dot deselects (toggle). When `onSelect` is absent the
+// sparkline is static (no interactive dots) for read-only callers.
+function Sparkline({ points, selectedIndex = null, onSelect }) {
   const { points: poly, coords } = sparklineGeometry(points, { width: 140, height: 32, pad: 3 });
   if (!poly) return <span className="text-[11px] text-gray-600">Run editorial checks to start the trend</span>;
-  const last = coords[coords.length - 1];
+  const lastIndex = coords.length - 1;
+  const interactive = typeof onSelect === 'function';
   return (
     <svg viewBox="0 0 140 32" width={140} height={32} className="h-8 w-[140px] max-w-full overflow-visible" role="img" aria-label="Editorial health score trend">
       <polyline points={poly} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-port-accent" />
-      <circle cx={last.x} cy={last.y} r="2.5" className="fill-port-accent" />
+      {!interactive ? (
+        <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="2.5" className="fill-port-accent" />
+      ) : coords.map((c, i) => {
+        const active = i === selectedIndex;
+        const isLast = i === lastIndex;
+        const select = () => onSelect(active ? null : i);
+        return (
+          <circle
+            key={i}
+            cx={c.x}
+            cy={c.y}
+            r={active ? 3.5 : isLast ? 2.5 : 2}
+            role="button"
+            tabIndex={0}
+            aria-pressed={active}
+            aria-label={`Revision ${i + 1} of ${coords.length}, score ${c.score}${active ? ' (selected)' : ''}`}
+            onClick={select}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); } }}
+            className={`cursor-pointer outline-none transition-all ${active ? 'fill-port-warning' : isLast ? 'fill-port-accent' : 'fill-port-accent/50 hover:fill-port-accent'}`}
+          >
+            <title>{`Revision ${i + 1} · score ${c.score}`}</title>
+          </circle>
+        );
+      })}
     </svg>
+  );
+}
+
+// One row of the snapshot diff (#1630): a changed bucket rendered as
+// `label from→to` with improvement (count dropped) in success-green and
+// regression (count rose) in error-red. `labelFor` resolves the raw bucket key
+// to a human label (severity name, category, or check label).
+function SnapshotDiffRow({ row, labelFor }) {
+  const improved = row.delta < 0;
+  return (
+    <li className="flex items-center justify-between gap-2 text-[11px]">
+      <span className="min-w-0 truncate text-gray-300" title={labelFor(row.key)}>{labelFor(row.key)}</span>
+      <span className={`flex shrink-0 items-center gap-0.5 ${improved ? 'text-port-success' : 'text-port-error'}`}>
+        {improved ? <TrendingDown size={11} /> : <TrendingUp size={11} />}
+        {row.from}→{row.to}
+      </span>
+    </li>
+  );
+}
+
+// A labelled diff section (severity / category / check) — renders nothing when
+// the dimension has no changes so a clean revision stays compact.
+function SnapshotDiffSection({ title, rows, labelFor }) {
+  if (!rows?.length) return null;
+  return (
+    <div>
+      <span className="block text-[10px] uppercase tracking-wide text-gray-600">{title}</span>
+      <ul className="mt-0.5 space-y-0.5">
+        {rows.map((row) => <SnapshotDiffRow key={row.key} row={row} labelFor={labelFor} />)}
+      </ul>
+    </div>
   );
 }
 
@@ -119,6 +183,11 @@ export default function EditorialHealthPanel({
   const [loading, setLoading] = useState(false);
   const [savingGate, setSavingGate] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
+  // Which trend snapshot the user drilled into (#1630): an index into the
+  // filtered trend points, or null for no selection. Reset whenever the series
+  // or the underlying data refreshes so a stale index can't point at a snapshot
+  // that shifted (a new run prepends/appends points).
+  const [selectedSnapshot, setSelectedSnapshot] = useState(null);
 
   // Make the breakdown rows navigable (#1606): clicking a category/check deep-links
   // the triage filter (shared `f`-prefixed URL params) and scrolls the findings
@@ -174,6 +243,10 @@ export default function EditorialHealthPanel({
   // the panel mid-view.
   useEffect(() => { setHealth(null); }, [seriesId]);
   useEffect(() => { load(seriesId); }, [seriesId, refreshKey, load]);
+  // Drop any snapshot drill-down when the data behind the trend changes — a new
+  // run shifts the point indices, so a held selection would point at the wrong
+  // (or a now-absent) revision (#1630).
+  useEffect(() => { setSelectedSnapshot(null); }, [seriesId, refreshKey]);
 
   const onGateChange = (gate) => {
     setSavingGate(true);
@@ -228,6 +301,19 @@ export default function EditorialHealthPanel({
     .filter((p) => p.open > 0)
     .sort((a, b) => a.score - b.score);
 
+  // Snapshot drill-down (#1630): clicking a sparkline dot selects a revision.
+  // The sparkline geometry drops non-finite-score points, so filter the points
+  // the SAME way here — the selected index then maps 1:1 onto the rendered dots.
+  // Clamp the held selection so a refresh that shrank the trend can't strand the
+  // drill-down on an out-of-range index.
+  const trendPoints = points.filter((p) => Number.isFinite(p?.score));
+  const selectedValid = selectedSnapshot != null
+    && selectedSnapshot >= 0 && selectedSnapshot < trendPoints.length;
+  const selectedPoint = selectedValid ? trendPoints[selectedSnapshot] : null;
+  const selectedPrev = selectedValid && selectedSnapshot > 0 ? trendPoints[selectedSnapshot - 1] : null;
+  const selectedDiff = selectedPoint ? snapshotDiff(selectedPoint, selectedPrev) : null;
+  const snapshotCategories = selectedPoint ? orderedCategories(selectedPoint.openByCategory) : [];
+
   return (
     <section className="space-y-3 rounded-lg border border-port-border bg-port-card p-3">
       <div className="flex items-center justify-between gap-2">
@@ -260,9 +346,87 @@ export default function EditorialHealthPanel({
         </div>
         <div className="sm:text-right">
           <span className="block text-[10px] uppercase tracking-wide text-gray-600">Score trend</span>
-          <span className="text-port-accent"><Sparkline points={health.trend?.points} /></span>
+          <span className="text-port-accent">
+            <Sparkline
+              points={trendPoints}
+              selectedIndex={selectedValid ? selectedSnapshot : null}
+              onSelect={setSelectedSnapshot}
+            />
+          </span>
+          {trendPoints.length > 1 ? (
+            <span className="block text-[10px] text-gray-600 sm:text-right">Click a point to see what changed</span>
+          ) : null}
         </div>
       </div>
+
+      {/* Snapshot drill-down (#1630) — the selected revision's open-finding
+          breakdown + a diff against the prior revision. */}
+      {selectedPoint && selectedDiff ? (
+        <div className="rounded-md border border-port-accent/40 bg-port-accent/5 p-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <span className="block text-[10px] uppercase tracking-wide text-gray-500">
+                Revision {selectedSnapshot + 1} of {trendPoints.length}
+                {selectedPoint.at ? ` · ${timeAgo(selectedPoint.at)}` : ''}
+              </span>
+              <div className="mt-0.5 flex items-baseline gap-2">
+                <span className={`text-lg font-bold ${scoreBand(selectedPoint.score).tone}`}>{selectedPoint.score}</span>
+                <span className="text-[11px] text-gray-500">/ 100</span>
+                {selectedDiff.scoreDelta != null && selectedDiff.scoreDelta !== 0 ? (
+                  <span className={`text-[11px] ${selectedDiff.scoreDelta > 0 ? 'text-port-success' : 'text-port-error'}`} title="Score change since the previous revision">
+                    {deltaDisplay(selectedDiff.scoreDelta).text}
+                  </span>
+                ) : null}
+                {Number.isFinite(selectedPoint.open) ? (
+                  <span className="text-[11px] text-gray-500">· {selectedPoint.open} open</span>
+                ) : null}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedSnapshot(null)}
+              aria-label="Close snapshot detail"
+              title="Close snapshot detail"
+              className="shrink-0 rounded p-0.5 text-gray-500 transition-colors hover:bg-port-border/50 hover:text-gray-300"
+            >
+              <X size={13} />
+            </button>
+          </div>
+
+          {/* This revision's open-finding breakdown. */}
+          <div className="mt-2 border-t border-port-border/60 pt-2">
+            <span className="block text-[10px] uppercase tracking-wide text-gray-600">Open findings this revision</span>
+            <div className="mt-1"><SeverityBreakdown openBySeverity={selectedPoint.openBySeverity} /></div>
+            {snapshotCategories.length ? (
+              <ul className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+                {snapshotCategories.map(({ category, count }) => (
+                  <li key={category} className="text-[11px] text-gray-400">
+                    <span className="text-gray-300">{category}</span> <span className="text-gray-500">{count}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+
+          {/* What changed vs the previous revision. */}
+          <div className="mt-2 border-t border-port-border/60 pt-2">
+            <span className="block text-[10px] uppercase tracking-wide text-gray-600">Changed since previous revision</span>
+            {!selectedDiff.hasPrevious ? (
+              <p className="mt-0.5 text-[11px] text-gray-500">First recorded revision — nothing to compare against yet.</p>
+            ) : (selectedDiff.bySeverity.length || selectedDiff.byCategory.length || selectedDiff.byCheck?.length) ? (
+              <div className="mt-1 space-y-1.5">
+                <SnapshotDiffSection title="By severity" rows={selectedDiff.bySeverity} labelFor={(k) => SEVERITY_LABELS[k] || k} />
+                <SnapshotDiffSection title="By category" rows={selectedDiff.byCategory} labelFor={(k) => k} />
+                <SnapshotDiffSection title="By check" rows={selectedDiff.byCheck} labelFor={labelForCheck} />
+              </div>
+            ) : (
+              <p className="mt-0.5 flex items-center gap-1 text-[11px] text-port-success">
+                <TrendingDown size={11} className="rotate-180" /> No open-finding counts changed since the previous revision.
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* Readiness gate control — also drives the autopilot convergence gate. */}
       <div className="flex flex-wrap items-center gap-2 border-t border-port-border/60 pt-2.5">

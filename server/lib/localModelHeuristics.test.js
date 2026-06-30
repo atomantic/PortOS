@@ -1,7 +1,58 @@
 import { describe, it, expect } from 'vitest';
-import { isEmbeddingModel, isGenerationModel, isVisionModel, isVisionCapableCliProvider, recommendEditorialModel } from './localModelHeuristics.js';
+import { isEmbeddingModel, isGenerationModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel, recommendEditorialModel } from './localModelHeuristics.js';
 
 describe('localModelHeuristics', () => {
+  describe('isToolUseModel', () => {
+    it('flags known tool-use-capable families by id', () => {
+      for (const id of [
+        'qwen2.5:7b',
+        'qwen3:32b',
+        'qwen2.5-coder:14b',
+        'llama3.1:8b',
+        'llama3.3:70b',
+        'mistral-small:24b',
+        'mixtral:8x7b',
+        'command-r:35b',
+        'hermes3:8b',
+        'glm-4:9b',
+        'granite3-dense:8b',
+        'gpt-oss:20b',
+      ]) {
+        expect(isToolUseModel(id), id).toBe(true);
+      }
+    });
+
+    it('does not flag families without dependable tool use by id', () => {
+      for (const id of [
+        'llama3:8b',          // Llama 3.0 — tool use landed in 3.1
+        'gemma2:9b',
+        'phi3:mini',
+        'orca-mini',
+        'nomic-embed-text',
+      ]) {
+        expect(isToolUseModel(id), id).toBe(false);
+      }
+    });
+
+    it('prefers explicit capability metadata in both directions', () => {
+      // `tools` present → true even when the id wouldn't match.
+      expect(isToolUseModel({ id: 'some-custom-model', capabilities: ['completion', 'tools'] })).toBe(true);
+      // Non-empty capabilities WITHOUT `tools` → explicit negative, even when the
+      // id family would otherwise match the heuristic.
+      expect(isToolUseModel({ id: 'qwen2.5:7b', capabilities: ['completion', 'vision'] })).toBe(false);
+      // No capability metadata → fall back to the id heuristic.
+      expect(isToolUseModel({ id: 'qwen2.5:7b' })).toBe(true);
+      expect(isToolUseModel({ id: 'gemma2:9b' })).toBe(false);
+    });
+
+    it('handles falsy / non-model inputs', () => {
+      expect(isToolUseModel(null)).toBe(false);
+      expect(isToolUseModel(undefined)).toBe(false);
+      expect(isToolUseModel(42)).toBe(false);
+      expect(isToolUseModel('')).toBe(false);
+    });
+  });
+
   describe('isEmbeddingModel', () => {
     it('flags known embedding models', () => {
       for (const id of [

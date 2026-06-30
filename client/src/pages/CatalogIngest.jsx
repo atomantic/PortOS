@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -19,7 +19,9 @@ import {
   ingestCatalogUrl,
   ingestCatalogFile,
   ingestCatalogVoice,
+  ingestCatalogBrain,
 } from '../services/apiCatalog';
+import { markBrainInboxSentToCatalog } from '../services/apiBrain';
 
 // One review section per ingredient type. The first three are bible-shaped
 // (character/place/object) and use `physicalDescription`/`description` as the
@@ -60,6 +62,7 @@ function StageIcon({ status }) {
 
 export default function CatalogIngest() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [phase, setPhase] = useState('paste'); // 'paste' | 'extracting' | 'review'
   const [title, setTitle] = useState('');
   const [rawText, setRawText] = useState('');
@@ -86,6 +89,17 @@ export default function CatalogIngest() {
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef(null);
   const fileInputRef = useRef(null);
+  const brainHandledRef = useRef(false);
+  // Creative inbox note ids handed off from the Brain batch-send. Once the
+  // commit below succeeds we stamp these consumed so they drop out of the
+  // inbox's "ready to become ingredients" banner (issue #1722). Held in a ref so
+  // it survives the history-state clear and the extract/review re-renders.
+  const creativeNoteIdsRef = useRef([]);
+  // The scrap id the handoff ids are bound to — set only when the PREFILLED
+  // paste is ingested. Commit consumes the notes ONLY when it commits this exact
+  // scrap, so switching to URL/File/Voice (a different scrap) and committing that
+  // never marks the original Brain notes consumed.
+  const creativeNoteScrapIdRef = useRef(null);
 
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
@@ -133,6 +147,10 @@ export default function CatalogIngest() {
 
   const reset = () => {
     activeRunIdRef.current = null;
+    // Abandoning the review (Start Over / Cancel) discards the Brain hand-off —
+    // a later commit of unrelated text must NOT mark the original notes consumed.
+    creativeNoteIdsRef.current = [];
+    creativeNoteScrapIdRef.current = null;
     recorderRef.current?.cancel?.();
     recorderRef.current = null;
     setRecording(false);
@@ -182,6 +200,9 @@ export default function CatalogIngest() {
       .catch((err) => { toast.error(err?.message || 'Failed to save scrap'); return null; });
     if (!created?.scrap?.id) { setSubmitting(false); setPhase('paste'); return; }
     setScrapId(created.scrap.id);
+    // Bind any pending Brain handoff ids to THIS scrap, so only a commit of the
+    // scrap built from the prefilled text consumes them (not a later URL/file/voice).
+    if (creativeNoteIdsRef.current.length) creativeNoteScrapIdRef.current = created.scrap.id;
     const result = await extractFromCatalogScrap(created.scrap.id, {}, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
@@ -200,6 +221,49 @@ export default function CatalogIngest() {
     setSubmitting(false);
     enterReviewFromResult(result);
   };
+
+  // Brain → catalog handoff: the brain UI navigates here with
+  // location.state.brainIngest = { brainType, brainId, title }, then we run the
+  // SAME extract→review flow as URL/file/voice (live stage checklist included).
+  const handleBrainIngest = async ({ brainType, brainId }) => {
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await ingestCatalogBrain({ brainType, brainId }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Brain ingest failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result);
+  };
+
+  // Handle inbound router-state handoffs once on mount:
+  //  - brainIngest { brainType, brainId } → run the brain-bridge extract→review.
+  //  - prefill { title, rawText }        → drop the text into the paste box so
+  //    the user reviews/edits it, then clicks Extract (the creative-notes batch
+  //    send from the brain inbox uses this).
+  // Either way we clear the history state afterwards so a refresh/back doesn't
+  // re-trigger the handoff (and, for brainIngest, a second LLM-billed run).
+  useEffect(() => {
+    if (brainHandledRef.current) return;
+    const brainIngest = location.state?.brainIngest;
+    const prefill = location.state?.prefill;
+    let handled = false;
+    if (brainIngest?.brainType && brainIngest?.brainId) {
+      handled = true;
+      handleBrainIngest(brainIngest);
+    } else if (typeof prefill?.rawText === 'string' && prefill.rawText.trim()) {
+      handled = true;
+      setSourceMode('paste');
+      setTitle(prefill.title || '');
+      setRawText(prefill.rawText);
+      if (Array.isArray(prefill.creativeNoteIds)) {
+        creativeNoteIdsRef.current = prefill.creativeNoteIds.filter(Boolean);
+      }
+    }
+    if (handled) {
+      brainHandledRef.current = true;
+      navigate('.', { replace: true, state: {} });
+    }
+  }, []);
 
   const handleFilePicked = async (e) => {
     const file = e.target.files?.[0];
@@ -332,10 +396,24 @@ export default function CatalogIngest() {
       toast.error(err?.message || 'Commit failed');
       return null;
     });
-    setCommitting(false);
-    if (!result) return;
+    if (!result) { setCommitting(false); return; }
+    // Keep `committing` true through the mark request + navigate: re-enabling the
+    // Commit button before the awaited follow-up finishes would open a
+    // double-submit window that re-commits the same scrap and duplicates
+    // ingredients. We navigate away on success, so it never needs clearing.
     const n = Array.isArray(result.ingredients) ? result.ingredients.length : accepted.length;
     toast.success(`Added ${n} ingredient${n === 1 ? '' : 's'} to the catalog.`);
+    // Best-effort: mark the source creative notes consumed so the inbox banner
+    // stops offering them. Only fires when this ingest came from the Brain
+    // batch-send (ids present). Failure is non-fatal — the notes just stay
+    // re-sendable (the prior behavior) — so swallow it silently rather than
+    // toasting a confusing error after a successful commit.
+    const noteIds = creativeNoteIdsRef.current;
+    if (noteIds.length && scrapId && scrapId === creativeNoteScrapIdRef.current) {
+      creativeNoteIdsRef.current = [];
+      creativeNoteScrapIdRef.current = null;
+      await markBrainInboxSentToCatalog(noteIds, { silent: true }).catch(() => {});
+    }
     navigate('/catalog');
   };
 

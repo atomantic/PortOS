@@ -12,6 +12,10 @@ const enc = encodeURIComponent;
 
 export const getCatalogStats = (options) => request('/catalog/stats', options);
 
+// Faceted counts (#1762) driving the filter dropdowns + album headers:
+// { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
+export const getCatalogFacets = (options) => request('/catalog/facets', options);
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>
@@ -38,7 +42,7 @@ export const extractFromCatalogScrap = (id, body = {}, options) =>
 export const commitCatalogScrapDraft = (id, accepted, options) =>
   request(`/catalog/scraps/${enc(id)}/commit`, { method: 'POST', body: JSON.stringify({ accepted }), ...options });
 
-// --- Alternate ingest sources (url / file / voice) ----------------------
+// --- Alternate ingest sources (url / file / voice / brain) --------------
 // Each returns { scrap, draft } — the same shape as extractFromCatalogScrap —
 // so CatalogIngest can drop straight into its review phase.
 
@@ -51,16 +55,48 @@ export const ingestCatalogFile = (body = {}, options) =>
 export const ingestCatalogVoice = (body = {}, options) =>
   request('/catalog/ingest/voice', { method: 'POST', body: JSON.stringify(body), ...options });
 
+// Brain → catalog bridge: ingest an existing brain record by { brainType, brainId }.
+export const ingestCatalogBrain = (body = {}, options) =>
+  request('/catalog/ingest/brain', { method: 'POST', body: JSON.stringify(body), ...options });
+
 // --- Ingredients --------------------------------------------------------
 
-export const listCatalogIngredients = ({ type, tag, q, limit, offset, ...options } = {}) => {
+export const listCatalogIngredients = ({ type, tag, q, refKind, refId, unlinked, orphaned, limit, offset, ...options } = {}) => {
   const params = new URLSearchParams();
   if (type) params.set('type', type);
   if (tag) params.set('tag', tag);
   if (q) params.set('q', q);
+  // Album/facet filters (#1762). refKind/refId are a pair; unlinked/orphaned are
+  // the "Raw"/"Orphaned" album views — mutually exclusive with each other and
+  // with the ref filter (the server rejects combining them).
+  if (refKind && refId) {
+    params.set('refKind', refKind);
+    params.set('refId', refId);
+  } else if (unlinked) {
+    params.set('unlinked', 'true');
+  } else if (orphaned) {
+    params.set('orphaned', 'true');
+  }
   if (limit) params.set('limit', String(limit));
   if (offset) params.set('offset', String(offset));
   return request(`/catalog/ingredients${params.toString() ? `?${params}` : ''}`, options);
+};
+
+// Batch fetch ingredients by id (max 50 server-side) — used by the Story
+// Builder remix handoff to hydrate the catalog ingredients the user selected.
+// The `ids` filter rides the normal paged list endpoint, which returns the
+// `{ items, nextOffset }` envelope ordered created_at DESC; this unwraps to a
+// plain array AND re-orders it to the requested `ids` so chips + seed read in
+// the user's selection order (mirroring the server's resolveCatalogIngredients).
+// Empty/falsy ids are dropped before the request.
+export const listCatalogIngredientsByIds = async (ids = [], options) => {
+  const list = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  const params = new URLSearchParams();
+  params.set('ids', list.join(','));
+  const res = await request(`/catalog/ingredients?${params}`, options);
+  const items = Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : []);
+  const byId = new Map(items.map((ing) => [ing.id, ing]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
 };
 
 export const getCatalogIngredient = (id, options) =>

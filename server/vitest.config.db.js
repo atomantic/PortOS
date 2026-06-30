@@ -10,6 +10,7 @@ import { defineConfig } from 'vitest/config';
 export const DB_TEST_INCLUDE = [
   '**/db.test.js',
   'services/catalogDB.test.js',
+  'services/catalogDB.facets.db.test.js',
   'services/catalogCanonProjection.test.js',
   'services/catalogRefResolver.test.js',
   'services/creativeDirector/projectsDB.test.js',

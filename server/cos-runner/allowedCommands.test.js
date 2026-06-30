@@ -20,6 +20,11 @@ describe('isAllowedCommand', () => {
     it('allows /home/user/.local/bin/aider', () => {
       expect(isAllowedCommand('/home/user/.local/bin/aider')).toBe(true);
     });
+
+    it('allows opencode (so headless OpenCode Ollama agents run under CoS Runner mode)', () => {
+      expect(isAllowedCommand('opencode')).toBe(true);
+      expect(isAllowedCommand('/opt/homebrew/bin/opencode')).toBe(true);
+    });
   });
 
   describe('Windows .exe stripping', () => {

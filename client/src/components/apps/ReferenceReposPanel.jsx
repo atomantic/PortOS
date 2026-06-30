@@ -4,6 +4,25 @@ import toast from '../ui/Toast';
 import * as api from '../../services/api';
 
 /**
+ * Where reference-watch records its proposals, keyed by the app's RESOLVED work
+ * tracker. Mirrors the server-side {trackerInstructions} block so the UID note
+ * doesn't lie when an app tracks issues in GitHub/GitLab/JIRA instead of
+ * PLAN.md. Falls back to the PLAN.md wording when the tracker is unresolved.
+ */
+function refWatchDestination(tracker) {
+  switch (tracker) {
+    case 'github':
+      return (<><code>[ref-watch-…]</code> GitHub issues (labeled <code>reference-watch</code>) for <code>/claim --issues</code> to pick up</>);
+    case 'gitlab':
+      return (<><code>[ref-watch-…]</code> GitLab issues (labeled <code>reference-watch</code>) for <code>/claim --issues</code> to pick up</>);
+    case 'jira':
+      return (<><code>[ref-watch-…]</code> JIRA tickets for the <code>claim-issue-jira</code> flow to pick up</>);
+    default:
+      return (<><code>[ref-watch-…]</code> checklist items in <code>PLAN.md</code> for <code>/claim</code> / <code>plan-task</code> to pick up</>);
+  }
+}
+
+/**
  * Per-app reference-repos manager. Embedded inside the app detail page's
  * "References" tab — the only surface for managing reference repos.
  */
@@ -29,6 +48,10 @@ export default function ReferenceReposPanel({ appId, appName }) {
   // spinner. RefRow reads checking via `checkingIds.has(ref.id)`.
   const [checkingIds, setCheckingIds] = useState(() => new Set());
   const [editingNotesId, setEditingNotesId] = useState(null);
+  // Resolved work tracker so the description tells the truth about WHERE
+  // reference-watch records proposals — PLAN.md vs the app's issue tracker.
+  // Read-only; null until loaded (falls back to the generic PLAN.md wording).
+  const [workTracker, setWorkTracker] = useState(null);
 
   // Track an explicit fetch error separately from `refs` so a transient
   // failure doesn't blank the list — stale-but-valid is far better UX
@@ -50,6 +73,14 @@ export default function ReferenceReposPanel({ appId, appName }) {
   useEffect(() => {
     fetch();
   }, [fetch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getAppWorkTracker(appId)
+      .then((info) => { if (!cancelled) setWorkTracker(info?.resolved || null); })
+      .catch(() => { if (!cancelled) setWorkTracker(null); });
+    return () => { cancelled = true; };
+  }, [appId]);
 
   const handleAdd = async (form) => {
     const created = await api.addReferenceRepo(appId, form).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
@@ -161,7 +192,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
             {refreshing && <RefreshCw size={11} className="animate-spin text-gray-500" />}
           </h3>
           <p className="text-xs text-gray-500 mt-0.5">
-            Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly, runs a security screen, and — for adoption-worthy commits — appends slug-tagged <code>[ref-watch-…]</code> checklist items to <code>PLAN.md</code> for <code>/claim</code> / <code>plan-task</code> to pick up. No source-code edits, no separate review file.
+            Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly, runs a security screen, and — for adoption-worthy commits — records slug-tagged <code>[ref-watch-…]</code> proposals in {refWatchDestination(workTracker)}. No source-code edits, no separate review file.
           </p>
         </div>
         <button

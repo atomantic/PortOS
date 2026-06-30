@@ -36,8 +36,9 @@ import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/seri
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
 import { updateIssue, ERR_NOT_FOUND as ISSUE_NOT_FOUND } from './pipeline/issues.js';
 import { updateProject } from './creativeDirector/local.js';
+import { updateProject as updateMusicVideoProject } from './musicVideo/projects.js';
 import { restoreBoard } from './moodBoard/index.js';
-import { updateWork } from './writersRoom/local.js';
+import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -134,6 +135,13 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // merge-fields both apply faithfully through the same call. It validates +
     // rejects a tombstoned row (404 → translateGone → ERR_TARGET_GONE).
     await restoreBoard(recordId, patch).catch(translateGone);
+  } else if (kind === 'musicVideoProject') {
+    // updateProject does a wholesale spread (applyProjectPatch → touch), so the
+    // restorable scalars + scenes[] in the snapshot patch overwrite the live
+    // values faithfully — restore-all and merge-fields both apply through the
+    // same path. It validates `status` and rejects a missing/tombstoned row with
+    // the generic ServerError 'NOT_FOUND' (→ translateGone → ERR_TARGET_GONE).
+    await updateMusicVideoProject(recordId, patch).catch(translateGone);
   } else if (kind === 'writersRoomWork') {
     // updateWork applies the snapshot's title/kind/status/folderId/imageStyle/
     // liveMode (the RESTORABLE_FIELDS set) through its allow-list + the liveMode
@@ -143,6 +151,17 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // and prose bodies are not restorable here (they're file-primary + lineage-
     // managed) — RESTORABLE_FIELDS.writersRoomWork omits them.
     await updateWork(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomFolder') {
+    // restoreFolder merges the snapshot's name/parentId/sortOrder (the
+    // RESTORABLE_FIELDS set) and bumps updatedAt so the restore wins the next LWW
+    // and re-pushes. A missing/tombstoned folder 404s (→ translateGone →
+    // ERR_TARGET_GONE). Body-less, so there are no file-primary structures to restore.
+    await restoreFolder(recordId, patch).catch(translateGone);
+  } else if (kind === 'writersRoomExercise') {
+    // restoreExercise merges the snapshot's sprint fields (appendedText + config)
+    // and stamps updatedAt so the restored sprint wins the next LWW. A
+    // missing/tombstoned exercise 404s (→ ERR_TARGET_GONE).
+    await restoreExercise(recordId, patch).catch(translateGone);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

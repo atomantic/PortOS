@@ -35,10 +35,11 @@ import {
 import { analyzeBalloonAttribution } from './balloonAttribution.js';
 import { analyzeNamePair, comparisonName, findFirstLetterClusters, normalizeName } from './nameSimilarity.js';
 import { findCliches, findModifierStacking } from './cliches.js';
-import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety } from './dialogue.js';
+import { findSaidBookisms, findUnattributedDialogueRuns, attributeDialogueByOwner, findDialogueTagVariety, splitScenes } from './dialogue.js';
 import { findItalicThoughts } from './italicThoughts.js';
 import {
   findFilterWords,
+  findHedgeWords,
   findCrutchWords,
   findAdverbs,
   findPassiveVoice,
@@ -58,6 +59,26 @@ import {
 import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
 
 export const CHECK_SCOPES = Object.freeze(['series', 'issue', 'scene', 'noun']);
+
+// A check's `scope` may be a single scope string OR an array of scopes (#1628).
+// A dual-scope check is one rule meaningful at more than one granularity — e.g.
+// `relationships.reciprocity` reasons series-wide but could also flag a newly
+// added relationship per issue — declared `scope: ['series', 'issue']` instead of
+// being split into two near-duplicate checks. These helpers normalize either form
+// so every consumer (the load-time guard, the catalog grouping, the dry-run plan)
+// fans a check across exactly its declared scopes.
+//
+// `normalizeCheckScopes` returns the declared scopes deduped and in canonical
+// CHECK_SCOPES order; an unknown/empty input returns []. `primaryCheckScope`
+// returns the first declared scope (canonical order) for the consumers that still
+// bucket/sort by a single value — for a single-scope check it is just that scope.
+export function normalizeCheckScopes(scope) {
+  const raw = Array.isArray(scope) ? scope : (scope == null ? [] : [scope]);
+  return CHECK_SCOPES.filter((s) => raw.includes(s));
+}
+
+export const primaryCheckScope = (scope) => normalizeCheckScopes(scope)[0] || null;
+
 export const CHECK_KINDS = Object.freeze(['deterministic', 'llm']);
 export const CHECK_SEVERITIES = Object.freeze(['high', 'medium', 'low']);
 const SEVERITIES = CHECK_SEVERITIES;
@@ -198,6 +219,19 @@ export const INFO_DUMPING_STAGE = 'pipeline-editorial-info-dumping';
 export const OBJECT_MOTIVATION_STAGE = 'pipeline-editorial-object-motivation';
 export const OBJECT_BACKSTORY_STAGE = 'pipeline-editorial-object-backstory';
 
+// Stage name for the object weight-proportionality LLM check (#1624): judges
+// whether an object's narrative weight (established backstory + payoff depth)
+// matches its prominence in the prose — flagging a minor object given a heavy
+// backstory ("a one-line locket with a 3-issue origin") or a climactic object
+// with no lineage to earn it ("a heirloom that decides the finale, never set
+// up"). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration
+// 143 (boot runs migrations but NOT setup-data, so the migration is required).
+// Like the two object-attachment checks above it feeds the canon's per-object
+// significance/attachment summary as context and reads the stitched manuscript
+// to weigh prose prominence against that established weight.
+export const OBJECT_WEIGHT_STAGE = 'pipeline-editorial-object-weight-proportionality';
+
 // Stage name for the style-guide conformance LLM check (#1303). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 096 (boot runs
@@ -300,6 +334,16 @@ export const KILL_YOUR_DARLINGS_STAGE = 'pipeline-editorial-kill-your-darlings';
 export const SENSORY_BALANCE_STAGE = 'pipeline-editorial-sensory-balance';
 export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
 
+// Stage name for the interiority-balance LLM check (#1623): visually dense but
+// emotionally empty scenes — heavy on description, light on POV reaction. Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 142 (boot runs
+// migrations but NOT setup-data, so the migration is required). Like the two
+// scene-grounding checks above it consumes the reverse-outline scene
+// segmentation as context and degrades to a whole-issue manuscript scan when no
+// outline exists.
+export const INTERIORITY_BALANCE_STAGE = 'pipeline-editorial-interiority-balance';
+
 // Stage name for the character-arc transition-detection LLM check (#1293). Ships
 // in data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 109 (boot runs
@@ -307,6 +351,18 @@ export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
 // stitched manuscript plus the reverse-outline scene map and the AUTHORED
 // per-character arcs to surface genuine change moments + flat-arc warnings.
 export const ARC_TRANSITIONS_STAGE = 'pipeline-editorial-arc-transitions';
+
+// Stage name for the character-arc regression / premature-closure LLM check
+// (#1619). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 141
+// (boot runs migrations but NOT setup-data, so the migration is required). Reads
+// the stitched manuscript plus the reverse-outline scene map and the AUTHORED
+// per-character arcs, tracks each character's progress across the issues, and
+// flags regression (growth then an unmotivated revert), a circular arc (ends
+// where it began), or premature closure (an arc resolved early then flat for the
+// rest of the series). Complements arc.transitions (which detects the change
+// MOMENTS) by judging the SHAPE of each character's progress across the whole arc.
+export const ARC_REGRESSION_STAGE = 'pipeline-editorial-arc-regression';
 
 // Stage name for the telling-not-showing-emotion LLM check (#1306). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
@@ -326,6 +382,13 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 // need no stage.
 export const ON_THE_NOSE_STAGE = 'pipeline-editorial-on-the-nose';
 export const VOICE_DISTINCTIVENESS_STAGE = 'pipeline-editorial-voice-distinctiveness';
+
+// Finding subtypes for `dialogue.on-the-nose` (#1626) — the stage prompt classifies
+// each subtext-free line into *why* it reads on-the-nose so the writer gets specific,
+// actionable feedback instead of a flat "on-the-nose" label. Surfaced on the finding
+// (and persisted comment) as `subtype`; the runner validates the model's value against
+// this allow-list and drops anything off-list (→ null) so a stray label can't leak through.
+export const ON_THE_NOSE_SUBTYPES = ['exposition', 'emotion-tell', 'relationship-report'];
 
 // Stage name for the narrator voice / tone-consistency LLM check (#1586) — the
 // narration-level sibling of voice-distinctiveness (which covers per-CHARACTER
@@ -549,6 +612,18 @@ export function continuityLedgerSummary(facts) {
 // deus ex machina, idiot plot, flat/unclear stakes, sagging middle, and dropped
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
+
+// Stage name for the series-wide pacing / intensity escalation-curve LLM check
+// (#1618). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration 140
+// (boot runs migrations but NOT setup-data, so the migration is required). Reads
+// the stitched manuscript plus the reverse-outline scene map and a deterministic
+// per-issue conflict-marker density tally, and scores the per-issue dramatic
+// intensity to flag a flat curve (issue 1 ≈ issue N), a front-loaded climax (the
+// biggest beat lands early), or stakes that plateau / de-escalate across the arc.
+// Complements plot.structure-momentum (flat stakes as one signal among many) by
+// focusing the lens on the whole-series escalation shape.
+export const PACING_ESCALATION_STAGE = 'pipeline-editorial-pacing-escalation-curve';
 
 // Stage name for the timeline / canon-contradiction LLM check (#1581). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
@@ -942,6 +1017,44 @@ function describeObjectAttachments(ctx) {
   return lines.join('\n') || '(no objects in canon)';
 }
 
+// A richer per-object weight summary for the weight-proportionality check
+// (#1624). Unlike describeObjectAttachments (which the unmotivated-interaction
+// check uses to know who already cares about an object), this surfaces the FULL
+// recorded weight an object carries going in — the prose significance plus every
+// attachment's emotion, per-bond significance, ORIGIN (the lineage/backstory),
+// and ROLE archetype — so the model can weigh that recorded backstory against
+// how prominent the object actually is in the manuscript. The origin/role fields
+// are exactly the "rich recorded backstory for a barely used object" signal the
+// over-weighted verdict depends on, which the leaner attachments summary omits.
+function describeObjectWeight(ctx) {
+  const { objects, nameById } = attachmentCanon(ctx);
+  const lines = [];
+  for (const o of objects) {
+    const atts = Array.isArray(o.attachments) ? o.attachments : [];
+    const sig = (o.significance || '').trim();
+    const head = `- ${o.name || o.id}${sig ? ` — significance: ${sig}` : ''}`;
+    if (!atts.length) {
+      lines.push(`${head}\n  attachments: none`);
+      continue;
+    }
+    const attLines = atts.map((a) => {
+      const who = nameById.get(a.characterId) || a.characterId || 'unknown';
+      const emotion = (a.emotion || '').trim();
+      const significance = (a.significance || '').trim();
+      const origin = (a.origin || '').trim();
+      const role = (a.role || '').trim();
+      const parts = [
+        `  • ${who}${emotion ? ` (${emotion})` : ''}${role ? ` [${role}]` : ''}`,
+      ];
+      if (significance) parts.push(`    significance: ${significance}`);
+      if (origin) parts.push(`    origin: ${origin}`);
+      return parts.join('\n');
+    });
+    lines.push(`${head}\n${attLines.join('\n')}`);
+  }
+  return lines.join('\n') || '(no objects in canon)';
+}
+
 // The attachment rows whose `origin` can be checked against the attached
 // character's `background` — both must be present, and the character must
 // still exist (a dangling characterId is the UI/sanitizer's concern, not this
@@ -1147,7 +1260,7 @@ export function buildSetupDigestPrompt({ focus, priorSummary, manuscript }) {
 // only — every other chunk, and every non-reserving check, keeps full manuscript
 // coverage. If the digest alone is larger than the whole window it still yields
 // (never prepended past the budget), preserving the no-overflow contract.
-async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false }) {
+async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk, crossChunkDigest = false, summarizeChunk = null, reserveSetupDigest = false, subtypes = null }) {
   const usableChars = Number.isFinite(chunks?.usableChars) ? chunks.usableChars : Infinity;
   const merged = new Map();
   // The presence of `summarizeChunk` (set only when the check opts into the
@@ -1200,6 +1313,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
       category,
       max,
       withIssueNumber: true,
+      subtypes,
     })) {
       const k = editorialFindingKey(f);
       if (!merged.has(k)) merged.set(k, f);
@@ -1255,7 +1369,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 // check). Existing checks ignore the extra args. These checks are all
 // manuscript-scoped, so findings keep a model-supplied issue number
 // (`withIssueNumber: true`).
-async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false }) {
+async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false, subtypes = null }) {
   const max = ctx.config?.maxFindings ?? 12;
   // Chunks are planned at the full usable budget; the digest is fitted into each
   // later chunk's spare room inside runChunkedManuscriptCheck (it yields to the
@@ -1290,6 +1404,7 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
     crossChunkDigest,
     summarizeChunk,
     reserveSetupDigest,
+    subtypes,
     callChunk: async (manuscript, meta) => {
       const { content } = await ctx.callStagedLLM(stage, buildVars(manuscript, meta, fittedContext), { returnsJson: true, source: stage });
       return content;
@@ -1302,11 +1417,21 @@ async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0,
 // check's `category`, coerce each string field, cap the count, and drop any
 // finding with no `problem`. `withIssueNumber` keeps a model-supplied issue
 // number (manuscript-scoped checks) vs. forcing null (canon-scoped checks).
-function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber }) {
+// `subtypes` (optional) is a per-check allow-list (#1626): when supplied, the
+// model's `subtype` is validated against it and stamped on the finding (off-list
+// or absent → null), letting a check sub-classify its findings (e.g. on-the-nose
+// → exposition / emotion-tell / relationship-report) without a new field on every
+// other check.
+function mapLlmFindings(raw, { severityDefault, category, max, withIssueNumber, subtypes = null }) {
   const list = Array.isArray(raw) ? raw : [];
+  const allowSubtype = Array.isArray(subtypes) && subtypes.length > 0;
   return list.slice(0, max).map((f) => ({
     severity: SEVERITIES.includes(f?.severity) ? f.severity : severityDefault,
     category,
+    // Optional per-check sub-classification. Only set when the check declares an
+    // allow-list AND the model returned a recognized value — null otherwise so a
+    // check with no subtypes (and an unrecognized label) carries a clean null.
+    subtype: allowSubtype && subtypes.includes(f?.subtype) ? f.subtype : null,
     location: typeof f?.location === 'string' ? f.location : '',
     problem: typeof f?.problem === 'string' ? f.problem : '',
     suggestion: typeof f?.suggestion === 'string' ? f.suggestion : '',
@@ -1416,6 +1541,40 @@ function readingGradeLevel(text) {
   if (words.length === 0) return null;
   const syllables = words.reduce((sum, w) => sum + countSyllables(w), 0);
   return 0.39 * (words.length / sentences) + 11.8 * (syllables / words.length) - 15.59;
+}
+
+// Per-scene reading-grade spread (#1625). The whole-corpus grade above is a single
+// number for the entire series — it averages away the legitimate modulation a
+// skilled writer uses (a quiet introspective scene reads lower, an action scene
+// higher) AND it hides a lone scene that swings far outside the intended band.
+// Splits the manuscript into scenes via the shared `splitScenes` (markdown
+// headings — including the stitcher's `# Issue N` — and centered rules like
+// "***") and measures each one, so the check can surface the outliers the corpus
+// average conceals. Scenes shorter than `minWords` are skipped: a brief fragment's
+// FK estimate is too noisy to judge. Returns one row per measurable scene
+// (`{ ordinal, grade, words, text }`), or [] when none qualify.
+function readingLevelByScene(manuscript, minWords) {
+  const floor = Number.isFinite(minWords) ? minWords : 120;
+  const rows = [];
+  for (const scene of splitScenes(String(manuscript || ''))) {
+    const words = (scene.text.match(WORD_RE) || []).length;
+    if (words < floor) continue;
+    const grade = readingGradeLevel(scene.text);
+    if (grade == null) continue;
+    rows.push({ ordinal: scene.ordinal, grade: Math.round(grade * 10) / 10, words, text: scene.text });
+  }
+  return rows;
+}
+
+// First substantive line of a scene, trimmed to a short anchor so a per-scene
+// finding lands on real prose the editor can locate. Skips blank lines; falls
+// back to '' for a whitespace-only scene.
+function sceneReadingAnchor(text) {
+  for (const line of String(text || '').split('\n')) {
+    const t = line.trim();
+    if (t) return t.length > 80 ? `${t.slice(0, 80).trim()}…` : t;
+  }
+  return '';
 }
 
 // Compact bullet list of the conformance-relevant style-guide expectations, fed
@@ -1734,6 +1893,77 @@ export function plotlineCoverageSummary(plotlines, scenes) {
   }).filter(Boolean);
   if (!rows.length) return '';
   return `Plotlines (from the reverse outline — reconcile dropped subplots against these):\n${rows.join('\n')}`;
+}
+
+// Curated lexicon of conflict / stakes / high-intensity markers (#1618). A
+// per-issue tally of these words is a crude-but-deterministic proxy for dramatic
+// intensity: the escalation-curve check can't "feel" tension, but it CAN see
+// whether the density of conflict language rises, plateaus, or falls across the
+// issues. The model treats the tally as a hint (not ground truth) and confirms
+// the curve against the prose — so a quiet-but-tense scene the lexicon misses is
+// still caught. Word-boundary matched, case-insensitive; kept deliberately small
+// and high-signal (physical conflict + danger/stakes) to limit false hits.
+const CONFLICT_INTENSITY_MARKERS = Object.freeze([
+  // physical conflict / violence
+  'attack', 'attacks', 'attacked', 'fight', 'fights', 'fought', 'fighting',
+  'strike', 'strikes', 'struck', 'punch', 'punched', 'stab', 'stabbed', 'shoot',
+  'shoots', 'shot', 'kill', 'kills', 'killed', 'die', 'dies', 'died', 'death',
+  'blood', 'bleeding', 'wound', 'wounded', 'scream', 'screams', 'screamed',
+  'shout', 'shouted', 'slam', 'slammed', 'crash', 'crashed',
+  // danger / stakes / dread
+  'danger', 'dangerous', 'threat', 'threats', 'threaten', 'threatened', 'enemy',
+  'enemies', 'weapon', 'weapons', 'gun', 'guns', 'knife', 'fire', 'fired',
+  'fires', 'firing', 'explode', 'exploded', 'explosion', 'fear', 'terror',
+  'panic', 'desperate', 'betray',
+  'betrayed', 'betrayal', 'trap', 'trapped', 'flee', 'fled', 'chase', 'chased',
+  'escape', 'war', 'battle', 'dying', 'doom', 'doomed',
+]);
+
+// Tally the conflict-marker density per issue across the WHOLE stitched manuscript
+// (#1618) so the escalation-curve check sees the complete intensity shape on every
+// chunk. Splits on the `# Issue N` headers the manuscript stitcher emits, counts
+// markers + words per issue, and reports markers-per-1k-words — normalizing out
+// raw length so a long-but-quiet issue doesn't read as more intense than a short
+// climactic one. Pure + deterministic so it's unit-testable and its token cost can
+// be counted into the per-chunk overhead. Returns '' when there are no issue
+// headers (the prompt's `{{#intensityTally}}` section then renders nothing and the
+// check judges the curve from the prose + scene map alone). A header that repeats
+// across the stitch (a chunk boundary mid-issue) sums into the same issue bucket.
+export function conflictIntensityTally(manuscript) {
+  const text = typeof manuscript === 'string' ? manuscript : '';
+  if (!text.trim()) return '';
+  const headerRe = /^#+\s*Issue\s+(\d+)\b[^\n]*$/gim;
+  const sections = [];
+  let match;
+  let prev = null;
+  while ((match = headerRe.exec(text)) !== null) {
+    if (prev) prev.end = match.index;
+    prev = { issue: Number(match[1]), start: headerRe.lastIndex, end: text.length };
+    sections.push(prev);
+  }
+  if (!sections.length) return '';
+  const markerRe = new RegExp(`\\b(?:${CONFLICT_INTENSITY_MARKERS.join('|')})\\b`, 'gi');
+  // Sum duplicate issue numbers (a repeated header across a stitch) — keep numeric
+  // order so the rendered curve reads issue 1 → N for the model.
+  const byIssue = new Map();
+  for (const sec of sections) {
+    const body = text.slice(sec.start, sec.end);
+    const words = (body.match(/\b[\w']+\b/g) || []).length;
+    const markers = (body.match(markerRe) || []).length;
+    const acc = byIssue.get(sec.issue) || { words: 0, markers: 0 };
+    byIssue.set(sec.issue, { words: acc.words + words, markers: acc.markers + markers });
+  }
+  const rows = [...byIssue.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([issue, { words, markers }]) => {
+      const density = words > 0 ? (markers / words) * 1000 : 0;
+      return `- Issue ${issue}: ${markers} conflict marker${markers === 1 ? '' : 's'} across `
+        + `${words} word${words === 1 ? '' : 's'} (${density.toFixed(1)} per 1k)`;
+    });
+  if (!rows.length) return '';
+  return 'Conflict-marker density per issue (deterministic intensity proxy — a rising '
+    + 'number suggests escalation, a flat or falling one a plateau / de-escalation; '
+    + 'treat as a hint and confirm against the prose):\n' + rows.join('\n');
 }
 
 // Human-readable POV-person labels for the head-hopping check's prompt (#1311).
@@ -3361,6 +3591,49 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'scene.interiority-balance',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Interiority balance (visually dense / emotionally empty scenes)',
+    description:
+      'Flags scenes that are description-dense yet emotionally empty — prose heavy on setting, blocking, and physical detail but light on the viewpoint character\'s reaction, emotion, or thought, so description swamps interiority ("500 words of setting, zero POV reaction"). Judges the description-to-interiority ratio within each scene. Reads the stitched manuscript plus the reverse-outline scene segmentation, degrading to a whole-issue scan when no outline exists. Distinct from sensory balance (which weighs the five senses) and from interiority.protagonist (which flags whole-issue interiority absence) — the gap here is the in-scene balance: vivid outside, empty inside.',
+    scope: 'scene',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk). It's
+      // context only — the check degrades gracefully to a whole-issue scan when
+      // no reverse outline exists (the prompt's {{#sceneMap}} renders nothing).
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: INTERIORITY_BALANCE_STAGE,
+        category: 'style',
+        context: { sceneMap },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
+      });
+    },
+  },
+  {
     id: 'pov.justified',
     sources: ['reverseOutline', 'editorialArcs'],
     label: 'POV justification (every viewpoint earns its arc)',
@@ -3480,6 +3753,171 @@ export const EDITORIAL_CHECKS = [
           });
         }
       }
+      return findings;
+    },
+  },
+  {
+    id: 'pov.economy',
+    sources: ['reverseOutline'],
+    label: 'POV economy (count vs series length, late-introduced viewpoints)',
+    description:
+      'Deterministic structural read of the reverse-outline POV-per-scene map at the SERIES level: flags too many viewpoints for the run length (N POV characters across M issues, each barely developed) and a POV introduced too late to earn its place (first appears in the final stretch of the run and holds only a scene or two). The acceptable POV-to-issue ratio and the late-introduction window are per-series tunable. Complements pov.justified (#1295, which asks whether each individual viewpoint earns an arc) by judging the viewpoint ROSTER as a whole. Degrades gracefully when the outline carries no issue numbers — without a series length neither signal can be judged, so the check stays silent.',
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'arc',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    configSchema: z.object({
+      // Max POV holders per issue before the roster reads as too crowded for the
+      // run length. 0.5 ≈ one viewpoint per two issues; a 12-issue run supports ~6
+      // POVs, a 7th-and-up trips the check. Raise for ensemble books, lower for a
+      // tight single-lead arc.
+      maxPovPerIssue: z.number().min(0.05).max(10).default(0.5),
+      // Don't judge POV economy on a run shorter than this many issues — a one- or
+      // two-issue book is too short for a count-vs-length verdict.
+      minIssues: z.number().int().min(1).max(100).default(3),
+      // A POV whose FIRST appearance falls this far into the issue span (0–1) is
+      // "late". 0.8 ⇒ the final fifth of the run. Only fires alongside the
+      // underdevelopment guard below.
+      lateIntroIssueFraction: z.number().min(0).max(1).default(0.8),
+      // A late POV is flagged only when it is ALSO underdeveloped — held in this
+      // many scenes or fewer. 0 disables the late-introduction check.
+      lateIntroMaxScenes: z.number().int().min(0).max(50).default(2),
+    }),
+    configFields: [
+      {
+        key: 'maxPovPerIssue',
+        label: 'Max POV characters per issue',
+        type: 'number',
+        min: 0.05,
+        max: 10,
+        step: 0.05,
+        help: 'Flag the roster as too crowded when POV count exceeds this many viewpoints per issue. 0.5 ≈ one viewpoint every two issues (a 12-issue run supports ~6 POVs). Raise for an ensemble book, lower for a single-lead arc.',
+      },
+      {
+        key: 'minIssues',
+        label: 'Minimum issues to judge economy',
+        type: 'number',
+        min: 1,
+        max: 100,
+        step: 1,
+        help: 'Skip the economy verdict for a run shorter than this — too short for a count-vs-length judgment.',
+      },
+      {
+        key: 'lateIntroIssueFraction',
+        label: 'Late-introduction window (fraction of run)',
+        type: 'number',
+        min: 0,
+        max: 1,
+        step: 0.05,
+        help: 'A POV whose first appearance falls this far into the issue span is "late". 0.8 = the final fifth of the run.',
+      },
+      {
+        key: 'lateIntroMaxScenes',
+        label: 'Late POV underdevelopment threshold (max scenes)',
+        type: 'number',
+        min: 0,
+        max: 50,
+        step: 1,
+        help: 'Flag a late-introduced POV only when it is also underdeveloped — held in this many scenes or fewer. 0 disables the late-introduction check.',
+      },
+    ],
+    // Needs a generated reverse outline with at least one POV-tagged scene to read.
+    gate: (ctx) => Array.isArray(ctx.reverseOutline)
+      && ctx.reverseOutline.some((s) => s && typeof s.povCharacter === 'string' && s.povCharacter.trim()),
+    run: (ctx) => {
+      const scenes = Array.isArray(ctx.reverseOutline) ? ctx.reverseOutline : [];
+      const cfg = ctx.config || {};
+      const maxPovPerIssue = Number.isFinite(cfg.maxPovPerIssue) ? cfg.maxPovPerIssue : 0.5;
+      const minIssues = Number.isInteger(cfg.minIssues) ? cfg.minIssues : 3;
+      const lateFraction = Number.isFinite(cfg.lateIntroIssueFraction) ? cfg.lateIntroIssueFraction : 0.8;
+      const lateMaxScenes = Number.isInteger(cfg.lateIntroMaxScenes) ? cfg.lateIntroMaxScenes : 2;
+      const severity = ctx.severityDefault || 'low';
+
+      // 1 or 2 POV characters is never a "too many viewpoints" roster, whatever the
+      // ratio — the dilution concern is fundamentally about an absolute crowd, and a
+      // 2-POV / 3-issue book shares the same 0.67 ratio as the 8-POV / 12-issue book
+      // the check targets. So the count signal also requires this absolute floor; the
+      // ratio is the tunable, this is a structural truth (not a knob).
+      const MIN_POV_TO_FLAG = 3;
+
+      // POV holder → { name, scenes[], firstIssue }, keyed by normalized name so
+      // casing/spacing variants collapse into one holder (mirrors pov.justified).
+      // Preserves first-appearance order (scenes arrive sequence-ordered).
+      const holders = new Map();
+      const issueSet = new Set();
+      for (const s of scenes) {
+        if (!s || typeof s !== 'object') continue;
+        const issueNumber = Number.isInteger(s.issueNumber) ? s.issueNumber : null;
+        if (issueNumber != null) issueSet.add(issueNumber);
+        const pov = typeof s.povCharacter === 'string' ? s.povCharacter.trim() : '';
+        if (!pov) continue;
+        const key = normalizeName(pov);
+        if (!key) continue;
+        let entry = holders.get(key);
+        if (!entry) { entry = { name: pov, key, scenes: [], firstIssue: issueNumber }; holders.set(key, entry); }
+        entry.scenes.push(s);
+        if (issueNumber != null && (entry.firstIssue == null || issueNumber < entry.firstIssue)) {
+          entry.firstIssue = issueNumber;
+        }
+      }
+      const povCount = holders.size;
+      if (povCount === 0) return [];
+
+      // Issue count drives the count-vs-length ratio AND locates "late". Without
+      // issue numbers we can't judge against series length, so both signals stay
+      // silent (graceful degradation — the outline rode peer sync and an older /
+      // hand-edited peer may carry untagged scenes).
+      const issueCount = issueSet.size;
+
+      const findings = [];
+      const flag = ({ location, problem, suggestion, anchorQuote = '', issueNumber = null }) =>
+        findings.push({ severity, category: 'arc', location, problem, suggestion, anchorQuote, issueNumber });
+
+      // 1) Too many POVs for the run length. Only when the run is long enough to
+      //    judge (minIssues), the roster clears the absolute floor, and the count
+      //    exceeds the configured viewpoints-per-issue budget.
+      if (issueCount >= minIssues && maxPovPerIssue > 0 && povCount >= MIN_POV_TO_FLAG) {
+        const budget = Math.floor(issueCount * maxPovPerIssue);
+        if (povCount > budget) {
+          const names = [...holders.values()].map((h) => h.name).join(', ');
+          const perIssues = (1 / maxPovPerIssue).toFixed(1);
+          flag({
+            location: 'Series',
+            problem: `${povCount} POV characters across ${issueCount} issue${issueCount === 1 ? '' : 's'} (${names}) — more viewpoints than the run length can develop. At roughly one viewpoint per ${perIssues} issues this run supports about ${budget}; each viewpoint past that gets less room and the narrative fragments.`,
+            suggestion: `Consolidate viewpoints — fold the thinnest POVs into a stronger character's perspective, or cut them — until the roster fits the run (about ${budget} for ${issueCount} issues), or raise "Max POV characters per issue" if this is a deliberate ensemble.`,
+          });
+        }
+      }
+
+      // 2) Late-introduced, underdeveloped POV. A viewpoint whose first appearance
+      //    lands in the final stretch of the run AND that holds only a scene or two
+      //    never earns its place. Needs an issue span to locate "late".
+      if (lateMaxScenes > 0 && issueCount >= minIssues) {
+        const issues = [...issueSet];
+        const minIssue = Math.min(...issues);
+        const maxIssue = Math.max(...issues);
+        const span = maxIssue - minIssue;
+        if (span > 0) {
+          for (const holder of holders.values()) {
+            if (holder.firstIssue == null) continue;
+            const sceneCount = holder.scenes.length;
+            if (sceneCount > lateMaxScenes) continue;
+            const position = (holder.firstIssue - minIssue) / span;
+            if (position < lateFraction) continue;
+            const first = holder.scenes[0];
+            const anchorQuote = typeof first?.anchorQuote === 'string' ? first.anchorQuote : '';
+            flag({
+              location: `Issue ${holder.firstIssue}: ${sceneLabel(first)}`,
+              problem: `"${holder.name}" first takes the viewpoint in issue ${holder.firstIssue} of ${minIssue}–${maxIssue} and holds POV in only ${sceneCount} scene${sceneCount === 1 ? '' : 's'} — a viewpoint introduced too late to develop. A fresh POV arriving in the final stretch reads as a structural seam rather than an earned perspective.`,
+              suggestion: `Seed "${holder.name}"'s viewpoint earlier so it has room to pay off, route these late scenes through an established POV character, or cut the viewpoint if it exists only to deliver late information.`,
+              anchorQuote,
+              issueNumber: holder.firstIssue,
+            });
+          }
+        }
+      }
+
       return findings;
     },
   },
@@ -3897,6 +4335,104 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'arc.regression',
+    sources: ['manuscript', 'reverseOutline', 'series.characterArcs'],
+    label: 'Character-arc regression / premature closure',
+    description:
+      'LLM scan of the SHAPE of each character\'s progress across the whole series — not the change moments themselves (that is arc.transitions) but whether the arc holds together end to end. Flags an unmotivated REGRESSION (a character grows, then reverts to their old self with no purpose or earned reason — distinct from a deliberate, dramatized relapse), a CIRCULAR arc (the character ends in the same state they began, the growth cancelled out with nothing gained), and PREMATURE CLOSURE (the arc fully resolves early — e.g. issue 3 of 10 — and the character is flat for the rest of the series, deflating the back half). Reads the stitched manuscript plus the reverse-outline scene map and the AUTHORED per-character arcs (series.characterArcs) to reconcile the planned end-state against what the prose delivers; degrades to a whole-manuscript scan when no outline or authored arcs exist. Whole-arc verdicts are gated to the final manuscript part so a mid-arc character whose later growth is still ahead is not false-flagged.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'arc',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
+      // context: the authored arcs name each character's planned start → end state
+      // so the model can tell a regression/circular arc from the intended ending,
+      // and the scene map lets it attribute a finding to a scene + issue. The check
+      // degrades gracefully — no authored arcs ⇒ {{#characterArcs}} renders nothing
+      // and the model judges the arc shape from the prose alone; no outline ⇒
+      // {{#sceneMap}} renders nothing.
+      const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: ARC_REGRESSION_STAGE,
+        category: 'arc',
+        // sceneMap grows unbounded with scene count; characterArcs is bounded by the
+        // roster — so largest-first trimming absorbs the cut into sceneMap.
+        context: { characterArcs, sceneMap },
+        // `isFinal` gates the whole-arc verdicts — regression, a circular arc, and
+        // premature closure can only be judged once the WHOLE arc is in view. An
+        // earlier chunk can't know a reverted character grows back, an apparent
+        // circle re-opens, or a "resolved" arc keeps developing — so it would
+        // false-flag. A single-chunk run is its own final part and judges the whole
+        // text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          characterArcs: c.characterArcs,
+          sceneMap: c.sceneMap,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // Each character's progress accrues across the whole manuscript — the
+        // findings digest keeps prior findings in view so a non-final chunk doesn't
+        // pre-flag, and the clean-setup digest rolls forward each character's
+        // start-state, peak growth, and latest state so the final chunk can detect a
+        // revert, a closed circle, or an arc that resolved early and went flat.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        // #1667: this check's verdict is gated to the final part AND anchored on the
+        // carried per-character progress digest — without it the final call would
+        // judge only the last chunk plus a summary and could not tell whether a
+        // character's growth peaked then reverted earlier. So the digest must reach
+        // the final chunk even when it's packed to the window — reserve room by
+        // trimming the final chunk's manuscript tail rather than silently dropping it
+        // (mirrors arc.climax-agency / pacing.escalation-curve).
+        //
+        // Tradeoff (the reserve only bites when the manuscript spans many chunks AND
+        // the final chunk is packed to within the digest's size of the window — a
+        // single-chunk run, the common provider-fits-the-book case, has no digest and
+        // keeps the whole ending): trimming the final chunk's tail can clip the very
+        // end-state this check reads for a circular arc or a late regression. Reserve
+        // is still the right call because the START state and any EARLY resolution —
+        // the anchors a circular-arc / premature-closure verdict cannot be made
+        // without — live ONLY in the digest, while the ending is still mostly covered
+        // by the final chunk's HEAD plus the carried "latest state" the setupFocus
+        // rolls forward. Dropping the digest would keep the last few hundred chars of
+        // ending but lose the beginning, which is the worse failure for an arc-SHAPE
+        // judgment. The setupFocus below carries each character's start/peak/latest so
+        // the lag is one chunk, not the whole history.
+        reserveSetupDigest: true,
+        setupFocus: 'For each named character who carries an arc, track their progress so far as a '
+          + 'short trajectory: their START state, the PEAK of their growth (the most-changed point '
+          + 'reached and which issue it landed in), and their LATEST state. Note when a character '
+          + 'who had grown reverts toward their old self (a possible regression — record whether the '
+          + 'revert is dramatized/earned or unmotivated), and when a character\'s arc appears fully '
+          + 'RESOLVED (their want/need settled) and which issue it resolved in, so a later part can '
+          + 'tell a genuinely premature closure (resolved early then flat) or a circular arc (ended '
+          + 'where it began) from an arc whose further development simply has not arrived yet.',
+      });
+    },
+  },
+  {
     id: 'plot.structure-momentum',
     sources: ['manuscript', 'reverseOutline', 'reverseOutline.plotlines', 'series.arc.readerMap'],
     label: 'Plot structure & momentum',
@@ -3965,6 +4501,83 @@ export const EDITORIAL_CHECKS = [
           + 'the stakes established so far and whether they have escalated; and any setup '
           + '(a planted problem, a coincidence, a try-fail attempt) a later part should pay off, '
           + 'so a later chunk can tell a genuinely dropped subplot or flat-stakes arc from one whose payoff simply has not arrived yet.',
+      });
+    },
+  },
+  {
+    id: 'pacing.escalation-curve',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Pacing — escalation curve',
+    description:
+      'LLM scan of the SERIES-WIDE escalation curve: it scores each issue\'s dramatic intensity (stakes, conflict, tension) and flags a curve that fails to build — flat intensity (issue 1 reads as intensely as issue N), a front-loaded climax (the biggest reveal / set-piece lands early and the rest coasts), or stakes that plateau or de-escalate across the arc. Reads the stitched manuscript plus the reverse-outline scene map and a deterministic per-issue conflict-marker density tally (a grounding hint the model confirms against the prose); degrades to a whole-manuscript scan when no outline exists. Subsumes "conflict escalation" as one signal of the same curve and complements plot.structure-momentum (which flags flat stakes as one of many macro pathologies) by focusing the lens on the whole-series intensity shape.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'pacing',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // Both blocks are fixed per-call overhead (re-sent on each chunk) and pure
+      // context: the scene map lets the model attribute escalation findings to a
+      // scene + issue, and the conflict-marker tally — computed once over the WHOLE
+      // manuscript so the curve is complete on every chunk — grounds the per-issue
+      // intensity scoring with a deterministic density signal. The check degrades
+      // gracefully — no outline ⇒ {{#sceneMap}} renders nothing; no issue headers ⇒
+      // {{#intensityTally}} renders nothing and the model scores intensity from the
+      // prose alone.
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const intensityTally = conflictIntensityTally(ctx.manuscript);
+      return runManuscriptLlmCheck(ctx, {
+        stage: PACING_ESCALATION_STAGE,
+        category: 'pacing',
+        // sceneMap grows unbounded with scene count; intensityTally is bounded by
+        // issue count — so largest-first trimming absorbs the cut into sceneMap.
+        context: { sceneMap, intensityTally },
+        // `isFinal` gates the whole-curve judgments — a flat curve, a front-loaded
+        // climax, and a plateaued/de-escalating arc can only be judged once the
+        // whole manuscript is in view; an earlier chunk can't know intensity rises
+        // later, so it would false-flag.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          sceneMap: c.sceneMap,
+          intensityTally: c.intensityTally,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // Intensity accrues across the whole manuscript — the findings digest keeps
+        // prior findings in view so a later chunk doesn't re-flag, and the clean-
+        // setup digest rolls forward the per-issue intensity seen so far so a later
+        // climax isn't mis-read as a flat or front-loaded curve.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        // #1667: this check's whole-curve verdict is gated to the final part AND
+        // anchored on the carried per-issue intensity digest — without it the final
+        // call would judge only the last chunk plus the crude tally. So the digest
+        // must reach the final chunk even when it's packed to the window — reserve
+        // room by trimming the final chunk's manuscript tail rather than silently
+        // dropping it (mirrors arc.climax-agency / emotion.reaction-proportionality).
+        reserveSetupDigest: true,
+        setupFocus: 'For each issue/part seen so far, note the level of dramatic intensity '
+          + '(stakes, conflict, tension) and whether it has been rising, holding flat, or '
+          + 'falling, so a later chunk can judge the WHOLE escalation curve and tell a genuinely '
+          + 'flat or front-loaded arc from one whose climax simply has not arrived yet.',
       });
     },
   },
@@ -4566,6 +5179,87 @@ export const EDITORIAL_CHECKS = [
     },
   },
   {
+    id: 'objects.weight-proportionality',
+    sources: ['manuscript', 'canon'],
+    label: 'Object narrative-weight proportionality',
+    description:
+      'LLM check — flags objects whose narrative weight is disproportionate to their prominence: a minor item the prose barely uses yet given a heavy backstory or significance ("a one-line locket with a three-issue origin"), or a climactic / decisive object with little or no established lineage to earn its weight ("an heirloom that resolves the finale, never set up"). Weighs each object\'s prominence in the manuscript against the depth of backstory and payoff established for it — the canon\'s recorded significance/attachments plus what the prose itself plants and pays off. Distinct from objects.unattached-significant (presence of an attachment), objects.unmotivated-interaction (a single unmotivated beat), and objects.backstory-consistency (an origin that contradicts a character\'s background) — the gap here is the over- or under-writing of plot machinery.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'plot',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a large object roster can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a large object roster can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The per-object weight summary (prose significance + every attachment's
+      // emotion / per-bond significance / origin lineage / role) is fixed per-call
+      // overhead re-sent on each chunk — trimmed by the runner to keep the
+      // manuscript a budget floor. It surfaces the FULL recorded backstory an
+      // object carries (the origin/role fields the leaner attachments summary
+      // omits) so the model can weigh that against the object's prose prominence.
+      const objects = describeObjectWeight(ctx);
+      return runManuscriptLlmCheck(ctx, {
+        stage: OBJECT_WEIGHT_STAGE,
+        category: 'plot',
+        context: { objects },
+        // `finalPart` gates the whole-corpus verdict. Both directions of this check
+        // are whole-story claims: "over-weighted" needs the object's TOTAL prominence
+        // (a non-final chunk can't know a barely-used object pays off later), and
+        // "under-established" needs the object's TOTAL lineage (the backstory may sit
+        // in an earlier chunk, carried in the setup digest). runChunkedManuscriptCheck
+        // merges findings first-wins and never retracts, so an imbalance reported from
+        // a non-final chunk would persist even after a later chunk clears it — so a
+        // non-final chunk only carries setup forward and the verdict waits for the
+        // final part. A single-chunk run is its own final part and judges the whole text.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          objects: c.objects,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // An object's backstory can be planted in an early chapter and its
+        // prominence (or payoff) land much later; the findings digest stops a
+        // later chunk re-flagging the same imbalance the prose only half-shows.
+        crossChunkDigest: true,
+        // …and a cleanly proportioned object produces no finding, so the findings
+        // digest alone can't carry it forward — roll a setup summary of each
+        // object and the backstory/significance the prose has established so the
+        // final part weighs a payoff against the full lineage, not just its chunk.
+        crossChunkSetup: true,
+        // #1667: the verdict is gated to the final part and weighs each object against
+        // its carried prominence/lineage snapshot, so guarantee the setup digest reaches
+        // the final chunk (trim its manuscript tail to fit) rather than letting a packed
+        // final chunk drop the snapshot and judge an object on its last chunk alone.
+        reserveSetupDigest: true,
+        setupFocus: 'List the objects/items the story features and, for each, how prominent or decisive it has '
+          + 'been so far and the depth of backstory, lineage, or significance the prose or canon has established '
+          + 'for it. CRUCIALLY, because the weight verdict is deferred to the final part and the earlier text is '
+          + 'no longer in view by then: for every object record which issue(s) it appears in AND a SHORT verbatim '
+          + 'snippet (≤ 200 chars) of its most weight-bearing moment (a heavy backstory beat, or a prominent / '
+          + 'climactic use) — the snippet is required so the final part can quote it as the finding anchor. This '
+          + 'lets the final part weigh a payoff against the full established weight, and still attribute and quote '
+          + 'an imbalance whose evidence sits pages earlier, not just in the current part.',
+      });
+    },
+  },
+  {
     id: 'prose.info-dumping',
     sources: ['manuscript'],
     label: 'Info-dumping / "as you know, Bob" exposition',
@@ -4647,7 +5341,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript', 'series.styleGuide'],
     label: 'Reading-level conformance',
     description:
-      "Measures the drafted manuscript's reading grade level (Flesch–Kincaid) and flags it when it drifts beyond a tolerance from the series style guide's target reading level.",
+      "Measures the drafted manuscript's reading grade level (Flesch–Kincaid) and flags it when the whole-corpus level drifts beyond a tolerance from the series style guide's target. Also reports per-scene reading-level variance: a single scene whose grade swings far outside the target band (target ± scene tolerance) is flagged even when the corpus average sits on target — surfacing the modulation a one-number check averages away.",
     scope: 'series',
     kind: 'deterministic',
     category: 'style',
@@ -4656,19 +5350,57 @@ export const EDITORIAL_CHECKS = [
     // Reads the stitched manuscript to measure the actual grade level.
     needsManuscript: true,
     configSchema: z.object({
-      // How many grade levels the measured reading level may drift from the
+      // How many grade levels the whole-corpus reading level may drift from the
       // target before it's flagged.
       tolerance: z.number().int().min(0).max(6).default(2),
+      // Half-width of the per-scene target band: a scene whose grade lands more
+      // than this many levels from the target is flagged as an out-of-band swing.
+      // Wider than `tolerance` by default — scenes legitimately modulate, so only
+      // the extreme outliers are worth a finding.
+      sceneTolerance: z.number().int().min(1).max(8).default(4),
+      // Minimum words a scene needs before its reading level is judged — a short
+      // fragment's FK estimate is too noisy to trust.
+      minSceneWords: z.number().int().min(20).max(2000).default(120),
+      // Cap per-scene findings so a long manuscript with many outliers can't
+      // flood the review (worst swings are reported first).
+      maxSceneFindings: z.number().int().min(1).max(20).default(5),
     }),
     configFields: [
       {
         key: 'tolerance',
-        label: 'Reading-level tolerance (grades)',
+        label: 'Whole-corpus tolerance (grades)',
         type: 'number',
         min: 0,
         max: 6,
         step: 1,
-        help: 'How many grade levels the measured reading level may differ from the style-guide target before it is flagged.',
+        help: 'How many grade levels the whole-manuscript reading level may differ from the style-guide target before it is flagged.',
+      },
+      {
+        key: 'sceneTolerance',
+        label: 'Per-scene band tolerance (grades)',
+        type: 'number',
+        min: 1,
+        max: 8,
+        step: 1,
+        help: 'Half-width of the per-scene target band. A single scene whose reading level swings more than this many grades from the target is flagged, even when the whole-manuscript average is on target.',
+      },
+      {
+        key: 'minSceneWords',
+        label: 'Minimum scene words to measure',
+        type: 'number',
+        min: 20,
+        max: 2000,
+        step: 10,
+        help: 'Scenes shorter than this are skipped — a brief fragment is too short for a reliable reading-level estimate.',
+      },
+      {
+        key: 'maxSceneFindings',
+        label: 'Max per-scene findings',
+        type: 'number',
+        min: 1,
+        max: 20,
+        step: 1,
+        help: 'Cap on per-scene out-of-band findings so a long manuscript can not flood the review. The widest swings are reported first.',
       },
     ],
     // Only run when the style guide sets a target AND there's prose to measure.
@@ -4680,22 +5412,63 @@ export const EDITORIAL_CHECKS = [
       const grade = readingGradeLevel(ctx.manuscript);
       if (grade == null) return [];
       const tolerance = ctx.config?.tolerance ?? 2;
+      const sceneTolerance = ctx.config?.sceneTolerance ?? 4;
+      const minSceneWords = ctx.config?.minSceneWords ?? 120;
+      const maxSceneFindings = ctx.config?.maxSceneFindings ?? 5;
+      const findings = [];
+
+      // 1. Whole-corpus drift from the target (the original #1303 behavior).
       const rounded = Math.round(grade * 10) / 10;
       const delta = rounded - target;
-      if (Math.abs(delta) <= tolerance) return [];
-      const tooHard = delta > 0;
-      const off = Math.round(Math.abs(delta) * 10) / 10;
-      return [{
-        severity: ctx.severityDefault,
-        category: 'style',
-        location: 'Series manuscript (whole-corpus reading level)',
-        problem: `The drafted manuscript reads at about a grade-${rounded} level, ${tooHard ? 'above' : 'below'} the style-guide target of grade ${target} (off by ${off} grade${off === 1 ? '' : 's'}).`,
-        suggestion: tooHard
-          ? 'Shorten sentences and prefer plainer words to bring the reading level down toward the target.'
-          : 'Vary sentence length and vocabulary to raise the reading level toward the target.',
-        anchorQuote: '',
-        issueNumber: null,
-      }];
+      if (Math.abs(delta) > tolerance) {
+        const tooHard = delta > 0;
+        const off = Math.round(Math.abs(delta) * 10) / 10;
+        findings.push({
+          severity: ctx.severityDefault,
+          category: 'style',
+          location: 'Series manuscript (whole-corpus reading level)',
+          problem: `The drafted manuscript reads at about a grade-${rounded} level, ${tooHard ? 'above' : 'below'} the style-guide target of grade ${target} (off by ${off} grade${off === 1 ? '' : 's'}).`,
+          suggestion: tooHard
+            ? 'Shorten sentences and prefer plainer words to bring the reading level down toward the target.'
+            : 'Vary sentence length and vocabulary to raise the reading level toward the target.',
+          anchorQuote: '',
+          issueNumber: null,
+        });
+      }
+
+      // 2. Per-scene variance (#1625): flag scenes whose grade falls outside the
+      // target band [target ± sceneTolerance]. The whole-corpus average above can
+      // hide a lone scene that swings far past the band, so report the worst
+      // out-of-band swings (capped). Needs at least 2 measurable scenes — a
+      // single-scene corpus has no spread to report beyond the whole-corpus check.
+      const bandLow = target - sceneTolerance;
+      const bandHigh = target + sceneTolerance;
+      const scenes = readingLevelByScene(ctx.manuscript, minSceneWords);
+      if (scenes.length >= 2) {
+        // How far a grade sits OUTSIDE the band (0 inside; positive when out) —
+        // the filter and the worst-first sort share this one definition.
+        const outsideBand = (g) => Math.max(g - bandHigh, bandLow - g, 0);
+        const outliers = scenes
+          .filter((s) => outsideBand(s.grade) > 0)
+          .sort((a, b) => outsideBand(b.grade) - outsideBand(a.grade))
+          .slice(0, maxSceneFindings);
+        for (const s of outliers) {
+          const tooHard = s.grade > bandHigh;
+          findings.push({
+            severity: ctx.severityDefault,
+            category: 'style',
+            location: `Series manuscript — scene ${s.ordinal} (${s.words} words)`,
+            problem: `Scene ${s.ordinal} reads at about a grade-${s.grade} level, ${tooHard ? 'above' : 'below'} the target band of grade ${bandLow}–${bandHigh} (target ${target} ± ${sceneTolerance}). A single scene swinging this far outside the band is hidden by the whole-corpus average.`,
+            suggestion: tooHard
+              ? 'If this scene is meant to read denser (action, exposition), confirm it is intentional; otherwise shorten sentences and simplify vocabulary to pull it toward the band.'
+              : 'If this scene is meant to read simpler (quiet introspection, sparse dialogue), confirm it is intentional; otherwise vary sentence length and vocabulary to raise it toward the band.',
+            anchorQuote: sceneReadingAnchor(s.text),
+            issueNumber: null,
+          });
+        }
+      }
+
+      return findings;
     },
   },
   {
@@ -5018,6 +5791,41 @@ export const EDITORIAL_CHECKS = [
     }),
   },
   {
+    id: 'prose.hedge-words',
+    sources: ['manuscript'],
+    label: 'Hedge / weasel words (distance markers)',
+    description:
+      'Flags hedge and weasel constructions that soften prose and back the reader out of the moment — metaphorical distance ("as if", "somewhere deep inside", "almost", "part of him"), dialogue/cognitive hedges ("kind of", "sort of", "I suppose", "more or less"), and cognitive weasel words ("surely", "no doubt", "obviously", "of course"). Density-scaled per-1000-word frequency: an occasional hedge is fine, a steady drumbeat reads as a narrator who won\'t commit. Separate from the perception-verb bucket in prose.filter-words.',
+    scope: 'issue',
+    kind: 'deterministic',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Per-1000-word rate at/above which a section is flagged.
+      densityPer1000: z.number().min(0).max(50).default(7),
+      // Cap findings per run so a heavy draft can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+      // House-style allowlist / extra hedge words (comma- or newline-separated).
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
+    }),
+    configFields: [
+      { key: 'densityPer1000', label: 'Hedge-word rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose hedge/weasel-word frequency per 1000 words is at or above this. One "perhaps" is fine; a steady drumbeat is the tic.' },
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Hedge words to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra hedge words to flag', type: 'text', help: 'Series-specific hedges/weasel words to add (comma-separated or one per line).' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => runDensityCheck(ctx, {
+      scan: (text, cfg) => findHedgeWords(text, { allowWords: splitPhraseList(cfg.allowWords), extraWords: splitPhraseList(cfg.extraWords) }),
+      noun: 'hedge words',
+      problem: (count, rate, anchor) => `${count} hedge/weasel word${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Hedges and weasel words soften the prose and distance the reader from a committed, dramatized moment.`,
+      suggestion: 'Commit to the moment — drop the hedge or dramatize the feeling directly ("part of him almost felt" → "he felt") — or add intentional uses to the allowlist.',
+    }),
+  },
+  {
     id: 'prose.crutch-words',
     sources: ['manuscript'],
     label: 'Crutch / filler words',
@@ -5069,12 +5877,14 @@ export const EDITORIAL_CHECKS = [
       densityPer1000: z.number().min(0).max(80).default(15),
       maxFindings: z.number().int().min(1).max(50).default(20),
       allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
       flagReportingTags: z.boolean().default(false),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Adverb rate to flag (per 1000 words)', type: 'number', min: 0, max: 80, step: 1, help: 'Flag a section whose -ly adverb frequency per 1000 words is at or above this.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Adverbs to leave alone (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra adverbs to flag', type: 'text', help: 'Series-specific adverbs the -ly heuristic misses, e.g. "fast", "well", "hard" (comma-separated or one per line).' },
       { key: 'flagReportingTags', label: 'Also flag reporting tags', type: 'boolean', help: 'By default only emotion-telling dialogue tags ("said angrily") are flagged; reporting tags ("said quietly") are treated as invisible stage directions. Enable to flag every adverb-laden tag.' },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
@@ -5083,6 +5893,7 @@ export const EDITORIAL_CHECKS = [
       const max = cfg.maxFindings ?? 20;
       const density = cfg.densityPer1000 ?? 15;
       const allowWords = splitPhraseList(cfg.allowWords);
+      const extraWords = splitPhraseList(cfg.extraWords);
       // Reporting tags ("said quietly") read as invisible stage directions, so by
       // default only the emotion-telling bucket ("said angrily") trips the
       // higher-severity tag signal (#1592). Opt back into the old flag-every-tag
@@ -5095,7 +5906,7 @@ export const EDITORIAL_CHECKS = [
         const text = s?.content || '';
         const words = countWords(text);
         if (words === 0) continue;
-        const hits = findAdverbs(text, { allowWords });
+        const hits = findAdverbs(text, { allowWords, extraWords });
         if (!hits.length) continue;
         const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
         const tagHits = hits.filter((h) => h.dialogueTag && (flagReportingTags || h.tagAdverbKind === 'emotion'));
@@ -5152,19 +5963,32 @@ export const EDITORIAL_CHECKS = [
       densityPer1000: z.number().min(0).max(50).default(10),
       maxFindings: z.number().int().min(1).max(50).default(20),
       suppressIntentional: z.boolean().default(true),
+      allowWords: z.string().default(''),
+      extraWords: z.string().default(''),
     }),
     configFields: [
       { key: 'densityPer1000', label: 'Passive-voice rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose passive-construction frequency per 1000 words is at or above this. Advisory — passive voice is sometimes the right choice.' },
       { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
       { key: 'suppressIntentional', label: 'Suppress intentional passive', type: 'boolean', help: 'On by default — skip predicate-adjective states ("she was exhausted") and setting/weather mood images ("the sky was streaked"), which are rarely weak passive. Turn off to count every be-verb + participle (the raw heuristic).' },
+      { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Participles to never treat as passive — archaic/adjectival "-ed" forms like "blessed", "beloved" (comma-separated or one per line).' },
+      { key: 'extraWords', label: 'Extra participles to flag', type: 'text', help: 'Series-specific irregular participles the heuristic misses, e.g. "begun", "hewn" (comma-separated or one per line).' },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
-    run: (ctx) => runDensityCheck(ctx, {
-      scan: (text, cfg) => filterPassiveVoice(findPassiveVoice(text), { suppressIntentional: cfg?.suppressIntentional !== false }),
-      noun: 'passive constructions',
-      problem: (count, rate, anchor) => `${count} passive construction${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Heavy passive voice distances the reader from who is acting.`,
-      suggestion: 'Rephrase to active voice where it sharpens the prose ("the door was opened by Sam" → "Sam opened the door"). Keep passive where the actor is unknown or beside the point.',
-    }),
+    run: (ctx) => {
+      // Parse the word lists once (not per section, the way the adverbs check
+      // hoists its own) — runDensityCheck calls scan() for every section.
+      const allowWords = splitPhraseList(ctx.config?.allowWords);
+      const extraWords = splitPhraseList(ctx.config?.extraWords);
+      return runDensityCheck(ctx, {
+        scan: (text, cfg) => filterPassiveVoice(
+          findPassiveVoice(text, { allowWords, extraWords }),
+          { suppressIntentional: cfg?.suppressIntentional !== false },
+        ),
+        noun: 'passive constructions',
+        problem: (count, rate, anchor) => `${count} passive construction${count === 1 ? '' : 's'} (e.g. "${anchor}") — about ${rate}/1000 words. Heavy passive voice distances the reader from who is acting.`,
+        suggestion: 'Rephrase to active voice where it sharpens the prose ("the door was opened by Sam" → "Sam opened the door"). Keep passive where the actor is unknown or beside the point.',
+      });
+    },
   },
   {
     id: 'prose.repeated-gestures',
@@ -5737,7 +6561,7 @@ export const EDITORIAL_CHECKS = [
     sources: ['manuscript'],
     label: 'On-the-nose / subtext-free dialogue (LLM)',
     description:
-      'LLM scan for dialogue that states exactly what a character feels or means with no subtext, and "maid-and-butler" exchanges where characters tell each other what they both already know. Complements the info-dumping check (#1297) — that targets backstory exposition, this targets emotionally flat, subtext-free lines.',
+      'LLM scan for dialogue that states exactly what a character feels or means with no subtext, and "maid-and-butler" exchanges where characters tell each other what they both already know. Each finding is sub-classified (#1626) as exposition (info-dump), emotion-tell (naming a feeling outright), or relationship-report (describing a bond instead of dramatizing it) so the fix is actionable. Complements the info-dumping check (#1297) — that targets backstory exposition, this targets emotionally flat, subtext-free lines.',
     scope: 'issue',
     kind: 'llm',
     category: 'dialogue',
@@ -5759,6 +6583,11 @@ export const EDITORIAL_CHECKS = [
       category: 'dialogue',
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
+      // The prompt classifies each finding (#1626) into why it reads on-the-nose;
+      // the runner validates the model's label against this set and stamps it as
+      // `subtype` on the finding so the editor sees exposition / emotion-tell /
+      // relationship-report instead of a flat "on-the-nose".
+      subtypes: ON_THE_NOSE_SUBTYPES,
     }),
   },
   {
@@ -6246,8 +7075,16 @@ export function assertValidChecks(checks) {
     if (!check.id || !check.label || !check.scope || !check.kind || !check.category) {
       throw new Error(`checkRegistry: malformed entry ${JSON.stringify(check)}`);
     }
-    if (!CHECK_SCOPES.includes(check.scope)) {
-      throw new Error(`checkRegistry: invalid scope "${check.scope}" for ${check.id} (must be one of ${CHECK_SCOPES.join(', ')})`);
+    // `scope` may be a single scope string OR a non-empty array of scopes (#1628).
+    // Validate the RAW form strictly (every member known, array non-empty, no
+    // duplicates) rather than leaning on normalizeCheckScopes's silent drop, so a
+    // typo'd or empty scope fails boot instead of quietly losing a granularity.
+    const rawScopes = Array.isArray(check.scope) ? check.scope : [check.scope];
+    if (rawScopes.length === 0 || rawScopes.some((s) => !CHECK_SCOPES.includes(s))) {
+      throw new Error(`checkRegistry: invalid scope ${JSON.stringify(check.scope)} for ${check.id} (must be one of ${CHECK_SCOPES.join(', ')}, or a non-empty array of them)`);
+    }
+    if (new Set(rawScopes).size !== rawScopes.length) {
+      throw new Error(`checkRegistry: ${check.id} has duplicate scopes in ${JSON.stringify(check.scope)}`);
     }
     if (!CHECK_KINDS.includes(check.kind)) {
       throw new Error(`checkRegistry: invalid kind "${check.kind}" for ${check.id} (must be one of ${CHECK_KINDS.join(', ')})`);
@@ -6289,6 +7126,21 @@ export function assertValidChecks(checks) {
         if (!field || !field.key || !field.label || !CHECK_FIELD_TYPES.includes(field.type)) {
           throw new Error(`checkRegistry: ${check.id} has a malformed configField ${JSON.stringify(field)} (need key, label, type ∈ ${CHECK_FIELD_TYPES.join('/')})`);
         }
+      }
+    }
+    // `dependsOn` (#1627) is optional: an array of OTHER check ids whose findings
+    // this check reads from `ctx.priorFindings`. The runner topologically orders the
+    // pass so a declared dependency runs first; a check sees ONLY the findings of
+    // the checks it lists here (everything else stays order-independent). Shape is
+    // validated at load; the *referenced* ids are NOT — a dependency on a disabled,
+    // unknown, or not-yet-loaded (custom) check is tolerated at run time (the
+    // dependent just runs without those findings). A self-reference is meaningless.
+    if (check.dependsOn !== undefined) {
+      if (!Array.isArray(check.dependsOn) || check.dependsOn.some((d) => typeof d !== 'string' || !d)) {
+        throw new Error(`checkRegistry: ${check.id} dependsOn must be an array of check-id strings`);
+      }
+      if (check.dependsOn.includes(check.id)) {
+        throw new Error(`checkRegistry: ${check.id} cannot depend on itself`);
       }
     }
     if (seen.has(check.id)) throw new Error(`checkRegistry: duplicate id ${check.id}`);
@@ -6342,7 +7194,7 @@ export const resolveCheckSeverity = (check, row) =>
 /**
  * Merge the static registry with persisted per-check state from settings.
  * Returns one row per registered check:
- *   { id, label, description, scope, kind, category, severityDefault,
+ *   { id, label, description, scope, scopes, kind, category, severityDefault,
  *     severity, enabled, config, configFields }
  * `enabled` falls back to the check's `defaultEnabled`; `config` is validated
  * through the check's schema (with defaults); `severity` is the EFFECTIVE level
@@ -6358,11 +7210,17 @@ export function resolveCheckState(settings) {
   return getAllChecks(settings).map((check) => {
     const row = stored[check.id] || {};
     const enabled = typeof row.enabled === 'boolean' ? row.enabled : check.defaultEnabled !== false;
+    // Normalize the declared scope ONCE: `scopes` (#1628) is the full declared set
+    // the catalog/plan fan a dual-scope check across; `scope` is the PRIMARY scope
+    // (a string) so every single-value consumer keeps working unchanged. For a
+    // single-scope check the two agree (`scope === scopes[0]`).
+    const scopes = normalizeCheckScopes(check.scope);
     return {
       id: check.id,
       label: check.label,
       description: check.description,
-      scope: check.scope,
+      scope: scopes[0] || null,
+      scopes,
       kind: check.kind,
       category: check.category,
       // `severityDefault` is the registry baseline (what the override resets to);
@@ -6445,6 +7303,80 @@ export function applySeriesCheckConfig(enabled, seriesOverrides) {
     // rides through unchanged; only `config` is overlaid.
     return { ...pair, config: parsed.success ? parsed.data : config };
   });
+}
+
+/**
+ * Stable topological ordering of enabled check pairs by their declared
+ * `dependsOn` (#1627). A check that names another *enabled* check in `dependsOn`
+ * is emitted AFTER it, so when the runner injects a dependency's findings into the
+ * dependent's `ctx.priorFindings` the dependency has already run this pass. Checks
+ * that declare no dependencies keep their exact registry order (stable) — so a run
+ * where nothing opts in is byte-identical to before this existed.
+ *
+ * Robustness:
+ *  - A dependency on a check ABSENT from `pairs` (disabled, or outside a targeted
+ *    subset run) is ignored — the dependent still runs, just without those findings
+ *    (the runner's injection is likewise degrade-tolerant).
+ *  - A dependency CYCLE (or a chain that transitively waits on one) can't be
+ *    ordered; rather than drop a check or spin forever, the still-unplaced members
+ *    are flushed in registry order and the cycle is logged once. The runner then
+ *    simply can't guarantee a cyclic dependency's findings are present — acceptable,
+ *    since a cycle is a registry bug a human must fix.
+ *
+ * Pure + side-effect-free (aside from the one cycle warning). O(n²) over the
+ * enabled set, which is tiny (≈ the registry size).
+ *
+ * @param {Array<{check: object}>} pairs  enabled pairs (from getEnabledChecks / applySeriesCheckConfig)
+ * @returns {Array<{check: object}>} the same pairs, dependency-ordered
+ */
+export function orderChecksByDependencies(pairs) {
+  if (!Array.isArray(pairs)) return [];
+  if (pairs.length < 2) return pairs.slice();
+  // Only deps actually present in this run gate ordering — an absent dep can't be
+  // waited on (and would otherwise wedge the dependent forever).
+  const present = new Set();
+  for (const p of pairs) { const id = p?.check?.id; if (typeof id === 'string') present.add(id); }
+  const waits = pairs.map((p) => {
+    const id = p?.check?.id;
+    const declared = Array.isArray(p?.check?.dependsOn) ? p.check.dependsOn : [];
+    return new Set(declared.filter((d) => typeof d === 'string' && d !== id && present.has(d)));
+  });
+  // Common case — nothing in this run waits on anything → the input is already a
+  // valid order. Skip the O(n²) Kahn scan and return registry order untouched.
+  if (waits.every((w) => w.size === 0)) return pairs.slice();
+  const used = new Array(pairs.length).fill(false);
+  const emitted = new Set();
+  const result = [];
+  while (result.length < pairs.length) {
+    // Kahn's algorithm, but always take the LOWEST registry index among the ready
+    // nodes — that's what makes the sort stable (independent checks never move).
+    let pick = -1;
+    for (let i = 0; i < pairs.length; i += 1) {
+      if (used[i]) continue;
+      let ready = true;
+      for (const dep of waits[i]) { if (!emitted.has(dep)) { ready = false; break; } }
+      if (ready) { pick = i; break; }
+    }
+    if (pick === -1) {
+      // No ready node ⇒ every remaining node waits on another remaining node: a
+      // cycle. Flush the rest in registry order so nothing is dropped.
+      const stuck = [];
+      for (let i = 0; i < pairs.length; i += 1) {
+        if (used[i]) continue;
+        used[i] = true;
+        result.push(pairs[i]);
+        const id = pairs[i]?.check?.id;
+        if (typeof id === 'string') stuck.push(id);
+      }
+      console.warn(`⚠️ editorial check dependency cycle — running in registry order: ${stuck.join(', ')}`);
+      break;
+    }
+    used[pick] = true;
+    result.push(pairs[pick]);
+    const id = pairs[pick]?.check?.id;
+    if (typeof id === 'string') emitted.add(id);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

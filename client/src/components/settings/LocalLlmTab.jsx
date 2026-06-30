@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music } from 'lucide-react';
+import { Cpu, Box, ArrowRightLeft, Download, Trash2, RefreshCw, Search, Plus, ExternalLink, Star, Link2, Copy, Play, Square, Power, PowerOff, Eye, Wrench, Brain, Code2, MessageSquare, Boxes, AlertTriangle, FlaskConical, Music, ArrowUpCircle } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
@@ -116,6 +116,11 @@ function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAc
       <div className="text-xs text-gray-400">
         {data?.modelCount ?? 0} model{(data?.modelCount ?? 0) === 1 ? '' : 's'} installed
         {data?.version && <> · v{data.version}</>}
+        {backend.id === 'ollama' && data?.updateAvailable && data?.latestVersion && (
+          <span className="text-port-warning" title={`Ollama v${data.latestVersion} is available (you have v${data.version})`}>
+            {' · '}v{data.latestVersion} available
+          </span>
+        )}
         {startupService?.supported && <> · {runsAtStartup ? 'runs at login' : 'startup off'}</>}
       </div>
 
@@ -167,6 +172,34 @@ function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAc
                 : data.available ? <Square size={12} /> : <Play size={12} />}
               {data.available ? 'Stop' : 'Start'} Ollama
             </button>
+          )}
+          {backend.id === 'ollama' && data?.updateAvailable && (
+            data?.canUpgrade ? (
+              <button
+                onClick={() => runAction(
+                  'upgrade-ollama',
+                  () => upgradeLocalLlmBackend('ollama'),
+                  (r) => r?.note ? `Ollama updated — ${r.note}` : `Ollama updated to v${data.latestVersion}`
+                )}
+                disabled={busy}
+                className={`${btnClass} bg-port-success/20 hover:bg-port-success/30 text-port-success`}
+                title={`Update Ollama from v${data.version} to v${data.latestVersion} in place (downloads the latest release and restarts it)`}
+              >
+                {actionInProgress === 'upgrade-ollama' ? <BrailleSpinner /> : <ArrowUpCircle size={12} />}
+                Update to v{data.latestVersion}
+              </button>
+            ) : (
+              <a
+                href={data.downloadUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={`${btnClass} bg-port-warning/20 hover:bg-port-warning/30 text-port-warning no-underline`}
+                title={`Ollama v${data.latestVersion} is available — automatic updates aren't supported on this platform`}
+              >
+                <ArrowUpCircle size={12} />
+                Update available
+              </a>
+            )
           )}
           {backend.id === 'ollama' && startupService?.supported && (
             <button

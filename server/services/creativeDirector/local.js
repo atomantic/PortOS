@@ -24,6 +24,8 @@
 
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
+import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalogDB.js';
+import { buildCastFromIngredients } from './catalogSeed.js';
 
 export { trimRuns, startingImageFilename } from './projectsLogic.js';
 
@@ -93,8 +95,26 @@ export async function listProjectIds(options = {}) {
 }
 
 export async function createProject(input) {
-  const project = await (await selectBackend()).createProject(input);
+  // Catalog "Remix into → Creative Director" handoff (#1808): resolve any seeded
+  // ingredient ids to live records, fold them into the project as structured
+  // `cast` (grounds the treatment prompt + per-scene casting), then link them
+  // durably via catalog_ingredient_refs (ref_kind='creative-director') so the
+  // Catalog "Appears in" panel and the convergence contract see one data model.
+  // `catalogIngredientIds` is consumed here and never persisted on the record —
+  // buildProjectRecord only reads named fields, so the raw id list drops out.
+  const ingredients = await resolveIngredientsByIds(input.catalogIngredientIds);
+  const seededInput = ingredients.length
+    ? { ...input, cast: buildCastFromIngredients(ingredients) }
+    : input;
+  const project = await (await selectBackend()).createProject(seededInput);
   announceNewProject(project.id);
+  if (ingredients.length > 0) {
+    // Best-effort: the project is already created, so a ref-link failure must
+    // not fail the request (mirrors storyBuilder's linkIngredientsToSeries).
+    await linkIngredientsToCreativeDirector(project.id, ingredients)
+      .then((linked) => console.log(`🎬 Linked ${linked.length} catalog ingredient(s) to Creative Director project ${project.id}`))
+      .catch((err) => console.error(`❌ Failed to link catalog ingredients to CD project ${project.id}: ${err.message}`));
+  }
   return project;
 }
 

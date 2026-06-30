@@ -1,4 +1,4 @@
-# Bootstrap local voice stack on Windows: whisper.cpp (STT) + active TTS backend.
+﻿# Bootstrap local voice stack on Windows: whisper.cpp (STT) + active TTS backend.
 # Safe to re-run: installs only what's missing, downloads only what's missing.
 #
 # Env overrides (same as setup-voice.sh):

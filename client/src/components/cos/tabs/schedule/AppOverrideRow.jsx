@@ -142,7 +142,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             title="Which open issues this app may claim"
             className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
           >
-            <option value="">Inherit ({ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (globalTaskMetadata?.issueAuthorFilter || 'owner'))?.label})</option>
+            <option value="">Inherit ({ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (globalTaskMetadata?.issueAuthorFilter || 'self'))?.label})</option>
             {ISSUE_AUTHOR_FILTER_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}

@@ -889,6 +889,14 @@ export const loraTrainingConfigSchema = z.object({
   // from the newest checkpoint. Set false to fall back to only the flat 30-min
   // idle watchdog (e.g. if a future driver fix makes soft hangs impossible).
   stallWatchdog: z.boolean().optional(),
+  // Auto display-sleep during training on Apple Silicon (default ON — the
+  // `!== false` read lives in services/loraTraining/displayPower.js
+  // isDisplaySleepEnabled). Sleeps the Mac's display when a run starts
+  // and wakes it when it finishes. This is the validated mitigation for the GPU
+  // watchdog kernel panic (mlx #3267): an active display makes WindowServer
+  // contend for the GPU, which hard-reboots the box during heavy sustained
+  // training. Set false if you drive the display some other way (SSH headless).
+  displaySleep: z.boolean().optional(),
 });
 
 // POST /api/lora-training/runs — start a training run for a dataset.
@@ -897,6 +905,9 @@ export const startTrainingRunSchema = z.object({
   baseModelId: z.string().min(1).max(128),
   name: z.string().trim().max(120).optional(),
   params: loraTrainingParamsSchema.optional(),
+  // Override the caption identity-leak gate (see validateDatasetReady) and train
+  // anyway — the UI sends this from the explicit "Train anyway" action.
+  acknowledgeCaptionLeak: z.boolean().optional(),
 });
 
 // Query for GET /api/city/snapshots — `since` (ISO timestamp) and `limit`
@@ -1117,6 +1128,20 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
   // semantics. Optional + additive so older peers fall through to the default.
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Editorial-checks pause threshold (#1613). When the registry-driven editorial
+  // checks pass surfaces ≥ N high-severity findings, the autopilot pauses the run
+  // for human review instead of silently proceeding (the downstream health gate is
+  // a backstop, but the per-step signal was misleading — a 50-high-finding pass
+  // looked "complete"). 0 = off (default), so the behavior is opt-in and existing
+  // installs are unchanged. Optional + additive so older peers fall through to off.
+  // No upper bound mirrors the round caps — a large N just means "effectively off".
+  checkFindingsPauseThreshold: z.number().int().min(0).optional(),
+  // Pause-notification escalation (#1615). When an autopilot run pauses, post an
+  // in-app notification (reason + resume link) so a paused run isn't missed until
+  // the user opens the status page. Defaults ON (true) when unset — a zero-cost
+  // informational signal — so this is the one autopilot setting that's opt-OUT.
+  // Optional + additive so older peers fall through to the default.
+  notifyOnPause: z.boolean().optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
@@ -1622,11 +1647,14 @@ const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
 // agree on the vocabulary.
 export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
 
-// claim-issue author-gate values. 'owner' = only claim issues filed by the
-// repository owner/creator (matches the `/claim --issues` default); 'any' =
-// claim any open issue regardless of who filed it. Kept here so both the
-// sanitizer and the claim-issue prompt-builder agree on the vocabulary.
-export const ISSUE_AUTHOR_FILTERS = ['owner', 'any'];
+// claim-issue author-gate values. 'self' = only claim issues YOU filed (the
+// gh/glab-authenticated `@me` account — the slashdo `/do:next --self` security
+// boundary, and the default so a shared/multi-contributor tracker never
+// auto-feeds third-party issues into an agent); 'owner' = only claim issues
+// filed by the repository owner/creator; 'any' = claim any open issue regardless
+// of who filed it. Kept here so both the sanitizer and the claim-issue
+// prompt-builder agree on the vocabulary.
+export const ISSUE_AUTHOR_FILTERS = ['self', 'owner', 'any'];
 
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
@@ -1864,5 +1892,6 @@ export const legacyExportSchema = z.object({
 // (e.g. `emptyToUndefined`) live in zodCompat.js.
 export * from './peerSyncValidation.js';
 export * from './creativeDirectorValidation.js';
+export * from './musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';

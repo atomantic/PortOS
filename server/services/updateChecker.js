@@ -4,7 +4,14 @@ import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getOriginInfo, UPSTREAM_OWNER, UPSTREAM_REPO, UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
+import { compareSemver } from '../lib/versionUtils.js';
+import { getInstallState } from './installState.js';
 import { execGh } from './github.js';
+
+// Re-exported for back-compat: callers/tests historically import compareSemver
+// from this module. The implementation now lives in lib/versionUtils.js so the
+// local-LLM update detector can share it.
+export { compareSemver };
 
 const UPDATE_FILE = join(PATHS.data, 'update.json');
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
@@ -44,57 +51,6 @@ export async function getCurrentVersion() {
   const pkg = await readJSONFile(pkgPath, { version: '0.0.0' });
   const version = (typeof pkg.version === 'string' && pkg.version) ? pkg.version : '0.0.0';
   return version;
-}
-
-/**
- * Compare two semver strings. Returns:
- *  -1 if a < b, 0 if equal, 1 if a > b
- */
-export function compareSemver(a, b) {
-  const extractParts = (v) => {
-    const noBuild = v.split('+')[0];
-    const hyphenIdx = noBuild.indexOf('-');
-    const core = hyphenIdx === -1 ? noBuild : noBuild.slice(0, hyphenIdx);
-    const pre = hyphenIdx === -1 ? null : noBuild.slice(hyphenIdx + 1);
-    return { nums: core.split('.').map(Number), pre: pre || null };
-  };
-  const comparePreRelease = (preA, preB) => {
-    const segsA = preA.split('.');
-    const segsB = preB.split('.');
-    const len = Math.max(segsA.length, segsB.length);
-    for (let i = 0; i < len; i++) {
-      if (i >= segsA.length) return -1; // fewer segments = lower precedence
-      if (i >= segsB.length) return 1;
-      const numA = /^\d+$/.test(segsA[i]) ? Number(segsA[i]) : null;
-      const numB = /^\d+$/.test(segsB[i]) ? Number(segsB[i]) : null;
-      // Numeric identifiers sort before string identifiers
-      if (numA !== null && numB !== null) {
-        if (numA < numB) return -1;
-        if (numA > numB) return 1;
-      } else if (numA !== null) {
-        return -1;
-      } else if (numB !== null) {
-        return 1;
-      } else {
-        if (segsA[i] < segsB[i]) return -1;
-        if (segsA[i] > segsB[i]) return 1;
-      }
-    }
-    return 0;
-  };
-  const pa = extractParts(a);
-  const pb = extractParts(b);
-  for (let i = 0; i < 3; i++) {
-    const na = pa.nums[i] || 0;
-    const nb = pb.nums[i] || 0;
-    if (na < nb) return -1;
-    if (na > nb) return 1;
-  }
-  // Equal core versions: no pre-release > pre-release (1.0.0 > 1.0.0-rc.1)
-  if (!pa.pre && pb.pre) return 1;
-  if (pa.pre && !pb.pre) return -1;
-  if (pa.pre && pb.pre) return comparePreRelease(pa.pre, pb.pre);
-  return 0;
 }
 
 async function loadState() {
@@ -285,6 +241,11 @@ export async function getUpdateStatus() {
     (Date.now() - new Date(lastSync.syncedAt).getTime()) < FORK_SYNC_FRESHNESS_MS
   );
 
+  // Install-sync state — "is the checked-out code ahead of what's running /
+  // installed?" (issue #1779). Best-effort: a git/fs hiccup here must never
+  // block the status response, so failures collapse to null.
+  const installState = await getInstallState().catch(() => null);
+
   return {
     currentVersion,
     ...state,
@@ -292,7 +253,8 @@ export async function getUpdateStatus() {
     remoteInfo,
     upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
     forkSyncFresh,
-    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS
+    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS,
+    installState
   };
 }
 

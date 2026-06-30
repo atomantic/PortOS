@@ -131,7 +131,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     };
     const onFailed = (data) => {
       if (data.generationId !== jobId) return;
-      // The mediaJobQueue collapses user-canceled jobs into a *:failed
+      // The mediaJobQueue collapses a RUNNING job's cancellation into a *:failed
       // socket event (SIGTERM looks like a failure to the underlying gen
       // module) while the persisted job.status is actually 'canceled'.
       // Re-fetch the authoritative state so MediaJobThumb's canceled UI
@@ -144,17 +144,28 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
         }
       }).catch(() => {});
     };
+    // A job canceled while still QUEUED never starts a gen run, so it emits no
+    // *:failed — only `*-gen:canceled` (bridged from mediaJobEvents, #1791).
+    // Settle straight to 'canceled' so the spinner clears live without the
+    // re-fetch the *:failed path needs. Also fires (harmlessly, idempotently)
+    // alongside *:failed when a running job is canceled.
+    const onCanceled = (data) => {
+      if (data.generationId !== jobId) return;
+      setState((prev) => (prev.status === 'canceled' ? prev : { ...prev, status: 'canceled' }));
+    };
 
     socket.on(`${evtPrefix}:started`, onStarted);
     socket.on(`${evtPrefix}:progress`, onProgress);
     socket.on(`${evtPrefix}:completed`, onCompleted);
     socket.on(`${evtPrefix}:failed`, onFailed);
+    socket.on(`${evtPrefix}:canceled`, onCanceled);
     return () => {
       canceled = true;
       socket.off(`${evtPrefix}:started`, onStarted);
       socket.off(`${evtPrefix}:progress`, onProgress);
       socket.off(`${evtPrefix}:completed`, onCompleted);
       socket.off(`${evtPrefix}:failed`, onFailed);
+      socket.off(`${evtPrefix}:canceled`, onCanceled);
     };
   }, [jobId, kind]);
 

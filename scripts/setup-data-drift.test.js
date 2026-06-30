@@ -44,6 +44,7 @@ const EXPECTED_STAGE_OLD = {
   'cos-agent-briefing.md': ['181b26838e526427173e4dccfc884d01', '3e1ca7f7b14b799f89a193c568003624', '699d053875472df455258724a0162bd5', '9bcd3a0167dd4aed7cfff7f404494dfb', 'af73fd50d6f29d561772474c12346e53', 'd761133753da290a0c02eca1c87709e4'],
   'pipeline-editorial-telling-emotion.md': ['2c5c33709732fe7ffa319d32b8755354'],
   'pipeline-editorial-chekhov.md': ['bfacbf343ba2b9a3f6037bb45b94e1bb'],
+  'pipeline-editorial-on-the-nose.md': ['48182b49149e6b5829fbed71b3ffc242'],
   'pipeline-tv-script.md': ['3f6fecc25573ed054b47db392250034a'],
 };
 const EXPECTED_STAGE_NEW = {
@@ -67,6 +68,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-manuscript-fix.md': 'e2baaf0f2f53c8aa1e934a428c0ca583',
   'pipeline-editorial-telling-emotion.md': '871f7e8bea2a2d95f28875ab45a318e2',
   'pipeline-editorial-chekhov.md': '1f8a1696b5e4f476051dc5b2e5737db9',
+  'pipeline-editorial-on-the-nose.md': 'e5786fb019e5bf19c7aa6ed0c8b35cda',
   'pipeline-tv-script.md': '376f779f4687b598f1c92ca4e770fd5a',
 };
 const EXPECTED_PARTIAL_OLD = {

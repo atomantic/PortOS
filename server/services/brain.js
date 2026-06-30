@@ -133,7 +133,7 @@ function safeParseJsonResponse(content) {
  * Returns immediately after creating the inbox entry.
  * AI classification runs in the background and emits a socket event on completion.
  */
-export async function captureThought(text, providerOverride, modelOverride) {
+export async function captureThought(text, providerOverride, modelOverride, { creative = false } = {}) {
   const meta = await storage.loadMeta();
   const provider = providerOverride || meta.defaultProvider;
   const model = modelOverride || meta.defaultModel;
@@ -162,6 +162,7 @@ export async function captureThought(text, providerOverride, modelOverride) {
   const inboxEntry = await storage.createInboxLog({
     capturedText: text,
     source: 'brain_ui',
+    ...(creative ? { creative: true } : {}),
     ...(mode === 'off'
       ? {}
       : { ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' } }),
@@ -676,6 +677,22 @@ export async function markInboxDone(inboxLogId) {
   });
 
   console.log(`🧠 Marked inbox entry done: ${inboxLogId}`);
+  return updated;
+}
+
+/**
+ * Mark a batch of creative inbox notes as consumed by a catalog ingest that just
+ * committed — stamps `sentToCatalogAt` so they drop out of the inbox's "ready to
+ * become ingredients" banner and can't be accidentally re-sent. Idempotent and
+ * forgiving: ids that no longer exist (deleted/tombstoned) are skipped silently
+ * so a partially-stale list still stamps the rest. Returns the updated entries.
+ */
+export async function markInboxSentToCatalog(ids) {
+  const sentToCatalogAt = new Date().toISOString();
+  // Single batched write (one store rewrite + one sync-log pass) — updateMany
+  // already skips unknown/tombstoned ids, preserving the "stamp the rest" contract.
+  const updated = await storage.updateMany('inbox', ids.map(id => ({ id, sentToCatalogAt })));
+  console.log(`🧠 Marked ${updated.length} creative note(s) sent to catalog`);
   return updated;
 }
 

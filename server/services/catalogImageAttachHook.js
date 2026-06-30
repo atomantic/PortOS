@@ -16,19 +16,32 @@
  * filename is already attached (the still-mounted client won the race), the hook
  * is a no-op, so the same render never lands as both portrait AND reference.
  *
- * Mounted once at server boot from server/index.js (after the media job queue is
- * running). Best-effort: a bookkeeping miss is logged but never thrown — it must
- * not crash the server or fail the user's render.
+ * The shared completion-hook scaffold (tag-decode, per-ingredient
+ * serialization, best-effort error handling, idempotent init/reset) lives in
+ * `createMediaJobImageHook` (#1791) — this file is just the catalog-specific
+ * config plus the portrait newest-render-wins guard below. Mounted once at
+ * server boot from server/index.js (after the media job queue is running).
  */
 
-import { mediaJobEvents } from './mediaJobQueue/index.js';
+import { createMediaJobImageHook } from './mediaJobImageHook.js';
 import { attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient } from './catalogDB.js';
+import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
+
+// Newest-render-wins for the PORTRAIT slot only (#1791). The per-ingredient
+// serialize already stops two concurrent renders from clobbering each other,
+// but an OLDER render completing AFTER a newer portrait (e.g. an out-of-order
+// Codex regenerate) would still demote the newer one. Unlike the scene-frame
+// hooks — which drop a stale render outright — catalog references are additive,
+// so instead of losing the image we file a stale would-be-portrait as a
+// reference. Keyed per ingredient; absent `queuedAt` is never stale, so the
+// guard is inert for renders the queue didn't timestamp.
+const portraitGuard = createNewestWinsGuard();
 
 // Resolve the render onto the ingredient. Returns the kind attached
 // ('portrait' | 'reference'), 'duplicate' when the client already filed it,
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
-// error (caught by the caller).
-async function attachGeneratedImage({ ingredientId, kind, filename }) {
+// error (caught by the factory).
+async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) {
   // The ingredient can be deleted between enqueue and completion (a render
   // outlives its editor by minutes). `getIngredient` filters `deleted = false`,
   // so this skips a hard-deleted ingredient (FK would throw) AND a soft-deleted
@@ -38,93 +51,66 @@ async function attachGeneratedImage({ ingredientId, kind, filename }) {
   const existing = await listMediaForIngredient(ingredientId);
   // Idempotent against the optimistic client path: it already attached this
   // exact render (under any kind) — don't double-file it as a second kind.
-  if (existing.some((m) => m.mediaKey === filename)) return 'duplicate';
+  const existingRow = existing.find((m) => m.mediaKey === filename);
+  if (existingRow) {
+    // The mounted client won the optimistic attach for this render. If it
+    // landed as the PORTRAIT, still record its queuedAt in the guard — otherwise
+    // a later OLDER portrait render isn't seen as stale and would clobber this
+    // newer one (the guard's mark normally happens on our own setPortraitMedia
+    // write below, which this duplicate path skips).
+    if (existingRow.kind === 'portrait') portraitGuard.mark(ingredientId, queuedAt);
+    return 'duplicate';
+  }
   const hasPortrait = existing.some((m) => m.kind === 'portrait');
   // Explicit kind wins; otherwise auto: first image → portrait, later → reference
   // (mirrors CatalogIngredient.jsx `handleGeneratedImage`).
-  const target = kind === 'portrait' || kind === 'reference'
+  let target = kind === 'portrait' || kind === 'reference'
     ? kind
     : (hasPortrait ? 'reference' : 'portrait');
+  // A stale would-be-portrait must not demote a newer portrait. Keep the image
+  // as a reference rather than dropping it (references are additive).
+  if (target === 'portrait' && portraitGuard.isStale(ingredientId, queuedAt)) {
+    target = 'reference';
+  }
   if (target === 'portrait') {
     await setPortraitMedia(ingredientId, filename);
+    portraitGuard.mark(ingredientId, queuedAt);
   } else {
     await attachMedia(ingredientId, filename, 'reference');
   }
   return target;
 }
 
-// Serialize the read→decide→write per ingredient. Two renders for the SAME
-// ingredient completing close together (e.g. two parallel Codex jobs, or a
-// regenerate after navigating back) would otherwise both read an empty media
-// list, both pick 'portrait', and have the second `setPortraitMedia` demote the
-// first — losing the earlier render entirely. Chaining each attach onto the
-// prior one for that ingredient makes the later job observe the first's write,
-// so it correctly falls through to 'reference'. Keyed by ingredientId, so
-// different ingredients still attach concurrently (their Postgres rows don't
-// conflict). In-memory tail, evicted once settled; lost on restart, which is
-// fine — the whole hook is best-effort.
-const attachTails = new Map();
-
-function serializePerIngredient(ingredientId, work) {
-  const prev = attachTails.get(ingredientId) || Promise.resolve();
-  // `work` on both fulfil AND reject so a prior failure doesn't stall the chain.
-  const next = prev.then(work, work);
-  attachTails.set(ingredientId, next);
-  // Evict once settled, but only if nothing newer has chained on. Swallow here
-  // (the eviction branch never rethrows) so it can't surface as an unhandled
-  // rejection — the caller attaches its own `.catch` to the returned promise.
-  const evict = () => { if (attachTails.get(ingredientId) === next) attachTails.delete(ingredientId); };
-  next.then(evict, evict);
-  return next;
-}
-
-let completedHandler = null;
+const hook = createMediaJobImageHook({
+  label: 'catalog image-attach',
+  initLog: '🏷️ Catalog image-attach hook initialized',
+  tagKey: 'catalogAttach',
+  identify: (tag) => (typeof tag?.ingredientId === 'string' && tag.ingredientId
+    ? { ingredientId: tag.ingredientId }
+    : null),
+  // Serialize the read→decide→write per ingredient so two renders for the SAME
+  // ingredient don't both read an empty media list, both pick 'portrait', and
+  // have the second demote the first. Different ingredients attach concurrently.
+  serializeKey: ({ ingredientId }) => ingredientId,
+  describe: ({ ingredientId }) => ingredientId,
+  attach: ({ ingredientId, tag, filename, queuedAt }) => attachGeneratedImage({
+    ingredientId, kind: tag.kind, filename, queuedAt,
+  }),
+  onAttached: ({ ingredientId, filename }, status) => {
+    if (status === 'portrait' || status === 'reference') {
+      console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);
+    }
+  },
+});
 
 export function initCatalogImageAttachHook() {
-  // Idempotent: a stray double-init (test reload, future refactor) would
-  // otherwise register two listeners and double-file every completed image.
-  if (completedHandler) return;
-
-  // EventEmitter does not await async listeners and does not catch their
-  // rejections — a throw here would surface as a process-killing unhandled
-  // rejection on Node ≥15. Use a sync listener that launches an async IIFE with
-  // a top-level catch so this bookkeeping miss can never crash the server.
-  completedHandler = (job) => {
-    void (async () => {
-      if (!job || job.kind !== 'image') return;
-      const tag = job.params?.catalogAttach;
-      const ingredientId = tag?.ingredientId;
-      if (!ingredientId || typeof ingredientId !== 'string') return;
-      const filename = job.result?.filename;
-      if (!filename || typeof filename !== 'string') return;
-
-      const status = await serializePerIngredient(ingredientId, () =>
-        attachGeneratedImage({ ingredientId, kind: tag.kind, filename }),
-      ).catch((err) => {
-        console.log(`⚠️ catalog image-attach hook failed for ${filename} → ${ingredientId}: ${err?.message || String(err)}`);
-        return 'failed';
-      });
-      if (status === 'portrait' || status === 'reference') {
-        console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);
-      }
-    })().catch((err) => {
-      // Last-resort net for synchronous throws (unexpected job shape, etc).
-      console.log(`⚠️ catalog image-attach hook crashed: ${err?.message || err}`);
-    });
-  };
-
-  mediaJobEvents.on('completed', completedHandler);
-  console.log('🏷️ Catalog image-attach hook initialized');
+  hook.init();
 }
 
-// Test-only reset so suites that re-init can do so cleanly. Removes the
-// previously registered listener so re-init doesn't leak handlers.
+// Test-only reset — also clears the portrait guard the factory doesn't own.
 export const __testing = {
   reset: () => {
-    if (completedHandler) {
-      mediaJobEvents.off('completed', completedHandler);
-      completedHandler = null;
-    }
-    attachTails.clear();
+    hook.__testing.reset();
+    portraitGuard.clear();
   },
 };

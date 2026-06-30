@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as api from '../../../services/api';
 import {Plus,
   Edit2,
@@ -8,6 +9,7 @@ import {Plus,
   CheckCircle2,
   Search,
   AlertTriangle,
+  Library,
   MessageSquareText} from 'lucide-react';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
@@ -28,6 +30,7 @@ import CopyableId from '../../ui/CopyableId';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function MemoryTab({ onRefresh }) {
+  const navigate = useNavigate();
   const [activeType, setActiveType] = useState('memories');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -248,6 +251,18 @@ export default function MemoryTab({ onRefresh }) {
       fetchRecords();
       onRefresh?.();
     }
+  };
+
+  // Send a brain record into the creative catalog. We hand the ids to the
+  // catalog ingest page (via router state) so the LLM extraction + live stage
+  // checklist run there — the brain note becomes typed catalog ingredients the
+  // user reviews and commits. Every MEMORY_TABS type is a supported bridge type.
+  const handleSendToCatalog = (record) => {
+    // Hand off just the ids — the catalog resolves the record and derives its
+    // title/text server-side via the brain-bridge ingest.
+    navigate('/catalog/ingest', {
+      state: { brainIngest: { brainType: activeType, brainId: record.id } },
+    });
   };
 
   const startEdit = (record) => {
@@ -583,6 +598,14 @@ export default function MemoryTab({ onRefresh }) {
                 <CheckCircle2 size={14} />
               </button>
             )}
+            <button
+              onClick={() => handleSendToCatalog(record)}
+              className="p-1.5 text-gray-400 hover:text-purple-300 rounded hover:bg-purple-500/20"
+              title="Send to Catalog"
+              aria-label="Send to Catalog"
+            >
+              <Library size={14} />
+            </button>
             <button
               onClick={() => startEdit(record)}
               className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
