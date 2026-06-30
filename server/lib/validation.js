@@ -828,12 +828,17 @@ export const apiAccessSettingsSchema = z.object({
 // (rsync runs shell:false, so this is not shell injection — but `*` would expand
 // to `--include=*/***` and defeat the filter chain, and `../foo` would traverse
 // out of the snapshot subdir). Restrict to a relative path of safe characters
-// with no traversal or wildcard segments. Mirrored by a service-side guard in
-// restoreSnapshot for non-route callers — see issue #1822.
+// with no wildcard, traversal, or absolute segments. Exported as a predicate so
+// the restoreSnapshot service guard reuses the exact same rule (mirrors
+// isSafeRecordId above) — see issue #1822.
+export const isSafeSubdirFilter = (v) =>
+  typeof v === 'string'
+  && /^[a-z0-9._/-]+$/i.test(v)
+  && !v.split('/').includes('..')
+  && !v.startsWith('/');
+
 export const subdirFilterSchema = z.string()
-  .regex(/^[a-z0-9._/-]+$/i, 'subdirFilter contains invalid characters')
-  .refine((v) => !v.split('/').includes('..'), 'subdirFilter may not contain ".." segments')
-  .refine((v) => !v.startsWith('/'), 'subdirFilter must be a relative path');
+  .refine(isSafeSubdirFilter, 'subdirFilter must be a relative path with no wildcard, ".." , or leading "/" segments');
 
 export const restoreRequestSchema = z.object({
   snapshotId: z.string().min(1),

@@ -16,6 +16,7 @@ import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
+import { isSafeSubdirFilter } from '../lib/validation.js';
 import { getIo } from './socket.js';
 
 // Module-level state
@@ -468,10 +469,9 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // Defense-in-depth for non-route callers (the route already validates via
   // subdirFilterSchema). subdirFilter is interpolated into an rsync include arg,
   // so a `*` would override the filter chain (restoring everything) and `..`
-  // would traverse out of the snapshot subdir — see issue #1822.
-  if (subdirFilter != null && (!/^[a-z0-9._/-]+$/i.test(subdirFilter)
-      || subdirFilter.split('/').includes('..')
-      || subdirFilter.startsWith('/'))) {
+  // would traverse out of the snapshot subdir. Reuse the same predicate the
+  // schema does so the two can't drift — see issue #1822.
+  if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
     throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
   }
 
