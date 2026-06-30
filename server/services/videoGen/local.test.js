@@ -1106,3 +1106,57 @@ describe('runtime fingerprint (/status)', () => {
     expect(() => invalidateRuntimeFingerprintCache()).not.toThrow();
   });
 });
+
+describe('generateVideo — BYOV missing-python-module failure path (#1833 regression)', () => {
+  // When a BYOV-runtime child dies with a ModuleNotFoundError, generateVideo's
+  // close handler drops the cached "ready" via invalidateByovReadyCache() and
+  // emits a 'failed' event whose reason names the runtime venv. That helper was
+  // extracted to runtimes.js in #1833; this test guards against it being only
+  // re-exported (`export * from './runtimes.js'`) but NOT bound in local.js's
+  // own scope — which would make the reference here throw a ReferenceError, so
+  // the terminal 'failed' event never carries the venv-specific reason.
+  it('emits a failed event naming the runtime venv when the child reports ModuleNotFoundError', async () => {
+    vi.resetModules();
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => {
+      const listeners = {};
+      const stderrListeners = {};
+      const proc = {
+        pid: 4242,
+        exitCode: null,
+        signalCode: null,
+        killed: false,
+        stdout: { on: vi.fn() },
+        stderr: { on: (event, fn) => { stderrListeners[event] = fn; } },
+        on(event, fn) { listeners[event] = fn; return proc; },
+        kill: vi.fn(),
+      };
+      // Feed the missing-module traceback to the stderr parser, then exit non-zero.
+      setImmediate(() => {
+        stderrListeners.data?.(Buffer.from("ModuleNotFoundError: No module named 'ltx_pipelines_mlx'\n"));
+        proc.exitCode = 1;
+        listeners.close?.(1, null);
+      });
+      return proc;
+    });
+
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+    await gv({
+      jobId: 'byov-missing-module',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified', // runtime: 'ltx2' → a BYOV runtime
+      prompt: 'a clip',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+
+    const evt = await failed;
+    expect(evt.generationId).toBe('byov-missing-module');
+    // Reason produced only by the BYOV missingPyModule branch (post-invalidate).
+    expect(evt.error).toMatch(/ltx_pipelines_mlx/);
+    expect(evt.error).toMatch(/LTX-2 MLX/);
+  });
+});
