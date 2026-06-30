@@ -66,6 +66,37 @@ describe('cliProviderArgs', () => {
     });
   });
 
+  describe('buildCliArgs — OpenCode Ollama', () => {
+    it('runs `opencode run -m ollama/<model>` (prompt rides stdin)', () => {
+      const args = buildCliArgs({
+        id: 'opencode-ollama', command: 'opencode', args: ['run'],
+        ollamaBacked: true, defaultModel: 'qwen2.5:7b',
+      });
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    });
+
+    it('prepends the run subcommand when the saved args dropped it', () => {
+      const args = buildCliArgs({
+        id: 'opencode-ollama', command: 'opencode', args: [],
+        defaultModel: 'qwen2.5:7b',
+      });
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    });
+
+    it('omits -m when no model is configured (opencode falls back to its own default)', () => {
+      const args = buildCliArgs({ id: 'opencode-ollama', command: 'opencode', args: ['run'], defaultModel: null });
+      expect(args).toEqual(['run']);
+    });
+
+    it('respects a user-baked -m pin and skips injection', () => {
+      const args = buildCliArgs({
+        id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'],
+        defaultModel: 'qwen2.5:7b',
+      });
+      expect(args).toEqual(['run', '-m', 'ollama/custom']);
+    });
+  });
+
   describe('stripBrokenModelFlags', () => {
     it('drops dangling / empty model flags but keeps pinned ones', () => {
       expect(stripBrokenModelFlags(['--model'])).toEqual([]);

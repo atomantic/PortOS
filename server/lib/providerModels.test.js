@@ -10,7 +10,8 @@ import {
   isBedrockEnabled,
   hasBedrockRegionPrefix,
   toBedrockModelId,
-  resolveBedrockCliModel
+  resolveBedrockCliModel,
+  prefixOpencodeModel
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -25,6 +26,33 @@ describe('providerModels', () => {
       expect(isCodexConfiguredDefault('')).toBe(false);
       expect(isCodexConfiguredDefault(null)).toBe(false);
       expect(isCodexConfiguredDefault(undefined)).toBe(false);
+    });
+  });
+
+  describe('prefixOpencodeModel', () => {
+    const oc = { command: 'opencode' };
+
+    it('namespaces a bare Ollama id under ollama/ for opencode providers', () => {
+      expect(prefixOpencodeModel(oc, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
+
+    it('is idempotent — an already-namespaced id is returned unchanged', () => {
+      expect(prefixOpencodeModel(oc, 'ollama/qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
+
+    it('namespaces a slash-bearing Ollama id (opencode splits on the first slash)', () => {
+      expect(prefixOpencodeModel(oc, 'hf.co/user/model:tag')).toBe('ollama/hf.co/user/model:tag');
+    });
+
+    it('is a no-op for non-opencode providers', () => {
+      expect(prefixOpencodeModel({ command: 'claude' }, 'qwen2.5:7b')).toBe('qwen2.5:7b');
+      expect(prefixOpencodeModel({ command: 'codex' }, 'gpt-5')).toBe('gpt-5');
+    });
+
+    it('is a no-op for empty / nullish models', () => {
+      expect(prefixOpencodeModel(oc, '')).toBe('');
+      expect(prefixOpencodeModel(oc, null)).toBeNull();
+      expect(prefixOpencodeModel(oc, undefined)).toBeUndefined();
     });
   });
 

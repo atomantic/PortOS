@@ -103,7 +103,10 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
   // Bedrock map is a no-op off Bedrock — mirror that pass-through here (the
   // mapper itself is unit-tested in providerModels.test.js).
-  resolveBedrockCliModel: vi.fn((m) => m)
+  resolveBedrockCliModel: vi.fn((m) => m),
+  // Mirror the real ollama/ namespacing for opencode providers (fully unit-
+  // tested in providerModels.test.js).
+  prefixOpencodeModel: vi.fn((p, m) => (p?.command === 'opencode' && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m)
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
@@ -210,6 +213,14 @@ describe('agent TUI spawning', () => {
     expect(config.commandLine).toBe("claude --dangerously-skip-permissions --add-dir '/tmp/with space' --model claude-sonnet");
     expect(config.promptDelayMs).toBe(1000);
     expect(config.idleTimeoutMs).toBe(30000);
+  });
+
+  it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [],
+    }, 'qwen2.5:7b');
+    expect(config.command).toBe('opencode');
+    expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
   });
 
   it('falls back to the default command via id heuristic when command is omitted', () => {

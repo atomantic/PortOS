@@ -18,6 +18,26 @@ export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DE
 export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
 
 /**
+ * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
+ * OpenCode Ollama provider declares its local daemon under the config-provider
+ * key `ollama` (via OPENCODE_CONFIG_CONTENT), so the bare Ollama model id stored
+ * in `defaultModel` must be namespaced with `ollama/` before it's passed to
+ * `opencode run -m` / `opencode --model`. Idempotent — an id that already starts
+ * with `ollama/` is returned untouched, and a `/`-bearing Ollama id
+ * (`hf.co/user/model:tag`) is namespaced as `ollama/hf.co/...` since OpenCode
+ * splits provider/model on the FIRST slash only. No-op for non-OpenCode
+ * providers and empty models.
+ * @param {{command?:string}} provider
+ * @param {string|null|undefined} model
+ * @returns {string|null|undefined}
+ */
+export function prefixOpencodeModel(provider, model) {
+  if (provider?.command !== 'opencode' || !model) return model;
+  const id = String(model);
+  return id.startsWith('ollama/') ? id : `ollama/${id}`;
+}
+
+/**
  * Claude Code on AWS Bedrock wants region-prefixed model ids
  * (`global.anthropic.claude-opus-4-8`, `us.anthropic.claude-opus-4-1-...-v1:0`).
  * When `CLAUDE_CODE_USE_BEDROCK` is set on the box, passing a bare

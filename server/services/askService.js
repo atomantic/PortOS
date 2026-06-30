@@ -31,7 +31,7 @@ import { getCharacter } from './character.js';
 import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, prefixOpencodeModel } from '../lib/providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
@@ -566,7 +566,8 @@ async function* streamCompletion(provider, model, prompt, signal) {
     if (!args.includes('--output-format') && !args.includes('-o')) args.push('--output-format', 'text');
     if (cliModel) args.push('--model', cliModel);
   } else if (cliModel) {
-    args.push('--model', cliModel);
+    // OpenCode addresses its Ollama model as `ollama/<id>` (no-op for other CLIs).
+    args.push('--model', prefixOpencodeModel(provider, cliModel));
   }
   const out = await new Promise((resolve, reject) => {
     let buf = '';

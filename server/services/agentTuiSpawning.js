@@ -17,7 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { resolveCliModel, resolveBedrockCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -181,6 +181,11 @@ function appendModelArgs(args, model, command, provider) {
   if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
   if (!effectiveModel) return args;
+  // OpenCode TUI launches with `opencode --model ollama/<id>` (the top-level
+  // flag preselects the model). Namespace the bare Ollama id; no Bedrock mapping.
+  if (command === 'opencode') {
+    return [...args, '--model', prefixOpencodeModel(provider, effectiveModel)];
+  }
   // Bedrock box: map a bare Claude id to its region-prefixed form just-in-time
   // (no-op off Bedrock / for non-Claude ids).
   const injectedModel = resolveBedrockCliModel(effectiveModel, {
