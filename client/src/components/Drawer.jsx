@@ -44,11 +44,11 @@ export default function Drawer({
         className={`fixed inset-y-0 right-0 z-50 w-full ${widthClass} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <h2 className="text-base font-medium text-white">{title}</h2>
+          <h2 className="text-base font-medium text-white truncate min-w-0 pr-2">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center"
+            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label={closeLabel}
           >
             <X className="w-5 h-5" />
