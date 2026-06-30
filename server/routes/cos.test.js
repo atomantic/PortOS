@@ -239,6 +239,36 @@ describe('CoS Routes', () => {
       expect(response.body).toHaveProperty('user');
       expect(response.body).toHaveProperty('cos');
     });
+
+    it('should bound each source and add a pagination block when limit/offset are passed', async () => {
+      const mockTasks = {
+        user: {
+          tasks: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }],
+          grouped: { pending: [{ id: 'u1' }] }
+        },
+        cos: {
+          tasks: [{ id: 'c1' }, { id: 'c2' }],
+          grouped: {}
+        }
+      };
+      cos.getAllTasks.mockResolvedValue(mockTasks);
+
+      const response = await request(app).get('/api/cos/tasks?limit=1&offset=1');
+
+      expect(response.status).toBe(200);
+      // Inner task arrays are windowed...
+      expect(response.body.user.tasks).toEqual([{ id: 'u2' }]);
+      expect(response.body.cos.tasks).toEqual([{ id: 'c2' }]);
+      // ...but grouped buckets keep reflecting the full set.
+      expect(response.body.user.grouped).toEqual({ pending: [{ id: 'u1' }] });
+      expect(response.body.pagination).toEqual({
+        limit: 1,
+        offset: 1,
+        userTotal: 3,
+        cosTotal: 2,
+        total: 5
+      });
+    });
   });
 
   describe('POST /api/cos/tasks', () => {

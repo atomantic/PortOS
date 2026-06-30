@@ -23,10 +23,55 @@ import {
   storyboardShotSchema,
   storyboardSceneSchema,
   restoreRequestSchema,
-  subdirFilterSchema
+  subdirFilterSchema,
+  isPaginationRequested,
+  paginateArray
 } from './validation.js';
 
 describe('validation.js', () => {
+  describe('isPaginationRequested', () => {
+    it('is false when neither limit nor offset is present', () => {
+      expect(isPaginationRequested({})).toBe(false);
+      expect(isPaginationRequested({ status: 'active' })).toBe(false);
+      expect(isPaginationRequested(undefined)).toBe(false);
+    });
+
+    it('is true when limit or offset is present (even at zero / empty string)', () => {
+      expect(isPaginationRequested({ limit: '10' })).toBe(true);
+      expect(isPaginationRequested({ offset: '0' })).toBe(true);
+      expect(isPaginationRequested({ limit: '0' })).toBe(true);
+      expect(isPaginationRequested({ offset: '' })).toBe(true);
+    });
+  });
+
+  describe('paginateArray', () => {
+    const items = [1, 2, 3, 4, 5];
+
+    it('windows the array and reports the full total', () => {
+      expect(paginateArray(items, { limit: '2', offset: '1' })).toEqual({
+        items: [2, 3],
+        total: 5,
+        limit: 2,
+        offset: 1
+      });
+    });
+
+    it('clamps limit to maxLimit and falls back to defaultLimit when invalid', () => {
+      expect(paginateArray(items, { limit: '999' }, { defaultLimit: 50, maxLimit: 3 })).toMatchObject({
+        items: [1, 2, 3],
+        limit: 3
+      });
+      expect(paginateArray(items, { limit: '-1' }, { defaultLimit: 4, maxLimit: 100 })).toMatchObject({
+        items: [1, 2, 3, 4],
+        limit: 4
+      });
+    });
+
+    it('tolerates a non-array input by treating it as empty', () => {
+      expect(paginateArray(null, { limit: '5' })).toEqual({ items: [], total: 0, limit: 5, offset: 0 });
+    });
+  });
+
   describe('featureProviderConfigSchema', () => {
     it('accepts a providerId + model', () => {
       const result = featureProviderConfigSchema.safeParse({ providerId: 'codex', model: 'gpt-5' });
