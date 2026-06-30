@@ -111,11 +111,16 @@ export async function addProjectScene(id, sceneInput) {
   return scene;
 }
 
-/** Bulk-append scenes (the autonomous planner, #1855) — emits one update, not N. */
+/**
+ * Bulk-append scenes (the autonomous planner, #1855) — emits one update, not
+ * N. Returns `{ project, scenes }` — the freshly-persisted project, so a
+ * caller composing a response never has to re-fetch or risk overwriting a
+ * concurrent edit with stale state.
+ */
 export async function addProjectScenes(id, sceneInputs) {
-  const scenes = await (await selectBackend()).addProjectScenes(id, sceneInputs);
+  const { project, scenes } = await (await selectBackend()).addProjectScenes(id, sceneInputs);
   emitRecordUpdated('musicVideoProject', id);
-  return scenes;
+  return { project, scenes };
 }
 
 export async function updateScene(id, sceneId, patch) {
