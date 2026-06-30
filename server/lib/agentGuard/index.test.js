@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { agentGuardEnv, AGENT_GUARD_BIN } from './index.js';
 
@@ -71,6 +71,7 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
   let workDir;
   let stubPm2;
   let marker;
+  let cleanBin; // a PATH dir with the coreutils the shim needs but NO pm2
 
   beforeAll(() => {
     workDir = mkdtempSync(join(tmpdir(), 'agentguard-'));
@@ -80,6 +81,16 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
     // shim blocks, this never runs and the marker stays absent.
     writeFileSync(stubPm2, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > '${marker}'\nexit 0\n`);
     chmodSync(stubPm2, 0o755);
+
+    // Build a pm2-free PATH dir holding just the externals the shim invokes
+    // (`tr`, `dirname`) so the "no real pm2 resolvable" test is hermetic instead
+    // of depending on whether the host's /usr/bin happens to contain pm2.
+    cleanBin = join(workDir, 'cleanbin');
+    mkdirSync(cleanBin);
+    for (const tool of ['tr', 'dirname']) {
+      const src = [`/usr/bin/${tool}`, `/bin/${tool}`].find((p) => existsSync(p));
+      if (src) symlinkSync(src, join(cleanBin, tool));
+    }
   });
 
   afterAll(() => {
@@ -118,16 +129,24 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
     expect(execedArgs).toBeNull();
   });
 
-  it('blocks `pm2 delete all` / `pm2 stop all` / `pm2 restart all`', () => {
-    for (const verb of ['delete', 'stop', 'restart']) {
+  it('blocks every mirrored daemon-wide verb when the target is `all`', () => {
+    // Must match PM2_ALL_TARGET_VERBS in commandSecurity.js.
+    for (const verb of ['stop', 'delete', 'del', 'restart', 'reload', 'gracefulreload', 'scale']) {
       const { code, execedArgs } = runShim([verb, 'all']);
-      expect(code).toBe(1);
+      expect(code, `${verb} all should be blocked`).toBe(1);
       expect(execedArgs).toBeNull();
     }
   });
 
   it('blocks `all` case-insensitively (`pm2 delete ALL`)', () => {
     expect(runShim(['delete', 'ALL']).code).toBe(1);
+  });
+
+  it('blocks `all` even when it appears after earlier flags/args', () => {
+    // The shim scans every arg after the subcommand, not just the first.
+    const { code, execedArgs } = runShim(['restart', '--update-env', 'all']);
+    expect(code).toBe(1);
+    expect(execedArgs).toBeNull();
   });
 
   it('passes a scoped `pm2 restart <name>` through to the real pm2', () => {
@@ -143,10 +162,12 @@ describeShim('pm2 guard shim (bin/pm2)', () => {
   });
 
   it('exits 127 when no real pm2 can be resolved', () => {
-    // Empty PORTOS_REAL_PM2 + a curated coreutils PATH that has no pm2 (but still
-    // resolves bash/tr/dirname the shim needs) → the resolver finds none.
-    const res = spawnSync('bash', [SHIM, 'list'], {
-      env: { PORTOS_REAL_PM2: '', PATH: '/usr/bin:/bin' },
+    // Empty PORTOS_REAL_PM2 + a hermetic PATH containing only tr/dirname (no pm2)
+    // → the resolver finds none and the shim bails with 127. bash is invoked by
+    // absolute path so it need not be on the restricted PATH.
+    const bash = ['/bin/bash', '/usr/bin/bash'].find((p) => existsSync(p)) || 'bash';
+    const res = spawnSync(bash, [SHIM, 'list'], {
+      env: { PORTOS_REAL_PM2: '', PATH: cleanBin },
       encoding: 'utf8',
     });
     expect(res.status).toBe(127);
