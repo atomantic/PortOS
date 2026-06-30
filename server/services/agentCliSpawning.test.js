@@ -206,6 +206,15 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
   });
 
+  it('respects a user-baked -m pin on an OpenCode provider and does not duplicate it', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'] },
+      'qwen2.5:7b',
+    );
+
+    expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.
