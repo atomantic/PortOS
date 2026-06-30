@@ -210,6 +210,34 @@ describe('executeCliRun — close handler crash guard', () => {
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
     errorSpy.mockRestore();
   });
+
+  it('does not flip a successful run to failed when onRunCompleted throws', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Writes succeed (success path runs); the success hook throws — the caller
+    // must still receive success:true, not a finalization-failure flip.
+    writeFile.mockResolvedValue(undefined);
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunCompleted: () => { throw new Error('hook boom'); } },
+    });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-success-hook-throws', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
+    errorSpy.mockRestore();
+  });
 });
 
 describe('buildCliArgs — claude-code defaultModel honoring', () => {

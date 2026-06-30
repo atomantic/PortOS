@@ -285,13 +285,15 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
       await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
+      // Isolate the completion hooks + onComplete from the outer catch — a
+      // throwing onRunCompleted must NOT be reinterpreted as a finalization
+      // failure that flips a successful run to success:false for the caller.
       if (metadata.success) {
-        runnerConfig.hooks?.onRunCompleted?.(metadata, output);
+        safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
       } else {
-        runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
+        safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
-
-      onComplete?.(metadata);
+      safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
     } catch (err) {
       console.error(`❌ Run ${runId} close handler error: ${err.message}`);
       // The timeout was already cleared and the child has closed, so callers
