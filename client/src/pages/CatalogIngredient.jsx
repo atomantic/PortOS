@@ -49,6 +49,7 @@ function refPath(refKind, refId) {
     case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
     case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
     case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
+    case 'creative-director': return `/media/creative-director/${encodeURIComponent(refId)}/overview`;
     case 'writers-room':
     case 'writersRoom':    return '/writers-room';
     default:               return null;
@@ -59,6 +60,7 @@ function REFKIND_LABEL(kind) {
   if (kind === 'universe')   return 'Universes';
   if (kind === 'series')     return 'Series';
   if (kind === 'issue')      return 'Issues';
+  if (kind === 'creative-director') return 'Creative Director';
   if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
   return kind;
 }

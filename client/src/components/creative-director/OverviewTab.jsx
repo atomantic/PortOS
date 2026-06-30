@@ -109,6 +109,37 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         </section>
       )}
 
+      {Array.isArray(project.cast) && project.cast.length > 0 && (
+        <section className="bg-port-card border border-port-border rounded p-4">
+          <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide mb-2">
+            Cast ({project.cast.length})
+          </h2>
+          <p className="text-xs text-port-text-muted mb-2">
+            Catalog ingredients remixed into this project — the director grounds the treatment and per-scene casting on them.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            {project.cast.map((member) => {
+              // Ingredient detail route is /catalog/:type/:id (matches CatalogCard);
+              // fall back to a non-link span if the cast member is missing its type.
+              const detailPath = member.type
+                ? `/catalog/${encodeURIComponent(member.type)}/${encodeURIComponent(member.ingredientId)}`
+                : null;
+              return (
+                <div key={member.ingredientId} className="text-sm">
+                  {detailPath
+                    ? <Link to={detailPath} className="text-port-accent font-medium">{member.name}</Link>
+                    : <span className="text-port-text font-medium">{member.name}</span>}
+                  {(member.type || member.role) && (
+                    <span className="text-port-text-muted"> · {[member.type, member.role].filter(Boolean).join(' · ')}</span>
+                  )}
+                  {member.summary && <span className="text-port-text-muted">: {member.summary}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {project.failureReason && (
         <section className="bg-port-card border border-port-error rounded p-4">
           <h2 className="text-sm font-semibold text-port-error uppercase tracking-wide mb-2">Failure reason</h2>

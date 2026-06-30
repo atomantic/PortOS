@@ -86,6 +86,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     name, aspectRatio, quality, modelId, targetDurationSeconds,
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null,
+    cast = [],
   } = input;
   return {
     id,
@@ -100,6 +101,12 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     styleSpec,
     startingImageFile,
     userStory,
+    // Catalog ingredients seeded into this project via the Catalog "Remix into
+    // → Creative Director" handoff (#1808). Structured casting context the
+    // treatment agent grounds the prompt + per-scene casting on; the same
+    // ingredients are also linked durably in catalog_ingredient_refs. Empty for
+    // a bare project. Each member: { ingredientId, name, type, role, summary? }.
+    cast: Array.isArray(cast) ? cast : [],
     disableAudio,
     autoAcceptScenes,
     // Optional back-pointer to the pipeline issue that spawned this project.
