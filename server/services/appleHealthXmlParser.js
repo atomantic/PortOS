@@ -18,6 +18,7 @@
 
 import { Writable } from 'stream';
 import { StringDecoder } from 'string_decoder';
+import { decodeXmlEntities } from '../lib/xmlEntities.js';
 
 const RECORD_TAG = '<Record';
 
@@ -28,37 +29,11 @@ const RECORD_TAG = '<Record';
 // preserving the "skip the bad record, keep importing" contract sax provided.
 const MAX_OPEN_TAG = 64 * 1024;
 
-const NAMED_ENTITIES = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-};
-
-/**
- * Decode the XML entities that can appear in attribute values (named + numeric).
- * Apple Health source/device names occasionally carry `&amp;` and friends.
- *
- * @param {string} str - Raw attribute value
- * @returns {string} Decoded value (unchanged if it contains no entities)
- */
-export function decodeXmlEntities(str) {
-  if (!str || str.indexOf('&') === -1) return str;
-  return str.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, code) => {
-    if (code[0] === '#') {
-      const cp = code[1] === 'x' || code[1] === 'X'
-        ? parseInt(code.slice(2), 16)
-        : parseInt(code.slice(1), 10);
-      // Leave out-of-range / non-Unicode code points untouched — String
-      // .fromCodePoint throws a RangeError for cp < 0 or > 0x10FFFF, which,
-      // running inside the stream's synchronous write, would reject the entire
-      // import. A malformed entity in one record must not fail the whole upload.
-      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
-    }
-    return NAMED_ENTITIES[code] ?? match;
-  });
-}
+// Apple Health source/device names occasionally carry `&amp;` and friends. The
+// decoder lives in the shared `server/lib/xmlEntities.js` (named + decimal/hex
+// numeric, double-decode-safe, out-of-range-tolerant); re-exported here because
+// this module's tests and callers reference `decodeXmlEntities` by this path.
+export { decodeXmlEntities };
 
 const ATTR_RE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 
