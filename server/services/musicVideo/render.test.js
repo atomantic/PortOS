@@ -101,6 +101,59 @@ describe('beatSnapClips', () => {
     expect(out[0].outSec).toBeCloseTo(1.95, 5);
     expect(out[1].outSec).toBeCloseTo(1.95, 5); // 3.9 - 1.95
   });
+
+  // #1854 — a director-arranged scene's saved startSec/endSec is honored
+  // exactly, bypassing live re-derivation from the beat grid.
+  describe('with a persisted scene arrangement', () => {
+    it('honors a beatAligned scene\'s saved duration instead of the live grid', () => {
+      const scenes = [{ sceneId: 's1', startSec: 10, endSec: 11.2, beatAligned: true }];
+      // Without the override, the nearest beat (1.95) would trim the clip to 1.95s.
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], [1.95], { toleranceSec: 0.12, scenes });
+      expect(out[0].outSec).toBeCloseTo(1.2, 5); // 11.2 - 10
+      expect(out[0].duration).toBeCloseTo(1.2, 5);
+    });
+
+    it('clamps a persisted duration to the clip\'s own rendered length', () => {
+      const scenes = [{ sceneId: 's1', startSec: 0, endSec: 100, beatAligned: true }];
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], null, { scenes });
+      expect(out[0].outSec).toBe(2);
+    });
+
+    it('clamps a persisted duration to minClipSec', () => {
+      const scenes = [{ sceneId: 's1', startSec: 0, endSec: 0.05, beatAligned: true }];
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], null, { scenes, minClipSec: 0.4 });
+      expect(out[0].outSec).toBeCloseTo(0.4, 5);
+    });
+
+    it('falls back to live beat-snapping for a scene without beatAligned set', () => {
+      const scenes = [{ sceneId: 's1', startSec: 10, endSec: 11.2, beatAligned: false }];
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], [1.95], { toleranceSec: 0.12, scenes });
+      expect(out[0].outSec).toBeCloseTo(1.95, 5);
+    });
+
+    it('falls back to live beat-snapping when startSec/endSec are missing', () => {
+      const scenes = [{ sceneId: 's1', beatAligned: true, startSec: null, endSec: null }];
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], [1.95], { toleranceSec: 0.12, scenes });
+      expect(out[0].outSec).toBeCloseTo(1.95, 5);
+    });
+
+    it('advances the running cursor by the honored duration for later clips', () => {
+      const scenes = [{ sceneId: 's1', startSec: 0, endSec: 1, beatAligned: true }];
+      // clip0 honored at 1.0s exactly; clip1 (no scene match) natural end = 1+2=3, beat at 2.95 → 2.95-1=1.95.
+      const out = beatSnapClips(
+        [clip({ sceneId: 's1', duration: 2, outSec: 2 }), clip({ sceneId: 's2', duration: 2, outSec: 2 })],
+        [2.95],
+        { toleranceSec: 0.12, scenes },
+      );
+      expect(out[0].outSec).toBeCloseTo(1, 5);
+      expect(out[1].outSec).toBeCloseTo(1.95, 5);
+    });
+
+    it('returns clips unchanged with no beat grid and no matching scenes', () => {
+      const out = beatSnapClips([clip({ sceneId: 's1', duration: 2, outSec: 2 })], null, { scenes: [] });
+      expect(out[0].outSec).toBe(2);
+    });
+  });
 });
 
 describe('resolveSceneClips', () => {
