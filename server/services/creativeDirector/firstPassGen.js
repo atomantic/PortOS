@@ -33,6 +33,7 @@ import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
+import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
 
 // Keep the derived portrait prompt bounded — enough descriptive text to render
@@ -188,6 +189,11 @@ export async function enqueueFirstPassPortraits(members = []) {
  * missing a prompt is recorded in `skipped`, never thrown, since this runs as
  * a side effect of writing the treatment and must not fail that write.
  *
+ * Renders at the project's locked-in `aspectRatio` (via `ASPECT_PRESETS`) so
+ * the seeded frame matches what sceneRunner.js will force-crop the source
+ * image to at actual render time — an unscaled square seed would have its
+ * edges cropped away to fit a 16:9/9:16 target.
+ *
  * Returns `{ mode, enqueued: [{ sceneId, jobId }], skipped: [{ sceneId, reason }], reason? }`.
  */
 export async function enqueueFirstPassSceneFrames(project) {
@@ -198,6 +204,18 @@ export async function enqueueFirstPassSceneFrames(project) {
   if (!resolved.ready) {
     return { mode: resolved.mode, enqueued: [], skipped: [], reason: resolved.reason };
   }
+
+  // Render at the project's locked-in aspect ratio, not the image worker's
+  // square default. sceneRunner.js force-scales+center-crops whatever source
+  // image it's handed to the project's target box
+  // (`scale=w:h:force_original_aspect_ratio=increase,crop=w:h` in
+  // videoGen/local.js) — a square seed for a 16:9/9:16 project would have a
+  // large chunk of its top/bottom or left/right cropped away before the
+  // scene ever renders, silently defeating the seeded frame. Falls back to
+  // the worker's own default (undefined → 1024x1024) for an unrecognized
+  // aspectRatio rather than throwing, matching this function's best-effort
+  // contract.
+  const { width, height } = ASPECT_PRESETS[project.aspectRatio] || {};
 
   const enqueued = [];
   const skipped = [];
@@ -217,6 +235,8 @@ export async function enqueueFirstPassSceneFrames(project) {
       params: {
         ...resolved.jobParams,
         prompt,
+        width,
+        height,
         // Tag the job so the durable creativeDirectorSceneImageHook files the
         // finished render onto this scene's sourceImageFile — no mounted
         // client required. Mirrors the catalogAttach tag the portrait path
