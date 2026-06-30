@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
+import { formatDateTime } from '../../../utils/formatters';
 import {Settings,
   Save,
   Zap,
@@ -517,13 +518,13 @@ export default function ConfigTab({ onRefresh }) {
             {settings.lastDailyDigest && (
               <div className="flex items-center gap-2 text-gray-500">
                 <Clock size={14} />
-                <span>Last digest: {new Date(settings.lastDailyDigest).toLocaleString()}</span>
+                <span>Last digest: {formatDateTime(settings.lastDailyDigest)}</span>
               </div>
             )}
             {settings.lastWeeklyReview && (
               <div className="flex items-center gap-2 text-gray-500">
                 <Clock size={14} />
-                <span>Last review: {new Date(settings.lastWeeklyReview).toLocaleString()}</span>
+                <span>Last review: {formatDateTime(settings.lastWeeklyReview)}</span>
               </div>
             )}
           </div>

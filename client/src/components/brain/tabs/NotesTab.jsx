@@ -23,6 +23,7 @@ import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 export default function NotesTab() {
   // Vault state
@@ -64,7 +65,7 @@ export default function NotesTab() {
   const [creating, setCreating] = useState(false);
 
   // Confirm delete
-  const [confirmDelete, setConfirmDelete] = useState(null);
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete } = useConfirmDelete();
 
   const searchRef = useRef(null);
   const editorRef = useRef(null);
@@ -176,7 +177,7 @@ export default function NotesTab() {
   const handleDeleteNote = async (notePath) => {
     await api.deleteNote(selectedVaultId, notePath).catch(() => null);
     toast.success('Note deleted');
-    setConfirmDelete(null);
+    cancelDelete();
     setNotes(prev => prev.filter(n => n.path !== notePath));
     if (selectedNote?.path === notePath) {
       setSelectedNote(null);
@@ -488,7 +489,7 @@ export default function NotesTab() {
                   </button>
                 )}
                 <button
-                  onClick={() => setConfirmDelete(selectedNote.path)}
+                  onClick={() => requestDelete(selectedNote.path)}
                   className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
                   title="Delete note"
                 >
@@ -498,12 +499,12 @@ export default function NotesTab() {
             </div>
 
             {/* Delete confirmation */}
-            {confirmDelete === selectedNote.path && (
+            {isConfirmingDelete(selectedNote.path) && (
               <InlineConfirmRow
                 variant="separator"
                 question="Delete this note permanently?"
                 onConfirm={() => handleDeleteNote(selectedNote.path)}
-                onCancel={() => setConfirmDelete(null)}
+                onCancel={cancelDelete}
               />
             )}
 

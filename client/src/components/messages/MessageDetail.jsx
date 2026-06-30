@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User } from 'lucide-react';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 
 /**
@@ -240,7 +241,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
                   From: <span className="text-white">{msg.from?.name || msg.from?.email || 'Unknown'}</span>
                 </span>
                 {msg.date && (
-                  <span className="text-gray-500">{new Date(msg.date).toLocaleString()}</span>
+                  <span className="text-gray-500">{formatDateTime(msg.date)}</span>
                 )}
               </div>
               {msg.to?.length > 0 && (

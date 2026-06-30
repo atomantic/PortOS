@@ -3,6 +3,7 @@ import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -47,11 +48,9 @@ router.get('/:processName', asyncHandler(async (req, res) => {
     return res.json({ processName: safeProcessName, lines, logs });
   }
 
-  // SSE streaming
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
+  // SSE streaming — shared header boilerplate via openSseStream; this route
+  // emits named `event:` frames directly so it uses safeEnd but not send.
+  const { safeEnd } = openSseStream(res);
 
   // Send initial connection event
   res.write(`event: connected\ndata: ${JSON.stringify({ processName: safeProcessName, timestamp: Date.now() })}\n\n`);
@@ -94,7 +93,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   logProcess.on('close', (code) => {
     if (!res.writableEnded && !res.destroyed) {
       res.write(`event: close\ndata: ${JSON.stringify({ code })}\n\n`);
-      res.end();
+      safeEnd();
     }
   });
 

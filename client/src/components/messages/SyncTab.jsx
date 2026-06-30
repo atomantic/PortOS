@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, AlertCircle, Settings, Globe, Mail, MailOpen } from 'lucide-react';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 
@@ -107,7 +108,7 @@ export default function SyncTab({ accounts, onRefresh }) {
                 <div className="text-sm font-medium text-white">{account.name}</div>
                 <div className="text-xs text-gray-500">
                   {account.lastSyncAt
-                    ? `Last sync: ${new Date(account.lastSyncAt).toLocaleString()}`
+                    ? `Last sync: ${formatDateTime(account.lastSyncAt)}`
                     : 'Never synced'}
                   {account.lastSyncStatus && ` (${account.lastSyncStatus})`}
                 </div>

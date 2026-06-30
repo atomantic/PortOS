@@ -13,7 +13,7 @@ import {
   browserDownloadUrl, deleteBrowserDownload
 } from '../services/api';
 import toast from '../components/ui/Toast';
-import { formatBytes } from '../utils/formatters';
+import { formatBytes, formatDateTime } from '../utils/formatters';
 
 const POLL_INTERVAL = 5000;
 
@@ -589,7 +589,7 @@ export default function BrowserPage() {
                               {file.name}
                             </div>
                             <div className="text-xs text-gray-500 mt-0.5">
-                              {formatBytes(file.size)} &middot; {new Date(file.modified).toLocaleString()}
+                              {formatBytes(file.size)} &middot; {formatDateTime(file.modified)}
                             </div>
                           </a>
                           <div className="flex items-center gap-1 shrink-0">

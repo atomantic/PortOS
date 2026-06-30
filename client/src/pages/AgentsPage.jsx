@@ -2,6 +2,7 @@ import { useState, useCallback, Fragment } from 'react';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { formatDateTime } from '../utils/formatters';
 
 export function AgentsPage() {
   const [killing, setKilling] = useState({});
@@ -25,10 +26,6 @@ export function AgentsPage() {
 
   const toggleExpand = (pid) => {
     setExpandedPid(prev => prev === pid ? null : pid);
-  };
-
-  const formatStartTime = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
   };
 
   const totalCpu = agents.reduce((sum, a) => sum + (a.cpu || 0), 0);
@@ -239,7 +236,7 @@ export function AgentsPage() {
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started At</div>
-                              <div className="text-sm text-gray-300">{formatStartTime(agent.startTime)}</div>
+                              <div className="text-sm text-gray-300">{formatDateTime(agent.startTime)}</div>
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime (ms)</div>

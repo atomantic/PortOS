@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { GitBranch, Plus, RefreshCw, Trash2, CheckCircle, AlertCircle, Edit3, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import { formatDateTime } from '../../utils/formatters';
 
 /**
  * Where reference-watch records its proposals, keyed by the app's RESOLVED work
@@ -268,7 +269,7 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
   }, [editingNotes]);
 
   const lastReviewedShort = reference.lastReviewedSha ? reference.lastReviewedSha.slice(0, 8) : null;
-  const lastCheckedAgo = reference.lastCheckedAt ? new Date(reference.lastCheckedAt).toLocaleString() : 'never';
+  const lastCheckedAgo = reference.lastCheckedAt ? formatDateTime(reference.lastCheckedAt) : 'never';
   const commitCount = snapshot?.commitCount;
 
   return (

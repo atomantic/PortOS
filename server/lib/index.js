@@ -89,6 +89,7 @@ export * from './hfErrors.js';
 export * from './hfCache.js';
 export * from './hfDownload.js';
 export * from './sseDownload.js';
+export * from './sseHeaders.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
@@ -187,6 +188,7 @@ export * from './pipelineIssueOrder.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
+export * from './textUtils.js';
 
 // === Model & config ===
 export * from './browserConfig.js';

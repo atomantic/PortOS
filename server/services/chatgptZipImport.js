@@ -30,9 +30,9 @@
  */
 
 import { createReadStream, createWriteStream } from 'fs';
-import { mkdir, rename, unlink } from 'fs/promises';
+import { rename, unlink } from 'fs/promises';
 import { Writable } from 'stream';
-import { PATHS, getMimeType } from '../lib/fileUtils.js';
+import { PATHS, getMimeType, ensureDir } from '../lib/fileUtils.js';
 import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -153,7 +153,7 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
  * at `/data/brain-imports/<assetId><ext>`.
  */
 export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportAssets } = {}) {
-  await mkdir(assetDir, { recursive: true });
+  await ensureDir(assetDir);
 
   const convoBuffers = [];          // { path, buffer }
   let assetNameMap = {};

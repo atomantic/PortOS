@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Gauge, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 
 const DIMENSION_LABELS = {
   openness: 'Openness',
@@ -135,7 +136,7 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
           </p>
           {confidence?.lastCalculated && (
             <p className="text-xs text-gray-500 mt-2">
-              Last calculated: {new Date(confidence.lastCalculated).toLocaleString()}
+              Last calculated: {formatDateTime(confidence.lastCalculated)}
             </p>
           )}
         </div>

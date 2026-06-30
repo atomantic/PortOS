@@ -15,7 +15,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { copyFile, mkdir, writeFile } from 'fs/promises';
+import { copyFile, writeFile } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
@@ -510,8 +510,8 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // existence check (TOCTOU), or disk-full — would otherwise propagate to the
   // queue's catch (no crash) but leave the run record `running` forever.
   try {
-    await mkdir(checkpointsDir, { recursive: true });
-    await mkdir(samplesDir, { recursive: true });
+    await ensureDir(checkpointsDir);
+    await ensureDir(samplesDir);
 
     if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
       bin = resolveFlux2Python();
@@ -542,7 +542,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
       // NNNN.txt caption pairs, plus preview_1.txt for the periodic sample
       // render. mflux resolves everything from the config's `data` dir.
       const dataDir = join(dir, 'data');
-      await mkdir(dataDir, { recursive: true });
+      await ensureDir(dataDir);
       for (let i = 0; i < manifest.images.length; i += 1) {
         const stem = String(i + 1).padStart(4, '0');
         await copyFile(manifest.images[i].path, join(dataDir, `${stem}.png`));

@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatDateTime } from '../utils/formatters';
 import { coalesce } from '../utils/coalesce';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -423,7 +423,7 @@ export default function Review() {
               </h3>
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-gray-600">
-                  {briefing.source} &middot; {new Date(briefing.generatedAt).toLocaleString()}
+                  {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
                 </span>
                 <button
                   onClick={() => setBriefingFullscreen(prev => !prev)}
@@ -734,7 +734,7 @@ function ReviewItem({ item, config, isEditing, onComplete, onDismiss, onDelete, 
             </div>
             <p className="text-xs text-gray-600 mt-2 flex items-center gap-1">
               <Clock3 size={12} />
-              {new Date(item.createdAt).toLocaleString()}
+              {formatDateTime(item.createdAt)}
             </p>
           </>
         )}
