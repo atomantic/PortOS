@@ -164,7 +164,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
 });
 
 describe('executeCliRun — close handler crash guard', () => {
-  it('does not throw an unhandled rejection when a metadata write fails on close', async () => {
+  it('does not crash and still settles the caller when a metadata write fails on close', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -180,7 +180,8 @@ describe('executeCliRun — close handler crash guard', () => {
       defaultModel: 'codex-configured-default', timeout: 5000,
     };
 
-    await executeCliRun({ runId: 'run-write-fail', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-write-fail', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
 
     child.stdout.emit('data', Buffer.from('output'));
     child.emit('close', 0);
@@ -188,6 +189,9 @@ describe('executeCliRun — close handler crash guard', () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('run-write-fail close handler error'));
+    // The caller must still be settled with failure metadata, not left hanging.
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
     errorSpy.mockRestore();
   });
 });
