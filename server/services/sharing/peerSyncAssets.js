@@ -17,6 +17,7 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
@@ -652,13 +653,11 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets)
  * runs. `label` is the filename used in log lines.
  */
 export async function fetchCappedAssetBuffer(peer, url, label, maxBytes, { allowEmpty = false } = {}) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
   // maxBytes propagates into the HTTPS shim's streaming cap (see
   // server/lib/httpClient.js); the plain-HTTP path falls back to the
   // post-resolve content-length checks below (serve-static always sets it).
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes }, peer)
-    .finally(() => clearTimeout(timeoutId))
+  const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
+    peerFetch(url, { signal, maxBytes }, peer))
     .catch((err) => {
       if (err?.message?.includes('exceed')) {
         console.log(`⚠️ peerSync: ${label} exceeded asset size cap — ${err.message}`);

@@ -17,6 +17,7 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
 import {
@@ -239,10 +240,8 @@ export async function syncCosHistoryFromPeer(peer) {
   cosHistorySweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/cos-history-manifest`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
-    const res = await peerFetch(url, { signal: controller.signal, maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES }, peer)
-      .finally(() => clearTimeout(timeoutId))
+    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
+      peerFetch(url, { signal, maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES }, peer))
       .catch(() => null);
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
     const declaredLen = Number(res.headers?.get?.('content-length'));
@@ -459,10 +458,8 @@ export async function syncCosTasksFromPeer(peer) {
   cosTasksSweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/cos-tasks`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
-    const res = await peerFetch(url, { signal: controller.signal, maxBytes: COS_TASKS_MAX_BYTES }, peer)
-      .finally(() => clearTimeout(timeoutId))
+    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
+      peerFetch(url, { signal, maxBytes: COS_TASKS_MAX_BYTES }, peer))
       .catch(() => null);
     if (!res || !res.ok) return { merged: 0, skipped: 'unreachable' };
     const declaredLen = Number(res.headers?.get?.('content-length'));

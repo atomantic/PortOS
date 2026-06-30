@@ -17,6 +17,7 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
@@ -228,10 +229,8 @@ export async function syncMediaLibraryFromPeer(peer) {
   librarySweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/library-manifest`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
-    const res = await peerFetch(url, { signal: controller.signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES }, peer)
-      .finally(() => clearTimeout(timeoutId))
+    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
+      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES }, peer))
       .catch(() => null);
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
     // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`

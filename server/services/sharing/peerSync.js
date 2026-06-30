@@ -22,6 +22,7 @@
  */
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
 import { getInstanceId, getPeers, enqueueReciprocalSync, UNKNOWN_INSTANCE_ID } from '../instances.js';
@@ -779,14 +780,12 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // so without this a stalled peer would hang the pull (and the UI action)
   // indefinitely. Mirrors the push path; an abort rejects → caught as null →
   // 'peer-unreachable'.
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
   // maxBytes caps the HTTPS shim's in-memory buffering (see lib/httpClient.js);
   // a buggy/misbehaving peer streaming an oversized body is aborted mid-stream
   // rather than buffered whole. The shim rejects with an "exceed" Error.
   let tooLarge = false;
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES }, peer)
-    .finally(() => clearTimeout(timeoutId))
+  const res = await withAbortTimeout(PUSH_TIMEOUT_MS, (signal) =>
+    peerFetch(url, { signal, maxBytes: RECORD_PAYLOAD_MAX_BYTES }, peer))
     .catch((err) => {
       if (err?.message?.includes('exceed')) {
         tooLarge = true; // HTTPS shim tripped the cap — same condition as the Content-Length check

@@ -23,6 +23,7 @@ import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { sidecarGenParamsHash } from '../../lib/assetHash.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 
@@ -85,10 +86,8 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   const sidecarName = imageSidecarName(safeName);
   const url = `${base}/data/images/${encodeURIComponent(sidecarName)}`;
   // Abort a hung connection after the timeout — mirrors the image pull worker.
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SIDECAR_PULL_TIMEOUT_MS);
-  const res = await peerFetch(url, { signal: controller.signal, maxBytes: SIDECAR_MAX_BYTES }, peer)
-    .finally(() => clearTimeout(timeoutId))
+  const res = await withAbortTimeout(SIDECAR_PULL_TIMEOUT_MS, (signal) =>
+    peerFetch(url, { signal, maxBytes: SIDECAR_MAX_BYTES }, peer))
     .catch(() => null);
   if (!res || !res.ok) return false;
   // Require a trustworthy content-length and refuse over-cap BEFORE buffering.
