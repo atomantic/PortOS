@@ -5,6 +5,7 @@ import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import { usePrevious } from '../../hooks/usePrevious.js';
 import { useInstallStream } from '../../hooks/useInstallStream.js';
+import useMounted from '../../hooks/useMounted.js';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -27,9 +28,9 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   // Track mount + the latest in-flight /setup/check abort controller so a fetch
   // that's still resolving after unmount (or superseded by a newer check)
   // neither sets state on a dead component nor wastes the round-trip.
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
   const checkAbortRef = useRef(null);
-  useEffect(() => () => { mountedRef.current = false; checkAbortRef.current?.abort(); }, []);
+  useEffect(() => () => checkAbortRef.current?.abort(), []);
   useEffect(() => { setDraftPath(pythonPath || ''); }, [pythonPath]);
   useEffect(() => () => clearTimeout(commitTimerRef.current), []);
   const commitDraft = (value) => {
