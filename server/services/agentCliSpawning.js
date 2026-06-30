@@ -724,39 +724,49 @@ export async function spawnDirectly({
     }
     } catch (handlerErr) {
       console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
-      // If the throw beat releaseAgentLane, the lane/execution is still held.
-      // The process now survives instead of restarting, so a held lane would
-      // block later tasks indefinitely — release it on the recovery path too.
-      if (!laneReleased) {
-        try {
-          releaseAgentLane({
-            agentId,
-            success: false,
-            exitCode: code,
-            executionId,
-            laneName,
-            errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
-          });
-        } catch (releaseErr) {
-          console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
+      // A paused agent was already persisted + lane-released by markAgentPaused;
+      // if the throw beat the pause guard above, do ONLY the in-memory cleanup
+      // (mirrors the normal pause path) — finalizing it as failed here would
+      // overwrite the paused state and break later resume.
+      if (pausedAgents.has(agentId)) {
+        pausedAgents.delete(agentId);
+        unregisterSpawnedAgent(claudeProcess.pid);
+        activeAgents.delete(agentId);
+      } else {
+        // If the throw beat releaseAgentLane, the lane/execution is still held.
+        // The process now survives instead of restarting, so a held lane would
+        // block later tasks indefinitely — release it on the recovery path too.
+        if (!laneReleased) {
+          try {
+            releaseAgentLane({
+              agentId,
+              success: false,
+              exitCode: code,
+              executionId,
+              laneName,
+              errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
+            });
+          } catch (releaseErr) {
+            console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
+          }
         }
+        // Persist a terminal failure record so the agent/run don't stay stuck as
+        // running with no live process to finish them — the process now survives
+        // instead of restarting. Mirrors the error handler's completion path;
+        // each call is guarded so a persistence failure can't re-crash.
+        try {
+          await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
+        } catch (completeErr) {
+          console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
+        }
+        try {
+          await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+        } catch (runErr) {
+          console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
+        }
+        unregisterSpawnedAgent(claudeProcess.pid);
+        activeAgents.delete(agentId);
       }
-      // Persist a terminal failure record so the agent/run don't stay stuck as
-      // running with no live process to finish them — the process now survives
-      // instead of restarting. Mirrors the error handler's completion path; each
-      // call is guarded so a persistence failure can't re-crash the handler.
-      try {
-        await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
-      } catch (completeErr) {
-        console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
-      }
-      try {
-        await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
-      } catch (runErr) {
-        console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
-      }
-      unregisterSpawnedAgent(claudeProcess.pid);
-      activeAgents.delete(agentId);
     }
   });
 
