@@ -15,6 +15,8 @@ import {
   creativeDirectorProjectUpdateSchema,
   creativeDirectorTreatmentSchema,
   creativeDirectorSceneUpdateSchema,
+  creativeDirectorAutoCastSuggestSchema,
+  creativeDirectorAutoCastApplySchema,
 } from '../lib/validation.js';
 import {
   listProjects,
@@ -25,6 +27,7 @@ import {
   setTreatment,
   updateScene,
 } from '../services/creativeDirector/local.js';
+import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 
@@ -69,6 +72,16 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(project);
 }));
 
+// Autonomous auto-cast (#1810) — preview only: given a free-text brief, return the
+// catalog ingredients the director would propose (hybrid FTS + pgvector search),
+// without mutating anything. Registered before `/:id/auto-cast` so the literal
+// path can't be shadowed by the param route.
+router.post('/auto-cast/suggest', asyncHandler(async (req, res) => {
+  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastSuggestSchema, req.body);
+  const hits = await suggestCastForBrief({ brief, types, limit });
+  res.json({ suggestions: hits.map(toSuggestionView).filter(Boolean) });
+}));
+
 router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectUpdateSchema, req.body);
   const updated = await updateProject(req.params.id, data);
@@ -78,6 +91,16 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   await deleteProject(req.params.id);
   res.json({ ok: true });
+}));
+
+// Autonomous auto-cast (#1810) — apply to a project: derive a brief from the
+// project (or accept an explicit one), search the catalog, APPEND the fresh
+// candidates to the project cast, and link them as creative-director refs.
+// Returns the updated project plus what was added/considered.
+router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
+  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
+  const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
+  res.json(result);
 }));
 
 // Agent-callable: write the treatment doc.

@@ -78,6 +78,26 @@ export const creativeDirectorProjectCreateSchema = z.object({
   sourceIssueId: z.string().min(1).max(64).nullable().optional(),
 });
 
+// Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
+// castable atom types (default character/place/object/scene server-side); `limit`
+// caps how many candidates the hybrid search returns. The suggest variant needs a
+// brief to search on; the apply variant derives one from the project when omitted.
+const autoCastTypes = z.array(z.string().trim().min(1).max(64)).max(10).optional();
+const autoCastLimit = z.number().int().min(1).max(50).optional();
+
+export const creativeDirectorAutoCastSuggestSchema = z.object({
+  brief: z.string().min(1).max(10000),
+  types: autoCastTypes,
+  limit: autoCastLimit,
+});
+
+export const creativeDirectorAutoCastApplySchema = z.object({
+  // Omitted → the service derives the brief from the project's name/style/story.
+  brief: z.string().max(10000).optional(),
+  types: autoCastTypes,
+  limit: autoCastLimit,
+});
+
 // Update is restricted to a few editable fields. modelId / aspectRatio /
 // quality / targetDurationSeconds are locked at creation — changing them
 // mid-project would invalidate already-rendered segments.

@@ -30,3 +30,25 @@ export const resumeCreativeDirectorProject = (id) => request(`/creative-director
 export const createSmokeTestCreativeDirectorProject = () => request('/creative-director/smoke-test', {
   method: 'POST',
 });
+// Autonomous auto-cast (#1810). `suggest` previews the catalog ingredients the
+// director would propose for a free-text brief (no mutation). `apply` derives the
+// brief from the project (or accepts an explicit one), appends the fresh
+// candidates to the project cast, and links them — returning
+// `{ project, added, suggestions }`. `options.silent` defers error toasting to a
+// caller that owns its own error UI.
+export const suggestCreativeDirectorAutoCast = (brief, { types, limit } = {}, options = {}) =>
+  request('/creative-director/auto-cast/suggest', {
+    method: 'POST',
+    body: JSON.stringify({ brief, ...(types ? { types } : {}), ...(limit ? { limit } : {}) }),
+    ...options,
+  });
+export const applyCreativeDirectorAutoCast = (id, { brief, types, limit } = {}, options = {}) =>
+  request(`/creative-director/${encodeURIComponent(id)}/auto-cast`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(brief ? { brief } : {}),
+      ...(types ? { types } : {}),
+      ...(limit ? { limit } : {}),
+    }),
+    ...options,
+  });
