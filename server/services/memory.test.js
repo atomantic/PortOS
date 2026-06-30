@@ -518,6 +518,38 @@ describe('memory service', () => {
       expect(result.summary).toBe('explicit summary');
     });
 
+    it('should regenerate summary when content is cleared to empty string', async () => {
+      // Absent-vs-cleared: clearing content to "" is an intentional edit and must
+      // refresh the (now-empty) summary, not leave the stale one behind (#1826).
+      const mockMemory = { id: 'mem-1', type: 'fact', content: 'old', summary: 'old summary', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old summary', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
+        return Promise.resolve(def);
+      });
+
+      const result = await updateMemory('mem-1', { content: '' });
+
+      expect(generateSummary).toHaveBeenCalledWith('');
+      expect(result.summary).toBe('');
+    });
+
+    it('should not regenerate summary (or throw) when content is absent', async () => {
+      // The string-typed gate must keep a content-less update out of generateSummary,
+      // which would throw on `undefined.length` (#1826).
+      const mockMemory = { id: 'mem-1', type: 'fact', content: 'old', summary: 'old summary', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old summary', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
+        return Promise.resolve(def);
+      });
+
+      const result = await updateMemory('mem-1', { status: 'archived' });
+
+      expect(generateSummary).not.toHaveBeenCalled();
+      expect(result.summary).toBe('old summary');
+    });
+
     it('should return null for non-existent memory', async () => {
       readJSONFile.mockImplementation((path, def) => Promise.resolve(def));
 
@@ -550,6 +582,37 @@ describe('memory service', () => {
       await updateMemory('mem-1', { tags: ['new-tag'] });
 
       expect(memoryBM25.indexMemory).toHaveBeenCalled();
+    });
+
+    it('should reindex BM25 when content is cleared to empty string', async () => {
+      // Absent-vs-cleared: clearing content to "" must reindex so the now-empty
+      // document stops matching its old terms — the falsy-gated version skipped
+      // the reindex and left the old text searchable (#1826).
+      const mockMemory = { id: 'mem-1', type: 'fact', content: 'searchable old text', summary: 'old', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
+        return Promise.resolve(def);
+      });
+
+      await updateMemory('mem-1', { content: '' });
+
+      expect(memoryBM25.indexMemory).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'mem-1', content: '' })
+      );
+    });
+
+    it('should not reindex BM25 when neither content nor tags are in the update', async () => {
+      const mockMemory = { id: 'mem-1', type: 'fact', content: 'test', summary: 'test', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'test', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
+        return Promise.resolve(def);
+      });
+
+      await updateMemory('mem-1', { category: 'engineering' });
+
+      expect(memoryBM25.indexMemory).not.toHaveBeenCalled();
     });
 
     it('should emit memory:updated event', async () => {
