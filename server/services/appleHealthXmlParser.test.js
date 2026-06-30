@@ -44,6 +44,14 @@ describe('decodeXmlEntities', () => {
   it('leaves unknown entities untouched', () => {
     expect(decodeXmlEntities('&bogus;')).toBe('&bogus;');
   });
+
+  it('leaves out-of-range numeric references untouched without throwing', () => {
+    // String.fromCodePoint(999999999999) throws RangeError — must not propagate.
+    expect(() => decodeXmlEntities('&#999999999999;')).not.toThrow();
+    expect(decodeXmlEntities('&#999999999999;')).toBe('&#999999999999;');
+    expect(decodeXmlEntities('&#x110000;')).toBe('&#x110000;'); // just past U+10FFFF
+    expect(decodeXmlEntities('&#x10FFFF;')).toBe(String.fromCodePoint(0x10ffff)); // max valid
+  });
 });
 
 describe('parseAttributes', () => {
@@ -142,5 +150,26 @@ describe('createAppleHealthRecordStream', () => {
 
   it('handles an empty stream without emitting anything', async () => {
     expect(await parse('')).toEqual([]);
+  });
+
+  it('does not throw on a malformed numeric entity inside a Record attribute', async () => {
+    const xml = '<HealthData><Record type="t" sourceName="&#999999999999;" startDate="d"/></HealthData>';
+    const records = await parse(xml);
+    expect(records).toHaveLength(1);
+    expect(records[0].attributes.sourcename).toBe('&#999999999999;'); // left as-is, not decoded
+  });
+
+  it('resyncs past an unterminated Record tag instead of stalling the stream', async () => {
+    // An unclosed opening tag (no `>`) larger than MAX_OPEN_TAG must not buffer
+    // the rest of the file forever — it should be skipped so later valid records
+    // still import. Feed it as two writes so the malformed tag is unclosed at
+    // the first drain.
+    const records = [];
+    const parser = createAppleHealthRecordStream({ onRecord: (n) => records.push(n) });
+    parser.write(Buffer.from('<HealthData><Record ' + 'a'.repeat(70000), 'utf8'));
+    parser.write(Buffer.from(' /><Record type="ok" value="1" startDate="d"/></HealthData>', 'utf8'));
+    await new Promise((resolve, reject) => parser.end((err) => (err ? reject(err) : resolve())));
+    expect(records).toHaveLength(1);
+    expect(records[0].attributes.type).toBe('ok');
   });
 });

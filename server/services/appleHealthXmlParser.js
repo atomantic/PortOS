@@ -21,6 +21,13 @@ import { StringDecoder } from 'string_decoder';
 
 const RECORD_TAG = '<Record';
 
+// A real Apple Health `<Record>` opening tag is at most a few hundred bytes. If
+// an apparent record's opening tag grows past this without closing (a malformed
+// / unterminated-quote tag that would otherwise swallow the rest of the file and
+// stall the import), treat it as garbage and resync to the next `<Record` —
+// preserving the "skip the bad record, keep importing" contract sax provided.
+const MAX_OPEN_TAG = 64 * 1024;
+
 const NAMED_ENTITIES = {
   amp: '&',
   lt: '<',
@@ -43,7 +50,11 @@ export function decodeXmlEntities(str) {
       const cp = code[1] === 'x' || code[1] === 'X'
         ? parseInt(code.slice(2), 16)
         : parseInt(code.slice(1), 10);
-      return Number.isFinite(cp) ? String.fromCodePoint(cp) : match;
+      // Leave out-of-range / non-Unicode code points untouched — String
+      // .fromCodePoint throws a RangeError for cp < 0 or > 0x10FFFF, which,
+      // running inside the stream's synchronous write, would reject the entire
+      // import. A malformed entity in one record must not fail the whole upload.
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
     }
     return NAMED_ENTITIES[code] ?? match;
   });
@@ -132,7 +143,16 @@ export function createAppleHealthRecordStream({ onRecord }) {
         continue;
       }
       const end = findTagEnd(buffer, idx + RECORD_TAG.length);
-      if (end === -1) { buffer = buffer.slice(idx); return; } // opening tag not fully buffered — wait
+      if (end === -1) {
+        // Opening tag not closed in the buffer. Normally just a chunk boundary
+        // mid-tag — retain and finish it next write. But a tag that never closes
+        // (unterminated quote / truncation) would buffer the rest of the file
+        // and stall; once it exceeds MAX_OPEN_TAG it can't be a real record, so
+        // skip it and resync to the next `<Record`.
+        if (buffer.length - idx > MAX_OPEN_TAG) { i = idx + RECORD_TAG.length; continue; }
+        buffer = buffer.slice(idx);
+        return;
+      }
       onRecord({ name: 'record', attributes: parseAttributes(buffer.slice(idx, end + 1)) });
       i = end + 1;
     }
