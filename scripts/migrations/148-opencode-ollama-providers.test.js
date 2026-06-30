@@ -27,7 +27,7 @@ describe('migration 148 — OpenCode Ollama providers', () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it('adds both shipped OpenCode providers to an existing install', async () => {
+  it('adds the OpenCode Ollama CLI provider to an existing install', async () => {
     writeJson(providersPath, {
       activeProvider: 'claude-code',
       providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } },
@@ -37,16 +37,13 @@ describe('migration 148 — OpenCode Ollama providers', () => {
 
     const out = readJson(providersPath);
     const cli = out.providers['opencode-ollama'];
-    const tui = out.providers['opencode-ollama-tui'];
     expect(cli.type).toBe('cli');
     expect(cli.command).toBe('opencode');
     expect(cli.args).toEqual(['run']);
     expect(cli.ollamaBacked).toBe(true);
     expect(cli.enabled).toBe(false);
-    expect(tui.type).toBe('tui');
-    expect(tui.command).toBe('opencode');
-    expect(tui.args).toEqual([]);
-    expect(tui.ollamaBacked).toBe(true);
+    // only the CLI variant ships (TUI completion path is a follow-up)
+    expect(out.providers['opencode-ollama-tui']).toBeUndefined();
     // unrelated providers + active provider untouched
     expect(out.providers['claude-code']).toBeDefined();
     expect(out.activeProvider).toBe('claude-code');
@@ -80,8 +77,6 @@ describe('migration 148 — OpenCode Ollama providers', () => {
     // existing CLI entry preserved untouched
     expect(out.providers['opencode-ollama'].enabled).toBe(true);
     expect(out.providers['opencode-ollama'].models).toEqual(['qwen2.5-coder:32b']);
-    // but the missing TUI variant is still added
-    expect(out.providers['opencode-ollama-tui']).toBeDefined();
   });
 
   it('is idempotent — a second run makes no changes', async () => {

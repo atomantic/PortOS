@@ -1,21 +1,25 @@
 /**
- * Ship the "OpenCode Ollama" provider pair (CLI + TUI) to existing installs.
+ * Ship the "OpenCode Ollama" CLI provider to existing installs.
  *
  * Background: issue-1802. Anthropic-format tool-calling (what the `claude` CLI
  * expects) is a poor fit for Ollama models trained against the OpenAI tool
  * schema — they emit JSON tool-call text that the harness never executes, so a
  * Claude-Ollama agent "runs" but silently fails to edit files. OpenCode speaks
  * the OpenAI-compatible protocol natively, so the SAME local models reliably
- * apply file changes. These providers run `opencode` against a local Ollama
+ * apply file changes. This provider runs `opencode run` against a local Ollama
  * daemon (declared inline via OPENCODE_CONFIG_CONTENT) so api-only / local-model
- * users get working tool execution.
+ * users get working headless tool execution.
+ *
+ * Only the headless CLI variant ships: the interactive TUI completion path drives
+ * the slashdo `/do:pr` / `/do:push` handoff that OpenCode can't execute, so a TUI
+ * variant is deferred to its own follow-up.
  *
  * `setup-data.js` merges *missing* provider entries from data.reference, but only
- * when an install actually re-runs setup. This migration delivers the pair on a
- * plain server restart too, and is the canonical path for deployed installs to
- * pick them up. Purely additive: brand-new ids, so there's no rename or pinned-
- * id rewrite to do (contrast migration 146, which renamed clawed-ollama). Adds
- * each provider only when missing — idempotent; existing keys are left untouched.
+ * when an install actually re-runs setup. This migration delivers the provider on
+ * a plain server restart too, and is the canonical path for deployed installs to
+ * pick it up. Purely additive: a brand-new id, so there's no rename or pinned-id
+ * rewrite to do (contrast migration 146, which renamed clawed-ollama). Adds the
+ * provider only when missing — idempotent; an existing key is left untouched.
  *
  * Kept in lockstep with data.reference/providers.json and
  * server/lib/aiToolkit/defaults/providers.sample.json. Frozen here as the
@@ -51,23 +55,6 @@ const OPENCODE_OLLAMA_CLI = {
   headlessArgs: [],
 };
 
-const OPENCODE_OLLAMA_TUI = {
-  id: 'opencode-ollama-tui',
-  name: 'OpenCode Ollama TUI (local model)',
-  type: 'tui',
-  command: 'opencode',
-  args: [],
-  models: [],
-  defaultModel: null,
-  ollamaBacked: true,
-  timeout: 600000,
-  enabled: false,
-  envVars: { OPENCODE_CONFIG_CONTENT },
-  secretEnvVars: [],
-  tuiPromptDelayMs: 2500,
-  tuiIdleTimeoutMs: 180000,
-};
-
 export default {
   async up({ rootDir }) {
     const providersPath = join(rootDir, PROVIDERS_REL_PATH);
@@ -96,7 +83,7 @@ export default {
     const providers = config.providers;
     let changed = false;
 
-    for (const def of [OPENCODE_OLLAMA_CLI, OPENCODE_OLLAMA_TUI]) {
+    for (const def of [OPENCODE_OLLAMA_CLI]) {
       if (!providers[def.id]) {
         providers[def.id] = { ...def, envVars: { ...def.envVars } };
         changed = true;
