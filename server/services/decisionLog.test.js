@@ -17,6 +17,14 @@ vi.mock('./cosEvents.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
+  // it through the mocked fs/promises.writeFile so writeFile.mockImplementation
+  // capture in the tests keeps working unchanged.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
   PATHS: { cos: '/mock/data/cos' },
   readJSONFile: vi.fn()
 }));
@@ -71,6 +79,11 @@ describe('decisionLog.js', () => {
     }));
     vi.doMock('../lib/fileUtils.js', () => ({
       ensureDir: vi.fn(),
+      atomicWrite: vi.fn(async (filePath, data) => {
+        const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+        const { writeFile } = await import('fs/promises');
+        return writeFile(filePath, payload);
+      }),
       PATHS: { cos: '/mock/data/cos' },
       readJSONFile: vi.fn()
     }));

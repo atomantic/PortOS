@@ -5,7 +5,14 @@ vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   readJSONFile: vi.fn(),
-  PATHS: { cos: '/tmp/test/cos' }
+  PATHS: { cos: '/tmp/test/cos' },
+  // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
+  // it through the mocked fs/promises.writeFile so writeFile.toHaveBeenCalled holds.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  })
 }));
 
 vi.mock('fs/promises', () => ({

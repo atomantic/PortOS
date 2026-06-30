@@ -5,9 +5,8 @@
  * metric+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 
 // === Pure Functions ===
 
@@ -61,7 +60,7 @@ export async function writeDayFile(dateStr, data) {
   await ensureDir(PATHS.health);
   data.updated = new Date().toISOString();
   const filePath = join(PATHS.health, `${dateStr}.json`);
-  await writeFile(filePath, JSON.stringify(data, null, 2));
+  await atomicWrite(filePath, data);
 }
 
 /**

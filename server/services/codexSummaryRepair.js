@@ -5,10 +5,9 @@
 // display, this module re-extracts the real assistant tail from the
 // matching output.txt and rewrites metadata.json in place.
 
-import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 
 // Any taskSummary above this size is almost certainly a transcript dump —
@@ -46,7 +45,7 @@ export async function repairCodexTaskSummary(agentDir, agent) {
   if (!rawContent) return null;
   const raw = JSON.parse(rawContent);
   raw.metadata = { ...(raw.metadata || {}), taskSummary: repaired, simplifySummary: null };
-  await writeFile(metaPath, JSON.stringify(raw, null, 2));
+  await atomicWrite(metaPath, raw);
 
   const beforeSize = (storedTask?.length || 0) + (storedSimplify?.length || 0);
   console.log(`🔧 Repaired Codex task summary for ${agent.id} (${beforeSize} → ${repaired.length} chars)`);

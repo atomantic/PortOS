@@ -5,9 +5,8 @@
  * Stores data in the shared daily-log.json under the `nicotine` key per entry.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import {
   isMortalLoomEnabled,
   readDailyLogIfEnabled,
@@ -110,7 +109,7 @@ async function loadDailyLog() {
 
 async function saveDailyLog(log) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(DAILY_LOG_FILE, JSON.stringify(log, null, 2));
+  await atomicWrite(DAILY_LOG_FILE, log);
   averageCache = null;
 }
 
@@ -281,7 +280,7 @@ async function loadCustomProducts() {
 
 async function saveCustomProducts(data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(CUSTOM_PRODUCTS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(CUSTOM_PRODUCTS_FILE, data);
 }
 
 export async function getCustomProducts() {

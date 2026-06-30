@@ -990,7 +990,7 @@ async function registerTrainedLora({
   const sidecar = buildTrainedSidecar({
     run, result, filename, previewImageUrl, sizeBytes, selectedStep, autoSelected,
   });
-  await writeFile(`${dest}.metadata.json`, JSON.stringify(sidecar, null, 2) + '\n');
+  await atomicWrite(`${dest}.metadata.json`, JSON.stringify(sidecar, null, 2) + '\n');
   return { sizeBytes, sidecar };
 }
 

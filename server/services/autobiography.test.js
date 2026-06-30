@@ -48,6 +48,13 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fs = await import('fs');
   return {
     ensureDir: vi.fn(),
+    // atomicWrite replaced raw writeFile(JSON.stringify) sites (#1837). Route it
+    // through the mocked fs/promises.writeFile so each test's existing
+    // writeFile.mockImplementation capture keeps working unchanged.
+    atomicWrite: vi.fn(async (filePath, data) => {
+      const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+      return fsPromises.writeFile(filePath, payload);
+    }),
     PATHS: { digitalTwin: '/mock/data/digital-twin' },
     readJSONFile: vi.fn(async (filePath, defaultValue) => {
       if (!fs.existsSync(filePath)) return defaultValue;

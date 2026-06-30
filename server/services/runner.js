@@ -5,7 +5,7 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
@@ -113,7 +113,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     metadata.errorAnalysis = errorAnalysis;
   }
 
-  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+  await atomicWrite(metadataPath, metadata).catch(() => {});
 
   if (success) {
     runnerConfig.hooks?.onRunCompleted?.(metadata, output);
@@ -154,7 +154,7 @@ export async function patchRunMetadata(runId, patch) {
   let metadata;
   try { metadata = JSON.parse(metadataStr); } catch { return; }
   Object.assign(metadata, patch);
-  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+  await atomicWrite(metadataPath, metadata).catch(() => {});
 }
 
 /**
@@ -249,7 +249,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     };
 
     await writeFile(outputPath, output).catch(() => {});
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+    await atomicWrite(metadataPath, metadata).catch(() => {});
     // Isolate the hook from onComplete — a throwing onRunFailed must not block
     // the caller from settling, and an uncaught throw here would crash the
     // process (this runs outside the request lifecycle).
@@ -288,7 +288,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
         metadata.errorAnalysis = errorAnalysis;
       }
 
-      await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+      await atomicWrite(metadataPath, metadata);
 
       // Isolate the completion hooks + onComplete from the outer catch — a
       // throwing onRunCompleted must NOT be reinterpreted as a finalization

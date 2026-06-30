@@ -19,7 +19,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -784,7 +784,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // and Remix flow can recover prompt/seed/steps even if mflux's own
       // --metadata sidecar lives at a slightly different filename shape.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
+      await atomicWrite(sidecar, meta).catch(() => {});
       // Cleaners run BEFORE the SSE complete + completed events so subscribers
       // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
       // cleanC2PA is a no-op on local — denoise is the only mode that does
@@ -913,7 +913,7 @@ export async function setImageHidden(filename, hidden) {
   assertGalleryFilename(filename);
   const { path: sidecarPath, metadata } = await readImageSidecar(filename);
   metadata.hidden = !!hidden;
-  await writeFile(sidecarPath, JSON.stringify(metadata, null, 2));
+  await atomicWrite(sidecarPath, metadata);
   return { ok: true, hidden: metadata.hidden };
 }
 

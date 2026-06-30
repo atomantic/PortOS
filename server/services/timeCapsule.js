@@ -5,12 +5,12 @@
  * Supports creating, listing, viewing, comparing, and deleting snapshots.
  */
 
-import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
+import { readFile, unlink, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 const SNAPSHOTS_DIR = join(DIGITAL_TWIN_DIR, 'snapshots');
@@ -31,7 +31,7 @@ async function loadIndex() {
 
 async function saveIndex(index) {
   await ensureSnapshotsDir();
-  await writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
+  await atomicWrite(INDEX_FILE, index);
 }
 
 /**
@@ -122,7 +122,7 @@ export async function createSnapshot(label, description = '') {
 
   // Save snapshot data
   const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
-  await writeFile(snapshotFile, JSON.stringify({ ...snapshot, data }, null, 2));
+  await atomicWrite(snapshotFile, { ...snapshot, data });
 
   // Update index
   const index = await loadIndex();

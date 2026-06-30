@@ -28,6 +28,14 @@ vi.mock('fs/promises', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { brain: '/tmp/test-brain' },
   ensureDir: vi.fn(async () => {}),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) bridge-map site (#1837);
+  // route it through the mocked fs/promises.writeFile so it updates
+  // bridgeFileContents and a reloaded bridge sees the persisted map.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
 }));
 vi.mock('./memoryBackend.js', () => ({ createMemory, updateMemory, updateMemoryEmbedding, deleteMemory }));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));

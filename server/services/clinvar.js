@@ -4,7 +4,7 @@ import { join } from 'path';
 import { createGunzip } from 'zlib';
 import { createInterface } from 'readline';
 import { pipeline } from 'stream/promises';
-import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const GENOME_DIR = PATHS.meatspace;
 const CLINVAR_GZ = join(GENOME_DIR, 'clinvar-raw.txt.gz');
@@ -274,7 +274,7 @@ export async function syncClinvar(onProgress) {
     downloadSize: downloadResult.size,
     indexSize: Buffer.byteLength(indexJson)
   };
-  await writeFile(CLINVAR_META, JSON.stringify(meta, null, 2));
+  await atomicWrite(CLINVAR_META, meta);
 
   // Clean up the raw gz file to save disk space
   await unlink(CLINVAR_GZ).catch(() => {});
