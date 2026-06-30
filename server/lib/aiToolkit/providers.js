@@ -674,7 +674,8 @@ export function createProviderService(config = {}) {
       }
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+        { signal: AbortSignal.timeout(8000) }
       ).catch(() => null);
 
       if (!response?.ok) {
