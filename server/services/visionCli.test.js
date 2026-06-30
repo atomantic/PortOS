@@ -1,10 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import {
+
+// Wrap the REAL resolveWindowsExecutable in a spy (not a stub) so every
+// existing test below is unaffected (a no-op pass-through on the non-win32
+// host running this suite) while one test can force a specific resolved
+// path to prove describeImageViaCli actually spawns it.
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveWindowsExecutable: vi.fn(actual.resolveWindowsExecutable) };
+});
+
+const {
   decodeImageDataUrl,
   buildCliVisionInvocation,
   describeImageViaCli,
-} from './visionCli.js';
+} = await import('./visionCli.js');
+const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
 
@@ -102,6 +113,27 @@ describe('describeImageViaCli', () => {
       text: 'a woman in a red cloak', finishReason: null, usage: null, reasoning: '',
     });
     expect(spawnImpl).toHaveBeenCalledOnce();
+  });
+
+  it('spawns the resolveWindowsExecutable-resolved path when one is found (#1865)', async () => {
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce('C:\\Users\\Joe\\AppData\\Roaming\\npm\\codex.cmd');
+    const child = makeFakeChild();
+    const spawnImpl = spawnEmitting(child, (c) => {
+      c.stdout.emit('data', Buffer.from('caption'));
+      c.emit('close', 0);
+    });
+    const promise = describeImageViaCli({
+      provider: { id: 'codex', command: 'codex', args: [] },
+      dataUrl: PNG_DATA_URL,
+      prompt: 'caption this',
+      spawnImpl,
+    });
+    await promise;
+    const [spawnedCommand, , options] = spawnImpl.mock.calls[0];
+    expect(spawnedCommand).toBe('C:\\Users\\Joe\\AppData\\Roaming\\npm\\codex.cmd');
+    // Never falls back to shell:true — the resolved path carries the explicit
+    // extension, so no shell option is needed (see resolveWindowsExecutable).
+    expect(options.shell).toBeUndefined();
   });
 
   it('strips the codex session transcript down to the assistant reply', async () => {

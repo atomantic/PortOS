@@ -282,7 +282,16 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     return child;
   }
 
-  it('passes shell: IS_WIN32 to spawn so npm-installed CLI shims can launch on Windows', async () => {
+  it('never enables shell:true — resolveWindowsExecutable (not a shell) is the Windows fix', async () => {
+    // resolveWindowsExecutable is module-private here, and its IS_WIN32 default
+    // is bound once at module load like the rest of the codebase's win32-gated
+    // logic (see bufferedSpawn.test.js) — it can't be faked by mutating
+    // process.platform mid-test. The resolution ALGORITHM itself is exhaustively
+    // covered by server/lib/bufferedSpawn.test.js's injectable-isWin32 tests
+    // (this file's copy is a byte-for-byte mirror); this test only pins the
+    // wiring — that the built-in spawn never falls back to shell:true (the
+    // DEP0190-unsafe approach this directory rejected — see resolveWindowsExecutable
+    // docstring above) regardless of platform.
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-spawn-'));
     const runner = createRunnerService({ dataDir });
     const child = makeChild();
@@ -301,8 +310,11 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
       runId: 'builtin-run', provider, prompt: 'test prompt', onComplete: resolveComplete,
     });
 
-    const [, , options] = spawn.mock.calls.at(-1);
-    expect(options.shell).toBe(process.platform === 'win32');
+    const [command, , options] = spawn.mock.calls.at(-1);
+    expect(options.shell).toBeFalsy();
+    // Off win32 (the host actually running this suite), resolution is a no-op
+    // and the bare command is spawned unchanged.
+    if (process.platform !== 'win32') expect(command).toBe('opencode');
 
     // The 'close' handler's atomicWrite calls run after executeCliRun returns
     // — wait for completion before removing dataDir, or rm races the writes.

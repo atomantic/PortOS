@@ -18,7 +18,7 @@
 
 import { spawn } from 'child_process';
 import { buildCliArgs } from './cliProviderArgs.js';
-import { IS_WIN32, killProcessTree } from './bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable } from './bufferedSpawn.js';
 
 /**
  * Resolve which CLI provider + model a feature should use from the providers
@@ -97,11 +97,14 @@ export function runCliProviderPrompt(args = {}) {
 
     // CLAUDECODE is deleted from the child env so a nested invocation doesn't
     // think it's running inside the parent Claude Code session.
-    const child = spawn(provider.command, spawnArgs, {
+    // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve to
+    // the explicit-extension path instead of enabling a shell — shell:true +
+    // an args array does NOT escape arguments (DEP0190), so a prompt/path
+    // containing a space would silently corrupt or be shell-injectable. See
+    // resolveWindowsExecutable in server/lib/bufferedSpawn.js.
+    const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+    const child = spawn(resolvedCommand, spawnArgs, {
       cwd: cwd || process.cwd(),
-      // npm-installed CLI providers are .cmd/.bat shims on Windows, which
-      // need a shell to execute (see server/lib/bufferedSpawn.js IS_WIN32).
-      shell: IS_WIN32,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
       windowsHide: true,

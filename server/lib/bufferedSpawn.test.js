@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Mock child_process.spawn so we can drive the buffered-spawn machinery without
 // launching real processes.
@@ -12,6 +15,7 @@ const {
   bufferedSpawnOrThrow,
   killProcessTree,
   needsShell,
+  resolveWindowsExecutable,
   IS_WIN32,
   WIN_CMD_SHIMS,
   MAX_OUTPUT_BYTES,
@@ -66,7 +70,7 @@ describe('killProcessTree', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('on Windows spawns taskkill /T /F against the pid', () => {
+  it('on Windows spawns taskkill /T /F against the pid and marks the child killed', () => {
     if (!IS_WIN32) return; // can't simulate platform branch from outside
     const child = makeFakeChild({ pid: 999 });
     const tk = makeFakeChild();
@@ -77,6 +81,63 @@ describe('killProcessTree', () => {
       'taskkill', ['/T', '/F', '/PID', '999'],
       expect.objectContaining({ stdio: 'ignore', windowsHide: true })
     );
+    // taskkill runs in a detached process that never touches `child` itself —
+    // .killed must be set synchronously here so re-entrant kill/abort guards
+    // elsewhere (gated on `!child.killed`) actually engage on Windows.
+    expect(child.killed).toBe(true);
+  });
+});
+
+describe('resolveWindowsExecutable', () => {
+  // isWin32 is passed explicitly so these tests are deterministic regardless
+  // of the host platform actually running them.
+  let fakePathDir;
+  let originalPath;
+
+  beforeEach(async () => {
+    fakePathDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-'));
+    originalPath = process.env.PATH;
+    process.env.PATH = fakePathDir;
+  });
+
+  afterEach(async () => {
+    process.env.PATH = originalPath;
+    await rm(fakePathDir, { recursive: true, force: true });
+  });
+
+  it('returns null when isWin32 is false, regardless of what is on PATH', async () => {
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    expect(resolveWindowsExecutable('opencode', false)).toBeNull();
+  });
+
+  it('resolves a bare command to its .cmd shim on PATH', async () => {
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    expect(resolveWindowsExecutable('opencode', true)).toBe(join(fakePathDir, 'opencode.cmd'));
+  });
+
+  it('prefers a real .exe over a .cmd shim when both exist', async () => {
+    await writeFile(join(fakePathDir, 'tool.cmd'), '@echo off\n');
+    await writeFile(join(fakePathDir, 'tool.exe'), '');
+    expect(resolveWindowsExecutable('tool', true)).toBe(join(fakePathDir, 'tool.exe'));
+  });
+
+  it('never matches an extension-less POSIX shim stub (the actual #1865 root cause)', async () => {
+    // npm ships a bare POSIX shell-script stub alongside the .cmd/.bat/.ps1
+    // Windows wrappers for Git Bash/WSL — it is not natively launchable.
+    await writeFile(join(fakePathDir, 'opencode'), '#!/bin/sh\n');
+    expect(resolveWindowsExecutable('opencode', true)).toBeNull();
+  });
+
+  it('returns null when nothing matches on PATH', () => {
+    expect(resolveWindowsExecutable('does-not-exist', true)).toBeNull();
+  });
+
+  it('returns null for an already-absolute path (nothing to resolve)', () => {
+    expect(resolveWindowsExecutable('C:\\tools\\opencode.cmd', true)).toBeNull();
+  });
+
+  it('returns null for a relative path containing a separator', () => {
+    expect(resolveWindowsExecutable('./bin/opencode', true)).toBeNull();
   });
 });
 

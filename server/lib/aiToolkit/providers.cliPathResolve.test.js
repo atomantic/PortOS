@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, rm } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Mock child_process so testProvider's command-resolution branch runs against a
 // controllable `which`/`where` + version probe instead of the host's real PATH.
@@ -22,15 +23,28 @@ const TEST_DATA_DIR = join(process.cwd(), 'test-data-cli-resolve');
 describe('testProvider — cli command resolution (cross-platform PATH)', () => {
   let providerService;
   let originalPlatform;
+  let originalPath;
+  let fakePathDir;
 
   beforeEach(async () => {
     originalPlatform = process.platform;
     if (!existsSync(TEST_DATA_DIR)) await mkdir(TEST_DATA_DIR, { recursive: true });
     providerService = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
+    // testProvider's win32 path now ALSO does its own filesystem-based
+    // re-resolution (resolveWindowsExecutable) independent of the mocked
+    // `where`/`which` lookup below — point PATH at a controlled, normally-empty
+    // temp dir so that re-resolution can't accidentally match something on the
+    // real host running this suite, and so tests can opt in to a match by
+    // writing a file into it.
+    originalPath = process.env.PATH;
+    fakePathDir = await mkdtemp(join(tmpdir(), 'provider-test-path-'));
+    process.env.PATH = fakePathDir;
   });
 
   afterEach(async () => {
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    process.env.PATH = originalPath;
+    await rm(fakePathDir, { recursive: true, force: true });
     vi.mocked(execFile).mockReset();
     if (existsSync(TEST_DATA_DIR)) await rm(TEST_DATA_DIR, { recursive: true });
   });
@@ -87,26 +101,41 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(result.path).toBe('C:\\a\\claude.exe');
   });
 
-  it('routes the win32 version probe through a shell (so .cmd/.bat shims can execute)', async () => {
+  it('re-resolves to the real .cmd shim when `where`s first match is an unspawnable extension-less stub (#1865 root cause)', async () => {
     setPlatform('win32');
-    stubExec({ lookup: 'C:\\Users\\Joe\\AppData\\Roaming\\npm\\claude.cmd\r\n' });
-    const p = await makeCliProvider();
+    // npm ships a bare POSIX shell-script stub (for Git Bash/WSL) alongside
+    // the real `.cmd` wrapper — `where` can return the stub first, which is
+    // exactly the literal scenario from the issue's reported error text.
+    await writeFile(join(fakePathDir, 'opencode'), '#!/bin/sh\n');
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    stubExec({ lookup: `${join(fakePathDir, 'opencode')}\r\n`, version: 'opencode 1.0.0\n' });
+    const p = await makeCliProvider('opencode');
 
-    await providerService.testProvider(p.id);
+    const result = await providerService.testProvider(p.id);
 
+    expect(result.success).toBe(true);
+    expect(result.path).toBe(join(fakePathDir, 'opencode.cmd'));
     const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
-    expect(versionCall?.[2]).toEqual({ shell: true });
+    expect(versionCall?.[0]).toBe(join(fakePathDir, 'opencode.cmd'));
+    // No options object (and so no shell) — the call is (path, args, callback)
+    // with nothing in between. The re-resolved path carries the explicit
+    // extension, so Node's own safely-escaping .bat/.cmd handling applies
+    // under shell:false.
+    expect(versionCall?.length).toBe(3);
+    expect(typeof versionCall?.[2]).toBe('function');
   });
 
-  it('does not enable a shell for the version probe on non-win32 platforms', async () => {
-    setPlatform('linux');
-    stubExec({ lookup: '/usr/local/bin/claude\n' });
+  it('falls back to the where-resolved path when no extension-bearing match exists on PATH', async () => {
+    setPlatform('win32');
+    // fakePathDir intentionally has no claude.* files — resolveWindowsExecutable
+    // finds nothing, so testProvider must fall back to the `where` result.
+    stubExec({ lookup: 'C:\\Users\\Joe\\.local\\bin\\claude.exe\r\n' });
     const p = await makeCliProvider();
 
-    await providerService.testProvider(p.id);
+    const result = await providerService.testProvider(p.id);
 
-    const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
-    expect(versionCall?.[2]).toEqual({ shell: false });
+    expect(result.success).toBe(true);
+    expect(result.path).toBe('C:\\Users\\Joe\\.local\\bin\\claude.exe');
   });
 
   it('invokes the resolved path for the version probe (so win32 runs the exact .exe)', async () => {

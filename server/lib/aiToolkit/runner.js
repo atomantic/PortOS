@@ -1,23 +1,54 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { existsSync } from 'fs';
-import { join, extname, basename, isAbsolute } from 'path';
+import { join, extname, basename, isAbsolute, delimiter } from 'path';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
-// cmd.exe. Mirrors `server/lib/bufferedSpawn.js`'s IS_WIN32/killProcessTree
-// pattern — duplicated rather than imported, since this directory must stay
-// self-contained (see ./CLAUDE.md).
+// cmd.exe. Mirrors `server/lib/bufferedSpawn.js`'s IS_WIN32/killProcessTree/
+// resolveWindowsExecutable pattern — duplicated rather than imported, since
+// this directory must stay self-contained (see ./CLAUDE.md).
 const IS_WIN32 = process.platform === 'win32';
 
-// On Windows, shell:true wraps the child in a cmd.exe process, so a plain
-// SIGTERM only kills that wrapper and orphans the real child. Use taskkill to
-// take down the whole process tree there; SIGTERM is sufficient elsewhere.
+// Extensions Windows can launch directly, checked in cmd.exe's own resolution
+// preference. Deliberately excludes an extension-less match — npm ships a
+// POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
+// wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
+const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+/**
+ * Resolve a bare command name to its full path WITH extension on Windows, so
+ * spawn() can target it directly under shell:false — the actual fix for
+ * #1865 (a bare command never resolves on Windows even though typing it at a
+ * real cmd.exe prompt works fine; see server/lib/bufferedSpawn.js's
+ * `resolveWindowsExecutable` docstring for the full root-cause explanation,
+ * mirrored here for self-containment). Filesystem-only (no subprocess).
+ */
+function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
+  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
+  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const ext of WIN_EXECUTABLE_EXTS) {
+      const candidate = join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+// On Windows, taskkill (used below) runs in a separate detached process that
+// never touches the original ChildProcess object — `.killed` is set
+// synchronously here (mirroring what Node's own `child.kill()` does on the
+// POSIX branch) so callers elsewhere that gate re-entrant kill handling on
+// `.killed` actually engage on Windows. A plain SIGTERM kills the cmd.exe
+// wrapper but orphans the real child, so the whole process tree is taken
+// down via `taskkill /T /F` there; SIGTERM is sufficient elsewhere.
 function killProcessTree(child) {
   if (IS_WIN32 && child.pid) {
+    child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
       .unref();
@@ -306,16 +337,17 @@ export function createRunnerService(config = {}) {
       // Pass the prompt via stdin (not argv) and run without a shell so that
       // user-configurable `provider.command` cannot inject extra commands via
       // shell metacharacters, and so the full prompt isn't visible in
-      // process listings as a single command-line argument.
+      // process listings as a single command-line argument. On Windows,
+      // resolve to the explicit .cmd/.bat path instead of enabling a shell —
+      // see resolveWindowsExecutable above for why shell:true is unsafe here.
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 
-      const childProcess = spawn(provider.command, args, {
+      const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+      const childProcess = spawn(resolvedCommand, args, {
         cwd: workspacePath,
         env: { ...process.env, ...provider.envVars },
-        windowsHide: true,
-        // See IS_WIN32 above — .cmd/.bat npm shims need a shell on Windows.
-        shell: IS_WIN32
+        windowsHide: true
       });
       if (childProcess.stdin) {
         childProcess.stdin.write(prompt);

@@ -1,6 +1,6 @@
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
@@ -17,6 +17,34 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
+
+// Extensions Windows can launch directly, checked in cmd.exe's own resolution
+// preference. Deliberately excludes an extension-less match — npm ships a
+// POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
+// wrappers (for Git Bash/WSL); that stub is not natively launchable here, and
+// is exactly what `where` can return as its first match (see #1865 — the
+// issue's literal error text was produced by this function resolving that
+// stub as `commandPath`, not by a missing shell).
+const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+/**
+ * Resolve a bare command name to its full path WITH extension on Windows —
+ * mirrors `resolveWindowsExecutable` in `server/lib/bufferedSpawn.js`
+ * (duplicated here for this directory's self-containment; see ./CLAUDE.md).
+ * Filesystem-only (no subprocess), so it can't reorder/misselect the way a
+ * raw `where` first-line read can.
+ */
+function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32') {
+  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
+  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const ext of WIN_EXECUTABLE_EXTS) {
+      const candidate = join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -460,21 +488,30 @@ export function createProviderService(config = {}) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
-        // Track whether the resolved path could actually be spawned. A bare PATH
-        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims.
-        // Without this, a non-spawnable shim falls through to `version:
-        // 'available'` and the Test button reports a provider the runner can
-        // never actually invoke as usable.
+        // On Windows, `where` can return the wrong file: npm ships an
+        // extension-less POSIX shell-script stub (for Git Bash/WSL) alongside
+        // the real `.cmd`/`.bat`/`.ps1` wrappers, and `where`'s first-line
+        // match is not guaranteed to be a launchable one (this is exactly
+        // what produced the literal error text in #1865). Re-resolve via the
+        // same extension-aware filesystem search the agent runner uses
+        // (server/lib/bufferedSpawn.js's resolveWindowsExecutable) and prefer
+        // it for both the actual invocation AND what we report back — falling
+        // back to the `where` result only when that search finds nothing.
+        const invokePath = (isWin32 && resolveWindowsExecutable(provider.command)) || commandPath;
+
+        // Track whether the resolved path could actually be spawned. Without
+        // this, a non-spawnable shim falls through to `version: 'available'`
+        // and the Test button reports a provider the runner can never
+        // actually invoke as usable.
         let everSpawned = false;
         const tryVersion = async (flag) => {
-          // Invoke the resolved path so Windows runs the exact `.exe` we found —
-          // execFile won't re-apply PATHEXT to a bare command name. `commandPath`
-          // is frequently a `.cmd`/`.bat` npm shim on Windows, which execFile
-          // can't launch without a shell — route through one there (the agent
-          // runner does the same; see server/services/runner.js IS_WIN32) so
-          // this probe matches what a real run can actually do.
+          // Invoke the resolved path so Windows runs the exact `.exe`/`.cmd`
+          // we found — execFile won't re-apply PATHEXT to a bare command
+          // name, and (now that `invokePath` carries the correct explicit
+          // extension) no shell is needed: Node's own already-safely-escaping
+          // internal `.bat`/`.cmd` handling takes over under shell:false.
           try {
-            const out = await execFileAsync(commandPath, [flag], { shell: isWin32 });
+            const out = await execFileAsync(invokePath, [flag]);
             everSpawned = true;
             return out?.stdout?.trim() || null;
           } catch (err) {
@@ -490,13 +527,13 @@ export function createProviderService(config = {}) {
         if (!everSpawned) {
           return {
             success: false,
-            error: `Resolved '${provider.command}' to ${commandPath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+            error: `Resolved '${provider.command}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
           };
         }
 
         return {
           success: true,
-          path: commandPath,
+          path: invokePath,
           version: versionOut || 'available'
         };
       }
