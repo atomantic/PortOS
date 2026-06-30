@@ -140,9 +140,11 @@ export default function MusicVideo() {
     if (!selected?.audioAnalysis) return;
     setPlanning(true);
     planMusicVideoProject(selected.id, { seedPrompts: true })
-      .then(({ project, scenesAdded, promptsSeeded }) => {
+      .then(({ project, scenesAdded, promptsSeeded, promptsSkippedReason }) => {
         replaceProject(project);
-        const suffix = promptsSeeded ? ' with first-pass prompts' : '';
+        const suffix = promptsSeeded
+          ? ' with first-pass prompts'
+          : (promptsSkippedReason && promptsSkippedReason !== 'not-requested' ? ` (prompts skipped: ${promptsSkippedReason})` : '');
         toast.success(`Planned ${scenesAdded} scene${scenesAdded === 1 ? '' : 's'}${suffix}`);
       })
       .catch((err) => toast.error(err?.message || 'Plan failed'))
