@@ -209,10 +209,11 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
-    it('emits a slashdo-free git/gh Completion Workflow for an OpenCode TUI + openPR', () => {
+    it('emits a slashdo-free, forge-aware Completion Workflow for an OpenCode TUI + openPR (opens PR, no auto-merge)', () => {
       // OpenCode TUI doesn't load Claude Code slash commands, so /do:pr / /do:push
-      // would be uninvokable. The agent must commit, push, open + merge the PR, and
-      // write the sentinel with plain git/gh — PortOS does NOT push or merge post-exit.
+      // would be uninvokable. The agent commits, pushes, opens the PR/MR for review,
+      // and writes the sentinel with plain git + the forge CLI. It must NOT auto-merge
+      // (it can't run the reviewer loop and PortOS runs no post-exit review for a TUI).
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
@@ -226,36 +227,20 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/simplify`/);
       // /simplify is a Claude built-in — OpenCode gets the inline equivalent.
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
-      // Plain git/gh commit → push → PR → merge → verify. The PR base is pinned
-      // to the worktree's base branch when known.
+      // Plain git commit → push → open PR. Base pinned to the worktree base branch.
       expect(prompt).toMatch(/git commit -m/);
       expect(prompt).toMatch(/git push -u origin claim\/issue-1/);
+      // Forge-aware: both GitHub (gh) and GitLab (glab) create commands, base-pinned.
       expect(prompt).toMatch(/gh pr create --fill --base main/);
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
-      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
-      expect(prompt).toMatch(/MERGED/);
+      expect(prompt).toMatch(/glab mr create --fill --target-branch main/);
+      // Opens for review — never auto-merges.
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/glab mr merge/);
+      expect(prompt).toMatch(/do NOT merge it yourself/);
       // Sentinel handshake still drives completion; never tell the agent to run /quit.
       expect(prompt).toMatch(/\.agent-done/);
       expect(prompt).toMatch(/NOT run `\/quit`/);
       expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
-    });
-
-    it('OpenCode TUI + openPR + reviewLoop opens the PR but does NOT auto-merge (review gate)', () => {
-      // OpenCode can't drive the reviewer loop and PortOS runs no post-exit review
-      // for a TUI, so when a review loop is requested the agent must leave the PR
-      // open for a reviewer/human rather than merging past the gate.
-      const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
-        '/r',
-        { branchName: 'claim/issue-3', worktreePath: '/tmp/wt' },
-        isTruthyMeta,
-        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
-      expect(prompt).toMatch(/## Completion Workflow/);
-      expect(prompt).toMatch(/gh pr create --fill/);
-      // No merge — the PR is left open for review.
-      expect(prompt).not.toMatch(/gh pr merge/);
-      expect(prompt).toMatch(/Leave the PR open for review/);
-      expect(prompt).toMatch(/\.agent-done/);
     });
 
     it('OpenCode TUI without openPR pushes the branch but opens no PR', () => {
@@ -268,10 +253,23 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).not.toMatch(/`\/do:push`/);
       expect(prompt).toMatch(/git push -u origin claim\/issue-2/);
-      // No PR is opened, so no gh pr create / merge steps.
+      // No PR is opened, so no forge create/merge steps.
       expect(prompt).not.toMatch(/gh pr create/);
+      expect(prompt).not.toMatch(/glab mr create/);
       expect(prompt).not.toMatch(/gh pr merge/);
       expect(prompt).toMatch(/\.agent-done/);
+    });
+
+    it('shell-quotes a branch ref containing shell metacharacters in the manual push command', () => {
+      // Git refs can legally contain `;` etc.; the emitted push command must quote it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false } }),
+        '/r',
+        { branchName: 'weird;rm -rf', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/git push -u origin 'weird;rm -rf'/);
+      expect(prompt).not.toMatch(/git push -u origin weird;rm/);
     });
 
     it('a non-OpenCode TUI (claude-code-tui) keeps the slashdo /do:pr workflow', () => {

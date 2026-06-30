@@ -19,6 +19,7 @@ import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUt
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
+import { shellQuote } from '../lib/shellQuote.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
 
@@ -888,7 +889,9 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  */
 function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
-    return buildManualTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, branchName, baseBranch });
+    // The manual path never auto-merges (it opens the PR for review), so it
+    // doesn't need willReviewLoop — the review gate holds unconditionally.
+    return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName, baseBranch });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
@@ -936,25 +939,25 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
 /**
  * Manual (slashdo-free) TUI completion-workflow block — for an OpenCode TUI that
  * does NOT load Claude Code slash commands and so can't run `/do:pr` / `/do:push`.
- * Drives the same commit → push → (PR) → sentinel handshake with plain `git` / `gh`
- * commands, so the `.agent-done` signal still fires and the task completes.
+ * Drives a plain `git` commit → push → (open PR/MR) → sentinel handshake, so the
+ * `.agent-done` signal still fires and the task completes.
  *
  * PortOS forces `openPR:false, skipMerge:true` on TUI worktree cleanup (see
  * agentTuiSpawning.js), so nothing happens after the agent exits — the agent owns
- * the push, and the PR + merge when one is requested, itself.
- *
- * OpenCode can't invoke the CLI reviewers itself, and PortOS runs no post-exit
- * review follow-up for a TUI. So when a review loop is requested (`willReviewLoop`),
- * the agent opens the PR but must NOT auto-merge — it leaves the PR open for a
- * configured reviewer / human, preserving the same review gate the slashdo `/do:pr`
- * flow enforces. Only when no review loop is requested does it merge directly.
+ * the push and the PR itself. It opens the PR/MR for review but does NOT merge:
+ * this provider can't drive the reviewer CLIs (no slashdo `/do:pr` review loop)
+ * and PortOS runs no post-exit review for a TUI, so auto-merging would ship
+ * unreviewed work. A configured reviewer / human reviews and merges. Forge-aware
+ * (GitHub `gh` + GitLab `glab`) to match the slashdo path; refs are shell-quoted
+ * because a git ref can legally contain shell metacharacters.
  */
-function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null }) {
-  const branchRef = branchName || 'HEAD';
-  // Pin the PR base to the worktree's base branch when known, so `gh pr create`
-  // doesn't guess (and a fork install targets the intended branch rather than the
-  // default). `--fill` still supplies title/body from the commits.
-  const prCreate = baseBranch ? `gh pr create --fill --base ${baseBranch}` : 'gh pr create --fill';
+function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null }) {
+  const branchRef = shellQuote(branchName || 'HEAD');
+  // Pin the PR base to the worktree's base branch when known, so the forge CLI
+  // doesn't guess (and a fork install targets the intended branch). `--fill`
+  // still supplies title/body from the commits.
+  const ghBaseArg = baseBranch ? ` --base ${shellQuote(baseBranch)}` : '';
+  const glabBaseArg = baseBranch ? ` --target-branch ${shellQuote(baseBranch)}` : '';
   const simplifyStep = simplifyEnabled
     ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
     : '1. (simplify disabled — skip)';
@@ -962,7 +965,7 @@ function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, s
 
   const lines = [
     '## Completion Workflow',
-    'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git` / `gh`. Run these in order:',
+    'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git` (and your forge\'s CLI). Run these in order:',
     '',
     simplifyStep,
     '2. Stage only the files you changed (never `git add -A` / `git add .`) and commit with a conventional message (`feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations):',
@@ -981,30 +984,13 @@ function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, s
   let step = 4;
   if (willOpenPR) {
     lines.push(
-      `${step++}. Open a pull request against the default branch and capture the PR URL it prints:`,
+      `${step++}. Open a pull/merge request against the base branch using the CLI for this repo's forge (check \`git remote -v\`), and capture the URL it prints. **Leave it open for review — do NOT merge it yourself.** This provider can't run the reviewer loop, and PortOS won't merge it for a TUI task, so a configured reviewer or a human reviews and merges it.`,
       '',
       '   ```bash',
-      `   ${prCreate}`,
+      `   # GitHub:  gh pr create --fill${ghBaseArg}`,
+      `   # GitLab:  glab mr create --fill${glabBaseArg}`,
       '   ```',
     );
-    if (willReviewLoop) {
-      // A review loop was requested. This provider can't drive the reviewer
-      // CLIs, and PortOS runs no post-exit review for a TUI — so DON'T merge.
-      // Leave the PR open so the configured reviewer / a human reviews + merges,
-      // matching the gate the slashdo `/do:pr` flow enforces before merging.
-      lines.push(
-        `${step++}. **Leave the PR open for review — do NOT merge it yourself.** A code review was requested for this task; this provider can't run the reviewer loop, so a configured reviewer or a human reviews and merges the PR. Record the PR URL in the sentinel below and finish.`,
-      );
-    } else {
-      lines.push(
-        `${step++}. Merge the PR and delete the branch:`,
-        '',
-        '   ```bash',
-        '   gh pr merge "<PR_URL>" --merge --delete-branch',
-        '   ```',
-        `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If \`gh pr merge\` exited non-zero (it can fail to delete/checkout the branch locally from inside a worktree even though the **remote** merge succeeded) but this shows \`MERGED\`, you are done — do NOT retry. If it shows \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
-      );
-    }
   }
 
   lines.push(

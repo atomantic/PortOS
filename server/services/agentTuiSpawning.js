@@ -17,6 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { shellQuote } from '../lib/shellQuote.js';
 import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
@@ -108,12 +109,6 @@ const OUTPUT_FLUSH_INTERVAL_MS = 250;
 // without waiting on the much longer idle timeout fallback.
 const DONE_SENTINEL_NAME = '.agent-done';
 const DONE_POLL_INTERVAL_MS = 2000;
-
-function shellQuote(value) {
-  const text = String(value ?? '');
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, `'\\''`)}'`;
-}
 
 /**
  * Thin wrapper around `shellService.createShellSession` for the agent TUI

@@ -204,6 +204,7 @@ export * from './lwwTimestamp.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';
 export * from './openapiSpec.js';
+export * from './shellQuote.js';
 export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';
