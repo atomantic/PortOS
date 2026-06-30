@@ -106,7 +106,9 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveBedrockCliModel: vi.fn((m) => m),
   // Mirror the real ollama/ namespacing for opencode providers (fully unit-
   // tested in providerModels.test.js).
-  prefixOpencodeModel: vi.fn((p, m) => (p?.command === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m)
+  prefixOpencodeModel: vi.fn((p, m) => (p?.command === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m),
+  // Mirror hasModelFlag (real impl unit-tested in providerModels.test.js).
+  hasModelFlag: vi.fn((a) => Array.isArray(a) && a.some((x) => x === '--model' || x === '-m' || (typeof x === 'string' && (x.startsWith('--model=') || x.startsWith('-m=')))))
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
@@ -221,6 +223,14 @@ describe('agent TUI spawning', () => {
     }, 'qwen2.5:7b');
     expect(config.command).toBe('opencode');
     expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+  });
+
+  it('respects a user-baked --model pin on an OpenCode TUI and does not duplicate it', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode',
+      args: ['--model', 'ollama/custom'], ollamaBacked: true,
+    }, 'qwen2.5:7b');
+    expect(config.args).toEqual(['--model', 'ollama/custom']);
   });
 
   it('falls back to the default command via id heuristic when command is omitted', () => {
