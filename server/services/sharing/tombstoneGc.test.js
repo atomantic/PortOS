@@ -896,4 +896,35 @@ describe('sweepTombstones — track GC cohort widened by musicVideoProject bundl
     await sweepTombstones({ now: NOW, graceMs: 0 });
     expect(pruneTombstonedTracks).toHaveBeenCalledWith(minAck + 1);
   });
+
+  it('does NOT hold the track cutoff hostage to a stale musicVideoProject row when the peer already has a confirmed direct track subscription', async () => {
+    // Regression (codex review on #1922): a peer syncing BOTH Music and Music
+    // Videos has its own direct `track` subscription, already fully governed
+    // by that row's `lastConfirmedPushedAt` floor. Without excluding the
+    // peer's musicVideoProject rows here, an unrelated/long-stale project
+    // subscription (never confirmed a bundled track delivery — e.g. it has no
+    // linked track at all) would needlessly hold back GC for EVERY track
+    // tombstone, even ones the peer's direct track subscription already
+    // confirmed.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      track: [
+        { peerId: 'peer-a', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedPushedAt: NOW },
+      ],
+      musicVideoProject: [
+        // Stale/unrelated project sub for the SAME peer: never confirmed a
+        // bundled track delivery, floors to its old createdAt — must NOT gate
+        // the track cutoff because peer-a already has a direct track sub.
+        {
+          peerId: 'peer-a',
+          createdAt: new Date(NOW - 30 * 24 * 60 * 60 * 1000).toISOString(),
+          lastConfirmedTrackBundleAtMs: null,
+        },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(NOW + 1); // governed by the direct track row, not the stale MV row
+  });
 });

@@ -217,13 +217,26 @@ function confirmedFloorForSub(sub, targetKind) {
 
 // Returns Infinity when there are no eligible rows for the kind (no per-record
 // constraint → the snapshot-coverage + per-peer-ack checks alone govern).
+//
+// #1922: a peer that has a DIRECT `track` subscription is already fully
+// governed by that row's own `lastConfirmedPushedAt` floor — its bundled
+// musicVideoProject rows must be excluded from the `track` floor for that
+// peer, otherwise an unrelated/stale project subscription (one whose linked
+// track this peer never even needed protecting) would needlessly hold back
+// pruning for EVERY track tombstone, including ones the peer's direct track
+// subscription already confirmed. Only a peer with NO direct `track`
+// subscription relies on its musicVideoProject rows as the stand-in vehicle.
 function minConfirmedPushedAtForKind(subs, peers, recordKind) {
   const cohortKinds = cohortKindsFor(recordKind);
   const eligible = eligiblePeerIdSet(peers);
+  const peersWithDirectKind = recordKind === 'track'
+    ? new Set(subs.filter((s) => s.recordKind === 'track' && s.peerId && eligible.has(s.peerId)).map((s) => s.peerId))
+    : null;
   let min = Infinity;
   for (const s of subs) {
     if (!cohortKinds.includes(s.recordKind)) continue;
     if (!s.peerId || !eligible.has(s.peerId)) continue;
+    if (peersWithDirectKind && s.recordKind === 'musicVideoProject' && peersWithDirectKind.has(s.peerId)) continue;
     const confirmed = confirmedFloorForSub(s, recordKind);
     if (confirmed < min) min = confirmed;
   }
