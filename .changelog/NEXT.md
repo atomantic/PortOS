@@ -33,6 +33,8 @@
 
 ## Internal
 
+- **[issue-1860] De-flaked the `peerSync` reciprocal-sync tests** — the positive `reciprocates a full-sync peer on peer:online` test waited for an async event handler with a hard `setTimeout(r, 30)` before asserting `enqueueReciprocalSync` was called, so a loaded CI runner whose handler chain exceeded 30ms produced a spurious failure (surfaced during the v2.24.0 release CI-flake gate). It now polls with `vi.waitFor`. The sibling negative test (`does NOT reciprocate a non-full-sync peer`) replaced its fixed-sleep + `not.toHaveBeenCalled()` — which could false-pass if the absent call were merely slow — with a deterministic full-sync "barrier" peer emitted after the subject: once the barrier's reciprocal call lands, the subject's handler has provably reached and skipped its own fullSync check. Test-only. (#1860)
+
 - Updated the bundled slashdo submodule to v3.20.0, pulling the latest `/do:*` slash commands and shared libraries.
 
 - **[issue-1836] Moved socket-handler orchestration into services** — the `standardize:start` and `app:deploy` Socket.IO handlers (`server/services/socket.js`) implemented their multi-step flows inline in the socket layer, where they couldn't be unit-tested or reused from an HTTP route. The PM2 standardization flow (analyze → git backup → apply) is now `pm2Standardizer.runStandardizeFlow()` and the deploy flow (resolve app → check deploy script → run) is now `appDeployer.runDeployFlow()`; each takes progress callbacks and returns a terminal outcome, so the socket handler is a thin adapter. Both are covered by new unit tests. Behavior-preserving. (#1836)
