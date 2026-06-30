@@ -565,17 +565,18 @@ export async function probePeer(peer) {
   // opposed to an unreachable one. The Instances UI reads this to prompt for a
   // credential instead of showing a generic offline state.
   let authRequired = false;
-  // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
-  // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
-  // an unresolved/unknown id just omits the param and we get the inbound-only
-  // shape (push count renders "unknown" client-side, never a misleading 0).
-  const ourInstanceId = await getInstanceId().catch(() => null);
-  const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
-    ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
-    : '';
-  // One shared abort signal spans all three parallel fetches AND their body
-  // reads, so a single PROBE_TIMEOUT_MS bounds the whole probe.
+  // One shared abort signal spans the instanceId read, all three parallel
+  // fetches, AND their body reads, so a single PROBE_TIMEOUT_MS bounds the whole
+  // probe (the instanceId read is inside the budget, as it was before).
   await withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
+    // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
+    // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
+    // an unresolved/unknown id just omits the param and we get the inbound-only
+    // shape (push count renders "unknown" client-side, never a misleading 0).
+    const ourInstanceId = await getInstanceId().catch(() => null);
+    const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
+      ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
+      : '';
     // Fetch health details, apps, and sync status in parallel
     const [healthRes, appsRes, syncRes] = await Promise.all([
       peerFetch(`${baseUrl}/api/system/health/details`, { signal }, peer),
