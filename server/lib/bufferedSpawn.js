@@ -96,6 +96,13 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  * A resolved native `.exe`/`.com` target needs no wrapping at all — it's
  * directly launchable, so it's returned unchanged.
  *
+ * Each arg is also passed through `escapeCmdMetacharsIfUnquoted` (see its
+ * docstring) — Node's own argv→command-line quoting only wraps an arg in
+ * literal double quotes when it contains whitespace/a quote; an arg with
+ * none of those reaches cmd.exe's raw command line UNQUOTED, so a bare
+ * metacharacter like `&` in it would still be interpreted by cmd.exe as a
+ * command separator despite `shell:false`.
+ *
  * @param {string} command - bare name, or a resolveWindowsExecutable result
  * @param {string[]} args
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
@@ -103,9 +110,35 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  */
 export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return { command: 'cmd.exe', args: ['/c', command, ...args] };
+    return { command: 'cmd.exe', args: ['/c', command, ...args.map(escapeCmdMetacharsIfUnquoted)] };
   }
   return { command, args };
+}
+
+// cmd.exe metacharacters that act as command separators / redirection /
+// grouping on its raw command line.
+const CMD_METACHAR_RE = /[&|<>^()]/g;
+// Node's argv→command-line quoting (CommandLineToArgvW rules, used because
+// cmd.exe is a normal executable target from Node's point of view) wraps an
+// argument in literal double quotes only when it contains whitespace or a
+// `"` — characters inside that quoted span are not re-interpreted by cmd.exe.
+const NEEDS_NODE_QUOTING_RE = /[\s"]/;
+
+/**
+ * Caret-escape cmd.exe metacharacters in an argument, but ONLY when Node's
+ * own quoting (see NEEDS_NODE_QUOTING_RE above) would otherwise leave it
+ * unquoted on cmd.exe's raw command line. An argument containing whitespace
+ * is deliberately left untouched here — it's already wrapped in literal
+ * double quotes by Node, and caret-escaping it too would inject literal `^`
+ * characters into the value the target program receives, corrupting it.
+ * This is the narrower, conservative fix for the specific gap: an argument
+ * with NO whitespace but a metacharacter (e.g. `foo&calc`) reaches cmd.exe
+ * unquoted and unprotected without this.
+ */
+function escapeCmdMetacharsIfUnquoted(value) {
+  const str = String(value);
+  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
+  return str.replace(CMD_METACHAR_RE, '^$&');
 }
 
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only
