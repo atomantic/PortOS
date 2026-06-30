@@ -94,6 +94,24 @@
       "secretEnvVars": [],
       "headlessArgs": []
     },
+    "opencode-ollama-tui": {
+      "id": "opencode-ollama-tui",
+      "name": "OpenCode Ollama TUI (local model)",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"ollama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Ollama (local)\",\"options\":{\"baseURL\":\"http://localhost:11434/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "codex": {
       "id": "codex",
       "name": "Codex CLI",

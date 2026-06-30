@@ -209,6 +209,64 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
+    it('emits a slashdo-free git/gh Completion Workflow for an OpenCode TUI + openPR', () => {
+      // OpenCode TUI doesn't load Claude Code slash commands, so /do:pr / /do:push
+      // would be uninvokable. The agent must commit, push, open + merge the PR, and
+      // write the sentinel with plain git/gh — PortOS does NOT push or merge post-exit.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      // No slashdo commands anywhere in the workflow.
+      expect(prompt).not.toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/`\/do:push`/);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      // /simplify is a Claude built-in — OpenCode gets the inline equivalent.
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+      // Plain git/gh commit → push → PR → merge → verify.
+      expect(prompt).toMatch(/git commit -m/);
+      expect(prompt).toMatch(/git push -u origin claim\/issue-1/);
+      expect(prompt).toMatch(/gh pr create --fill/);
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
+      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
+      expect(prompt).toMatch(/MERGED/);
+      // Sentinel handshake still drives completion; never tell the agent to run /quit.
+      expect(prompt).toMatch(/\.agent-done/);
+      expect(prompt).toMatch(/NOT run `\/quit`/);
+      expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
+    });
+
+    it('OpenCode TUI without openPR pushes the branch but opens no PR', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false } }),
+        '/r',
+        { branchName: 'claim/issue-2', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).not.toMatch(/`\/do:push`/);
+      expect(prompt).toMatch(/git push -u origin claim\/issue-2/);
+      // No PR is opened, so no gh pr create / merge steps.
+      expect(prompt).not.toMatch(/gh pr create/);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).toMatch(/\.agent-done/);
+    });
+
+    it('a non-OpenCode TUI (claude-code-tui) keeps the slashdo /do:pr workflow', () => {
+      // providerCommand is the gate — a claude TUI must NOT fall into the manual path.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
+      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/gh pr create/);
+    });
+
     it('emits a non-TUI "Completion" block (no slashdo) for non-Claude CLI agents', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true } }),

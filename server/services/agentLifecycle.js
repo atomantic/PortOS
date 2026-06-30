@@ -323,7 +323,8 @@ export async function spawnAgentForTask(task) {
     // inside buildAgentPrompt — see its doc comment.
     const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
       providerType: provider.type,
-      providerId: provider.id
+      providerId: provider.id,
+      providerCommand: provider.command
     });
 
     // Create agent directory
