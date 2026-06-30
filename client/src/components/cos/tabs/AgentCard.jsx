@@ -591,7 +591,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (
           <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-0.5 text-xs bg-blue-500/20 text-blue-400 rounded font-mono">
+            <span className="px-2 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded font-mono">
               {agent.metadata.jiraTicketId}
             </span>
             {agent.metadata?.jiraTicketUrl && (
@@ -599,7 +599,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 href={agent.metadata.jiraTicketUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
                 title="Open JIRA ticket in new tab"
               >
                 View ticket

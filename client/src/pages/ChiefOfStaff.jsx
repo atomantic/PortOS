@@ -462,7 +462,7 @@ export default function ChiefOfStaff() {
         <Brain className={`w-4 h-4 shrink-0 ${
           learningSummary?.status === 'critical' ? 'text-port-error' :
           learningSummary?.status === 'warning' ? 'text-port-warning' :
-          learningSummary?.status === 'good' ? 'text-purple-400' :
+          learningSummary?.status === 'good' ? 'text-port-accent-2' :
           'text-gray-500'
         }`} />
         <div className="flex-1 min-w-0 text-left">
@@ -776,7 +776,7 @@ export default function ChiefOfStaff() {
             className={`bg-port-card border rounded p-1.5 sm:p-2 lg:p-3 transition-all text-left hover:bg-port-card/80 ${
               learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
               learningSummary?.status === 'warning' ? 'border-port-warning shadow-md shadow-port-warning/20' :
-              'border-port-border hover:border-purple-500/50'
+              'border-port-border hover:border-port-accent-2/50'
             }`}
             title={learningSummary?.statusMessage || 'View learning analytics'}
           >
@@ -785,7 +785,7 @@ export default function ChiefOfStaff() {
               <Brain className={`w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 shrink-0 ${
                 learningSummary?.status === 'critical' ? 'text-port-error' :
                 learningSummary?.status === 'warning' ? 'text-port-warning' :
-                learningSummary?.status === 'good' ? 'text-purple-400' :
+                learningSummary?.status === 'good' ? 'text-port-accent-2' :
                 'text-gray-500'
               }`} />
             </div>

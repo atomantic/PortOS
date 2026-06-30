@@ -2,6 +2,7 @@ import { HeartPulse, Cigarette } from 'lucide-react';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import useChartColors from '../../hooks/useChartColors.js';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -37,6 +38,7 @@ function computeSummary(dailyData) {
 }
 
 export default function NicotineHealthCorrelation({ data, range }) {
+  const chartColors = useChartColors();
   const dailyData = data?.dailyData ?? [];
 
   if (dailyData.length < 14) {
@@ -74,30 +76,30 @@ export default function NicotineHealthCorrelation({ data, range }) {
 
       <ResponsiveContainer width="100%" height={220}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
-          <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} interval="preserveStartEnd" />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+          <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
           <YAxis
             yAxisId="hr"
             orientation="left"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={40}
-            label={{ value: 'HR (bpm)', angle: -90, position: 'insideLeft', fill: '#9ca3af', fontSize: 10 }}
+            label={{ value: 'HR (bpm)', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 10 }}
           />
           <YAxis
             yAxisId="nicotine"
             orientation="right"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={40}
-            label={{ value: 'Nicotine (mg)', angle: 90, position: 'insideRight', fill: '#9ca3af', fontSize: 10 }}
+            label={{ value: 'Nicotine (mg)', angle: 90, position: 'insideRight', fill: chartColors.axis, fontSize: 10 }}
           />
           <Tooltip content={<CustomTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+          <Legend wrapperStyle={{ fontSize: 11, color: chartColors.axis }} />
           <Line
             yAxisId="hr"
             type="monotone"
             dataKey="hr"
             name="Heart Rate"
-            stroke="#ef4444"
+            stroke={chartColors.error}
             strokeWidth={2}
             dot={false}
             connectNulls
@@ -107,6 +109,8 @@ export default function NicotineHealthCorrelation({ data, range }) {
             type="monotone"
             dataKey="restingHr"
             name="Resting HR"
+            // Lighter red than chartColors.error — deliberately distinct from
+            // the primary HR line, no matching --port-* token.
             stroke="#f87171"
             strokeWidth={1}
             strokeDasharray="4 2"
@@ -117,7 +121,7 @@ export default function NicotineHealthCorrelation({ data, range }) {
             yAxisId="nicotine"
             dataKey="nicotine"
             name="Nicotine"
-            fill="#9ca3af"
+            fill={chartColors.axis}
             opacity={0.7}
             maxBarSize={12}
           />

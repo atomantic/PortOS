@@ -1,19 +1,13 @@
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import useChartColors from '../../hooks/useChartColors.js';
 
-const STAGE_COLORS = {
-  deep: '#3b82f6',
-  rem: '#8b5cf6',
-  core: '#06b6d4',
-  awake: '#6b7280'
-};
-
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, colors }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
-      <p style={{ color: '#9ca3af', marginBottom: 4 }}>{label}</p>
+    <div style={{ background: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`, color: colors.text, padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
+      <p style={{ color: colors.axis, marginBottom: 4 }}>{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.fill, margin: '2px 0' }}>
           {entry.name}: {entry.value != null ? entry.value.toFixed(1) : '—'}h
@@ -24,6 +18,13 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function SleepCard({ data = [], loading = false }) {
+  const chartColors = useChartColors();
+  const stageColors = {
+    deep: chartColors.chart1,
+    rem: chartColors.chart2,
+    core: chartColors.chart3,
+    awake: chartColors.axis
+  };
   const avg = data.length > 0
     ? (data.reduce((sum, d) => sum + (d.totalSleep ?? d.value ?? 0), 0) / data.length)
     : null;
@@ -55,15 +56,15 @@ export default function SleepCard({ data = [], loading = false }) {
           {hasStages ? (
             <ResponsiveContainer width="100%" height={150}>
               <BarChart data={last7} layout="vertical" margin={{ top: 2, right: 8, bottom: 2, left: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" horizontal={false} />
-                <XAxis type="number" tick={{ fill: '#9ca3af', fontSize: 11 }} unit="h" />
-                <YAxis type="category" dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} width={36} />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 10, color: '#9ca3af' }} />
-                <Bar dataKey="deep" name="Deep" stackId="a" fill={STAGE_COLORS.deep} />
-                <Bar dataKey="rem" name="REM" stackId="a" fill={STAGE_COLORS.rem} />
-                <Bar dataKey="core" name="Core" stackId="a" fill={STAGE_COLORS.core} />
-                <Bar dataKey="awake" name="Awake" stackId="a" fill={STAGE_COLORS.awake} />
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} horizontal={false} />
+                <XAxis type="number" tick={{ fill: chartColors.axis, fontSize: 11 }} unit="h" />
+                <YAxis type="category" dataKey="date" tick={{ fill: chartColors.axis, fontSize: 10 }} width={36} />
+                <Tooltip content={<CustomTooltip colors={chartColors} />} />
+                <Legend wrapperStyle={{ fontSize: 10, color: chartColors.axis }} />
+                <Bar dataKey="deep" name="Deep" stackId="a" fill={stageColors.deep} />
+                <Bar dataKey="rem" name="REM" stackId="a" fill={stageColors.rem} />
+                <Bar dataKey="core" name="Core" stackId="a" fill={stageColors.core} />
+                <Bar dataKey="awake" name="Awake" stackId="a" fill={stageColors.awake} />
               </BarChart>
             </ResponsiveContainer>
           ) : (

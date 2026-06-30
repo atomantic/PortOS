@@ -2,12 +2,13 @@ import { HeartPulse, Beer } from 'lucide-react';
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import useChartColors from '../../hooks/useChartColors.js';
 
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, colors }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
-      <p style={{ color: '#9ca3af', marginBottom: 4 }}>{label}</p>
+    <div style={{ background: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`, color: colors.text, padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
+      <p style={{ color: colors.axis, marginBottom: 4 }}>{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.color ?? entry.fill, margin: '2px 0' }}>
           {entry.name}: {entry.value != null ? Math.round(entry.value * 100) / 100 : '—'}
@@ -35,6 +36,7 @@ function computeSummary(dailyData) {
 }
 
 export default function AlcoholHrvCorrelation({ data, range }) {
+  const chartColors = useChartColors();
   const dailyData = data?.dailyData ?? [];
 
   if (dailyData.length < 14) {
@@ -71,30 +73,30 @@ export default function AlcoholHrvCorrelation({ data, range }) {
 
       <ResponsiveContainer width="100%" height={220}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
-          <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} interval="preserveStartEnd" />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+          <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
           <YAxis
             yAxisId="hrv"
             orientation="left"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={40}
-            label={{ value: 'HRV (ms)', angle: -90, position: 'insideLeft', fill: '#9ca3af', fontSize: 10 }}
+            label={{ value: 'HRV (ms)', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 10 }}
           />
           <YAxis
             yAxisId="alcohol"
             orientation="right"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={40}
-            label={{ value: 'Alcohol (g)', angle: 90, position: 'insideRight', fill: '#9ca3af', fontSize: 10 }}
+            label={{ value: 'Alcohol (g)', angle: 90, position: 'insideRight', fill: chartColors.axis, fontSize: 10 }}
           />
-          <Tooltip content={<CustomTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+          <Tooltip content={<CustomTooltip colors={chartColors} />} />
+          <Legend wrapperStyle={{ fontSize: 11, color: chartColors.axis }} />
           <Line
             yAxisId="hrv"
             type="monotone"
             dataKey="hrv"
             name="HRV"
-            stroke="#22c55e"
+            stroke={chartColors.success}
             strokeWidth={2}
             dot={false}
             connectNulls
@@ -103,7 +105,7 @@ export default function AlcoholHrvCorrelation({ data, range }) {
             yAxisId="alcohol"
             dataKey="alcohol"
             name="Alcohol"
-            fill="#f59e0b"
+            fill={chartColors.warning}
             opacity={0.7}
             maxBarSize={12}
           />

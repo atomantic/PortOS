@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
+import useChartColors from '../../../hooks/useChartColors.js';
 import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
 const RANGES = [
@@ -12,6 +13,7 @@ const RANGES = [
 ];
 
 export default function PostHistory({ onBack }) {
+  const chartColors = useChartColors();
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [range, setRange] = useState(30);
@@ -94,14 +96,14 @@ export default function PostHistory({ onBack }) {
           <h3 className="text-sm font-medium text-gray-400 mb-3">Score Trend</h3>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={chartData}>
-              <CartesianGrid stroke="#2a2a2a" strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#666' }} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#666' }} />
+              <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartColors.axis }} />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
               <Tooltip
-                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: 8 }}
-                labelStyle={{ color: '#999' }}
+                contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, borderRadius: 8 }}
+                labelStyle={{ color: chartColors.axis }}
               />
-              <Line type="monotone" dataKey="score" stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="score" stroke={chartColors.accent} strokeWidth={2} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
