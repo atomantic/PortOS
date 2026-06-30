@@ -2497,6 +2497,31 @@ describe('peerSync', () => {
       expect(subs.every((s) => s.recordKind === 'mediaCollection')).toBe(true);
     });
 
+    it('fans a track update out to music-video projects that link it (#1858)', async () => {
+      vi.mocked(getPeers).mockResolvedValue([{
+        instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+        enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+        syncCategories: { musicVideoProjects: true },
+      }]);
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-link', name: 'Linked', mode: 'director', trackId: 'track-7',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(listMusicVideoProjects).mockResolvedValue([
+        { id: 'mv-link', trackId: 'track-7' },
+        { id: 'mv-other', trackId: 'track-99' },
+      ]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-link' });
+      await __drainForTests();
+
+      const subs = await collectSubscriptionsForUpdate('track', 'track-7');
+      expect(subs.some((s) => s.recordKind === 'musicVideoProject' && s.recordId === 'mv-link')).toBe(true);
+      // A project linking a DIFFERENT track is not fanned out.
+      expect(subs.some((s) => s.recordId === 'mv-other')).toBe(false);
+    });
+
     it('returns [] for a kind with no direct/parent subscription path', async () => {
       expect(await collectSubscriptionsForUpdate('image', 'whatever')).toEqual([]);
     });
@@ -2637,6 +2662,17 @@ describe('peerSync', () => {
         kind: 'musicVideoProject',
         record: { id: 'mv-3', trackId: 'track-9', deleted: true, deletedAt: '2026-06-29T00:00:00Z' },
         linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses a linkedTrack whose id does not match the project trackId (#1858)', async () => {
+      await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-5', trackId: 'track-A', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-SMUGGLED', audioFilename: 'x.mp3' },
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });

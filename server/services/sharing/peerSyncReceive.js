@@ -191,7 +191,8 @@ export async function applyIncomingPush(payload) {
   // forward-shaped track row past the gate via a music-video push (same reasoning
   // as the linkedCollection gate above). Skip the gate for a tombstone track —
   // id+deleted+deletedAt+updatedAt is schema-safe at every version.
-  if (record.deleted !== true && isPlainObject(linkedTrack) && linkedTrack.deleted !== true) {
+  if (record.deleted !== true && isPlainObject(linkedTrack) && linkedTrack.deleted !== true
+      && linkedTrack.id === record.trackId) {
     for (const c of RECORD_KIND_SCHEMA_CATEGORIES.track) relevantCategories.add(c);
   }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
@@ -335,7 +336,11 @@ export async function applyIncomingPush(payload) {
     // time. The audio bytes already pulled via assetManifest. Non-fatal: the
     // project itself is merged; skip on a tombstone push, a local-ephemeral
     // (opted-out) project, or a missing bundle — same contract as linkedCollection.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)) {
+    // Require the bundle's id to MATCH the project's `trackId` so a malformed/
+    // malicious sender can't smuggle an unrelated track record through the
+    // music-video push (the project only needs the track it actually links).
+    if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)
+        && linkedTrack.id === record.trackId) {
       await mergeTracksFromSync([linkedTrack], { source }).catch((err) => {
         console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
         trackSyncPending = true;
