@@ -335,7 +335,7 @@ export default function ListEnrichment({
                   <ul className="space-y-2">
                     {analysis.patterns.map((pattern, i) => (
                       <li key={i} className="flex items-start gap-2 text-gray-300">
-                        <Check size={16} className="text-green-400 mt-0.5 shrink-0" />
+                        <Check size={16} className="text-port-success mt-0.5 shrink-0" />
                         {pattern}
                       </li>
                     ))}
@@ -409,7 +409,7 @@ export default function ListEnrichment({
               <button
                 onClick={saveDocument}
                 disabled={saving || !documentContent.trim()}
-                className="px-6 py-3 min-h-[44px] bg-green-600 text-white rounded-lg font-medium hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="px-6 py-3 min-h-[44px] bg-port-success text-white rounded-lg font-medium hover:bg-port-success/80 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {saving ? (
                   <>

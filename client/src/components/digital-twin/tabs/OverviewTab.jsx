@@ -131,17 +131,17 @@ export default function OverviewTab({ status, settings, onRefresh }) {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full mb-8">
           <div className="p-4 bg-port-card rounded-lg border border-port-border">
-            <FileText className="w-8 h-8 text-purple-400 mb-3" />
+            <FileText className="w-8 h-8 text-port-accent-2 mb-3" />
             <h3 className="font-semibold text-white mb-2">Core Identity</h3>
             <p className="text-sm text-gray-400">Define your values, philosophy, and worldview</p>
           </div>
           <div className="p-4 bg-port-card rounded-lg border border-port-border">
-            <Sparkles className="w-8 h-8 text-yellow-400 mb-3" />
+            <Sparkles className="w-8 h-8 text-port-warning mb-3" />
             <h3 className="font-semibold text-white mb-2">Enrichment</h3>
             <p className="text-sm text-gray-400">Answer questions to expand your profile</p>
           </div>
           <div className="p-4 bg-port-card rounded-lg border border-port-border">
-            <CheckCircle className="w-8 h-8 text-green-400 mb-3" />
+            <CheckCircle className="w-8 h-8 text-port-success mb-3" />
             <h3 className="font-semibold text-white mb-2">Testing</h3>
             <p className="text-sm text-gray-400">Verify alignment across different models</p>
           </div>
@@ -331,8 +331,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           <div>
             <div className="flex items-center gap-4 mb-4">
               <div className={`text-3xl font-bold ${
-                completeness.score >= 80 ? 'text-green-400' :
-                completeness.score >= 50 ? 'text-yellow-400' : 'text-red-400'
+                completeness.score >= 80 ? 'text-port-success' :
+                completeness.score >= 50 ? 'text-port-warning' : 'text-port-error'
               }`}>
                 {completeness.score}%
               </div>
@@ -348,8 +348,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
             <div className="h-2 bg-port-border rounded-full overflow-hidden mb-4">
               <div
                 className={`h-full transition-all ${
-                  completeness.score >= 80 ? 'bg-green-500' :
-                  completeness.score >= 50 ? 'bg-yellow-500' : 'bg-red-500'
+                  completeness.score >= 80 ? 'bg-port-success' :
+                  completeness.score >= 50 ? 'bg-port-warning' : 'bg-port-error'
                 }`}
                 style={{ width: `${completeness.score}%` }}
               />
@@ -438,9 +438,9 @@ export default function OverviewTab({ status, settings, onRefresh }) {
         {contradictions && (
           <div className="mt-4 pt-4 border-t border-port-border">
             {contradictions.error ? (
-              <div className="text-red-400 text-sm">{contradictions.error}</div>
+              <div className="text-port-error text-sm">{contradictions.error}</div>
             ) : contradictions.issues?.length === 0 ? (
-              <div className="flex items-center gap-2 text-green-400">
+              <div className="flex items-center gap-2 text-port-success">
                 <CheckCircle size={18} />
                 No contradictions detected
               </div>
@@ -451,9 +451,9 @@ export default function OverviewTab({ status, settings, onRefresh }) {
                   <div
                     key={i}
                     className={`p-3 rounded-lg border ${
-                      issue.severity === 'high' ? 'bg-red-500/10 border-red-500/30' :
-                      issue.severity === 'medium' ? 'bg-yellow-500/10 border-yellow-500/30' :
-                      'bg-blue-500/10 border-blue-500/30'
+                      issue.severity === 'high' ? 'bg-port-error/10 border-port-error/30' :
+                      issue.severity === 'medium' ? 'bg-port-warning/10 border-port-warning/30' :
+                      'bg-port-accent/10 border-port-accent/30'
                     }`}
                   >
                     <div className="font-medium text-white mb-1">
@@ -503,8 +503,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           onClick={() => navigate('/digital-twin/test')}
           className="flex items-center gap-3 sm:gap-4 p-4 min-h-[72px] bg-port-card rounded-lg border border-port-border hover:border-port-accent transition-colors"
         >
-          <div className="p-2.5 sm:p-3 rounded-lg bg-green-500/20 shrink-0">
-            <Play className="w-5 h-5 sm:w-6 sm:h-6 text-green-400" />
+          <div className="p-2.5 sm:p-3 rounded-lg bg-port-success/20 shrink-0">
+            <Play className="w-5 h-5 sm:w-6 sm:h-6 text-port-success" />
           </div>
           <div className="text-left min-w-0">
             <div className="font-medium text-white">Run Tests</div>
@@ -520,8 +520,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           onClick={() => navigate(gaps[0]?.suggestedCategory ? `/digital-twin/enrich?category=${gaps[0].suggestedCategory}` : '/digital-twin/enrich')}
           className="flex items-center gap-3 sm:gap-4 p-4 min-h-[72px] bg-port-card rounded-lg border border-port-border hover:border-port-accent transition-colors"
         >
-          <div className="p-2.5 sm:p-3 rounded-lg bg-yellow-500/20 shrink-0">
-            <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-400" />
+          <div className="p-2.5 sm:p-3 rounded-lg bg-port-warning/20 shrink-0">
+            <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-port-warning" />
           </div>
           <div className="text-left min-w-0">
             <div className="font-medium text-white">Enrich Soul</div>
@@ -535,8 +535,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           onClick={() => navigate('/digital-twin/export')}
           className="flex items-center gap-3 sm:gap-4 p-4 min-h-[72px] bg-port-card rounded-lg border border-port-border hover:border-port-accent transition-colors"
         >
-          <div className="p-2.5 sm:p-3 rounded-lg bg-blue-500/20 shrink-0">
-            <Download className="w-5 h-5 sm:w-6 sm:h-6 text-blue-400" />
+          <div className="p-2.5 sm:p-3 rounded-lg bg-port-accent/20 shrink-0">
+            <Download className="w-5 h-5 sm:w-6 sm:h-6 text-port-accent" />
           </div>
           <div className="text-left min-w-0">
             <div className="font-medium text-white">Export Soul</div>
@@ -552,8 +552,8 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className={`text-2xl sm:text-3xl font-bold ${
-                status.lastTestRun.score >= 0.8 ? 'text-green-400' :
-                status.lastTestRun.score >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                status.lastTestRun.score >= 0.8 ? 'text-port-success' :
+                status.lastTestRun.score >= 0.5 ? 'text-port-warning' : 'text-port-error'
               }`}>
                 {Math.round(status.lastTestRun.score * 100)}%
               </div>
@@ -581,12 +581,12 @@ export default function OverviewTab({ status, settings, onRefresh }) {
         <div className="flex items-center gap-3">
           {settings?.autoInjectToCoS ? (
             <>
-              <CheckCircle className="w-5 h-5 text-green-400" />
+              <CheckCircle className="w-5 h-5 text-port-success" />
               <span className="text-white">Soul context is being injected into CoS agents</span>
             </>
           ) : (
             <>
-              <AlertCircle className="w-5 h-5 text-yellow-400" />
+              <AlertCircle className="w-5 h-5 text-port-warning" />
               <span className="text-white">Soul context injection is disabled</span>
               <button
                 onClick={() => setShowSettings(true)}

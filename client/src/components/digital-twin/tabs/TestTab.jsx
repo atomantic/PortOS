@@ -170,11 +170,11 @@ export default function TestTab({ onRefresh }) {
   const getResultIcon = (result) => {
     switch (result) {
       case 'passed':
-        return <CheckCircle className="w-5 h-5 text-green-400" />;
+        return <CheckCircle className="w-5 h-5 text-port-success" />;
       case 'failed':
-        return <XCircle className="w-5 h-5 text-red-400" />;
+        return <XCircle className="w-5 h-5 text-port-error" />;
       case 'partial':
-        return <AlertCircle className="w-5 h-5 text-yellow-400" />;
+        return <AlertCircle className="w-5 h-5 text-port-warning" />;
       default:
         return <Clock className="w-5 h-5 text-gray-400" />;
     }
@@ -344,7 +344,7 @@ export default function TestTab({ onRefresh }) {
         <button
           onClick={generateTests}
           disabled={generating || selectedProviders.length === 0}
-          className="flex items-center justify-center gap-2 px-4 py-3 min-h-[48px] bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 px-4 py-3 min-h-[48px] bg-port-accent-2 text-port-on-accent-2 rounded-lg font-medium hover:bg-port-accent-2/80 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {generating ? (
             <>
@@ -368,10 +368,10 @@ export default function TestTab({ onRefresh }) {
 
       {/* Generated Tests */}
       {showGenerated && generatedTests.length > 0 && (
-        <div className="bg-port-card rounded-lg border border-purple-500/30 overflow-hidden">
+        <div className="bg-port-card rounded-lg border border-port-accent-2/30 overflow-hidden">
           <div className="p-4 border-b border-port-border flex items-center justify-between">
             <h3 className="font-semibold text-white flex items-center gap-2">
-              <Wand2 className="w-5 h-5 text-purple-400" />
+              <Wand2 className="w-5 h-5 text-port-accent-2" />
               AI-Generated Tests ({generatedTests.length})
             </h3>
             <button
@@ -404,11 +404,11 @@ export default function TestTab({ onRefresh }) {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 text-sm">
                   <div>
-                    <div className="text-green-400 text-xs mb-1">Expected Behavior</div>
+                    <div className="text-port-success text-xs mb-1">Expected Behavior</div>
                     <div className="text-gray-400">{test.expectedBehavior}</div>
                   </div>
                   <div>
-                    <div className="text-red-400 text-xs mb-1">Failure Signals</div>
+                    <div className="text-port-error text-xs mb-1">Failure Signals</div>
                     <div className="text-gray-400">{test.failureSignals}</div>
                   </div>
                 </div>
@@ -488,8 +488,8 @@ export default function TestTab({ onRefresh }) {
                   {results.map(r => (
                     <td key={`${r.providerId}-${r.model}-score`} className="px-4 py-3">
                       <span className={`text-lg font-bold ${
-                        r.score >= 0.8 ? 'text-green-400' :
-                        r.score >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                        r.score >= 0.8 ? 'text-port-success' :
+                        r.score >= 0.5 ? 'text-port-warning' : 'text-port-error'
                       }`}>
                         {Math.round((r.score || 0) * 100)}%
                       </span>
@@ -518,11 +518,11 @@ export default function TestTab({ onRefresh }) {
                     </div>
                     <div>
                       <h4 className="text-sm font-medium text-gray-400 mb-1">Expected Behavior</h4>
-                      <p className="text-green-400 bg-port-card p-3 rounded whitespace-pre-wrap">{test.expectedBehavior}</p>
+                      <p className="text-port-success bg-port-card p-3 rounded whitespace-pre-wrap">{test.expectedBehavior}</p>
                     </div>
                     <div>
                       <h4 className="text-sm font-medium text-gray-400 mb-1">Failure Signals</h4>
-                      <p className="text-red-400 bg-port-card p-3 rounded whitespace-pre-wrap">{test.failureSignals}</p>
+                      <p className="text-port-error bg-port-card p-3 rounded whitespace-pre-wrap">{test.failureSignals}</p>
                     </div>
 
                     {/* Model Responses */}
@@ -555,8 +555,8 @@ export default function TestTab({ onRefresh }) {
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'sounds_like_me'
-                                      ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                                      : 'text-gray-400 border border-port-border hover:text-green-400 hover:border-green-500/30 disabled:opacity-30'
+                                      ? 'bg-port-success/20 text-port-success border border-port-success/30'
+                                      : 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30'
                                   }`}
                                 >
                                   <ThumbsUp size={14} />
@@ -567,8 +567,8 @@ export default function TestTab({ onRefresh }) {
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'not_quite'
-                                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-                                      : 'text-gray-400 border border-port-border hover:text-yellow-400 hover:border-yellow-500/30 disabled:opacity-30'
+                                      ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
+                                      : 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30'
                                   }`}
                                 >
                                   <Minus size={14} />
@@ -579,8 +579,8 @@ export default function TestTab({ onRefresh }) {
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'doesnt_sound_like_me'
-                                      ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                      : 'text-gray-400 border border-port-border hover:text-red-400 hover:border-red-500/30 disabled:opacity-30'
+                                      ? 'bg-port-error/20 text-port-error border border-port-error/30'
+                                      : 'text-gray-400 border border-port-border hover:text-port-error hover:border-port-error/30 disabled:opacity-30'
                                   }`}
                                 >
                                   <ThumbsDown size={14} />
@@ -615,8 +615,8 @@ export default function TestTab({ onRefresh }) {
               >
                 <div className="flex items-center gap-4">
                   <span className={`text-xl font-bold ${
-                    run.score >= 0.8 ? 'text-green-400' :
-                    run.score >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                    run.score >= 0.8 ? 'text-port-success' :
+                    run.score >= 0.5 ? 'text-port-warning' : 'text-port-error'
                   }`}>
                     {Math.round(run.score * 100)}%
                   </span>
@@ -640,7 +640,7 @@ export default function TestTab({ onRefresh }) {
       {feedbackStats && feedbackStats.totalFeedback > 0 && (
         <div className="bg-port-card rounded-lg border border-port-border p-4">
           <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
-            <TrendingUp size={18} className="text-purple-400" />
+            <TrendingUp size={18} className="text-port-accent-2" />
             Identity Validation
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -650,21 +650,21 @@ export default function TestTab({ onRefresh }) {
             </div>
             <div className="p-3 bg-port-bg rounded-lg text-center">
               <div className={`text-2xl font-bold ${
-                feedbackStats.validationRate >= 0.7 ? 'text-green-400' :
-                feedbackStats.validationRate >= 0.4 ? 'text-yellow-400' : 'text-red-400'
+                feedbackStats.validationRate >= 0.7 ? 'text-port-success' :
+                feedbackStats.validationRate >= 0.4 ? 'text-port-warning' : 'text-port-error'
               }`}>
                 {feedbackStats.validationRate != null ? `${Math.round(feedbackStats.validationRate * 100)}%` : '—'}
               </div>
               <div className="text-xs text-gray-500">Validation Rate</div>
             </div>
             <div className="p-3 bg-port-bg rounded-lg text-center">
-              <div className="text-2xl font-bold text-green-400">
+              <div className="text-2xl font-bold text-port-success">
                 {feedbackStats.byValidation?.sounds_like_me || 0}
               </div>
               <div className="text-xs text-gray-500">Sounds Like Me</div>
             </div>
             <div className="p-3 bg-port-bg rounded-lg text-center">
-              <div className="text-2xl font-bold text-red-400">
+              <div className="text-2xl font-bold text-port-error">
                 {feedbackStats.byValidation?.doesnt_sound_like_me || 0}
               </div>
               <div className="text-xs text-gray-500">Not Me</div>
@@ -673,8 +673,8 @@ export default function TestTab({ onRefresh }) {
 
           {feedbackStats.recentTrend && feedbackStats.recentTrend.direction !== 'insufficient_data' && (
             <div className={`p-3 rounded-lg text-sm ${
-              feedbackStats.recentTrend.direction === 'improving' ? 'bg-green-500/10 text-green-400' :
-              feedbackStats.recentTrend.direction === 'declining' ? 'bg-red-500/10 text-red-400' :
+              feedbackStats.recentTrend.direction === 'improving' ? 'bg-port-success/10 text-port-success' :
+              feedbackStats.recentTrend.direction === 'declining' ? 'bg-port-error/10 text-port-error' :
               'bg-port-bg text-gray-400'
             }`}>
               {feedbackStats.recentTrend.direction === 'improving'

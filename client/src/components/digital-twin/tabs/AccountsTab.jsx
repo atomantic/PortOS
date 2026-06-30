@@ -240,11 +240,11 @@ export default function AccountsTab() {
             <div className="text-xs text-gray-500">Ingestion Enabled</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-purple-400">{Object.keys(stats.byCategory || {}).length}</div>
+            <div className="text-2xl font-bold text-port-accent-2">{Object.keys(stats.byCategory || {}).length}</div>
             <div className="text-xs text-gray-500">Categories</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-green-400">{Object.keys(stats.byPlatform || {}).length}</div>
+            <div className="text-2xl font-bold text-port-success">{Object.keys(stats.byPlatform || {}).length}</div>
             <div className="text-xs text-gray-500">Platforms</div>
           </div>
         </div>
