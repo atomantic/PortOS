@@ -42,25 +42,25 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
     expect(validation.IMPORTER_CONTENT_TYPES).toBeDefined();
   });
 
-  it('#1831 moved schemas still parse through the validation.js entry', () => {
-    // agent
+  it('#1831 moved schemas + non-schema exports are wired through the validation.js entry', () => {
+    // One parse-smoke per new domain — proves the schema is reachable AND
+    // usable through the validation.js entry (mirrors the #1151 block above).
     expect(() => validation.validateRequest(validation.agentSchema, {
       userId: 'u1', name: 'Botley', personality: { style: 'witty' },
     })).not.toThrow();
-    // cos
     expect(() => validation.validateRequest(validation.createCosTaskSchema, {
       description: 'do the thing',
     })).not.toThrow();
-    expect(validation.normalizeReviewers({ reviewers: ['gemini'] })).toEqual(['antigravity']);
-    expect(validation.sanitizeTaskMetadata({ useWorktree: true })).toEqual({ useWorktree: true });
-    // media
     expect(() => validation.validateRequest(validation.localLlmInstallSchema, {
       backend: 'ollama', modelId: 'llama3',
     })).not.toThrow();
-    // pipeline
     expect(() => validation.validateRequest(validation.writersRoomWorkCreateSchema, {
       title: 'My Work',
     })).not.toThrow();
+    // Non-schema exports (a function + a constant) must also re-export — the
+    // "same objects" test covers identity, this confirms barrel reachability
+    // for the kinds of exports that aren't Zod schemas.
+    expect(typeof validation.normalizeReviewers).toBe('function');
     expect(validation.MAX_CONVERGENCE_ROUNDS).toBe(20);
   });
 
