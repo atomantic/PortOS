@@ -553,32 +553,39 @@ export async function spawnDirectly({
   });
 
   claudeProcess.on('error', async (err) => {
-    clearTimeout(initializationTimeout);
-    console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
+    // Runs outside the request lifecycle — an uncaught throw from the awaited
+    // completeAgent/completeAgentRun would crash the process, so wrap the body.
+    try {
+      clearTimeout(initializationTimeout);
+      console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
-    // Release execution lane
-    if (laneName) {
-      release(agentId);
+      // Release execution lane
+      if (laneName) {
+        release(agentId);
+      }
+
+      // Complete tool execution tracking with error
+      if (executionId) {
+        errorExecution(executionId, { message: err.message, category: 'spawn-error' });
+        completeExecution(executionId, { success: false });
+      }
+
+      const agentDataErr = activeAgents.get(agentId);
+      if (agentDataErr?.killTimer) {
+        clearTimeout(agentDataErr.killTimer);
+        agentDataErr.killTimer = null;
+      }
+
+      cosEvents.emit('agent:error', { agentId, error: err.message });
+      await outputBatcher.flush();
+      await completeAgent(agentId, { success: false, error: err.message });
+      await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
+      unregisterSpawnedAgent(claudeProcess.pid);
+      activeAgents.delete(agentId);
+    } catch (handlerErr) {
+      console.error(`❌ Agent ${agentId} error handler failed: ${handlerErr.message}`);
+      activeAgents.delete(agentId);
     }
-
-    // Complete tool execution tracking with error
-    if (executionId) {
-      errorExecution(executionId, { message: err.message, category: 'spawn-error' });
-      completeExecution(executionId, { success: false });
-    }
-
-    const agentDataErr = activeAgents.get(agentId);
-    if (agentDataErr?.killTimer) {
-      clearTimeout(agentDataErr.killTimer);
-      agentDataErr.killTimer = null;
-    }
-
-    cosEvents.emit('agent:error', { agentId, error: err.message });
-    await outputBatcher.flush();
-    await completeAgent(agentId, { success: false, error: err.message });
-    await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
-    unregisterSpawnedAgent(claudeProcess.pid);
-    activeAgents.delete(agentId);
   });
 
   claudeProcess.on('close', async (code) => {
