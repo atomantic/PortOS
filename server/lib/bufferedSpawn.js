@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 
@@ -99,10 +99,18 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * object, so without this the flag would stay `false` for the process's
  * entire lifetime and those guards would never engage on Windows.
  *
+ * The win32 branch is gated on `instanceof ChildProcess` — some callers (the
+ * aiToolkit runner's `stopRun`, via `registerExternalRun`) pass this a
+ * killable that isn't a `child_process` spawn at all, e.g. a node-pty `IPty`
+ * TUI session, which also exposes `.kill()`/`.pid`. A raw `taskkill` against
+ * a pty's pid bypasses node-pty's own Windows teardown (releasing its native
+ * ConPTY handle), leaking it — so any non-ChildProcess killable always uses
+ * its own `.kill()` instead, on every platform.
+ *
  * @param {import('child_process').ChildProcess} child
  */
 export function killProcessTree(child) {
-  if (IS_WIN32 && child.pid) {
+  if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
