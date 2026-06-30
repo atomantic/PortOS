@@ -528,7 +528,11 @@ describe('close-handler skip-finalization — source contract', () => {
     const closeIdx = AGENT_CLI_SRC.indexOf("claudeProcess.on('close'");
     expect(closeIdx, "claudeProcess 'close' handler must exist").toBeGreaterThan(-1);
 
-    const closeBody = AGENT_CLI_SRC.slice(closeIdx, closeIdx + 4000);
+    // Extract the full callback body via brace-balancing rather than a fixed
+    // slice — a try/catch crash-guard wrapper can push finalizeAgent past any
+    // fixed window (see #1825).
+    const closeBody = extractFunctionBody(AGENT_CLI_SRC, "claudeProcess.on('close'");
+    expect(closeBody, "claudeProcess 'close' handler body must be extractable").toBeTruthy();
 
     // Guard present
     expect(closeBody).toMatch(/pausedAgents\.has\(agentId\)/);
