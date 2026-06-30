@@ -148,4 +148,46 @@ describe('GET /api/settings — external token redaction', () => {
     expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
     expect(persisted.civitai?.apiKey).toBe('civ_secret456');
   });
+
+  // Because GET no longer returns the tokens, a client that rebuilds a full
+  // top-level object from a GET and PUTs it back (e.g. patchSettingsSlice)
+  // sends an `imageGen`/`civitai` object WITHOUT the token. The server must
+  // re-inject the persisted token so an unrelated slice save doesn't silently
+  // delete the credential.
+  it('preserves a persisted hfToken when a PUT replaces imageGen without it', async () => {
+    seedSettings({ imageGen: { hfToken: 'hf_keepme', mode: 'local' } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ imageGen: { mode: 'external', local: { pythonPath: '/usr/bin/python3' } } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.imageGen?.mode).toBe('external');
+    expect(persisted.imageGen?.local?.pythonPath).toBe('/usr/bin/python3');
+    // And the save response still doesn't echo the preserved token.
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+  });
+
+  it('preserves a persisted civitai.apiKey when a PUT replaces civitai without it', async () => {
+    seedSettings({ civitai: { apiKey: 'civ_keepme', autoDownload: true } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ civitai: { autoDownload: false } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.civitai?.apiKey).toBe('civ_keepme');
+    expect(persisted.civitai?.autoDownload).toBe(false);
+  });
+
+  it('leaves a persisted token untouched when the PUT omits its parent entirely', async () => {
+    seedSettings({ imageGen: { hfToken: 'hf_keepme' }, timezone: 'UTC' });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'America/Los_Angeles' });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.timezone).toBe('America/Los_Angeles');
+  });
 });
