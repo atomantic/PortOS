@@ -438,7 +438,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
         {contradictions && (
           <div className="mt-4 pt-4 border-t border-port-border">
             {contradictions.error ? (
-              <div className="text-red-400 text-sm">{contradictions.error}</div>
+              <div className="text-port-error text-sm">{contradictions.error}</div>
             ) : contradictions.issues?.length === 0 ? (
               <div className="flex items-center gap-2 text-port-success">
                 <CheckCircle size={18} />

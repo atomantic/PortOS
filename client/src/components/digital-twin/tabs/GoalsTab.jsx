@@ -469,7 +469,7 @@ export default function GoalsTab({ onRefresh }) {
                         </button>
                         <button
                           onClick={() => requestDelete(goal.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete

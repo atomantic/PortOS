@@ -358,7 +358,7 @@ export default function TasteTab({ onRefresh }) {
               </button>
               <button
                 onClick={() => handleResetSection(reviewSection)}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-red-400 border border-red-500/30 rounded-lg text-sm hover:bg-red-500/10"
+                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10"
               >
                 <RotateCcw size={16} />
                 Reset Section

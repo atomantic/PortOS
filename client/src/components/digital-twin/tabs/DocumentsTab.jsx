@@ -412,7 +412,7 @@ export default function DocumentsTab({ onRefresh }) {
           </button>
           <button
             onClick={() => handleDelete(deleteConfirm)}
-            className="px-4 py-3 min-h-[44px] bg-red-500 text-white rounded-lg hover:bg-red-600"
+            className="px-4 py-3 min-h-[44px] bg-port-error text-white rounded-lg hover:bg-port-error/80"
           >
             Delete
           </button>

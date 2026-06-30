@@ -204,7 +204,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                     {results.map(r => (
                       <td key={`${r.providerId}-${r.model}-score`} className="px-4 py-3">
                         {r.error ? (
-                          <span className="text-sm text-red-400">{r.error}</span>
+                          <span className="text-sm text-port-error">{r.error}</span>
                         ) : (
                           <>
                             <span className={`text-lg font-bold ${scoreToColor(r.score || 0)}`}>
