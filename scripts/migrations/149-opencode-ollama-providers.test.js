@@ -1,6 +1,6 @@
 /**
- * Test for migration 148 — add the OpenCode Ollama CLI + TUI shipped providers
- * to existing installs. Picked up by server/vitest.config.js's
+ * Test for migration 149 — add the OpenCode Ollama CLI provider to existing
+ * installs. Picked up by server/vitest.config.js's
  * `../scripts/**\/*.test.js` glob.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -8,17 +8,17 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './148-opencode-ollama-providers.js';
+import migration from './149-opencode-ollama-providers.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 
-describe('migration 148 — OpenCode Ollama providers', () => {
+describe('migration 149 — OpenCode Ollama providers', () => {
   let rootDir;
   let providersPath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-148-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-149-'));
     mkdirSync(join(rootDir, 'data'), { recursive: true });
     providersPath = join(rootDir, 'data/providers.json');
   });
