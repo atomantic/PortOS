@@ -777,7 +777,13 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     let linkedTrack = null;
     if (record.deleted !== true && isStr(record.trackId)) {
       const track = await getTrack(record.trackId, { includeDeleted: true }).catch(() => null);
-      if (track && track.deleted !== true) linkedTrack = sanitizeRecordForWire('track', track);
+      // Ship the linked track whether LIVE or a TOMBSTONE. A track delete fans
+      // out to its linked music-video projects (collectSubscriptionsForUpdate),
+      // and a musicVideoProjects-only peer needs the tombstone to converge
+      // instead of keeping stale audio it can still (wrongly) render. The audio
+      // BYTES are dropped for a deleted track (buildMusicVideoAssetManifest reads
+      // it without includeDeleted), so only the tombstone record rides.
+      if (track) linkedTrack = sanitizeRecordForWire('track', track);
     }
     return {
       kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,

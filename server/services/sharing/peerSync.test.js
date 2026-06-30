@@ -2398,6 +2398,33 @@ describe('peerSync', () => {
       expect(captured.linkedTrack?.audioFilename).toBe('linked.mp3');
     });
 
+    it('bundles a tombstone linkedTrack when the linked track is deleted (#1858)', async () => {
+      // A track delete fans out to its linked projects; the project push must
+      // carry the track tombstone so a Music-Videos-only peer converges instead
+      // of keeping stale audio. No audio bytes ride for a deleted track.
+      enableMusicVideoPeer();
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-8', title: 'Gone', audioFilename: 'gone.mp3',
+        updatedAt: '2026-06-29T00:00:00Z', deleted: true, deletedAt: '2026-06-29T00:00:00Z',
+      });
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-5', name: 'Linked-deleted', mode: 'director', trackId: 'track-8',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-29T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ missingAssets: [] }) };
+      });
+      await pushRecordToPeer({
+        id: 'sub-mv5', peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-5',
+      });
+      expect(captured.linkedTrack?.id).toBe('track-8');
+      expect(captured.linkedTrack?.deleted).toBe(true);
+      expect(captured.assetManifest.filter(a => a.kind === 'music')).toEqual([]);
+    });
+
     it('omits linkedTrack when the project has no linked track', async () => {
       enableMusicVideoPeer();
       vi.mocked(getMusicVideoProject).mockResolvedValue({
