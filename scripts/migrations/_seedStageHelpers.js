@@ -23,6 +23,17 @@
  * across every seed migration); pass it only for the rare template whose basename
  * diverges from its stage key.
  *
+ * `makeSeedMigrations(stageSpecs)` is the multi-stage form: it runs the same
+ * copy-if-missing + merge-if-absent body for each stage but writes the installed
+ * `stage-config.json` exactly once with an `N added` summary log. It is behaviour-
+ * identical to the hand-rolled `for (const stageKey of STAGES)` loops the genuine
+ * multi-stage seed migrations (091/094/095/107) used to carry — the on-disk
+ * results (templates copied only when missing, config entries merged only when
+ * absent, single pretty-printed write) match byte-for-byte. Each spec is either a
+ * bare `stageKey` string (filename derived as `${stageKey}.md`) or a
+ * `{ stageKey, filename }` object for the rare diverging basename. `makeSeedMigration`
+ * is the single-stage convenience wrapper over the same machinery.
+ *
  * The data effects above are what these migrations are responsible for — the
  * console log copy is incidental and not preserved verbatim from the pre-refactor
  * files (all now log under `stageKey`).
@@ -34,41 +45,62 @@ import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 /**
- * @param {string} stageKey  - stage-config key, e.g. `pipeline-editorial-character-consistency`
- * @param {{ filename?: string }} [opts] - template basename under `prompts/stages/` (defaults to `${stageKey}.md`)
+ * Normalize a stage spec (bare `stageKey` string or `{ stageKey, filename }`)
+ * into `{ stageKey, filename }` with the universal `${stageKey}.md` default.
+ * @param {string | { stageKey: string, filename?: string }} spec
+ * @returns {{ stageKey: string, filename: string }}
+ */
+function normalizeStageSpec(spec) {
+  if (typeof spec === 'string') return { stageKey: spec, filename: `${spec}.md` };
+  const { stageKey, filename } = spec;
+  return { stageKey, filename: filename || `${stageKey}.md` };
+}
+
+/**
+ * Multi-stage seed migration: copy each `.md` template when missing and merge
+ * each `stage-config.json` entry when absent, writing the installed config once
+ * with an `N added` summary. Behaviour-identical to the hand-rolled
+ * `for (const stageKey of STAGES)` loops it replaces.
+ *
+ * @param {Array<string | { stageKey: string, filename?: string }>} stageSpecs
  * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
  */
-export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}) {
+export function makeSeedMigrations(stageSpecs) {
+  const stages = stageSpecs.map(normalizeStageSpec);
   return {
     async up({ rootDir }) {
       const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
       await mkdir(stagesDir, { recursive: true });
 
-      const dataPath = join(stagesDir, filename);
-      const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', filename);
+      // 1) Copy each prompt template that isn't already present.
+      for (const { stageKey, filename } of stages) {
+        const dataPath = join(stagesDir, filename);
+        const samplePath = join(rootDir, 'data.reference', 'prompts', 'stages', filename);
 
-      const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
-      if (exists) {
-        console.log(`📝 ${stageKey} prompt: already present`);
-      } else {
+        const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
+        if (exists) {
+          console.log(`📝 ${stageKey} prompt: already present`);
+          continue;
+        }
         const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
         if (!sampleExists) {
           console.warn(`⚠️  ${stageKey}: sample missing for ${filename} — skipping copy`);
-        } else {
-          try {
-            await copyFile(samplePath, dataPath);
-            console.log(`✅ seeded ${filename}`);
-          } catch (err) {
-            console.warn(`⚠️  ${stageKey}: copy failed for ${filename}: ${err.message}`);
-          }
+          continue;
+        }
+        try {
+          await copyFile(samplePath, dataPath);
+          console.log(`✅ seeded ${filename}`);
+        } catch (err) {
+          console.warn(`⚠️  ${stageKey}: copy failed for ${filename}: ${err.message}`);
         }
       }
 
+      // 2) Merge each stage-config entry (skip any already present), writing once.
       const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
       const sampleConfigPath = join(rootDir, 'data.reference', 'prompts', 'stage-config.json');
       const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
       if (!sampleConfigExists) {
-        console.warn(`⚠️  ${stageKey}: data.reference stage-config.json missing — cannot resolve entry; skipping config write`);
+        console.warn('⚠️  seed-stages: data.reference stage-config.json missing — cannot resolve entries; skipping config write');
         return;
       }
       try {
@@ -78,23 +110,40 @@ export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}
           ? JSON.parse(await readFile(installedConfigPath, 'utf8'))
           : { stages: {} };
         installed.stages = installed.stages || {};
-        if (installed.stages[stageKey]) {
-          console.log(`📝 ${stageKey} stage-config: already present`);
-          return;
+
+        let added = 0;
+        for (const { stageKey } of stages) {
+          if (installed.stages[stageKey]) {
+            console.log(`📝 ${stageKey} stage-config: already present`);
+            continue;
+          }
+          if (!sample?.stages?.[stageKey]) {
+            console.warn(`⚠️  ${stageKey}: sample stage-config missing ${stageKey} — skipping`);
+            continue;
+          }
+          installed.stages[stageKey] = sample.stages[stageKey];
+          added += 1;
         }
-        if (!sample?.stages?.[stageKey]) {
-          console.warn(`⚠️  ${stageKey}: sample stage-config missing ${stageKey} — skipping`);
-          return;
-        }
-        installed.stages[stageKey] = sample.stages[stageKey];
+
+        if (added === 0) return;
         // Canonical atomic write (temp + rename) so an interrupted boot/upgrade
         // can't leave a truncated stage-config.json; atomicWrite ensures the dir.
         await atomicWrite(installedConfigPath, `${JSON.stringify(installed, null, 2)}\n`);
         const action = installedExists ? 'merged' : 'created';
-        console.log(`📝 ${stageKey} stage-config (${action}): 1 added`);
+        console.log(`📝 seed-stages stage-config (${action}): ${added} added`);
       } catch (err) {
-        console.warn(`⚠️  ${stageKey}: stage-config merge failed: ${err.message}`);
+        console.warn(`⚠️  seed-stages: stage-config merge failed: ${err.message}`);
       }
     },
   };
+}
+
+/**
+ * Single-stage convenience wrapper over {@link makeSeedMigrations}.
+ * @param {string} stageKey  - stage-config key, e.g. `pipeline-editorial-character-consistency`
+ * @param {{ filename?: string }} [opts] - template basename under `prompts/stages/` (defaults to `${stageKey}.md`)
+ * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
+ */
+export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}) {
+  return makeSeedMigrations([{ stageKey, filename }]);
 }

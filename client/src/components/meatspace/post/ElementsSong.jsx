@@ -55,13 +55,13 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }
     if (!itemProp && loadItemOnMount) {
       getMemoryItem('elements-song').then(data => {
         if (data) { setLoadedItem(data); setMastery(data.mastery || { overallPct: 0, chunks: {}, elements: {} }); }
-      }).catch(() => {});
+      }).catch(err => console.warn('⚠️ Failed to load elements song: ' + err.message));
     }
   }, [itemProp, loadItemOnMount]);
 
   useEffect(() => {
     if (!item?.id) return;
-    getMemoryMastery(item.id).then(m => { if (m) setMastery(m); }).catch(() => {});
+    getMemoryMastery(item.id).then(m => { if (m) setMastery(m); }).catch(err => console.warn('⚠️ Failed to load mastery: ' + err.message));
   }, [item?.id]);
 
   function handlePracticeComplete(newMastery) {
@@ -458,7 +458,7 @@ function LearnMode({ item, onBack, onComplete }) {
                 mode: 'learn', chunkId: null,
                 results: [{ correct: true }],
                 totalMs: 0,
-              }).then(r => onComplete(r?.mastery)).catch(() => onComplete(null));
+              }).then(r => onComplete(r?.mastery)).catch(err => { console.warn('⚠️ Failed to record practice: ' + err.message); onComplete(null); });
             }}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors"
           >
@@ -544,7 +544,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
               mode: 'element-flash', chunkId: null,
               results: results.map(r => ({ correct: r.correct, element: r.element, expected: r.expected, answered: r.answered })),
               totalMs: Date.now() - startTime,
-            }).then(r => onComplete(r?.mastery)).catch(() => onComplete(null));
+            }).then(r => onComplete(r?.mastery)).catch(err => { console.warn('⚠️ Failed to record practice: ' + err.message); onComplete(null); });
           }}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
         >
@@ -669,7 +669,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
               mode: 'fill-blank', chunkId: null,
               results: results.map(r => ({ correct: r.correct, expected: r.expected, answered: r.answered })),
               totalMs: Date.now() - startTime,
-            }).then(r => onComplete(r?.mastery)).catch(() => onComplete(null));
+            }).then(r => onComplete(r?.mastery)).catch(err => { console.warn('⚠️ Failed to record practice: ' + err.message); onComplete(null); });
           }}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
         >

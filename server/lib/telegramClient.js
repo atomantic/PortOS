@@ -64,9 +64,12 @@ export function createTelegramBot(token, opts = {}) {
           continue;
         }
         updates = json.result;
-      } catch {
-        // Aborted (stopPolling called) or network error
+      } catch (err) {
+        // Aborted (stopPolling called) or network/parse error
         if (!polling) break;
+        if (err?.name !== 'AbortError') {
+          console.warn(`⚠️ Telegram poll error, retrying: ${err?.message || String(err)}`);
+        }
         await new Promise(r => setTimeout(r, RETRY_DELAY_NETWORK_ERROR_MS));
         continue;
       }

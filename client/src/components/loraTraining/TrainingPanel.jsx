@@ -46,7 +46,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
     getLoraTrainingStatus().then((s) => {
       setStatus(s);
       setParams((prev) => prev || { ...s.defaults });
-    }).catch(() => setStatus({ runtimes: {}, defaults: {} }));
+    }).catch(err => { console.warn('⚠️ Failed to load training status: ' + err.message); setStatus({ runtimes: {}, defaults: {} }); });
     listImageModels().then((list) => {
       // FLUX.2 Klein only — mflux ≥0.17 dropped FLUX.1 training, and the
       // torch fallback trains the same bf16 Klein bases.
@@ -63,7 +63,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
         return (nonBf16 || nineB[0] || trainable[0])?.id || '';
       });
-    }).catch(() => setModels([]));
+    }).catch(err => { console.warn('⚠️ Failed to load image models: ' + err.message); setModels([]); });
   }, []);
 
   // A reassigned dataset keeps its id but its old runs belong to the previous
@@ -88,7 +88,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
       );
       setActiveRun(own.find(isActive) || null);
       setLastRun(own.find((r) => !isActive(r)) || null);
-    }).catch(() => {});
+    }).catch(err => console.warn('⚠️ Failed to refresh training runs: ' + err.message));
   }, [dataset.id, charEntryId, charEntryKind, charUniverseId]);
   useEffect(() => { refreshRuns(); }, [refreshRuns]);
 
