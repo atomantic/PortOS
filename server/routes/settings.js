@@ -9,6 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { isPlainObject } from '../lib/objects.js';
 import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
@@ -37,11 +38,31 @@ const decorateBounds = (settings) => ({
   },
 });
 
+// Third-party API tokens that live OUTSIDE the `secrets.*` hierarchy but must
+// never be echoed to the client (#1821). The Settings UI reads only their
+// *presence* from dedicated status routes (`GET /api/image-gen/setup/hf-token-
+// status`, `GET /api/loras/auth/civitai` → `hasKey`), never the raw value here,
+// so stripping them is non-breaking. Sibling fields under each parent are
+// preserved; arrays are left untouched (a legacy/malformed `civitai: ['x']`
+// must not be spread into `{ '0': 'x' }`).
+const redactExternalTokens = (settings) => {
+  const next = { ...settings };
+  if (isPlainObject(next.imageGen)) {
+    const { hfToken, ...rest } = next.imageGen;
+    next.imageGen = rest;
+  }
+  if (isPlainObject(next.civitai)) {
+    const { apiKey, ...rest } = next.civitai;
+    next.civitai = rest;
+  }
+  return next;
+};
+
 // GET /api/settings
 router.get('/', asyncHandler(async (req, res) => {
   const settings = await getSettings();
   const { secrets, ...safe } = settings;
-  res.json(decorateBounds(safe));
+  res.json(decorateBounds(redactExternalTokens(safe)));
 }));
 
 // GET /api/settings/ai-assignments

@@ -1,5 +1,6 @@
 ## Security
 
+- **`GET /api/settings` no longer leaks third-party API tokens** — the handler redacted only the top-level `secrets` key, so `imageGen.hfToken` (HuggingFace) and `civitai.apiKey` were returned in full. Both are now stripped from the response (their sibling config is preserved), matching how the Settings UI already reads only token *presence* from the dedicated `/image-gen/setup/hf-token-status` and `/loras/auth/civitai` status routes. On-disk values are untouched. (#1821)
 - **Vision-test endpoint no longer reads arbitrary files** — `POST /api/providers/:id/test-vision` took `imagePath` straight from the request body, so a `../` traversal or absolute path could have any readable file base64-encoded and forwarded to the configured external vision provider. The image loader now allowlists `imagePath` to a real image basename under `data/screenshots` (via the canonical `resolveScreenshot` path resolver), rejecting traversal and absolute-path escapes before any file is read or forwarded. (#1820)
 
 ## Added
