@@ -22,6 +22,20 @@ import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { PORTS } from '../lib/ports.js';
+import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
+
+// Process-level safety net (defense-in-depth, see issue #1878). The main server
+// (server/index.js) already wires this same shared helper via
+// setupProcessErrorHandlers(io); the CoS runner — a separate long-lived PM2
+// process that spawns and supervises child agents — had no such net, so a stray
+// async handler that rejected/threw outside the request lifecycle would crash it
+// with Node's default unhandled output. Reusing the shared helper gives the runner
+// the identical, already-tested convention: log via the emoji-prefixed console.error
+// style, and on an uncaughtException exit cleanly after flushing so PM2 restarts a
+// process that would otherwise be left in an undefined state (boot then reaps any
+// orphaned agents). Called with no `io` — the runner's socket server fans agent
+// output to portos-server, not the error-alert UI, so the UI emit is skipped.
+setupProcessErrorHandlers();
 
 // Timing constants for process termination/cleanup (ms). Named so the grace
 // windows are obvious at each call site instead of bare literals.
