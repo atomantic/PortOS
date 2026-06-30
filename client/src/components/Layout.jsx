@@ -894,7 +894,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 h-screen print:hidden
+          fixed inset-y-0 left-0 z-50 h-screen h-[100dvh] print:hidden
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
