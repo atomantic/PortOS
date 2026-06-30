@@ -238,6 +238,35 @@ describe('executeCliRun — close handler crash guard', () => {
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
     errorSpy.mockRestore();
   });
+
+  it('observes a rejected promise from an async completion hook (no unhandled rejection)', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    writeFile.mockResolvedValue(undefined);
+    // An async hook that REJECTS — safeSettle must attach a .catch so it does
+    // not escape as an unhandled rejection, and onComplete must still settle.
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunCompleted: () => Promise.reject(new Error('async hook boom')) },
+    });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-async-hook-rejects', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('onRunCompleted hook threw during recovery'));
+    errorSpy.mockRestore();
+  });
 });
 
 describe('buildCliArgs — claude-code defaultModel honoring', () => {
