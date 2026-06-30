@@ -58,11 +58,19 @@ const redactExternalTokens = (settings) => {
   return next;
 };
 
+// Single sanitizer every settings response (GET load + PUT save) runs through,
+// so a leak can't reappear on one path after being closed on the other: strip
+// the top-level `secrets` hierarchy, redact external tokens (#1821), then
+// decorate server-authoritative bounds.
+const sanitizeSettingsForResponse = (settings) => {
+  const { secrets, ...safe } = settings;
+  return decorateBounds(redactExternalTokens(safe));
+};
+
 // GET /api/settings
 router.get('/', asyncHandler(async (req, res) => {
   const settings = await getSettings();
-  const { secrets, ...safe } = settings;
-  res.json(decorateBounds(redactExternalTokens(safe)));
+  res.json(sanitizeSettingsForResponse(settings));
 }));
 
 // GET /api/settings/ai-assignments
@@ -153,8 +161,7 @@ router.put('/', asyncHandler(async (req, res) => {
   // merged value so a save takes effect without a restart and without
   // re-reading the file.
   setCodexParallelLimit(merged.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
-  const { secrets, ...safe } = merged;
-  res.json(decorateBounds(safe));
+  res.json(sanitizeSettingsForResponse(merged));
 }));
 
 export default router;

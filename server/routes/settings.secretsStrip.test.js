@@ -129,4 +129,23 @@ describe('GET /api/settings — external token redaction', () => {
     expect(Array.isArray(res.body.civitai)).toBe(true);
     expect(res.body.civitai[0]).toBe('legacy-junk');
   });
+
+  it('also redacts the tokens from the PUT /api/settings save response', async () => {
+    // Tokens already persisted; an unrelated save must not echo them back —
+    // otherwise the leak just moves from initial load to the save round-trip.
+    seedSettings({
+      imageGen: { hfToken: 'hf_secret123', defaultModel: 'flux' },
+      civitai: { apiKey: 'civ_secret456' },
+    });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'UTC' });
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+    expect(res.body.civitai?.apiKey).toBeUndefined();
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    // On-disk values survive the redaction.
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
+    expect(persisted.civitai?.apiKey).toBe('civ_secret456');
+  });
 });
