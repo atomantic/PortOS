@@ -6,6 +6,7 @@ import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
+import { formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const STEP_LABELS = {
@@ -520,7 +521,7 @@ export default function UpdateTab() {
       {/* Last Check */}
       {status?.lastCheck && (
         <div className="text-xs text-gray-500">
-          Last checked: {new Date(status.lastCheck).toLocaleString()}
+          Last checked: {formatDateTime(status.lastCheck)}
         </div>
       )}
 
@@ -564,7 +565,7 @@ export default function UpdateTab() {
               </span>
               {status.lastUpdateResult.completedAt && (
                 <span className="text-xs text-gray-500">
-                  {new Date(status.lastUpdateResult.completedAt).toLocaleString()}
+                  {formatDateTime(status.lastUpdateResult.completedAt)}
                 </span>
               )}
             </div>

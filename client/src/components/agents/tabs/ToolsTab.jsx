@@ -3,7 +3,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
-import { formatCooldown } from '../../../utils/formatters';
+import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 
 export default function ToolsTab({ agentId, agent }) {
   const [selectedAccountId, setSelectedAccountId] = useState('');
@@ -658,7 +658,7 @@ export default function ToolsTab({ agentId, agent }) {
                               </p>
                             )}
                             <p className="text-[10px] text-gray-600 mt-1">
-                              {isPublished ? `Published ${new Date(draft.publishedAt || draft.updatedAt).toLocaleString()}` : new Date(draft.createdAt).toLocaleString()}
+                              {isPublished ? `Published ${formatDateTime(draft.publishedAt || draft.updatedAt)}` : formatDateTime(draft.createdAt)}
                             </p>
                           </div>
                           <button

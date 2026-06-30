@@ -2,6 +2,7 @@ import { useState, useCallback, Fragment } from 'react';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { formatDateTime } from '../utils/formatters';
 
 export function AgentsPage() {
   const [killing, setKilling] = useState({});
@@ -28,7 +29,7 @@ export function AgentsPage() {
   };
 
   const formatStartTime = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
+    return formatDateTime(timestamp);
   };
 
   const totalCpu = agents.reduce((sum, a) => sum + (a.cpu || 0), 0);
