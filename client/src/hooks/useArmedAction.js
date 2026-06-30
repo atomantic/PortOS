@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * Two-click-arm confirmation hook. Returns `[armed, fire]`:
@@ -18,7 +18,7 @@ export function useArmedAction(onConfirm, { timeoutMs = 5000 } = {}) {
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
-  const fire = (...args) => {
+  const fire = useCallback((...args) => {
     if (!armed) {
       setArmed(true);
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -29,7 +29,7 @@ export function useArmedAction(onConfirm, { timeoutMs = 5000 } = {}) {
     timerRef.current = null;
     setArmed(false);
     onConfirm(...args);
-  };
+  }, [armed, timeoutMs, onConfirm]);
 
   return [armed, fire];
 }

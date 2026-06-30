@@ -2,12 +2,16 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Mic, Square } from 'lucide-react';
 import toast from '../ui/Toast';
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
 export default function VoiceCapture({ onTranscript, disabled }) {
   const [listening, setListening] = useState(false);
   const [interimText, setInterimText] = useState('');
   const recognitionRef = useRef(null);
+  // Resolve the Web Speech API lazily inside the component. Reading `window`
+  // at module scope throws a ReferenceError when this file is imported in an
+  // SSR/Node test context; the lazy initializer only runs in the browser.
+  const [SpeechRecognition] = useState(() => (
+    typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : undefined
+  ));
   const supported = !!SpeechRecognition;
 
   const stop = useCallback(() => {
@@ -76,7 +80,7 @@ export default function VoiceCapture({ onTranscript, disabled }) {
     recognitionRef.current = recognition;
     recognition.start();
     setListening(true);
-  }, [listening, supported, stop, onTranscript]);
+  }, [listening, supported, stop, onTranscript, SpeechRecognition]);
 
   if (!supported) return null;
 
