@@ -1,9 +1,9 @@
-import { readdir, stat, rm, mkdir, writeFile as fsWriteFile } from 'fs/promises';
+import { readdir, stat, rm, writeFile as fsWriteFile } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -122,7 +122,7 @@ export async function archiveCategory(categoryKey, options = {}) {
   if (!existsSync(dirPath)) throw new Error(`Category directory not found: ${categoryKey}`);
 
   const backupDir = join(DATA_DIR, 'backup');
-  await mkdir(backupDir, { recursive: true });
+  await ensureDir(backupDir);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const archiveName = `${categoryKey}-${timestamp}.tar.gz`;

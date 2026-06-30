@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Trash2 } from 'lucide-react';
 import * as api from '../services/api';
-import { formatTime, formatRuntime } from '../utils/formatters';
+import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 
@@ -220,7 +220,7 @@ export function HistoryPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</div>
-                          <div className="text-gray-300">{new Date(entry.timestamp).toLocaleString()}</div>
+                          <div className="text-gray-300">{formatDateTime(entry.timestamp)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>

@@ -171,12 +171,13 @@ export function formatContextLength(tokens) {
 }
 
 /**
- * Count whitespace-separated words in a string. Matches the server-side
- * countWords in writers-room storage so client + server agree.
+ * Count whitespace-separated words in a string. Mirrors the canonical
+ * server-side `countWords` in `server/lib/textUtils.js` (the client cannot
+ * import from `server/`) so client + server word counts always agree.
  */
 export function countWords(text) {
-  if (!text) return 0;
-  const m = String(text).trim().match(/\S+/g);
+  if (typeof text !== 'string') return 0;
+  const m = text.trim().match(/\S+/g);
   return m ? m.length : 0;
 }
 

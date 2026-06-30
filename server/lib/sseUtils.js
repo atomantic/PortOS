@@ -9,6 +9,7 @@
 // fire-and-forget coordinator shape.
 
 import { randomUUID } from 'crypto';
+import { SSE_HEADERS } from './sseHeaders.js';
 
 // Filters Python child noise (HF/torch/bitsandbytes/xformers warnings, deprecation
 // notices, etc.) that would otherwise drown the user's view of real progress.
@@ -38,11 +39,7 @@ export const broadcastSse = (job, payload) => {
 export const attachSseClient = (jobs, jobId, res) => {
   const job = jobs.get(jobId);
   if (!job) return false;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.writeHead(200, SSE_HEADERS);
   job.clients.push(res);
   // Replay the last broadcasted frame so a client that connected after a
   // `complete`/`error` (within the SSE_CLEANUP_DELAY_MS grace window) sees

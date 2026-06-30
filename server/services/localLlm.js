@@ -23,12 +23,12 @@
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync, createWriteStream } from 'fs'
-import { stat, mkdir, rm } from 'fs/promises'
+import { stat, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { PATHS, atomicWrite } from '../lib/fileUtils.js'
+import { PATHS, atomicWrite, ensureDir } from '../lib/fileUtils.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
@@ -456,7 +456,7 @@ async function upgradeOllamaMacApp(emit) {
 
   const tmpDir = join(tmpdir(), `portos-ollama-upgrade-${Date.now()}`)
   const zipPath = join(tmpDir, 'Ollama-darwin.zip')
-  await mkdir(tmpDir, { recursive: true })
+  await ensureDir(tmpDir)
 
   emit(`Downloading Ollama ${release.tag_name} (${Math.round(asset.size / 1024 / 1024)} MB)…`)
   // No timeout signal here: it would cover the entire multi-hundred-MB body

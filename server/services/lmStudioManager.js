@@ -8,7 +8,8 @@
 import { homedir } from 'os'
 import { join, basename, resolve, relative, isAbsolute, sep } from 'path'
 import { existsSync } from 'fs'
-import { readdir, stat, mkdir, copyFile, link, rm, rmdir } from 'fs/promises'
+import { readdir, stat, copyFile, link, rm, rmdir } from 'fs/promises'
+import { ensureDir } from '../lib/fileUtils.js'
 import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import {
@@ -664,7 +665,7 @@ async function importModelFromGguf({ lmstudioId, ggufPath, projectorPath, mode =
     return false
   }
   let linked = false
-  const r = await mkdir(destDir, { recursive: true })
+  const r = await ensureDir(destDir)
     .then(async () => {
       const base = basename(ggufPath)
       const destName = /\.gguf$/i.test(base) ? base : `${repo}.gguf`

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 
 export default function PublishedTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
@@ -149,7 +149,7 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4 text-right text-gray-400">
                           {post.commentCount ?? '-'}
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(post.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(post.publishedAt)}>
                           {timeAgo(post.publishedAt)}
                         </td>
                         <td className="py-2">
@@ -206,7 +206,7 @@ export default function PublishedTab({ agentId }) {
                             {comment.isReply ? 'reply' : 'comment'}
                           </span>
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(comment.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(comment.publishedAt)}>
                           {timeAgo(comment.publishedAt)}
                         </td>
                         <td className="py-2">

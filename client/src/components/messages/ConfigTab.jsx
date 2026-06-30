@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink, User } from 'lucide-react';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -350,7 +351,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     </div>
                     {account.lastSyncAt && (
                       <div className="text-xs text-gray-600">
-                        Last sync: {new Date(account.lastSyncAt).toLocaleString()} ({account.lastSyncStatus})
+                        Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
                       </div>
                     )}
                   </div>

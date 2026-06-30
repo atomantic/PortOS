@@ -9,7 +9,7 @@ import {
   getMortalLoomStatus,
   importMortalLoom
 } from '../../services/api';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatDateTime } from '../../utils/formatters';
 
 export function MortalLoomTab() {
   const icloudPathId = useId();
@@ -170,8 +170,8 @@ export function MortalLoomTab() {
           {status?.exists ? (
             <>
               <div>Size: {formatBytes(status.size)}</div>
-              <div>Modified: {status.mtime ? new Date(status.mtime).toLocaleString() : '—'}</div>
-              {lastImport && <div>Last import: {new Date(lastImport).toLocaleString()}</div>}
+              <div>Modified: {status.mtime ? formatDateTime(status.mtime) : '—'}</div>
+              {lastImport && <div>Last import: {formatDateTime(lastImport)}</div>}
             </>
           ) : (
             <div className="text-yellow-400">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>

@@ -16,6 +16,7 @@ import {
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { formatDateTime } from '../utils/formatters';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
   generateCategoryVariations, promoteVariationToCanon, autoSortBuckets,
@@ -3679,7 +3680,7 @@ function RenderTab({
             {runs.map((r) => (
               <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">
                 <span className="truncate">
-                  <span className="text-gray-500">{new Date(r.createdAt).toLocaleString()} —</span>{' '}
+                  <span className="text-gray-500">{formatDateTime(r.createdAt)} —</span>{' '}
                   {r.promptCount} prompt{r.promptCount === 1 ? '' : 's'}
                 </span>
                 {r.collectionId && (

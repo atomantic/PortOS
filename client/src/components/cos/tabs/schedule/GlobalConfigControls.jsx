@@ -4,6 +4,7 @@ import CronInput from '../../../CronInput';
 import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
+import { formatDateTime } from '../../../../utils/formatters';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { filterSelectableModels } from '../../../../utils/providers';
@@ -239,7 +240,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
                 const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
                 return (
                   <p className="text-xs text-port-warning mt-1">
-                    {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${new Date(p.nextRecheckAt).toLocaleString()}` : ''}
+                    {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
                   </p>
                 );
               }
@@ -250,7 +251,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             if (status.reason === 'perpetual-parked') {
               return (
                 <p className="text-xs text-port-warning mt-1">
-                  Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${new Date(status.nextRunAt).toLocaleString()}` : ''}
+                  Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
                 </p>
               );
             }
@@ -485,7 +486,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {status.completedAt && (
         <div className="text-xs text-gray-500">
-          Completed: {new Date(status.completedAt).toLocaleString()}
+          Completed: {formatDateTime(status.completedAt)}
         </div>
       )}
     </div>

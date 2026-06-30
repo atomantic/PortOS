@@ -103,7 +103,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `hfErrors.js` | Parse huggingface_hub gated-access errors: `extractGatedRepo(text)` → `owner/name` (or null) for the UI's license deep-link. Shared by the image runner and LoRA trainer. Pure. |
 | `hfCache.js` | HuggingFace Hub cache inspection (`inspectModelCache(repoId)` → `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`). Drives the inline "Available / Download" badge on the image + video gen forms. Also `verifyModelCache(repoId,{deep})` (structural safetensors-header + optional sha256 integrity check) and `repairModelCache(repoId,{deep})` (delete corrupt weight files so the download path re-fetches them) — power the "Repair model" banner. |
 | `hfDownload.js` | `downloadHfRepo({repo,onEvent})` returning `{promise,kill}` — spawns `scripts/hf_download_repo.py` in the FLUX.2 venv (fallback: mflux pythonPath) and emits SSE-friendly stage/progress/complete events. Powers the inline "Download" button next to the model picker. |
-| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})`, `openSseStream(res)` (`{send,safeEnd}` SSE boilerplate), `SSE_HEADERS` — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
+| `sseHeaders.js` | `SSE_HEADERS` — the canonical SSE response headers (incl. `X-Accel-Buffering:no`) in a dependency-free module so any producer (`sseDownload.js`, `sseUtils.js`) can share them without pulling in a heavier module's transitive imports. |
+| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})`, `openSseStream(res)` (`{send,safeEnd}` SSE boilerplate; uses `SSE_HEADERS` from `sseHeaders.js`) — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
 
 ## File & I/O
 
@@ -207,6 +208,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
 | `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
+| `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |

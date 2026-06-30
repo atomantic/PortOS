@@ -28,7 +28,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
-import { formatDurationMin } from '../../../utils/formatters';
+import { formatDurationMin, formatDateTime } from '../../../utils/formatters';
 
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
@@ -328,7 +328,7 @@ export default function LearningTab() {
                           <div className="font-mono truncate">{d.id}</div>
                           {d.dismissedAt && (
                             <div className="text-gray-600 text-[10px]">
-                              dismissed {new Date(d.dismissedAt).toLocaleString()}
+                              dismissed {formatDateTime(d.dismissedAt)}
                               {d.snapshot?.value !== undefined && (
                                 <span> · snapshot: {d.snapshot.value}{d.snapshot.kind === 'rate' ? '%' : ''}</span>
                               )}
@@ -865,7 +865,7 @@ export default function LearningTab() {
           {/* Last Updated */}
           {learning.lastUpdated && (
             <div className="text-xs text-gray-600 text-center pt-4 border-t border-port-border">
-              Learning data last updated: {new Date(learning.lastUpdated).toLocaleString()}
+              Learning data last updated: {formatDateTime(learning.lastUpdated)}
             </div>
           )}
         </>

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trash2, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import * as api from '../services/api';
-import { formatTime, formatRuntime, formatBytes } from '../utils/formatters';
+import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 import { writeClipboardSilently } from '../lib/clipboard';
@@ -322,7 +322,7 @@ export function RunsHistoryPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-sm">
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started</div>
-                          <div className="text-gray-300">{new Date(run.startTime).toLocaleString()}</div>
+                          <div className="text-gray-300">{formatDateTime(run.startTime)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
