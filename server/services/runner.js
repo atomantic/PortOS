@@ -282,20 +282,26 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
       // The timeout was already cleared and the child has closed, so callers
       // waiting on onComplete would hang forever if we only logged. Settle them
       // with failure metadata so a disk/hook failure surfaces as a failed run.
+      // The hook and onComplete are isolated from each other — a throwing
+      // onRunFailed must NOT prevent onComplete from settling the caller.
+      const failMetadata = {
+        endTime: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        exitCode: code,
+        success: false,
+        error: `Run finalization failed: ${err.message}`,
+        errorCategory: 'finalization_error',
+        outputSize: Buffer.byteLength(output),
+      };
       try {
-        const failMetadata = {
-          endTime: new Date().toISOString(),
-          duration: Date.now() - startTime,
-          exitCode: code,
-          success: false,
-          error: `Run finalization failed: ${err.message}`,
-          errorCategory: 'finalization_error',
-          outputSize: Buffer.byteLength(output),
-        };
         runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output);
+      } catch (hookErr) {
+        console.error(`❌ Run ${runId} onRunFailed hook threw during recovery: ${hookErr.message}`);
+      }
+      try {
         onComplete?.(failMetadata);
       } catch (settleErr) {
-        console.error(`❌ Run ${runId} failed to settle after close handler error: ${settleErr.message}`);
+        console.error(`❌ Run ${runId} onComplete threw during recovery: ${settleErr.message}`);
       }
     }
   });
