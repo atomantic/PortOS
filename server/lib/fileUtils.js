@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { access, appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -184,6 +184,18 @@ export async function atomicWrite(filePath, data) {
   await ensureDir(dirname(filePath));
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);
+  // Preserve the destination's existing permission bits. A plain
+  // writeFile(existing) truncated the inode in place and kept its mode, but
+  // atomicWrite creates a fresh temp inode at the umask default (typically
+  // 0644) and renames it over the target — which would silently widen a
+  // hand-restricted file (e.g. a `chmod 600` OAuth tokens.json) on every
+  // rewrite. Mirror the destination's mode onto the temp file before the
+  // rename so atomicWrite is a true drop-in for the truncate pattern. New
+  // files (stat fails with ENOENT) keep the umask default, exactly as before.
+  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, () => null);
+  if (existingMode !== null) {
+    await chmod(tmp, existingMode).catch(() => {});
+  }
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.

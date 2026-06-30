@@ -21,6 +21,15 @@ function makeFsPromisesStore() {
     }),
     unlink: vi.fn(async (path) => { delete store[path]; }),
     mkdir: vi.fn(async () => {}),
+    // atomicWrite stats the destination to mirror its mode onto the temp file
+    // before renaming (#1837). The in-memory store doesn't track modes, so
+    // report a default for existing paths and ENOENT for absent ones; chmod is
+    // a no-op here.
+    stat: vi.fn(async (path) => {
+      if (!(path in store)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { mode: 0o644 };
+    }),
+    chmod: vi.fn(async () => {}),
   };
 }
 
