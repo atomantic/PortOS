@@ -20,7 +20,16 @@
  */
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { DEFAULT_ENGINE_ID, isEngineReady } from '../pipeline/musicGen.js';
+import { ENGINES, DEFAULT_ENGINE_ID, isEngineReady } from '../pipeline/musicGen.js';
+
+// First provisioned engine in ENGINES' declared order (musicgen, audioldm2,
+// acestep), so a project where only a non-default local backend is installed
+// (e.g. AudioLDM2 but not MusicGen) still gets a first-pass bed instead of
+// silently skipping on a hardcoded DEFAULT_ENGINE_ID check. Returns null when
+// nothing is provisioned.
+function firstReadyEngineId() {
+  return Object.keys(ENGINES).find((id) => isEngineReady(id)) || null;
+}
 
 // Keep the derived prompt bounded — a music-gen prompt is a short mood/style
 // brief, not the full treatment. Mirrors PORTRAIT_PROMPT_CHARS' "enough
@@ -56,33 +65,37 @@ export function buildMusicBedPrompt(project) {
  * Returns `{ mode, enqueued, jobId? , reason? }`. `mode` echoes the resolved
  * engine id (even when skipped) so the response shape stays predictable.
  */
-export async function enqueueFirstPassMusicBed(project, { engine = DEFAULT_ENGINE_ID } = {}) {
+export async function enqueueFirstPassMusicBed(project, { engine } = {}) {
   if (!project || typeof project !== 'object' || !project.id) {
-    return { mode: engine, enqueued: false, reason: 'no-project' };
+    return { mode: engine || DEFAULT_ENGINE_ID, enqueued: false, reason: 'no-project' };
   }
   // Never clobber an existing bed — re-running auto-cast with the toggle on
   // stays idempotent, same posture as firstPassGen's portrait-exists check.
   if (project.musicBed && typeof project.musicBed.filename === 'string' && project.musicBed.filename) {
-    return { mode: engine, enqueued: false, reason: 'has-music-bed' };
+    return { mode: engine || DEFAULT_ENGINE_ID, enqueued: false, reason: 'has-music-bed' };
   }
-  if (!isEngineReady(engine)) {
-    return { mode: engine, enqueued: false, reason: 'engine-not-ready' };
+  // Resolve the engine once the project is known to need a render. An
+  // explicit `engine` wins; otherwise prefer any provisioned local backend
+  // over assuming the default (musicgen) is the one installed.
+  const resolvedEngine = engine || firstReadyEngineId() || DEFAULT_ENGINE_ID;
+  if (!isEngineReady(resolvedEngine)) {
+    return { mode: resolvedEngine, enqueued: false, reason: 'engine-not-ready' };
   }
   const prompt = buildMusicBedPrompt(project);
   if (!prompt) {
-    return { mode: engine, enqueued: false, reason: 'no-prompt' };
+    return { mode: resolvedEngine, enqueued: false, reason: 'no-prompt' };
   }
   const queued = enqueueJob({
     kind: 'audio',
     params: {
       prompt,
-      engine,
+      engine: resolvedEngine,
       // Tag the job so the durable creativeDirectorMusicBedHook files the
       // finished track onto this project's `musicBed` field — no mounted
       // client required.
       creativeDirectorMusicBed: { projectId: project.id },
     },
   });
-  console.log(`🎼 CD first-pass music bed: queued for project ${project.id.slice(0, 8)} (${engine})`);
-  return { mode: engine, enqueued: true, jobId: queued.jobId };
+  console.log(`🎼 CD first-pass music bed: queued for project ${project.id.slice(0, 8)} (${resolvedEngine})`);
+  return { mode: resolvedEngine, enqueued: true, jobId: queued.jobId };
 }

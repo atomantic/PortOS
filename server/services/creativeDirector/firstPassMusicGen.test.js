@@ -4,6 +4,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(),
 }));
 vi.mock('../pipeline/musicGen.js', () => ({
+  ENGINES: { musicgen: {}, audioldm2: {}, acestep: {} },
   DEFAULT_ENGINE_ID: 'musicgen',
   isEngineReady: vi.fn(),
 }));
@@ -90,6 +91,14 @@ describe('enqueueFirstPassMusicBed', () => {
     expect(await enqueueFirstPassMusicBed(null)).toEqual({ mode: 'musicgen', enqueued: false, reason: 'no-project' });
     expect(await enqueueFirstPassMusicBed({ name: 'no id' })).toEqual({ mode: 'musicgen', enqueued: false, reason: 'no-project' });
     expect(isEngineReady).not.toHaveBeenCalled();
+  });
+
+  it('prefers a ready non-default engine over the default when the default is not provisioned', async () => {
+    isEngineReady.mockImplementation((id) => id === 'audioldm2');
+    const project = { id: 'proj-1', name: 'Neon Drift', styleSpec: 'synthwave' };
+    const out = await enqueueFirstPassMusicBed(project);
+    expect(out).toEqual({ mode: 'audioldm2', enqueued: true, jobId: 'job-1' });
+    expect(enqueueJob.mock.calls[0][0].params.engine).toBe('audioldm2');
   });
 
   it('honors an explicit engine override', async () => {

@@ -17,7 +17,7 @@
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { updateProject } from './creativeDirector/local.js';
+import { getProject, updateProject } from './creativeDirector/local.js';
 
 const hook = createMediaJobImageHook({
   label: 'CD music-bed',
@@ -45,12 +45,22 @@ const hook = createMediaJobImageHook({
     };
   },
   // The project may have been deleted between enqueue and completion —
-  // updateProject throws 404 in that case; treat it the same as the catalog
-  // hook's "gone" case (best-effort, never surfaces past the factory's catch).
-  attach: ({ projectId, filename, durationSec, engine, modelId }) =>
-    updateProject(projectId, {
+  // getProject/updateProject throw 404 in that case; treat it the same as the
+  // catalog hook's "gone" case (best-effort, never surfaces past the
+  // factory's catch). Re-read the CURRENT project inside this serialized
+  // section first: a project only has one music-bed slot, so if a second
+  // first-pass request queued a duplicate job before the first one finished,
+  // the first completion to attach wins and this later one must not clobber
+  // it (return null — the factory's "nothing applied" signal — instead of
+  // overwriting the existing musicBed).
+  attach: async ({ projectId, filename, durationSec, engine, modelId }) => {
+    const current = await getProject(projectId);
+    if (current?.musicBed?.filename) return null;
+    await updateProject(projectId, {
       musicBed: { filename, durationSec, engine, modelId, generatedAt: new Date().toISOString() },
-    }).then(() => 'attached'),
+    });
+    return 'attached';
+  },
   onAttached: ({ projectId, filename }) => {
     console.log(`🎼 CD project ${projectId.slice(0, 8)} ← music bed ${filename}`);
   },

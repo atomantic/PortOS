@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Mock the project store so the hook's tag-decode + serialize + attach logic
-// is exercised without touching disk or a DB. `updateProject` is reprogrammed
-// per-test to stand in for the durable attach.
+// is exercised without touching disk or a DB. `updateProject`/`getProject` are
+// reprogrammed per-test to stand in for the durable attach + its idempotency
+// re-read.
 const updateProject = vi.fn(async (id, patch) => ({ id, ...patch }));
-vi.mock('./creativeDirector/local.js', () => ({ updateProject }));
+const getProject = vi.fn(async () => ({ id: 'proj-1' }));
+vi.mock('./creativeDirector/local.js', () => ({ updateProject, getProject }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const hook = await import('./creativeDirectorMusicBedHook.js');
@@ -33,6 +35,8 @@ describe('creativeDirectorMusicBedHook', () => {
     hook.initCreativeDirectorMusicBedHook();
     updateProject.mockReset();
     updateProject.mockImplementation(async (id, patch) => ({ id, ...patch }));
+    getProject.mockReset();
+    getProject.mockImplementation(async (id) => ({ id }));
   });
 
   afterEach(() => {
@@ -75,11 +79,20 @@ describe('creativeDirectorMusicBedHook', () => {
   });
 
   it('does not throw when the attach fails — project deleted mid-render', async () => {
-    updateProject.mockRejectedValueOnce(Object.assign(new Error('Project not found'), { status: 404 }));
+    getProject.mockRejectedValueOnce(Object.assign(new Error('Project not found'), { status: 404 }));
     mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: tag() } }));
-    await waitFor(() => updateProject.mock.calls.length > 0);
+    await waitFor(() => getProject.mock.calls.length > 0);
     await new Promise((r) => setTimeout(r, 20));
     // No throw escapes the listener; nothing further to assert beyond "didn't crash".
+    expect(updateProject).not.toHaveBeenCalled();
+  });
+
+  it('does not clobber an already-attached music bed — re-checks inside the serialized section', async () => {
+    getProject.mockImplementationOnce(async (id) => ({ id, musicBed: { filename: 'already-there.wav' } }));
+    mediaJobEvents.emit('completed', completedAudioJob({ params: { creativeDirectorMusicBed: tag() } }));
+    await waitFor(() => getProject.mock.calls.length > 0);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(updateProject).not.toHaveBeenCalled();
   });
 
   it('serializes attaches for the same project so concurrent completions do not clobber', async () => {
