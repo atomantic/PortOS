@@ -90,6 +90,7 @@ function TerminalHotKeys({ sendCtrlC, handlePaste, sendNavKey, showPasteInput, s
         onClick={sendCtrlC}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 rounded text-xs font-mono transition-colors border border-red-500/30 min-h-[40px] shrink-0"
         title="Send Ctrl+C interrupt"
+        aria-label="Send Ctrl+C interrupt"
       >
         <OctagonX size={14} />
         <span className="hidden sm:inline">Ctrl+C</span>
@@ -98,6 +99,7 @@ function TerminalHotKeys({ sendCtrlC, handlePaste, sendNavKey, showPasteInput, s
         onClick={handlePaste}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-blue-300 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px] shrink-0"
         title="Paste clipboard contents"
+        aria-label="Paste clipboard contents"
       >
         <ClipboardPaste size={14} />
         <span className="hidden sm:inline">Paste</span>
@@ -898,6 +900,7 @@ export default function Shell() {
             onClick={() => setIsFullscreen(true)}
             className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
             title="Fullscreen terminal"
+            aria-label="Fullscreen terminal"
           >
             <Maximize2 size={16} />
             <span className="hidden sm:inline">Fullscreen</span>
@@ -1070,6 +1073,7 @@ export default function Shell() {
             onClick={() => setIsFullscreen(false)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs transition-colors border border-port-border min-h-[40px] shrink-0"
             title="Exit fullscreen"
+            aria-label="Exit fullscreen"
           >
             <Minimize2 size={14} />
             <span className="hidden sm:inline">Exit</span>
