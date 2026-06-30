@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-reverse-outline', 'pipeline-reverse-outline.md');
+export default makeSeedMigration('pipeline-reverse-outline');

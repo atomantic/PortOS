@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-dialogue-pleasantries', 'pipeline-editorial-dialogue-pleasantries.md');
+export default makeSeedMigration('pipeline-editorial-dialogue-pleasantries');

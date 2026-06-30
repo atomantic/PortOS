@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-info-dumping', 'pipeline-editorial-info-dumping.md');
+export default makeSeedMigration('pipeline-editorial-info-dumping');

@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-eyeline-match', 'pipeline-editorial-eyeline-match.md');
+export default makeSeedMigration('pipeline-editorial-eyeline-match');

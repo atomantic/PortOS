@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-plot-structure', 'pipeline-editorial-plot-structure.md');
+export default makeSeedMigration('pipeline-editorial-plot-structure');

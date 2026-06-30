@@ -13,4 +13,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-arc-regression', 'pipeline-editorial-arc-regression.md');
+export default makeSeedMigration('pipeline-editorial-arc-regression');

@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-comic-prose-sync', 'pipeline-editorial-comic-prose-sync.md');
+export default makeSeedMigration('pipeline-editorial-comic-prose-sync');

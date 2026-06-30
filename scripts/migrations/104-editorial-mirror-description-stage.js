@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-mirror-description', 'pipeline-editorial-mirror-description.md');
+export default makeSeedMigration('pipeline-editorial-mirror-description');

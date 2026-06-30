@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-character-consistency', 'pipeline-editorial-character-consistency.md');
+export default makeSeedMigration('pipeline-editorial-character-consistency');

@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-voice-consistency', 'pipeline-editorial-voice-consistency.md');
+export default makeSeedMigration('pipeline-editorial-voice-consistency');

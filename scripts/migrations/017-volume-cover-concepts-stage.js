@@ -21,4 +21,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-volume-cover-concepts', 'pipeline-volume-cover-concepts.md', { logPrefix: 'volume-cover-concepts' });
+export default makeSeedMigration('pipeline-volume-cover-concepts');

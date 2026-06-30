@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-fact-accuracy', 'pipeline-editorial-fact-accuracy.md');
+export default makeSeedMigration('pipeline-editorial-fact-accuracy');

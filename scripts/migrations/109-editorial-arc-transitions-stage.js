@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-arc-transitions', 'pipeline-editorial-arc-transitions.md');
+export default makeSeedMigration('pipeline-editorial-arc-transitions');

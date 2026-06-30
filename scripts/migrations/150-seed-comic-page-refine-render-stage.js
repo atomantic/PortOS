@@ -23,4 +23,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-comic-page-refine-render', 'pipeline-comic-page-refine-render.md', { logPrefix: 'comic-page refine stage' });
+export default makeSeedMigration('pipeline-comic-page-refine-render');

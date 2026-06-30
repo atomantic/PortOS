@@ -13,4 +13,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-pacing-escalation-curve', 'pipeline-editorial-pacing-escalation-curve.md');
+export default makeSeedMigration('pipeline-editorial-pacing-escalation-curve');

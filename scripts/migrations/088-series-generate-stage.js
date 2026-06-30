@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-series-generate', 'pipeline-series-generate.md');
+export default makeSeedMigration('pipeline-series-generate');

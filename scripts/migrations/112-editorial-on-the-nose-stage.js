@@ -13,4 +13,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-on-the-nose', 'pipeline-editorial-on-the-nose.md');
+export default makeSeedMigration('pipeline-editorial-on-the-nose');

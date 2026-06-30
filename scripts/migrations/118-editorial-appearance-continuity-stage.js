@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-appearance-continuity', 'pipeline-editorial-appearance-continuity.md');
+export default makeSeedMigration('pipeline-editorial-appearance-continuity');

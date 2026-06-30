@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-chekhov', 'pipeline-editorial-chekhov.md');
+export default makeSeedMigration('pipeline-editorial-chekhov');

@@ -17,4 +17,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-canon-describe-from-prose', 'pipeline-canon-describe-from-prose.md');
+export default makeSeedMigration('pipeline-canon-describe-from-prose');

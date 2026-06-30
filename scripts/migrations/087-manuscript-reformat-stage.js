@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('manuscript-reformat', 'manuscript-reformat.md');
+export default makeSeedMigration('manuscript-reformat');

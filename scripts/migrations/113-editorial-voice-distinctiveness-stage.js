@@ -13,4 +13,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-voice-distinctiveness', 'pipeline-editorial-voice-distinctiveness.md');
+export default makeSeedMigration('pipeline-editorial-voice-distinctiveness');

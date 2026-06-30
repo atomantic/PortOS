@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-script-verify', 'pipeline-script-verify.md');
+export default makeSeedMigration('pipeline-script-verify');

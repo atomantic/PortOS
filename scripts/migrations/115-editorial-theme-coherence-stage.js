@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-theme-coherence', 'pipeline-editorial-theme-coherence.md');
+export default makeSeedMigration('pipeline-editorial-theme-coherence');

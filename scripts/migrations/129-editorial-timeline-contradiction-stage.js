@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-timeline-contradiction', 'pipeline-editorial-timeline-contradiction.md');
+export default makeSeedMigration('pipeline-editorial-timeline-contradiction');

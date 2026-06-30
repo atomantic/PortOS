@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-continuity-bible', 'pipeline-continuity-bible.md');
+export default makeSeedMigration('pipeline-continuity-bible');

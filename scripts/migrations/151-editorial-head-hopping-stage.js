@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-head-hopping', 'pipeline-editorial-head-hopping.md');
+export default makeSeedMigration('pipeline-editorial-head-hopping');

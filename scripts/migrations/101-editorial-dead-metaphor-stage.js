@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-dead-metaphor', 'pipeline-editorial-dead-metaphor.md');
+export default makeSeedMigration('pipeline-editorial-dead-metaphor');

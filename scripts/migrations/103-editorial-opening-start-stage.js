@@ -13,4 +13,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-opening-start', 'pipeline-editorial-opening-start.md');
+export default makeSeedMigration('pipeline-editorial-opening-start');

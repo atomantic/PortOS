@@ -16,4 +16,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-comic-page-turn', 'pipeline-editorial-comic-page-turn.md');
+export default makeSeedMigration('pipeline-editorial-comic-page-turn');

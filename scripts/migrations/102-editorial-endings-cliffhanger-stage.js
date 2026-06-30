@@ -16,4 +16,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-endings-cliffhanger', 'pipeline-editorial-endings-cliffhanger.md');
+export default makeSeedMigration('pipeline-editorial-endings-cliffhanger');

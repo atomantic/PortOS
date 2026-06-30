@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-analysis', 'pipeline-editorial-analysis.md', { logPrefix: 'editorial-analysis' });
+export default makeSeedMigration('pipeline-editorial-analysis');

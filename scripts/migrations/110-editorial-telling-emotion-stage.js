@@ -14,4 +14,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-telling-emotion', 'pipeline-editorial-telling-emotion.md');
+export default makeSeedMigration('pipeline-editorial-telling-emotion');

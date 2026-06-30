@@ -9,4 +9,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-comic-cover-concepts', 'pipeline-comic-cover-concepts.md', { logPrefix: 'comic-cover-concepts' });
+export default makeSeedMigration('pipeline-comic-cover-concepts');

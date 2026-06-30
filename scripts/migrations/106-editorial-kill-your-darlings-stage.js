@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-kill-your-darlings', 'pipeline-editorial-kill-your-darlings.md');
+export default makeSeedMigration('pipeline-editorial-kill-your-darlings');

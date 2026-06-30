@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-climax-agency', 'pipeline-editorial-climax-agency.md');
+export default makeSeedMigration('pipeline-editorial-climax-agency');

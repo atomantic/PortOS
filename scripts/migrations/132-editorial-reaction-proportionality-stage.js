@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-reaction-proportionality', 'pipeline-editorial-reaction-proportionality.md');
+export default makeSeedMigration('pipeline-editorial-reaction-proportionality');

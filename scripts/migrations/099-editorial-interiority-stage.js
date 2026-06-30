@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-interiority', 'pipeline-editorial-interiority.md');
+export default makeSeedMigration('pipeline-editorial-interiority');

@@ -12,4 +12,4 @@
 
 import { makeSeedMigration } from './_seedStageHelpers.js';
 
-export default makeSeedMigration('pipeline-editorial-unmodeled-names', 'pipeline-editorial-unmodeled-names.md');
+export default makeSeedMigration('pipeline-editorial-unmodeled-names');
