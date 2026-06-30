@@ -164,29 +164,33 @@ describe('executeCliRun — Codex sentinel suppression', () => {
 });
 
 describe('executeCliRun — close handler crash guard', () => {
-  it('does not crash and still settles the caller when a metadata write fails on close', async () => {
+  // Drive a codex run whose first write (output) succeeds and second write
+  // (metadata) rejects, so the close handler's recovery path runs. Returns the
+  // onComplete spy + console.error spy for assertions.
+  async function runWithMetadataWriteFailure(runId, { hooks } = {}) {
     const child = makeChild();
     spawn.mockReturnValue(child);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    // First write (output) succeeds, second write (metadata) rejects — the
-    // handler runs outside the request lifecycle, so an uncaught throw here
-    // would crash the Node process.
     writeFile
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('ENOSPC: disk full'));
+    if (hooks) setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks });
 
     const provider = {
       id: 'codex', command: 'codex', args: [],
       defaultModel: 'codex-configured-default', timeout: 5000,
     };
-
     const onComplete = vi.fn();
-    await executeCliRun({ runId: 'run-write-fail', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+    await executeCliRun({ runId, provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
 
     child.stdout.emit('data', Buffer.from('output'));
     child.emit('close', 0);
-    // Let the detached close handler settle.
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve)); // let the detached handler settle
+    return { onComplete, errorSpy };
+  }
+
+  it('does not crash and still settles the caller when a metadata write fails on close', async () => {
+    const { onComplete, errorSpy } = await runWithMetadataWriteFailure('run-write-fail');
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('run-write-fail close handler error'));
     // The caller must still be settled with failure metadata, not left hanging.
@@ -196,30 +200,11 @@ describe('executeCliRun — close handler crash guard', () => {
   });
 
   it('still settles onComplete when the recovery onRunFailed hook itself throws', async () => {
-    const child = makeChild();
-    spawn.mockReturnValue(child);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    // Metadata write fails, AND the recovery onRunFailed hook throws — the
+    // Metadata write fails AND the recovery onRunFailed hook throws — the
     // caller must STILL be settled (the hook must not block onComplete).
-    writeFile
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('ENOSPC: disk full'));
-    setAIToolkit(fakeToolkit(), {
-      dataDir: '/tmp/test-runner',
+    const { onComplete, errorSpy } = await runWithMetadataWriteFailure('run-hook-throws', {
       hooks: { onRunFailed: () => { throw new Error('hook boom'); } },
     });
-
-    const provider = {
-      id: 'codex', command: 'codex', args: [],
-      defaultModel: 'codex-configured-default', timeout: 5000,
-    };
-
-    const onComplete = vi.fn();
-    await executeCliRun({ runId: 'run-hook-throws', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
-
-    child.stdout.emit('data', Buffer.from('output'));
-    child.emit('close', 0);
-    await new Promise((resolve) => setImmediate(resolve));
 
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });

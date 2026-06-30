@@ -39,6 +39,18 @@ export function setAIToolkit(toolkit, config = {}) {
   runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
 }
 
+// Invoke a completion hook / callback so that a throw is logged but never
+// propagates — these run at out-of-request boundaries where an uncaught throw
+// is an unhandled rejection that crashes the process. Each call is isolated so
+// a throwing hook can't prevent a later `onComplete` from settling the caller.
+function safeSettle(fn, label) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(`❌ ${label} threw during recovery: ${err.message}`);
+  }
+}
+
 export async function createRun(options) {
   // The toolkit's runner emits its own "🤖 AI run [source]: provider/model"
   // line — don't duplicate it here.
@@ -233,8 +245,11 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
     await writeFile(outputPath, output).catch(() => {});
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
-    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
-    onComplete?.(metadata);
+    // Isolate the hook from onComplete — a throwing onRunFailed must not block
+    // the caller from settling, and an uncaught throw here would crash the
+    // process (this runs outside the request lifecycle).
+    safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
   });
 
   childProcess.on('close', async (code) => {
@@ -293,16 +308,8 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
         errorCategory: 'finalization_error',
         outputSize: Buffer.byteLength(output),
       };
-      try {
-        runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output);
-      } catch (hookErr) {
-        console.error(`❌ Run ${runId} onRunFailed hook threw during recovery: ${hookErr.message}`);
-      }
-      try {
-        onComplete?.(failMetadata);
-      } catch (settleErr) {
-        console.error(`❌ Run ${runId} onComplete threw during recovery: ${settleErr.message}`);
-      }
+      safeSettle(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+      safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
     }
   });
 

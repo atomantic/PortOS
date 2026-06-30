@@ -589,6 +589,11 @@ export async function spawnDirectly({
   });
 
   claudeProcess.on('close', async (code) => {
+    // Runs outside the request lifecycle — a throw from outputBatcher.flush,
+    // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
+    // as an unhandled rejection and crash the process. The inner try/finally
+    // only covers finalizeAgent's cleanup; this outer guard is the crash net.
+    try {
     clearTimeout(initializationTimeout);
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
@@ -711,6 +716,11 @@ export async function spawnDirectly({
       }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
+      activeAgents.delete(agentId);
+    }
+    } catch (handlerErr) {
+      console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
+      unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
     }
   });
