@@ -15,40 +15,38 @@
  * back to `'dev'` and the socket emission is a no-op match.
  */
 
-import { existsSync, readFileSync, statSync } from 'fs';
-import { readFile, stat } from 'fs/promises';
+import { existsSync, readFileSync, statSync, watch } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const INDEX_PATH = join(__dirname, '..', '..', 'client', 'dist', 'index.html');
+const DIST_DIR = dirname(INDEX_PATH);
 
-// Cache keyed on the index.html mtime — Vite rewrites this file every build,
-// so a changed mtime means new chunk filenames inside. A pure module-level
-// cache would keep serving the old stamped HTML (and reporting the old build
-// id over the socket) after `npm run build`, so the browser would request
-// chunk filenames that no longer exist on disk → 404 → black page.
+// Cached snapshot of the stamped HTML + its build id, plus an event-driven
+// staleness flag. Vite rewrites index.html every build (new chunk filenames
+// inside), so a pure module-level cache would keep serving the old stamped HTML
+// — the browser would then request chunk filenames that no longer exist on disk
+// → 404 → black page.
 //
-// The cache is refreshed OFF the request hot path: the synchronous getters
-// return the cached snapshot immediately and kick a non-blocking `fs.stat` +
-// `fs.readFile` refresh. The previous implementation `statSync`'d on every SPA
-// navigation, blocking the event loop for that I/O on each request. The first
-// call primes the cache synchronously (server boot) so the very first response
-// is correct; thereafter a rebuild is picked up on the next request after the
-// async refresh settles (sub-millisecond on a local disk). Refreshes are
-// deduped (one in flight) and throttled so a request burst can't fan out a
-// `stat` per request.
+// The previous design `statSync`'d index.html on EVERY SPA navigation to detect
+// a rebuild. That blocked the event loop for that I/O on each request. Instead
+// we watch the dist directory: any write to index.html flags the cache stale,
+// and the next getter recomputes synchronously exactly once. So a request never
+// pays a stat, yet a rebuild-while-running is reflected immediately on the very
+// next read — the served HTML always matches the on-disk chunks (no stale-chunk
+// window). In production the server is restarted as part of an update (the
+// client is rebuilt while the process is down), so the boot-time prime already
+// reads the fresh bundle; the watcher only matters for a manual rebuild against
+// a long-running dev server.
 let cached = null;
-let refreshing = null; // in-flight refresh promise, or null
-let lastRefreshAt = 0; // throttle clock (ms)
-
-const REFRESH_THROTTLE_MS = 1000;
+let dirty = false;
+let watcher = null;
 
 const DEV_SNAPSHOT = { id: 'dev', html: null, mtimeMs: 0 };
 
-// Pure: hash + stamp the meta tag into the html. Shared by the sync prime and
-// the async refresh so the two paths can't drift.
+// Pure: hash + stamp the meta tag into the html.
 function deriveFromHtml(html, mtimeMs) {
   const id = createHash('sha256').update(html).digest('hex').slice(0, 12);
   // Inject the meta tag once. Idempotent: replace if already present
@@ -62,47 +60,49 @@ function deriveFromHtml(html, mtimeMs) {
   return { id, html: stamped, mtimeMs };
 }
 
-// Synchronous prime — used once on the first getter call (server boot) so the
-// cache is never empty when a value is read. One sync stat+read here is fine; it
-// happens at most once, not per request.
-function primeSync() {
-  if (!existsSync(INDEX_PATH)) {
-    cached = DEV_SNAPSHOT;
-    return cached;
-  }
+// Synchronous (re)compute — reads index.html once. Runs at boot (the first
+// getter call) and again only after the watcher flags a rebuild, NOT per
+// request. The mtime is captured purely for cache-equality diagnostics.
+function computeSync() {
+  if (!existsSync(INDEX_PATH)) return DEV_SNAPSHOT;
   const mtimeMs = statSync(INDEX_PATH).mtimeMs;
-  cached = deriveFromHtml(readFileSync(INDEX_PATH, 'utf8'), mtimeMs);
-  return cached;
+  return deriveFromHtml(readFileSync(INDEX_PATH, 'utf8'), mtimeMs);
 }
 
-// Async refresh — recompute only when the mtime moved. Runs off the request
-// path so its I/O never blocks the event loop for the current response.
-async function refresh() {
-  const s = await stat(INDEX_PATH).catch(() => null);
-  if (!s) {
-    if (!cached || cached.id !== 'dev') cached = DEV_SNAPSHOT;
-    return cached;
+// Watch the dist DIRECTORY (Vite rewrites index.html via atomic rename, which a
+// file-level watch loses after the first swap). Any event touching index.html
+// marks the cache stale. Lazily armed on first read so it costs nothing in
+// `npm run dev` (no dist dir) and re-arms if the directory appears later.
+function ensureWatcher() {
+  if (watcher || !existsSync(DIST_DIR)) return;
+  // fs.watch can throw on platforms/filesystems without change notification;
+  // a failure just means we fall back to the boot-time prime (correct for the
+  // production restart-on-update flow), so swallow and leave watcher null.
+  try {
+    watcher = watch(DIST_DIR, (_event, filename) => {
+      // filename is null on some platforms — treat any event as a possible
+      // index.html change rather than miss a rebuild.
+      if (!filename || filename === 'index.html') dirty = true;
+    });
+    watcher.unref(); // never keep the event loop alive
+    watcher.on('error', () => { closeWatcher(); }); // re-arm on next read
+  } catch {
+    watcher = null;
   }
-  if (!cached || cached.mtimeMs !== s.mtimeMs) {
-    const html = await readFile(INDEX_PATH, 'utf8').catch(() => null);
-    if (html != null) cached = deriveFromHtml(html, s.mtimeMs);
-  }
-  return cached;
 }
 
-// Kick a deduped, throttled background refresh. Non-blocking — the caller reads
-// the (possibly one-request-stale) cache while this settles.
-function scheduleRefresh() {
-  if (refreshing) return;
-  const now = Date.now();
-  if (now - lastRefreshAt < REFRESH_THROTTLE_MS) return;
-  lastRefreshAt = now;
-  refreshing = refresh().finally(() => { refreshing = null; });
+function closeWatcher() {
+  if (!watcher) return;
+  try { watcher.close(); } catch { /* already closed */ }
+  watcher = null;
 }
 
 function ensureFresh() {
-  if (!cached) return primeSync();
-  scheduleRefresh();
+  ensureWatcher();
+  if (!cached || dirty) {
+    cached = computeSync();
+    dirty = false;
+  }
   return cached;
 }
 
@@ -115,16 +115,20 @@ export function getStampedIndexHtml() {
 }
 
 /**
- * Force a refresh and resolve the resulting snapshot. Bypasses the throttle so
- * callers that need the freshest value right now (boot warm-up, tests) can
- * `await` it. The hot-path getters never call this — they stay non-blocking via
- * `scheduleRefresh`.
+ * Force a synchronous recompute and return the resulting snapshot. The hot-path
+ * getters recompute only when the watcher flags a rebuild; this is the explicit
+ * hook for callers that want to recompute right now (boot warm-up, tests).
  *
- * @returns {Promise<{id: string, html: string|null, mtimeMs: number}>}
+ * @returns {{id: string, html: string|null, mtimeMs: number}}
  */
-export async function refreshBuildId() {
-  if (!cached) primeSync();
-  lastRefreshAt = Date.now();
-  refreshing = refresh().finally(() => { refreshing = null; });
-  return refreshing;
+export function refreshBuildId() {
+  cached = computeSync();
+  dirty = false;
+  return cached;
+}
+
+/** Test-only: tear down the dist watcher so a `vi.resetModules()` suite doesn't
+ *  leak watch handles across re-imports. */
+export function __closeWatcherForTests() {
+  closeWatcher();
 }
