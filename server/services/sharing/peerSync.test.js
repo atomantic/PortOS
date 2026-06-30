@@ -1062,8 +1062,11 @@ describe('peerSync', () => {
         fullSync: true,
         syncCategories: {},
       });
-      await new Promise((r) => setTimeout(r, 30));
-      expect(vi.mocked(enqueueReciprocalSync)).toHaveBeenCalledWith('local-1');
+      // Poll until the async handler resolves peer identity and enqueues the
+      // mirror — a fixed sleep raced the call on a loaded CI runner (#1860).
+      await vi.waitFor(() =>
+        expect(vi.mocked(enqueueReciprocalSync)).toHaveBeenCalledWith('local-1')
+      );
     });
 
     it('does NOT reciprocate a non-full-sync peer on peer:online (preserves prior behavior)', async () => {
@@ -1073,6 +1076,13 @@ describe('peerSync', () => {
       vi.mocked(enqueueReciprocalSync).mockClear();
       installPeerSyncListener();
       vi.mocked(listUniverses).mockResolvedValue([]);
+      // Emit the non-full-sync subject first, then a full-sync *barrier* peer.
+      // Both run the same async handler pipeline (backfill → retryPending →
+      // fullSync check), and the barrier — emitted second and doing equal-or-
+      // more work — only calls enqueueReciprocalSync as its final step. So once
+      // the barrier's reciprocal call lands, the subject's handler has provably
+      // reached and *skipped* its own fullSync check. This replaces a fixed
+      // sleep that could false-pass merely because the absent call was slow.
       instanceEvents.emit('peer:online', {
         id: 'local-2',
         instanceId: 'peer-b',
@@ -1082,8 +1092,20 @@ describe('peerSync', () => {
         directions: ['outbound'],
         syncCategories: { universe: true },
       });
-      await new Promise((r) => setTimeout(r, 30));
-      expect(vi.mocked(enqueueReciprocalSync)).not.toHaveBeenCalled();
+      instanceEvents.emit('peer:online', {
+        id: 'local-barrier',
+        instanceId: 'peer-barrier',
+        name: 'Barrier',
+        enabled: true,
+        syncEnabled: true,
+        directions: ['outbound'],
+        fullSync: true,
+        syncCategories: {},
+      });
+      await vi.waitFor(() =>
+        expect(vi.mocked(enqueueReciprocalSync)).toHaveBeenCalledWith('local-barrier')
+      );
+      expect(vi.mocked(enqueueReciprocalSync)).not.toHaveBeenCalledWith('local-2');
     });
   });
 
