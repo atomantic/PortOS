@@ -14,7 +14,7 @@ vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() 
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), updateApp: vi.fn() }));
 vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn() } }));
 vi.mock('./autoFixer.js', () => ({ handleErrorRecovery: vi.fn() }));
-vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn() }));
+vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn(), runStandardizeFlow: vi.fn() }));
 vi.mock('./notifications.js', () => ({ notificationEvents: { on: vi.fn() } }));
 vi.mock('./providerStatus.js', () => ({ providerStatusEvents: { on: vi.fn() } }));
 vi.mock('./agentPersonalities.js', () => ({ agentPersonalityEvents: { on: vi.fn() } }));
@@ -55,7 +55,7 @@ vi.mock('../lib/socketValidation.js', () => ({
   appDeploySchema: {}
 }));
 vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
-vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn() }));
+vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(), runDeployFlow: vi.fn() }));
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';

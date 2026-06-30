@@ -591,6 +591,104 @@ export async function applyStandardization(repoPath, plan, { skipBackup = false 
 }
 
 /**
+ * Run the full PM2 standardization flow: analyze → git backup → apply.
+ *
+ * This is the orchestration the `standardize:start` socket handler used to do
+ * inline. Pulling it into the service makes it unit-testable and HTTP-callable —
+ * the caller only supplies progress callbacks and consumes the final result.
+ *
+ * Progress is reported through `onStep({ step, status, data })` (the same
+ * `step`/`status`/`data` triple the socket layer forwards as `standardize:step`)
+ * and `onAnalyzed({ plan })` once the analysis plan is ready. Both callbacks are
+ * optional, so the flow is callable headless.
+ *
+ * Resolves to the terminal outcome the caller should report as
+ * `standardize:complete`:
+ *   - `{ success: false, error }` on any failed step
+ *   - `{ success: true, result: { backupBranch, filesModified, processes } }`
+ *
+ * @param {string} repoPath - Absolute path to the repo being standardized
+ * @param {string|null} providerId - Optional AI provider id (else the active one)
+ * @param {object} [opts]
+ * @param {(evt: {step: string, status: string, data: object}) => void} [opts.onStep]
+ * @param {(evt: {plan: object}) => void} [opts.onAnalyzed]
+ * @param {Function} [opts.analyze] - Injectable step impl (defaults to analyzeApp);
+ *   a test seam so the orchestration is unit-testable without real AI analysis.
+ * @param {Function} [opts.backup] - Injectable step impl (defaults to createGitBackup).
+ * @param {Function} [opts.apply] - Injectable step impl (defaults to applyStandardization).
+ * @returns {Promise<{success: boolean, error?: string, result?: object}>}
+ */
+export async function runStandardizeFlow(
+  repoPath,
+  providerId = null,
+  { onStep, onAnalyzed, analyze = analyzeApp, backup = createGitBackup, apply = applyStandardization } = {}
+) {
+  const emit = (step, status, data = {}) => onStep?.({ step, status, data });
+
+  // Step 1: Analyze
+  emit('analyze', 'running', { message: 'Analyzing project configuration...' });
+
+  const analysis = await analyze(repoPath, providerId)
+    .catch(err => ({ success: false, error: err.message }));
+
+  if (!analysis.success) {
+    emit('analyze', 'error', { message: analysis.error });
+    return { success: false, error: analysis.error };
+  }
+
+  emit('analyze', 'done', {
+    message: `Found ${analysis.proposedChanges.processes?.length || 0} processes`,
+    processes: analysis.proposedChanges.processes,
+    strayPorts: analysis.proposedChanges.strayPorts
+  });
+
+  onAnalyzed?.({ plan: analysis });
+
+  // Step 2: Backup
+  emit('backup', 'running', { message: 'Creating git backup...' });
+
+  const backupResult = await backup(repoPath)
+    .catch(err => ({ success: false, reason: err.message }));
+
+  if (backupResult.success) {
+    emit('backup', 'done', { message: `Backup branch: ${backupResult.branch}`, branch: backupResult.branch });
+  } else if (backupResult.code === 'DIRTY_WORKTREE') {
+    emit('backup', 'error', { message: backupResult.reason });
+    return { success: false, error: backupResult.reason };
+  } else {
+    emit('backup', 'skipped', { message: backupResult.reason || 'No git repository' });
+  }
+
+  // Step 3: Apply changes (backup already handled above)
+  emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
+
+  const result = await apply(repoPath, analysis, { skipBackup: true })
+    .catch(err => ({ success: false, errors: [err.message] }));
+
+  if (result.errors?.length > 0) {
+    emit('apply', 'error', { message: result.errors.join(', ') });
+    return { success: false, error: result.errors.join(', ') };
+  }
+
+  emit('apply', 'done', {
+    message: `Modified ${result.filesModified.length} files`,
+    filesModified: result.filesModified
+  });
+
+  console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
+
+  return {
+    success: true,
+    result: {
+      // Use the backup branch from step 2 since step 3 skipped its own backup.
+      backupBranch: backupResult.branch || null,
+      filesModified: result.filesModified,
+      processes: analysis.proposedChanges.processes
+    }
+  };
+}
+
+/**
  * Get the standard PM2 template for reference
  */
 export function getStandardTemplate() {
