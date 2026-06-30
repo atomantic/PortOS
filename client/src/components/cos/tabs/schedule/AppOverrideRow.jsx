@@ -59,8 +59,11 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
   };
 
   // claim-issue per-app swarm override. '' = inherit the global default; '0'
-  // = explicit off; 2..6 = swarm with that many agents. Sent as a Number so the
-  // server's integer-range check keeps it (0 collapses to off and is dropped).
+  // = explicit off; 2..6 = swarm with that many agents. Sent as a Number: the
+  // server's sanitizer KEEPS an explicit 0 (it's how a per-app override turns
+  // swarm off even when the global default has it on) and 2..6; only 1 /
+  // out-of-range / non-integer are dropped. Inherit is the absent key (deleted
+  // above), distinct from a stored 0.
   const handleSwarmCountChange = async (raw) => {
     setUpdating(true);
     const next = { ...(override?.taskMetadata || {}) };
