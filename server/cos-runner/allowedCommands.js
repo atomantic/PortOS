@@ -14,7 +14,8 @@ export const ALLOWED_COMMANDS = new Set([
   'codex',
   'copilot',
   'agy',
-  'gemini'
+  'gemini',
+  'opencode'
 ]);
 
 /**
