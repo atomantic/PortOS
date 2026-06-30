@@ -83,7 +83,12 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
   };
 
   return (
-    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[var(--port-terminal-bg)] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
+    // Background stays a fixed dark terminal hex: the panel's inner content
+    // (text-white, text-gray-300/400/500/600, status colors) is hardcoded
+    // light, so swapping to the theme's --port-terminal-bg (light in the day
+    // themes) would render light-on-light. A coordinated fg+bg theming pass
+    // for this panel is tracked in #1909.
+    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[#0d1117] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
       {/* Scanline effect */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.02]"
