@@ -122,6 +122,7 @@ import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageH
 import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './services/musicVideoSceneVideoHook.js';
 import { initCreativeDirectorMusicBedHook } from './services/creativeDirectorMusicBedHook.js';
+import { initCreativeDirectorSceneImageHook } from './services/creativeDirectorSceneImageHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -755,6 +756,11 @@ ensureSelf()
     // the requesting client unmounted mid-render (#1928). Also depends on the
     // queue being loaded.
     initCreativeDirectorMusicBedHook();
+    // Creative Director scene-frame hook — durably files a queued first-pass
+    // reference-frame render onto its project scene's `sourceImageFile` on
+    // completion, even if no client is watching (#1867). Also depends on the
+    // queue being loaded.
+    initCreativeDirectorSceneImageHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.

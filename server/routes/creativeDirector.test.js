@@ -25,10 +25,12 @@ vi.mock('../services/creativeDirector/autoCast.js', () => ({
   toSuggestionView: (hit) => ({ ingredientId: hit.ingredient.id, name: hit.ingredient.name, type: hit.ingredient.type, score: hit.rrfScore, searchMethod: hit.searchMethod }),
 }));
 
-// Mock first-pass gen (#1818) so the route test doesn't pull the real
-// mediaJobQueue/catalogDB graph; the route's job is to gate + dispatch.
+// Mock first-pass gen (#1818, extended by #1867) so the route test doesn't
+// pull the real mediaJobQueue/catalogDB graph; the route's job is to gate +
+// dispatch.
 vi.mock('../services/creativeDirector/firstPassGen.js', () => ({
   enqueueFirstPassPortraits: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
+  enqueueFirstPassSceneFrames: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
 }));
 
 // Mock first-pass music-bed gen (#1928) so the route test doesn't pull the
@@ -156,21 +158,37 @@ describe('creativeDirector routes', () => {
   });
 
   describe('PATCH /:id/treatment', () => {
+    const treatmentBody = {
+      logline: 'A cat finds a hat.',
+      synopsis: 'Then puts it on.',
+      scenes: [{
+        sceneId: 'scene-1',
+        order: 0,
+        intent: 'Cat enters frame',
+        prompt: 'A cat walks into view',
+        durationSeconds: 4,
+      }],
+    };
+
     it('writes the treatment when shape is valid', async () => {
       cdService.setTreatment.mockResolvedValue({ id: 'cd-1', treatment: { scenes: [] } });
-      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send({
-        logline: 'A cat finds a hat.',
-        synopsis: 'Then puts it on.',
-        scenes: [{
-          sceneId: 'scene-1',
-          order: 0,
-          intent: 'Cat enters frame',
-          prompt: 'A cat walks into view',
-          durationSeconds: 4,
-        }],
-      });
+      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
       expect(r.status).toBe(200);
       expect(cdService.setTreatment).toHaveBeenCalled();
+    });
+
+    it('seeds first-pass scene frames when the project opted in (#1867)', async () => {
+      cdService.setTreatment.mockResolvedValue({ id: 'cd-1', generateFirstPass: true, treatment: { scenes: [] } });
+      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
+      expect(r.status).toBe(200);
+      expect(firstPass.enqueueFirstPassSceneFrames).toHaveBeenCalledWith({ id: 'cd-1', generateFirstPass: true, treatment: { scenes: [] } });
+    });
+
+    it('does not seed first-pass scene frames when the project never opted in', async () => {
+      cdService.setTreatment.mockResolvedValue({ id: 'cd-1', treatment: { scenes: [] } });
+      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
+      expect(r.status).toBe(200);
+      expect(firstPass.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();
     });
   });
 
@@ -362,6 +380,24 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.composing).toBe(false);
       expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
+    it('persists generateFirstPass on the project when composing with the flag set (#1867)', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true, generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
+    });
+
+    it('does not persist generateFirstPass when not composing', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).not.toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
     });
   });
 
