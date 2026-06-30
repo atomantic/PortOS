@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
 import { PORTS } from './lib/ports.js';
+import { estimateTokens } from './lib/contextBudget.js';
 import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
@@ -261,7 +262,7 @@ const aiToolkitHooks = {
     });
   },
   onRunCompleted: (metadata, output) => {
-    const estimatedTokens = Math.ceil(output.length / 4);
+    const estimatedTokens = estimateTokens(output);
     recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
@@ -1044,6 +1045,10 @@ const closeServer = (server, label) => new Promise((resolve) => {
   });
 });
 
+// Hard ceiling on graceful shutdown: if Socket.IO/HTTP don't close within this
+// window, force-exit so PM2 isn't left waiting on a hung process.
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
+
 let shuttingDown = false;
 const shutdown = async (signal) => {
   if (shuttingDown) return;
@@ -1063,7 +1068,7 @@ const shutdown = async (signal) => {
   const forceExitTimer = setTimeout(() => {
     console.error('⚠️ Graceful shutdown timed out, forcing exit');
     process.exit(1);
-  }, 10000);
+  }, GRACEFUL_SHUTDOWN_TIMEOUT_MS);
 
   await new Promise((resolve) => {
     io.close((err) => {
