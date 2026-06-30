@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video } from 'lucide-react';
+import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
@@ -19,6 +19,7 @@ import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
+import { autoArrangeScenes } from '../lib/beatGrid.js';
 import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
@@ -43,6 +44,7 @@ export default function MusicVideo() {
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [arranging, setArranging] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
   const selected = projects.find((p) => p.id === selectedId) || null;
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
@@ -125,6 +127,45 @@ export default function MusicVideo() {
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
+  };
+
+  // Auto-arrange (#1915): distribute every scene across the analyzed song
+  // sections weighted by each section's energy, writing the same persisted
+  // startSec/endSec/beatAligned fields the manual drag-snap arranger (#1854)
+  // writes — a director-tunable starting point honored exactly at render time.
+  // Optimistically applies the whole arrangement to the local board, then
+  // persists each scene sequentially (the per-project load-modify-save can't
+  // drop a write that way). Silent PATCHes — the catch owns the only error toast.
+  const handleAutoArrange = () => {
+    if (!selected?.audioAnalysis) return;
+    const scenes = selected.scenes || [];
+    const arrangement = autoArrangeScenes(scenes, selected.audioAnalysis);
+    if (arrangement.length === 0) {
+      toast.error('Nothing to arrange — analyze the track and add scenes first');
+      return;
+    }
+    const byId = new Map(arrangement.map((a) => [a.sceneId, a]));
+    replaceProject({
+      ...selected,
+      scenes: scenes.map((s) => {
+        const a = byId.get(s.sceneId);
+        return a ? { ...s, startSec: a.startSec, endSec: a.endSec, beatAligned: a.beatAligned } : s;
+      }),
+    });
+    setArranging(true);
+    (async () => {
+      for (const a of arrangement) {
+        // Sequential by design — see the comment above (avoids a load-modify-save race).
+        await updateMusicVideoScene(
+          selected.id, a.sceneId,
+          { startSec: a.startSec, endSec: a.endSec, beatAligned: a.beatAligned },
+          { silent: true },
+        );
+      }
+    })()
+      .then(() => toast.success(`Auto-arranged ${arrangement.length} scene${arrangement.length === 1 ? '' : 's'} by energy`))
+      .catch((err) => toast.error(err?.message || 'Auto-arrange failed'))
+      .finally(() => setArranging(false));
   };
 
   // --- Render (#1760, Phase 2): assemble scene clips over the master audio bed.
@@ -368,6 +409,16 @@ export default function MusicVideo() {
                       title={!selected.trackId && !selected.uploadedAudioFilename ? 'Link a track first' : 'Analyze beat grid'}
                       className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
                       <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
+                    </button>
+                    <button onClick={handleAutoArrange}
+                      disabled={arranging || !selected.audioAnalysis || (selected.scenes || []).length === 0}
+                      title={!selected.audioAnalysis
+                        ? 'Analyze the track first'
+                        : (selected.scenes || []).length === 0
+                          ? 'Add scenes first'
+                          : 'Distribute scenes across song sections by energy'}
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                      <Wand2 size={15} /> {arranging ? 'Arranging…' : 'Auto-arrange'}
                     </button>
                     {render ? (
                       <button onClick={handleCancelRender} title="Cancel render"
