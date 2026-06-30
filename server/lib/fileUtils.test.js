@@ -29,6 +29,7 @@ import {
   formatDuration,
   sha256File,
   resolveImageInputPath,
+  resolveScreenshot,
   PATHS,
   sanitizeFilename,
   getFileExtension,
@@ -677,6 +678,52 @@ describe('fileUtils', () => {
       const out = resolveImageInputPath(refsAbs);
       expect(out).toContain('data/image-refs/');
       expect(out).not.toContain('data/images/');
+    });
+  });
+
+  describe('resolveScreenshot', () => {
+    const sampleTemplate = join(__dirname_test, '..', '..', 'data.reference', 'templates', 'character-reference-sheet.png');
+    const shotName = 'fileutils-test-screenshot.png';
+    const shotPath = join(PATHS.screenshots, shotName);
+
+    beforeEach(() => {
+      if (!existsSync(PATHS.screenshots)) mkdirSync(PATHS.screenshots, { recursive: true });
+      if (existsSync(sampleTemplate) && !existsSync(shotPath)) copyFileSync(sampleTemplate, shotPath);
+    });
+
+    afterAll(() => {
+      // Remove ONLY the uniquely-named fixture — never the real screenshots root.
+      if (existsSync(shotPath)) rmSync(shotPath, { force: true });
+    });
+
+    it('resolves a basename present under the screenshots root', () => {
+      const out = resolveScreenshot(shotName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/screenshots/');
+      expect(out).toContain(shotName);
+    });
+
+    it('SECURITY: rejects parent-directory traversal that escapes the screenshots root', () => {
+      // `loadImageAsBase64` (issue #1820) fed `imagePath` straight from req.body;
+      // a `../` payload must NOT resolve to a file outside data/screenshots.
+      expect(resolveScreenshot('../../etc/passwd')).toBeNull();
+      expect(resolveScreenshot('../package.json')).toBeNull();
+    });
+
+    it('SECURITY: rejects an absolute path outside the screenshots root', () => {
+      expect(resolveScreenshot('/etc/passwd')).toBeNull();
+      expect(resolveScreenshot('/etc/hosts')).toBeNull();
+    });
+
+    it('rejects non-image extensions and missing files', () => {
+      expect(resolveScreenshot('notes.txt')).toBeNull();
+      expect(resolveScreenshot('does-not-exist.png')).toBeNull();
+    });
+
+    it('returns null for non-string / empty input', () => {
+      expect(resolveScreenshot(null)).toBeNull();
+      expect(resolveScreenshot('')).toBeNull();
+      expect(resolveScreenshot(undefined)).toBeNull();
     });
   });
 

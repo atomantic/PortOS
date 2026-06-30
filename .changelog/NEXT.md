@@ -1,3 +1,7 @@
+## Security
+
+- **Vision-test endpoint no longer reads arbitrary files** — `POST /api/providers/:id/test-vision` took `imagePath` straight from the request body, so a `../` traversal or absolute path could have any readable file base64-encoded and forwarded to the configured external vision provider. The image loader now allowlists `imagePath` to a real image basename under `data/screenshots` (via the canonical `resolveScreenshot` path resolver), rejecting traversal and absolute-path escapes before any file is read or forwarded. (#1820)
+
 ## Added
 
 - **Creative Director auto-compose** — the Overview tab's Auto-cast control now has a `+ treatment` toggle (shown only before a treatment exists): with it on, once the director seeds the cast from the catalog it autonomously writes a first-pass treatment + scene plan grounded in that cast, instead of stopping at cast seeding. Director-first — the autonomous treatment is a starting point you keep editing on the same board, and it never clobbers an existing treatment. (#1817)
