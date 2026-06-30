@@ -71,15 +71,20 @@ async function resolveQueueModeParams() {
     };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
+    // We pass no modelId, so the worker renders with its default ('dev') model —
+    // an mflux model that REQUIRES a configured pythonPath (the imageGen route
+    // and universeBuilderRender both reject this up front with
+    // IMAGE_GEN_NOT_CONFIGURED). First-pass gen runs fire-and-forget with no
+    // client listening, so a doomed job's SSE failure would vanish while the
+    // user is told portraits are rendering. Skip cleanly instead — same
+    // graceful-skip contract as a disabled codex.
+    const pythonPath = settings.imageGen?.local?.pythonPath || null;
+    if (!pythonPath) return { mode, ready: false, reason: 'local-not-configured' };
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-    // modelId omitted → the worker falls through to its default ('dev') model,
-    // matching the manual portrait path which also passes no modelId. pythonPath
-    // may be null (FLUX.2 carries its own venv); the worker surfaces a missing
-    // python over SSE rather than us hard-failing the whole auto-cast request.
     return {
       mode,
       ready: true,
-      jobParams: { pythonPath: settings.imageGen?.local?.pythonPath || null, cleanC2PA, denoise },
+      jobParams: { pythonPath, cleanC2PA, denoise },
     };
   }
   // external (or an unknown mode) — synchronous SD-API isn't suited for a
@@ -117,22 +122,24 @@ export async function enqueueFirstPassPortraits(members = []) {
     return { mode: resolved.mode, enqueued: [], skipped: [], reason: resolved.reason };
   }
 
+  // Resolve each member's render decision concurrently — the per-member reads
+  // (getIngredient + portrait check) are independent, so a 50-member cast costs
+  // one round-trip batch rather than ~2N serial queries. Promise.all preserves
+  // order, so the enqueue pass below still assigns jobIds in cast order.
+  const decisions = await Promise.all(list.map(async ({ ingredientId }) => {
+    const ingredient = await getIngredient(ingredientId);
+    if (!ingredient) return { ingredientId, skip: 'gone' };
+    if (await ingredientHasPortrait(ingredientId)) return { ingredientId, skip: 'has-portrait' };
+    const prompt = buildPortraitPrompt(ingredient);
+    if (!prompt) return { ingredientId, skip: 'no-prompt' };
+    return { ingredientId, prompt };
+  }));
+
   const enqueued = [];
   const skipped = [];
-  for (const member of list) {
-    const { ingredientId } = member;
-    const ingredient = await getIngredient(ingredientId);
-    if (!ingredient) {
-      skipped.push({ ingredientId, reason: 'gone' });
-      continue;
-    }
-    if (await ingredientHasPortrait(ingredientId)) {
-      skipped.push({ ingredientId, reason: 'has-portrait' });
-      continue;
-    }
-    const prompt = buildPortraitPrompt(ingredient);
-    if (!prompt) {
-      skipped.push({ ingredientId, reason: 'no-prompt' });
+  for (const { ingredientId, skip, prompt } of decisions) {
+    if (skip) {
+      skipped.push({ ingredientId, reason: skip });
       continue;
     }
     const queued = enqueueJob({
