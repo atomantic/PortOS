@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { delimiter, isAbsolute, join } from 'path';
 
 /**
  * Shared buffered-spawn + Windows kill-tree machinery used by the app build and
@@ -32,6 +34,52 @@ export const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
  */
 export const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
 
+// Extensions Windows can launch directly, checked in cmd.exe's own resolution
+// preference (a real .exe wins over a batch shim when both exist). Deliberately
+// excludes an extension-less match — npm ships a POSIX shell-script stub
+// alongside a package's `.cmd`/`.bat`/`.ps1` Windows wrappers (for Git
+// Bash/WSL), and that stub is not natively launchable on Windows.
+const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+/**
+ * Resolve a bare command name (e.g. "opencode") to its full path WITH
+ * extension on Windows, so `spawn()` can target it directly under the
+ * default `shell: false`.
+ *
+ * This is the actual fix for #1865 (CLI providers like opencode/codex/claude
+ * failing to spawn on Windows) — NOT a missing `shell: true`. A bare command
+ * with no extension never resolves on Windows even though typing it at a
+ * real cmd.exe prompt works fine: libuv's internal PATHEXT search finds e.g.
+ * "opencode.cmd", but Node's JS-layer `.bat`/`.cmd` safe-auto-escape
+ * detection (the CVE-2024-27980 fix) only fires on a LITERAL `.bat`/`.cmd`
+ * suffix in the string passed to `spawn()` — it never sees what libuv found.
+ * Resolving to the explicit extension up front lets that already-tested,
+ * already-safely-escaping Node code path take over automatically, instead of
+ * hand-rolling cmd.exe argument quoting ourselves (the exact class of bug the
+ * CVE was about — `shell: true` + an args array does NOT escape arguments,
+ * it just space-joins them, so any arg containing a space or a cmd.exe
+ * metacharacter would silently corrupt or be shell-injectable).
+ *
+ * Deliberately filesystem-only (no `where`/`which` subprocess) so resolution
+ * is synchronous and side-effect-free.
+ *
+ * @param {string} command - bare command name, or an existing path (returned unchanged)
+ * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
+ * @returns {string|null} the resolved absolute path, or null when not found
+ *   (off win32, command is already a path, or no match exists on PATH)
+ */
+export function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
+  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
+  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const ext of WIN_EXECUTABLE_EXTS) {
+      const candidate = join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
 // Cap buffered stdout/stderr so a runaway child can't exhaust memory; we only
 // ever surface a tail of the output anyway.
 export const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -44,10 +92,18 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * is fire-and-forget: its own `error` is swallowed and the handle is unref'd so
  * it never keeps the event loop alive. Elsewhere, a plain SIGTERM suffices.
  *
+ * `child.killed` is set synchronously on the win32 branch (mirroring what
+ * Node's own `child.kill()` does for the POSIX branch) — callers elsewhere
+ * gate re-entrant kill/abort handling on `.killed`, and `taskkill` runs in a
+ * separate detached process that never touches the original ChildProcess
+ * object, so without this the flag would stay `false` for the process's
+ * entire lifetime and those guards would never engage on Windows.
+ *
  * @param {import('child_process').ChildProcess} child
  */
 export function killProcessTree(child) {
   if (IS_WIN32 && child.pid) {
+    child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
       .unref();

@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
-import { IS_WIN32 } from '../lib/bufferedSpawn.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
+});
+
+// Keep the real killProcessTree (existing tests below rely on its real
+// non-Windows SIGTERM branch) but stub resolveWindowsExecutable so the
+// Windows command-resolution path can be driven deterministically regardless
+// of the host platform actually running the suite.
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveWindowsExecutable: vi.fn(() => null) };
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -181,12 +189,10 @@ describe('executeCliRun — Codex sentinel suppression', () => {
 });
 
 describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
-  // IS_WIN32 (imported from bufferedSpawn.js) is bound once at module load
-  // from the real `process.platform`, like the rest of the codebase's
-  // win32-gated tests (see bufferedSpawn.test.js) — it can't be faked by
-  // mutating process.platform mid-test. Assert the spawn option mirrors the
-  // constant so this pins the wiring on every platform CI actually runs on.
-  it('passes shell: IS_WIN32 to spawn so npm-installed CLI shims (opencode, codex, claude) can launch on Windows', async () => {
+  it('spawns the resolveWindowsExecutable-resolved path (e.g. opencode.cmd) when one is found', async () => {
+    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce('C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd');
+
     const child = makeChild();
     spawn.mockReturnValue(child);
 
@@ -197,10 +203,34 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun({ runId: 'run-shell-opt', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    await executeCliRun({ runId: 'run-resolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
 
-    const [, , options] = spawn.mock.calls.at(-1);
-    expect(options.shell).toBe(IS_WIN32);
+    const [command, , options] = spawn.mock.calls.at(-1);
+    expect(command).toBe('C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd');
+    // Never set shell:true — resolving the explicit extension lets Node's own
+    // safely-escaping .bat/.cmd handling take over under shell:false instead.
+    expect(options.shell).toBeFalsy();
+  });
+
+  it('falls back to the bare command when resolution finds nothing (e.g. off win32, or not on PATH)', async () => {
+    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(null);
+
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = { id: 'codex', command: 'codex', args: [], timeout: 5000 };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-unresolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+
+    const [command, , options] = spawn.mock.calls.at(-1);
+    expect(command).toBe('codex');
+    expect(options.shell).toBeFalsy();
   });
 });
 

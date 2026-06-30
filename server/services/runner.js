@@ -10,7 +10,7 @@ import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
-import { IS_WIN32, killProcessTree } from '../lib/bufferedSpawn.js';
+import { killProcessTree, resolveWindowsExecutable } from '../lib/bufferedSpawn.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -161,14 +161,17 @@ export async function patchRunMetadata(runId, patch) {
 /**
  * Override executeCliRun.
  *
- * Runs without a shell on POSIX (Node 18.20+/20.10+ already auto-escapes args
- * for Windows .bat/.cmd shims per CVE-2024-27980, so `shell:false` there
- * avoided the old DEP0190 warning and metacharacter-injection surface). On
- * win32, `shell: IS_WIN32` is required: npm-installed CLI providers
- * (opencode, codex, claude, …) are .cmd/.bat shims that Node can't execute
- * without going through cmd.exe — see #1865. Prompt content rides stdin, not
- * argv, and `args` is still escaped by Node for the shell, so this doesn't
- * reopen the injection surface DEP0190 warned about.
+ * Runs without a shell (`shell:false`, the default — never set `shell:true`
+ * here): npm-installed CLI providers (opencode, codex, claude, …) are
+ * .cmd/.bat shims on Windows, but the fix for that (#1865) is resolving the
+ * bare command to its explicit-extension path via `resolveWindowsExecutable`
+ * before spawning, NOT enabling a shell. `shell:true` + an args array does
+ * NOT escape arguments — it just space-joins them (the literal DEP0190
+ * warning) — so any arg or prompt content containing a space or a cmd.exe
+ * metacharacter would silently corrupt or be shell-injectable. Resolving the
+ * `.cmd`/`.bat` extension up front instead lets Node's own already-tested,
+ * already-safely-escaping internal batch-file handling (the CVE-2024-27980
+ * fix) take over automatically under `shell:false`.
  */
 export async function executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   const toolkit = requireToolkit();
@@ -198,18 +201,18 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
-  childProcess = spawn(provider.command, args, {
+  // See the executeCliRun docblock above — resolve to the explicit-extension
+  // path on Windows (e.g. opencode.cmd) instead of enabling a shell, so a
+  // bare command name actually launches there without reopening the
+  // unescaped-argument injection surface DEP0190 warns about.
+  const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+
+  childProcess = spawn(resolvedCommand, args, {
     cwd: workspacePath,
     // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
     // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
     env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })(),
-    windowsHide: true,
-    // npm-installed CLI providers (opencode, codex, claude, …) are .cmd/.bat
-    // shims on Windows; Node can't execute those without going through
-    // cmd.exe. See server/lib/bufferedSpawn.js for the same IS_WIN32 pattern
-    // used elsewhere in PortOS. Array args are still escaped by Node for the
-    // shell, so this doesn't reopen metacharacter injection in `args`.
-    shell: IS_WIN32
+    windowsHide: true
   });
 
   // Pass prompt via stdin to avoid OS argv limits
