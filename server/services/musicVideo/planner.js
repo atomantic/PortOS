@@ -122,7 +122,10 @@ async function tryProposeScenePrompts(project, sections, { providerId, model } =
     return { seeded: null, reason: 'too-many-sections' };
   }
 
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model }).catch(() => ({ provider: null, selectedModel: null }));
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model }).catch((err) => {
+    console.warn(`⚠️ Music Video plan: provider resolution failed for ${project.id}: ${err.message}`);
+    return { provider: null, selectedModel: null };
+  });
   if (!provider) return { seeded: null, reason: 'no-provider' };
   if (provider.enabled === false) return { seeded: null, reason: 'provider-disabled' };
 
