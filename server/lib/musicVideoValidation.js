@@ -84,6 +84,18 @@ export const musicVideoSceneReorderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500),
 }).strict();
 
+// Autonomous shot planner (#1855): propose a scene per analyzed audio section.
+// `seedPrompts` (default true) additionally asks the active/given AI provider
+// for a first-pass framePrompt/prompt per scene — best-effort, never fails the
+// plan itself (see services/musicVideo/planner.js). `providerId`/`model` mirror
+// the optional override shape used elsewhere (mediaPromptRefiner, universe
+// builder) so a caller can pin a specific provider instead of the active one.
+export const musicVideoPlanRequestSchema = z.object({
+  seedPrompts: z.boolean().optional(),
+  providerId: z.string().max(64).optional(),
+  model: z.string().max(200).optional(),
+}).strict();
+
 // The cached beat/tempo/section map (audioAnalysis.js output). Validated when a
 // record round-trips so a hand-edited/legacy project can't carry a malformed
 // analysis; the analyzer itself produces this shape.

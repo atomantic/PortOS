@@ -22,6 +22,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   createMusicVideoProject: vi.fn(),
   deleteMusicVideoProject: vi.fn(),
   analyzeMusicVideoProject: vi.fn(),
+  planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
   updateMusicVideoScene: vi.fn(),
   deleteMusicVideoScene: vi.fn(),
@@ -41,7 +42,14 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title}</div> }));
 
 import MusicVideo from './MusicVideo.jsx';
-import { listMusicVideoProjects, renderMusicVideoProject } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, renderMusicVideoProject, planMusicVideoProject } from '../services/apiMusicVideo.js';
+
+const PROJECT_ANALYZED = {
+  ...PROJECT_NO_CLIP,
+  id: 'mv-3',
+  name: 'Analyzed Track',
+  audioAnalysis: { bpm: 120, beats: [], downbeats: [], sections: [{ label: 'Intro', startSec: 0, endSec: 10, energy: 0.5 }], durationSec: 10 },
+};
 
 const openProject = async (project) => {
   listMusicVideoProjects.mockResolvedValue([project]);
@@ -78,5 +86,25 @@ describe('MusicVideo render control (#1760)', () => {
     const link = await screen.findByText(/View rendered music video/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
     expect(link.closest('a').getAttribute('href')).toContain('preview=video%3Arh-9');
+  });
+});
+
+describe('MusicVideo autonomous shot planner (#1855)', () => {
+  it('disables AI Plan until the track is analyzed', async () => {
+    await openProject(PROJECT_NO_CLIP);
+    const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
+    expect(planBtn).toHaveProperty('disabled', true);
+  });
+
+  it('calls the planner and replaces the project on success', async () => {
+    const plannedProject = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's1', order: 0, prompt: 'p' }] };
+    planMusicVideoProject.mockResolvedValue({ project: plannedProject, scenesAdded: 1, promptsSeeded: false, promptsSkippedReason: 'no-provider' });
+
+    await openProject(PROJECT_ANALYZED);
+    const planBtn = await screen.findByRole('button', { name: /AI Plan/i });
+    expect(planBtn).toHaveProperty('disabled', false);
+
+    fireEvent.click(planBtn);
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }));
   });
 });

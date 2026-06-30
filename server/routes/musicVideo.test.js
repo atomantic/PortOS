@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
@@ -31,10 +32,20 @@ vi.mock('../services/musicVideo/render.js', () => ({
   cancelRender: vi.fn(() => true),
 }));
 
+vi.mock('../services/musicVideo/planner.js', () => ({
+  planProject: vi.fn(async (id) => ({
+    project: { id, scenes: [{ sceneId: 'mvs-1' }] },
+    scenesAdded: 1,
+    promptsSeeded: false,
+    promptsSkippedReason: 'no-provider',
+  })),
+}));
+
 import * as svc from '../services/musicVideo/projects.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
+import { planProject } from '../services/musicVideo/planner.js';
 import musicVideoRoutes from './musicVideo.js';
 
 describe('musicVideo routes', () => {
@@ -128,6 +139,36 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+    });
+  });
+
+  describe('POST /:id/plan', () => {
+    it('plans with default options when no body is sent', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/plan');
+      expect(r.status).toBe(200);
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: undefined, providerId: undefined, model: undefined });
+      expect(r.body.scenesAdded).toBe(1);
+      expect(r.body.promptsSeeded).toBe(false);
+    });
+
+    it('forwards seedPrompts/providerId/model overrides', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/plan')
+        .send({ seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
+      expect(r.status).toBe(200);
+      expect(planProject).toHaveBeenCalledWith('mv-1', { seedPrompts: false, providerId: 'p1', model: 'gpt-x' });
+    });
+
+    it('rejects an unknown body field', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/plan').send({ bogus: true });
+      expect(r.status).toBe(400);
+      expect(planProject).not.toHaveBeenCalled();
+    });
+
+    it('propagates a 422 from the planner (no cached analysis)', async () => {
+      planProject.mockRejectedValueOnce(new ServerError('Project has no analyzed sections to plan from — run Analyze first', { status: 422, code: 'NOT_ANALYZED' }));
+      const r = await request(app).post('/api/music-video/mv-1/plan');
+      expect(r.status).toBe(422);
+      expect(r.body.code).toBe('NOT_ANALYZED');
     });
   });
 
