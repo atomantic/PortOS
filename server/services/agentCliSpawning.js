@@ -593,6 +593,9 @@ export async function spawnDirectly({
     // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
     // as an unhandled rejection and crash the process. The inner try/finally
     // only covers finalizeAgent's cleanup; this outer guard is the crash net.
+    // `laneReleased` lets the recovery path free a still-held execution lane
+    // (a throw before releaseAgentLane) without double-releasing one that ran.
+    let laneReleased = false;
     try {
     clearTimeout(initializationTimeout);
     const success = code === 0;
@@ -672,6 +675,7 @@ export async function spawnDirectly({
       laneName: agentData?.laneName || laneName,
       errorExecutionMessage: finalError || undefined,
     });
+    laneReleased = true;
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
@@ -720,6 +724,23 @@ export async function spawnDirectly({
     }
     } catch (handlerErr) {
       console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
+      // If the throw beat releaseAgentLane, the lane/execution is still held.
+      // The process now survives instead of restarting, so a held lane would
+      // block later tasks indefinitely — release it on the recovery path too.
+      if (!laneReleased) {
+        try {
+          releaseAgentLane({
+            agentId,
+            success: false,
+            exitCode: code,
+            executionId,
+            laneName,
+            errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
+          });
+        } catch (releaseErr) {
+          console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
+        }
+      }
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
     }
