@@ -166,6 +166,30 @@ describe('resolveWindowsExecutable', () => {
   it('returns null for a relative path containing a separator', () => {
     expect(resolveWindowsExecutable('./bin/opencode', true)).toBeNull();
   });
+
+  it('searches the given searchEnv.PATH, not bare process.env, honoring a provider-configured PATH override', async () => {
+    // A provider's envVars can override PATH for the child process — the CLI
+    // may live somewhere the PARENT process.env.PATH never points to.
+    const customDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-custom-'));
+    try {
+      await writeFile(join(customDir, 'opencode.cmd'), '@echo off\n');
+      // process.env.PATH (set in beforeEach) does NOT include customDir.
+      expect(resolveWindowsExecutable('opencode', true)).toBeNull();
+      expect(resolveWindowsExecutable('opencode', true, { PATH: customDir })).toBe(join(customDir, 'opencode.cmd'));
+    } finally {
+      await rm(customDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to searchEnv.Path (capital-P-lowercase, the Windows convention) when PATH is absent', async () => {
+    const customDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-capital-'));
+    try {
+      await writeFile(join(customDir, 'opencode.cmd'), '@echo off\n');
+      expect(resolveWindowsExecutable('opencode', true, { Path: customDir })).toBe(join(customDir, 'opencode.cmd'));
+    } finally {
+      await rm(customDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('prepareWindowsSafeSpawn', () => {
@@ -220,6 +244,13 @@ describe('prepareWindowsSafeSpawn', () => {
   it('never escapes off Windows, even for an unquoted metacharacter arg', () => {
     const result = prepareWindowsSafeSpawn('/usr/local/bin/tool.cmd', ['foo&bar'], false);
     expect(result.args).toEqual(['foo&bar']);
+  });
+
+  it('also caret-escapes a metacharacter in the resolved command path itself (e.g. a custom install dir)', () => {
+    // A custom npm prefix directory containing a metacharacter, with no
+    // whitespace, would reach cmd.exe unquoted just like an unquoted arg.
+    const result = prepareWindowsSafeSpawn('C:\\Tools&CLIs\\npm\\codex.cmd', ['exec'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\Tools^&CLIs\\npm\\codex.cmd', 'exec'] });
   });
 });
 

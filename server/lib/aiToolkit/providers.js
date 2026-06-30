@@ -34,9 +34,9 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
  * Filesystem-only (no subprocess), so it can't reorder/misselect the way a
  * raw `where` first-line read can.
  */
-function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32') {
+function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32', searchEnv = process.env) {
   if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
   for (const dir of pathDirs) {
     for (const ext of WIN_EXECUTABLE_EXTS) {
       const candidate = join(dir, `${command}${ext}`);
@@ -59,7 +59,10 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  */
 function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return { command: 'cmd.exe', args: ['/c', command, ...args.map(escapeCmdMetacharsIfUnquoted)] };
+    return {
+      command: 'cmd.exe',
+      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
+    };
   }
   return { command, args };
 }
@@ -531,10 +534,14 @@ export function createProviderService(config = {}) {
         // match is not guaranteed to be a launchable one (this is exactly
         // what produced the literal error text in #1865). Re-resolve via the
         // same extension-aware filesystem search the agent runner uses
-        // (server/lib/bufferedSpawn.js's resolveWindowsExecutable) and prefer
-        // it for both the actual invocation AND what we report back — falling
-        // back to the `where` result only when that search finds nothing.
-        const invokePath = (isWin32 && resolveWindowsExecutable(provider.command)) || commandPath;
+        // (server/lib/bufferedSpawn.js's resolveWindowsExecutable), searched
+        // against the same provider-envVars-merged env the runner actually
+        // spawns under (so a configured PATH override is honored here too),
+        // and prefer it for both the actual invocation AND what we report
+        // back — falling back to the `where` result only when that search
+        // finds nothing.
+        const searchEnv = { ...process.env, ...provider.envVars };
+        const invokePath = (isWin32 && resolveWindowsExecutable(provider.command, isWin32, searchEnv)) || commandPath;
 
         // Track whether the resolved path could actually be spawned. Without
         // this, a non-spawnable shim falls through to `version: 'available'`

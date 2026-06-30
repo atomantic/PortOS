@@ -97,18 +97,22 @@ export function runCliProviderPrompt(args = {}) {
 
     // CLAUDECODE is deleted from the child env so a nested invocation doesn't
     // think it's running inside the parent Claude Code session.
+    const childEnv = { ...process.env, ...provider.envVars };
+    delete childEnv.CLAUDECODE;
+
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
     // (cmd.exe /c) instead of enabling a shell — shell:true + an args array
     // does NOT escape arguments (DEP0190), so a prompt/path containing a
-    // space would silently corrupt or be shell-injectable. See
+    // space would silently corrupt or be shell-injectable. Resolved against
+    // `childEnv` so a provider-configured PATH override is honored. See
     // resolveWindowsExecutable/prepareWindowsSafeSpawn in
     // server/lib/bufferedSpawn.js.
-    const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+    const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
     const { command: spawnCommand, args: wrappedArgs } = prepareWindowsSafeSpawn(resolvedCommand, spawnArgs);
     const child = spawn(spawnCommand, wrappedArgs, {
       cwd: cwd || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
+      env: childEnv,
       windowsHide: true,
     });
 

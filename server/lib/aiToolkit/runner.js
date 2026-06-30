@@ -24,12 +24,14 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
  * the caller knows exactly which file (and which kind — `.exe` vs
  * `.cmd`/`.bat`) it's about to launch. Filesystem-only (no subprocess). See
  * server/lib/bufferedSpawn.js's `resolveWindowsExecutable` docstring for the
- * full root-cause explanation, mirrored here for self-containment. Pair with
- * `prepareWindowsSafeSpawn` below to get a launchable `{ command, args }`.
+ * full root-cause explanation (including why `searchEnv` matters — a
+ * provider-configured PATH override), mirrored here for self-containment.
+ * Pair with `prepareWindowsSafeSpawn` below to get a launchable
+ * `{ command, args }`.
  */
-function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
+function resolveWindowsExecutable(command, isWin32 = IS_WIN32, searchEnv = process.env) {
   if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
   for (const dir of pathDirs) {
     for (const ext of WIN_EXECUTABLE_EXTS) {
       const candidate = join(dir, `${command}${ext}`);
@@ -55,7 +57,10 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  */
 function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return { command: 'cmd.exe', args: ['/c', command, ...args.map(escapeCmdMetacharsIfUnquoted)] };
+    return {
+      command: 'cmd.exe',
+      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
+    };
   }
   return { command, args };
 }
@@ -393,11 +398,14 @@ export function createRunnerService(config = {}) {
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 
-      const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+      const childEnv = { ...process.env, ...provider.envVars };
+      // Resolved against `childEnv` (not bare process.env) so a
+      // provider-configured PATH override is honored.
+      const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
       const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
       const childProcess = spawn(spawnCommand, spawnArgs, {
         cwd: workspacePath,
-        env: { ...process.env, ...provider.envVars },
+        env: childEnv,
         windowsHide: true
       });
       if (childProcess.stdin) {

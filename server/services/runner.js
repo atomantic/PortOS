@@ -202,16 +202,21 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
+  // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
+  // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
+  const childEnv = { ...process.env, ...provider.envVars };
+  delete childEnv.CLAUDECODE;
+  Object.assign(childEnv, agentGuardEnv(childEnv));
+
   // See the executeCliRun docblock above for why this is a resolve+wrap, not
-  // a shell:true.
-  const resolvedCommand = resolveWindowsExecutable(provider.command) || provider.command;
+  // a shell:true. Resolved against `childEnv` (not bare process.env) so a
+  // provider-configured PATH override is honored.
+  const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
   const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
 
   childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: workspacePath,
-    // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
-    // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
-    env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })(),
+    env: childEnv,
     windowsHide: true
   });
 

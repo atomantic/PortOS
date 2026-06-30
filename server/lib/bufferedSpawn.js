@@ -55,14 +55,20 @@ const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
  * is synchronous and side-effect-free. Pair with `prepareWindowsSafeSpawn`
  * below to get a `{ command, args }` pair that's actually launchable.
  *
+ * Searches `searchEnv.PATH`/`.Path`, NOT necessarily `process.env` — pass the
+ * actual env object the child will run under (e.g. after merging a
+ * provider's `envVars`) so a per-provider `PATH` override is honored. The
+ * default is `process.env` for callers that don't customize the child env.
+ *
  * @param {string} command - bare command name, or an existing path (returned unchanged)
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
+ * @param {NodeJS.ProcessEnv} [searchEnv] - env to read PATH from; defaults to `process.env`
  * @returns {string|null} the resolved absolute path, or null when not found
  *   (off win32, command is already a path, or no match exists on PATH)
  */
-export function resolveWindowsExecutable(command, isWin32 = IS_WIN32) {
+export function resolveWindowsExecutable(command, isWin32 = IS_WIN32, searchEnv = process.env) {
   if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (process.env.PATH || process.env.Path || '').split(delimiter).filter(Boolean);
+  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
   for (const dir of pathDirs) {
     for (const ext of WIN_EXECUTABLE_EXTS) {
       const candidate = join(dir, `${command}${ext}`);
@@ -96,12 +102,15 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  * A resolved native `.exe`/`.com` target needs no wrapping at all — it's
  * directly launchable, so it's returned unchanged.
  *
- * Each arg is also passed through `escapeCmdMetacharsIfUnquoted` (see its
- * docstring) — Node's own argv→command-line quoting only wraps an arg in
- * literal double quotes when it contains whitespace/a quote; an arg with
- * none of those reaches cmd.exe's raw command line UNQUOTED, so a bare
- * metacharacter like `&` in it would still be interpreted by cmd.exe as a
- * command separator despite `shell:false`.
+ * The resolved path AND each arg are passed through
+ * `escapeCmdMetacharsIfUnquoted` (see its docstring) — Node's own
+ * argv→command-line quoting only wraps a value in literal double quotes when
+ * it contains whitespace/a quote; a value with none of those reaches
+ * cmd.exe's raw command line UNQUOTED, so a bare metacharacter like `&` in
+ * it would still be interpreted by cmd.exe as a command separator despite
+ * `shell:false` — this covers both a metacharacter in an arg AND one in the
+ * resolved install path itself (e.g. a custom npm prefix directory named
+ * `C:\Tools&CLIs\npm`).
  *
  * @param {string} command - bare name, or a resolveWindowsExecutable result
  * @param {string[]} args
@@ -110,7 +119,10 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  */
 export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return { command: 'cmd.exe', args: ['/c', command, ...args.map(escapeCmdMetacharsIfUnquoted)] };
+    return {
+      command: 'cmd.exe',
+      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
+    };
   }
   return { command, args };
 }
