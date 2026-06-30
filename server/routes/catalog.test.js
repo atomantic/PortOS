@@ -276,6 +276,27 @@ describe.skipIf(!dbReady)('GET /api/catalog/ingredients/:id/details — batched 
     const r = await request(makeApp()).get(`/api/catalog/ingredients/cat-chr-does-not-exist-${NONCE}/details`);
     expect(r.status).toBe(404);
   });
+
+  it('omits dangling "Appears in" refs whose target was soft-deleted (#1812)', async () => {
+    const liveUni = `details-live-uni-${NONCE}`;
+    const deadUni = `details-dead-uni-${NONCE}`;
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2)', [liveUni, `Live Uni ${NONCE}`]);
+    // Soft-delete this one so its ref becomes dangling.
+    await query('INSERT INTO universes (id, name, deleted, deleted_at) VALUES ($1, $2, TRUE, NOW())', [deadUni, `Dead Uni ${NONCE}`]);
+    const ing = await catalogDB.createIngredient({ type: 'character', name: `Dangling Probe ${NONCE}` });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', liveUni, 'cast-character');
+    await catalogDB.linkIngredientToRef(ing.id, 'universe', deadUni, 'reference');
+
+    const r = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/details`);
+    expect(r.status).toBe(200);
+    const refIds = r.body.refs.map((ref) => ref.refId);
+    expect(refIds).toContain(liveUni);        // live target → chip stays
+    expect(refIds).not.toContain(deadUni);    // dangling target → chip dropped
+
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
+    await query('DELETE FROM universes WHERE id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
+  });
 });
 
 describe.skipIf(!dbReady)('GET /api/catalog/facets + ingredient filters (#1762)', () => {
