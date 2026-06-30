@@ -27,7 +27,12 @@ beforeEach(async () => {
   }
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Tear down the dist watcher the current module instance armed, before the
+  // next test's vi.resetModules() orphans the handle. (Import returns the same
+  // instance the test used — resetModules runs in beforeEach, not yet here.)
+  const mod = await import('./buildId.js').catch(() => null);
+  mod?.__closeWatcherForTests?.();
   if (preservedIndex !== null) {
     writeFileSync(INDEX_PATH, preservedIndex);
     preservedIndex = null;
@@ -53,14 +58,15 @@ describe('buildId — cache invalidation', () => {
     expect(htmlA).toContain(`<meta name="portos-build-id" content="${idA}">`);
     expect(htmlA).toContain('body>A');
 
-    // Simulate a Vite rebuild: new content, new mtime.
+    // Simulate a Vite rebuild: new content, new mtime. The hot-path getters
+    // recompute only on a watcher signal; refreshBuildId() is the explicit,
+    // synchronous recompute hook (deterministic — no fs.watch timing).
     writeFileSync(INDEX_PATH, '<html><head></head><body>B</body></html>');
     const t1 = new Date('2026-02-01T00:00:00Z');
     utimesSync(INDEX_PATH, t1, t1);
 
-    // The refresh is async + off the hot path, so settle it explicitly (this
-    // bypasses the throttle the synchronous getters honor).
-    await mod.refreshBuildId();
+    const snap = mod.refreshBuildId();
+    expect(snap.id).not.toBe(idA);
 
     const idB = mod.getBuildId();
     const htmlB = mod.getStampedIndexHtml();
@@ -69,25 +75,28 @@ describe('buildId — cache invalidation', () => {
     expect(htmlB).toContain('body>B');
   });
 
-  it('getters serve the cached snapshot until the async refresh settles (no hot-path re-stat)', async () => {
+  it('the dist watcher invalidates the cache so a rebuild is picked up off the hot path', async () => {
     writeFileSync(INDEX_PATH, '<html><head></head><body>old</body></html>');
     const t0 = new Date('2026-05-01T00:00:00Z');
     utimesSync(INDEX_PATH, t0, t0);
 
     const mod = await import('./buildId.js');
-    const idOld = mod.getBuildId(); // primes
+    const idOld = mod.getBuildId(); // primes + arms the dist watcher
     expect(idOld).not.toBe('dev');
 
-    // Rebuild on disk. The synchronous getter must still return the cached
-    // (stale) value within the throttle window — it does not re-stat per call.
+    // Rebuild on disk. The synchronous getter does NOT re-stat per call, so the
+    // change is observed only once the dir watcher fires and flags the cache
+    // stale — poll briefly to let the (async) watch event land.
     writeFileSync(INDEX_PATH, '<html><head></head><body>new</body></html>');
     const t1 = new Date('2026-05-02T00:00:00Z');
     utimesSync(INDEX_PATH, t1, t1);
-    expect(mod.getBuildId()).toBe(idOld);
 
-    // Once the explicit refresh settles, the next read reflects the rebuild.
-    const snap = await mod.refreshBuildId();
-    expect(snap.id).not.toBe(idOld);
+    let idNew = idOld;
+    for (let i = 0; i < 60 && idNew === idOld; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      idNew = mod.getBuildId();
+    }
+    expect(idNew).not.toBe(idOld);
     expect(mod.getStampedIndexHtml()).toContain('body>new');
   });
 
