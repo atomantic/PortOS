@@ -41,6 +41,7 @@ import {
   BYOV_RUNTIME_INFO,
   BYOV_VIDEO_RUNTIMES,
   assertByovRuntimeInstalled,
+  invalidateByovReadyCache,
 } from './runtimes.js';
 import { loadHistory, saveHistory } from './history.js';
 // Re-export the extracted runtime + history surface so existing deep imports
