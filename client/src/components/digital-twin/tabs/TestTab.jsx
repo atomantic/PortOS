@@ -344,7 +344,7 @@ export default function TestTab({ onRefresh }) {
         <button
           onClick={generateTests}
           disabled={generating || selectedProviders.length === 0}
-          className="flex items-center justify-center gap-2 px-4 py-3 min-h-[48px] bg-port-accent-2 text-white rounded-lg font-medium hover:bg-port-accent-2/80 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 px-4 py-3 min-h-[48px] bg-port-accent-2 text-port-on-accent-2 rounded-lg font-medium hover:bg-port-accent-2/80 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {generating ? (
             <>

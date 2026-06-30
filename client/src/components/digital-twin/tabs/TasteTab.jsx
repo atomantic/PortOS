@@ -351,7 +351,7 @@ export default function TasteTab({ onRefresh }) {
               <button
                 onClick={() => handleGenerateSummary(reviewSection)}
                 disabled={generatingSummary || reviewResponses.length === 0}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               >
                 {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
                 {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
@@ -423,7 +423,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={handleGoDeeper}
               disabled={loadingPersonalized || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {loadingPersonalized ? <BrailleSpinner /> : <Telescope size={16} />}
@@ -439,7 +439,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={() => handleGenerateSummary(activeSection)}
               disabled={generatingSummary || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
@@ -743,7 +743,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={handleGenerateOverallSummary}
               disabled={generatingSummary || (profile?.completedCount || 0) === 0}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50 whitespace-nowrap"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50 whitespace-nowrap"
             >
               {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
               {profile?.profileSummary ? 'Regenerate' : 'Generate Profile'}

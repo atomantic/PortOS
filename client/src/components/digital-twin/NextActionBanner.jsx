@@ -186,7 +186,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             </p>
             <button
               onClick={() => navigate('/digital-twin/interview')}
-              className="px-4 py-2 bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
+              className="px-4 py-2 bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
             >
               Go to Interview
               <ArrowRight size={14} />
@@ -258,7 +258,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => navigate('/digital-twin/interview')}
-                className="px-4 py-2 bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
+                className="px-4 py-2 bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
               >
                 Import Results
                 <ArrowRight size={14} />
