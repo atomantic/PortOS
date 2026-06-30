@@ -157,7 +157,7 @@ describe('enqueueFirstPassSceneFrames (#1867)', () => {
   });
 
   it('enqueues a creativeDirector-tagged job per scene lacking a reference frame', async () => {
-    const project = { id: 'cd-1', treatment: { scenes: [scene({ sceneId: 's1' }), scene({ sceneId: 's2' })] } };
+    const project = { id: 'cd-1', aspectRatio: '16:9', treatment: { scenes: [scene({ sceneId: 's1' }), scene({ sceneId: 's2' })] } };
     const out = await enqueueFirstPassSceneFrames(project);
     expect(out.mode).toBe('local');
     expect(out.enqueued).toEqual([
@@ -170,6 +170,26 @@ describe('enqueueFirstPassSceneFrames (#1867)', () => {
     expect(firstJob.params.creativeDirector).toEqual({ projectId: 'cd-1', sceneId: 's1' });
     expect(firstJob.params.prompt).toBe('a cat walks into a noir alley');
     expect(firstJob.params.pythonPath).toBe('/py');
+  });
+
+  it('renders at the project aspect ratio, not the worker default square (#1867 fix)', async () => {
+    const wide = { id: 'cd-1', aspectRatio: '16:9', treatment: { scenes: [scene({ sceneId: 's1' })] } };
+    const wideOut = await enqueueFirstPassSceneFrames(wide);
+    expect(wideOut.enqueued).toHaveLength(1);
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ width: 768, height: 432 });
+
+    enqueueJob.mockClear();
+    const tall = { id: 'cd-2', aspectRatio: '9:16', treatment: { scenes: [scene({ sceneId: 's1' })] } };
+    await enqueueFirstPassSceneFrames(tall);
+    expect(enqueueJob.mock.calls[0][0].params).toMatchObject({ width: 432, height: 768 });
+  });
+
+  it('falls back to undefined width/height for an unrecognized aspectRatio rather than throwing', async () => {
+    const project = { id: 'cd-1', aspectRatio: 'bogus', treatment: { scenes: [scene({ sceneId: 's1' })] } };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out.enqueued).toHaveLength(1);
+    expect(enqueueJob.mock.calls[0][0].params.width).toBeUndefined();
+    expect(enqueueJob.mock.calls[0][0].params.height).toBeUndefined();
   });
 
   it('skips a scene that already has a reference frame (idempotent re-run)', async () => {
