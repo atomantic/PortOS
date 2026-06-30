@@ -43,6 +43,13 @@ const DIST_DIR = dirname(INDEX_PATH);
 let cached = null;
 let dirty = false;
 let watcher = null;
+let lastStatAt = 0;
+
+// When the watcher CAN'T be armed (fs.watch unsupported, or it errored out), a
+// rebuild would otherwise go undetected until restart. In that degraded mode we
+// fall back to a stat — throttled so it stays cheap — so the cache self-heals.
+// No stat is taken while the watcher is healthy.
+const STAT_FALLBACK_MS = 1000;
 
 const DEV_SNAPSHOT = { id: 'dev', html: null, mtimeMs: 0 };
 
@@ -86,9 +93,28 @@ function ensureWatcher() {
     });
     watcher.unref(); // never keep the event loop alive
     watcher.on('error', () => { closeWatcher(); }); // re-arm on next read
+    // The watcher only catches FUTURE writes; if the dist dir just appeared
+    // (a build completed against a running dev server), recompute once so an
+    // index.html that landed before the watcher armed isn't missed.
+    dirty = true;
   } catch {
     watcher = null;
   }
+}
+
+// Degraded-mode fallback: only runs when the watcher is NOT armed. A throttled
+// stat detects a rebuild so the cache can't go permanently stale on a platform
+// without working fs.watch. Cheap (OS inode cache) and bounded to one per
+// STAT_FALLBACK_MS regardless of request rate.
+function maybeStatRefresh() {
+  const now = Date.now();
+  if (now - lastStatAt < STAT_FALLBACK_MS) return;
+  lastStatAt = now;
+  if (!existsSync(INDEX_PATH)) {
+    if (cached.id !== 'dev') cached = DEV_SNAPSHOT;
+    return;
+  }
+  if (statSync(INDEX_PATH).mtimeMs !== cached.mtimeMs) cached = computeSync();
 }
 
 function closeWatcher() {
@@ -102,6 +128,10 @@ function ensureFresh() {
   if (!cached || dirty) {
     cached = computeSync();
     dirty = false;
+  } else if (!watcher) {
+    // Watcher couldn't be armed/maintained — fall back to a throttled stat so a
+    // rebuild is still picked up instead of serving stale chunks until restart.
+    maybeStatRefresh();
   }
   return cached;
 }
