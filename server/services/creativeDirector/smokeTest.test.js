@@ -22,6 +22,15 @@ vi.mock('../../lib/mediaModels.js', () => ({
   getDefaultVideoModelId: () => 'ltx23_distilled_q4',
 }));
 
+// createProject (via local.js) now imports catalogDB for the #1808 catalog-seed
+// path; mock it so the smoke test doesn't pull in the real Postgres/instances/
+// peer-sync chain (the smoke project passes no catalogIngredientIds).
+vi.mock('../catalogDB.js', () => ({
+  resolveIngredientsByIds: vi.fn(async () => []),
+  linkIngredientsToCreativeDirector: vi.fn(async () => []),
+  cdRefRoleForType: (type) => type,
+}));
+
 const { createSmokeTestProject } = await import('./smokeTest.js');
 
 beforeEach(() => {

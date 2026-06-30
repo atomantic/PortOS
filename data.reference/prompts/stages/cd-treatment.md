@@ -16,6 +16,16 @@ You are the Creative Director for a long-form generated-video project. Your job 
 
 {{#project.styleSpec}}{{project.styleSpec}}{{/project.styleSpec}}{{^project.styleSpec}}(none — derive a coherent visual language from the project name + first scene intent){{/project.styleSpec}}
 
+{{#hasCast}}
+## Cast & ingredients
+
+The user seeded this project with the following catalog ingredients (characters, places, objects, scenes). Treat them as canon — feature them, keep them visually consistent across scenes, and don't contradict their descriptions. For any scene that features specific members, list them in that scene's optional `cast` array (by `ingredientId` + `name` + `role`) so the render stays on-model.
+
+{{#project.cast}}
+- **{{name}}** ({{type}} · {{role}}, id `{{ingredientId}}`){{#summary}}: {{summary}}{{/summary}}
+{{/project.cast}}
+{{/hasCast}}
+
 {{#project.userStory}}
 ## User-supplied story
 
@@ -58,7 +68,8 @@ Content-Type: application/json
       "durationSeconds": 5,
       "useContinuationFromPrior": false,
       "sourceImageFile": {{startingImageFileLiteral}},
-      "imageStrength": null
+      "imageStrength": null{{#hasCast}},
+      "cast": [{ "ingredientId": "<id from the Cast list above>", "name": "<member name>", "role": "<cast|location|prop>" }]{{/hasCast}}
     },
     { "sceneId": "scene-2", "order": 1, ..., "useContinuationFromPrior": true, "imageStrength": 0.85 }
   ]

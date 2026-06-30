@@ -36,6 +36,20 @@ const safeBasename = z.string()
   .refine((v) => v !== '.' && v !== '..',
     'must not be `.` or `..`');
 
+// One cast member — a catalog ingredient seeded into the project (#1808). Stored
+// on the project record and surfaced to the treatment agent for grounding +
+// per-scene casting. `ingredientId` is the stable catalog id so the agent (and a
+// future casting UI) can reference a specific member. The server derives this
+// array from `catalogIngredientIds`; it's accepted on the wire too so a direct
+// API caller (or a sync round-trip) can supply it explicitly.
+export const creativeDirectorCastMemberSchema = z.object({
+  ingredientId: z.string().min(1).max(64),
+  name: z.string().min(1).max(200),
+  type: z.string().max(64).optional(),
+  role: z.string().max(64).optional(),
+  summary: z.string().max(500).optional(),
+});
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -45,6 +59,14 @@ export const creativeDirectorProjectCreateSchema = z.object({
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
   userStory: z.string().max(10000).nullable().optional(),
+  // Catalog "Remix into → Creative Director" handoff (#1761/#1808): the selected
+  // ingredient ids. The service resolves them to live records, folds them into
+  // the project `cast`, and links them via catalog_ingredient_refs. Bounded to
+  // 50 to match the remix multi-select cap.
+  catalogIngredientIds: z.array(z.string().trim().max(64)).max(50).optional(),
+  // Server-derived from catalogIngredientIds; also accepted directly for off-UI
+  // callers and sync. Schema-parity with buildProjectRecord's `cast` field.
+  cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
   // Audio defaults OFF for CD projects — current model audio output is
   // inconsistent across renders and the user can re-enable per-project.
   // (videoGen one-offs still default to enabled.)
@@ -96,6 +118,11 @@ export const creativeDirectorSceneSchema = z.object({
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
+  // Per-scene casting (#1808) — the catalog cast members the agent bound to this
+  // scene, referencing the project `cast` by ingredientId. Optional: the agent
+  // only sets it when a scene features specific characters/places, and bare
+  // (non-remix) projects never carry it.
+  cast: z.array(creativeDirectorCastMemberSchema).max(20).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(1).optional(),
     notes: z.string().max(2000).optional(),

@@ -99,6 +99,32 @@ describe('buildTreatmentPrompt — template-rendered output', () => {
     expect(out).toContain('"sourceImageFile": "hero.png"');
     expect(out).toContain('Starting image: /data/images/hero.png');
   });
+
+  it('hides the Cast section + per-scene cast field when no cast is seeded (#1808)', async () => {
+    const out = await buildTreatmentPrompt(baseProject);
+    expect(out).not.toContain('## Cast & ingredients');
+    expect(out).not.toContain('"cast"');
+  });
+
+  it('renders the Cast section + per-scene cast field when ingredients are seeded (#1808)', async () => {
+    const out = await buildTreatmentPrompt({
+      ...baseProject,
+      cast: [
+        { ingredientId: 'cat-c', name: 'Mara', type: 'character', role: 'cast', summary: 'A tall figure in a grey coat.' },
+        { ingredientId: 'cat-p', name: 'The Spire', type: 'place', role: 'location' },
+      ],
+    });
+    expect(out).toContain('## Cast & ingredients');
+    // Member lines render name, type · role, id, and the optional summary.
+    expect(out).toContain('**Mara** (character · cast, id `cat-c`): A tall figure in a grey coat.');
+    // No summary → the `{{#summary}}` block stays empty (no trailing colon).
+    expect(out).toContain('**The Spire** (place · location, id `cat-p`)');
+    expect(out).not.toContain('**The Spire** (place · location, id `cat-p`):');
+    // The header + intro render exactly once, not per member.
+    expect(out.match(/## Cast & ingredients/g)).toHaveLength(1);
+    // The per-scene cast field appears in the JSON output contract.
+    expect(out).toContain('"cast": [{ "ingredientId":');
+  });
 });
 
 describe('buildEvaluatePrompt — multi-frame sampling', () => {

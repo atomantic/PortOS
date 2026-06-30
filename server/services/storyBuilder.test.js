@@ -33,10 +33,27 @@ vi.mock('../lib/stageRunner.js', () => ({
 // real DB (#1761). listIngredients (the batch resolve) and linkIngredientsToSeries
 // (the batch link) are spies the tests program per case; the type→role vocabulary
 // itself is covered in catalogDB.test.js.
-const catalogMocks = vi.hoisted(() => ({
-  listIngredients: vi.fn(),
-  linkIngredientsToSeries: vi.fn(),
-}));
+const catalogMocks = vi.hoisted(() => {
+  const listIngredients = vi.fn();
+  return {
+    listIngredients,
+    linkIngredientsToSeries: vi.fn(),
+    // resolveIngredientsByIds is the shared resolver storyBuilder now delegates
+    // to (#1808). Mirror the real dedupe + pick-order logic but route the batch
+    // fetch through the mocked listIngredients so every existing per-case
+    // `listIngredients.mockResolvedValue(...)` + call-args assertion still drives
+    // it unchanged.
+    resolveIngredientsByIds: vi.fn(async (ids) => {
+      const list = [...new Set((Array.isArray(ids) ? ids : [])
+        .filter((id) => typeof id === 'string' && id.trim())
+        .map((id) => id.trim()))];
+      if (list.length === 0) return [];
+      const { items } = await listIngredients({ ids: list, limit: list.length });
+      const byId = new Map((items || []).map((ing) => [ing.id, ing]));
+      return list.map((id) => byId.get(id)).filter(Boolean);
+    }),
+  };
+});
 vi.mock('./catalogDB.js', () => catalogMocks);
 
 const sb = await import('./storyBuilder.js');
