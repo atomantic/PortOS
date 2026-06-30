@@ -353,20 +353,34 @@ export async function buildTrackAssetManifest(track) {
 }
 
 /**
- * Hash a Creative Director project's direct image input (`startingImageFile`) so
- * the receiver can pull the bytes from `/data/images/`. `startingImageFilename`
- * returns null for an external URL / non-local path, so those never ship (the
- * receiver resolves the same URL itself). Scene VIDEO renders are NOT hashed
- * here: they live in the project's linked media collection, which federates as
- * its own record and ships its bytes via that collection's manifest — duplicating
- * them here would double the transfer. This mirrors buildAuthorAssetManifest:
- * one direct asset, missing-local-file skipped silently.
+ * Hash a Creative Director project's direct image input (`startingImageFile`)
+ * and first-pass music bed (`musicBed.filename`, #1928) so the receiver can
+ * pull the bytes from `/data/images/` and `/data/music/` respectively.
+ * `startingImageFilename` returns null for an external URL / non-local path,
+ * so those never ship (the receiver resolves the same URL itself). Scene
+ * VIDEO renders are NOT hashed here: they live in the project's linked media
+ * collection, which federates as its own record and ships its bytes via that
+ * collection's manifest — duplicating them here would double the transfer.
+ * The music bed has no such alternate channel (unlike scene video, it isn't
+ * filed into the linked collection), so without bundling it here a subscribed
+ * peer would receive a dangling `musicBed.filename` reference — mirrors how
+ * `buildTrackAssetManifest` / `buildMusicVideoAssetManifest` bundle their
+ * `PATHS.music` audio. Each direct asset is missing-local-file skipped
+ * silently (mirrors buildAuthorAssetManifest).
  */
 export async function buildProjectAssetManifest(project) {
-  const filename = startingImageFilename(project?.startingImageFile);
-  if (!filename) return [];
-  const entry = await hashImageForManifest(filename);
-  return entry ? [entry] : [];
+  const entries = [];
+  const imageFilename = startingImageFilename(project?.startingImageFile);
+  if (imageFilename) {
+    const imageEntry = await hashImageForManifest(imageFilename);
+    if (imageEntry) entries.push(imageEntry);
+  }
+  const musicBedFilename = project?.musicBed?.filename;
+  if (isStr(musicBedFilename)) {
+    const musicEntry = await hashSimpleAsset(musicBedFilename, 'music', PATHS.music);
+    if (musicEntry) entries.push(musicEntry);
+  }
+  return entries;
 }
 
 // `data/video-history.json` is a FLAT array of video-generation rows

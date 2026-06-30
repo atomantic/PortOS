@@ -4,7 +4,7 @@ import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
-export default function OverviewTab({ project, onProjectUpdate }) {
+export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueued }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
   const [autoCasting, setAutoCasting] = useState(false);
@@ -115,6 +115,15 @@ export default function OverviewTab({ project, onProjectUpdate }) {
           cast: result?.project?.cast || [],
           ...(composing ? { status: 'planning' } : {}),
         });
+        // Portraits land on a catalog ingredient (no project-status change to
+        // ride), and the music bed lands on `project.musicBed` directly — both
+        // attach asynchronously, well after this response. A project that
+        // hasn't been started/composed yet stays at status 'draft', which the
+        // detail page's poll gate treats as terminal (no compose flip to
+        // escape it, unlike the `composing` branch above). Tell the parent to
+        // extend polling for a bit so either result actually shows up in the
+        // open tab instead of requiring a manual Refresh / navigate-away.
+        if (firstPassQueued > 0 || musicBedQueued) onAsyncWorkQueued?.();
         // Suffix the portrait-gen count + music-bed status onto whichever
         // success toast fires, so a user who opted into either first-pass gen
         // sees it kicked off in one place.
