@@ -10,6 +10,11 @@ import { getProviderById } from './providers.js';
 import { getConfig as getCosConfig } from './cos.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';
+
+// Re-export the canonical token estimator so existing importers
+// (e.g. memoryRetriever.js) keep their `from './memoryEmbeddings.js'` path.
+export { estimateTokens };
 
 const MODEL_LIST_TIMEOUT_MS = 10000;
 const MODEL_LOAD_TIMEOUT_MS = 60000;
@@ -427,21 +432,11 @@ export async function generateQueryEmbedding(query, context = {}) {
 }
 
 /**
- * Estimate token count for text (rough approximation)
- * Used for context budgeting
- */
-export function estimateTokens(text) {
-  if (!text) return 0;
-  // Rough estimate: ~4 chars per token for English text
-  return Math.ceil(text.length / 4);
-}
-
-/**
  * Truncate text to fit within token budget
  */
 export function truncateToTokens(text, maxTokens) {
   if (!text) return '';
-  const maxChars = maxTokens * 4;
+  const maxChars = maxTokens * CHARS_PER_TOKEN;
   if (text.length <= maxChars) return text;
   return text.substring(0, maxChars - 3) + '...';
 }

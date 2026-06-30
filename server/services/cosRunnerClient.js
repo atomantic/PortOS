@@ -8,8 +8,9 @@
 import { io } from 'socket.io-client';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { PORTS } from '../lib/ports.js';
 
-const COS_RUNNER_URL = process.env.COS_RUNNER_URL || 'http://localhost:5558';
+const COS_RUNNER_URL = process.env.COS_RUNNER_URL || `http://localhost:${PORTS.COS}`;
 
 /**
  * Read a runner response body as JSON, tolerating a non-JSON body.

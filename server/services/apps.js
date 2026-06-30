@@ -48,11 +48,11 @@ function buildPortosApp() {
       // on API. If no cert is present, don't advertise api-local — nothing is listening
       // there and Overview would otherwise show a dead port.
       { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
-      { name: 'portos-cos', port: 5558, ports: { api: 5558 } },
+      { name: 'portos-cos', port: PORTS.COS, ports: { api: PORTS.COS } },
       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
-      { name: 'portos-autofixer', port: 5559, ports: { api: 5559 } },
-      { name: 'portos-autofixer-ui', port: 5560, ports: { ui: 5560 } },
-      { name: 'portos-browser', port: 5556, ports: { cdp: 5556, health: 5557 } }
+      { name: 'portos-autofixer', port: PORTS.AUTOFIXER, ports: { api: PORTS.AUTOFIXER } },
+      { name: 'portos-autofixer-ui', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
+      { name: 'portos-browser', port: PORTS.CDP, ports: { cdp: PORTS.CDP, health: PORTS.CDP_HEALTH } }
     ],
     envFile: '.env',
     icon: 'portos',
