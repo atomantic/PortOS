@@ -28,8 +28,10 @@
  * files (all now log under `stageKey`).
  */
 
-import { access, copyFile, mkdir, readFile, writeFile, constants } from 'fs/promises';
-import { dirname, join } from 'path';
+import { access, copyFile, mkdir, readFile, constants } from 'fs/promises';
+import { join } from 'path';
+
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 /**
  * @param {string} stageKey  - stage-config key, e.g. `pipeline-editorial-character-consistency`
@@ -85,8 +87,9 @@ export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}
           return;
         }
         installed.stages[stageKey] = sample.stages[stageKey];
-        await mkdir(dirname(installedConfigPath), { recursive: true });
-        await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
+        // Canonical atomic write (temp + rename) so an interrupted boot/upgrade
+        // can't leave a truncated stage-config.json; atomicWrite ensures the dir.
+        await atomicWrite(installedConfigPath, `${JSON.stringify(installed, null, 2)}\n`);
         const action = installedExists ? 'merged' : 'created';
         console.log(`📝 ${stageKey} stage-config (${action}): 1 added`);
       } catch (err) {
