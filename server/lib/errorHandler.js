@@ -311,7 +311,12 @@ export function setupProcessErrorHandlers(io) {
     serverError.canAutoFix = true; // Could be auto-fixable
 
     console.error(`💥 Uncaught Exception: ${serverError.message}`);
-    console.error(error.stack);
+    // Guard the raw-throw deref — a non-Error throw value (e.g. `throw null`)
+    // has no `.stack`, and the safety net itself must never throw while handling
+    // a failure (it would mask the original and skip the clean exit/flush below).
+    if (error instanceof Error) {
+      console.error(error.stack);
+    }
 
     if (io) {
       emitErrorEvent(io, serverError);
