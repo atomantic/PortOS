@@ -141,6 +141,32 @@ describe('analyzePcm', () => {
       expect(sections[i].startSec).toBeCloseTo(sections[i - 1].endSec, 3);
       expect(sections[i].label).toBeTruthy();
     }
+    // Every section carries a normalized 0..1 energy (#1915), and the loudest is 1.
+    for (const s of sections) {
+      expect(typeof s.energy).toBe('number');
+      expect(s.energy).toBeGreaterThan(0);
+      expect(s.energy).toBeLessThanOrEqual(1);
+    }
+    expect(Math.max(...sections.map((s) => s.energy))).toBe(1);
+  });
+
+  it('assigns higher energy to a louder section than a quiet one (#1915)', () => {
+    // A quiet first half and a loud second half: the energy jump forces a
+    // section boundary, and the loud section must read a higher energy.
+    const samples = clickTrack({ bpm: 120, durationSec: 40 });
+    const half = Math.round(samples.length / 2);
+    for (let i = 0; i < half; i++) samples[i] *= 0.15;
+    const { sections } = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(sections.length).toBeGreaterThanOrEqual(2);
+    const quiet = sections[0];
+    const loud = sections[sections.length - 1];
+    expect(loud.energy).toBeGreaterThan(quiet.energy);
+  });
+
+  it('reports energy 1 for the single fallback section of a short track', () => {
+    const { sections } = analyzePcm(clickTrack({ bpm: 120, durationSec: 4 }), ANALYSIS_SAMPLE_RATE);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].energy).toBe(1);
   });
 
   it('reports no tempo and one section for a sustained pure tone', () => {
