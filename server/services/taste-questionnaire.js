@@ -10,7 +10,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { resolveAPIProvider, callProviderAISimple } from '../lib/aiProvider.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';
@@ -424,7 +424,7 @@ async function saveTasteProfile(profile) {
     await ensureDir(DIGITAL_TWIN_DIR);
   }
   profile.updatedAt = now();
-  await writeFile(TASTE_PROFILE_FILE, JSON.stringify(profile, null, 2));
+  await atomicWrite(TASTE_PROFILE_FILE, profile);
   profileCache = profile;
 }
 

@@ -24,7 +24,7 @@ import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningIns
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
@@ -592,11 +592,11 @@ export async function saveScript(name, content, metadata = {}) {
 
   // Save metadata
   const metaPath = join(SCRIPTS_DIR, `${name}.json`);
-  await writeFile(metaPath, JSON.stringify({
+  await atomicWrite(metaPath, {
     name,
     createdAt: new Date().toISOString(),
     ...metadata
-  }, null, 2));
+  });
 
   return { path: scriptPath, name };
 }

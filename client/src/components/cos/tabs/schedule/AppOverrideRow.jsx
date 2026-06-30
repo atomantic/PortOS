@@ -1,7 +1,7 @@
 import { useState, memo } from 'react';
 import AppIcon from '../../../AppIcon';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
+import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES, toggleAppMetadataOverride, agentOptionButtonClass } from '../../constants';
 import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { INTERVAL_LABELS } from './scheduleConstants';
@@ -53,6 +53,22 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
     const next = { ...(override?.taskMetadata || {}) };
     if (value === '') delete next.issueAuthorFilter;
     else next.issueAuthorFilter = value;
+    const taskMetadata = Object.keys(next).length ? next : null;
+    await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
+    setUpdating(false);
+  };
+
+  // claim-issue per-app swarm override. '' = inherit the global default; '0'
+  // = explicit off; 2..6 = swarm with that many agents. Sent as a Number: the
+  // server's sanitizer KEEPS an explicit 0 (it's how a per-app override turns
+  // swarm off even when the global default has it on) and 2..6; only 1 /
+  // out-of-range / non-integer are dropped. Inherit is the absent key (deleted
+  // above), distinct from a stored 0.
+  const handleSwarmCountChange = async (raw) => {
+    setUpdating(true);
+    const next = { ...(override?.taskMetadata || {}) };
+    if (raw === '') delete next.swarmCount;
+    else next.swarmCount = Number(raw);
     const taskMetadata = Object.keys(next).length ? next : null;
     await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
     setUpdating(false);
@@ -144,6 +160,22 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           >
             <option value="">Inherit ({ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (globalTaskMetadata?.issueAuthorFilter || 'self'))?.label})</option>
             {ISSUE_AUTHOR_FILTER_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        )}
+
+        {SWARM_TASK_TYPES.has(taskType) && (
+          <select
+            value={override?.taskMetadata?.swarmCount ?? ''}
+            onChange={(e) => handleSwarmCountChange(e.target.value)}
+            disabled={updating}
+            aria-label={`Swarm mode for ${app.name}`}
+            title="How many independent issues this app claims in parallel per run"
+            className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
+          >
+            <option value="">Inherit ({SWARM_COUNT_OPTIONS.find(o => o.value === (globalTaskMetadata?.swarmCount || 0))?.label})</option>
+            {SWARM_COUNT_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

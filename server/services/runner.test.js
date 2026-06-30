@@ -9,6 +9,13 @@ vi.mock('child_process', async (importOriginal) => {
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) metadata sites (#1837);
+  // route it through the mocked fs/promises.writeFile so it resolves cleanly.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
 }));
 
 vi.mock('fs/promises', () => ({

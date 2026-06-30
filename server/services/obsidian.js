@@ -10,7 +10,7 @@ import { readFile, writeFile, readdir, stat, unlink } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const VAULTS_FILE = join(PATHS.brain, 'obsidian-vaults.json');
 
@@ -33,7 +33,7 @@ export async function getVaults() {
 
 async function saveVaults(vaults) {
   await ensureDir(PATHS.brain);
-  await writeFile(VAULTS_FILE, JSON.stringify({ vaults }, null, 2));
+  await atomicWrite(VAULTS_FILE, { vaults });
 }
 
 export async function addVault({ name, path }) {

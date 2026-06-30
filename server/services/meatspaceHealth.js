@@ -6,9 +6,8 @@
  * to the shared MortalLoom.json; otherwise local PortOS data files are used.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -30,7 +29,7 @@ const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
 async function writeLocal(file, data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(file, JSON.stringify(data, null, 2));
+  await atomicWrite(file, data);
 }
 
 // === Blood Tests ===

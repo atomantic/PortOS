@@ -14,7 +14,14 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn(),
   loadSlashdoFile: vi.fn().mockResolvedValue(''),
   safeJSONParse: (content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } },
-  atomicWrite: vi.fn().mockResolvedValue(),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) schedule-save site (#1837);
+  // route it through the mocked fs/promises.writeFile so the tests that read
+  // writeFile.mock.calls.at(-1)[1] still observe the persisted schedule JSON.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
   PATHS: { cos: '/mock/data/cos', root: '/mock', reports: '/mock/reports', scripts: '/mock/scripts' },
   HOUR: 60 * 60 * 1000,
   DAY: 24 * 60 * 60 * 1000,

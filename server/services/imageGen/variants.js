@@ -21,7 +21,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { cleanImageBuffer } from '../../lib/imageClean.js';
 import { removeCornerWatermark } from '../../lib/imageWatermark.js';
 import { applyLightRegen, computePixelDelta } from './regen.js';
@@ -91,7 +91,7 @@ export async function persistVariant({
 
   await Promise.all([
     writeFile(outPath, data),
-    writeFile(sidecarPath, JSON.stringify(variantMeta, null, 2)),
+    atomicWrite(sidecarPath, variantMeta),
   ]);
 
   const filedCollections = await autoFileCleanedToSourceCollections(sourceFilename, outFilename).catch((err) => {

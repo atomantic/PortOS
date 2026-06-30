@@ -20,8 +20,8 @@
  */
 
 import { join } from 'path';
-import { writeFile, unlink } from 'fs/promises';
-import { ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { unlink } from 'fs/promises';
+import { atomicWrite, ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { createMemoryEntry } from './brainStorage.js';
 
 const MAX_MEMORY_CONTENT = 9800;
@@ -445,7 +445,7 @@ async function archiveConversation(summary) {
     transcript: summary.transcript,
     importedAt: new Date().toISOString()
   };
-  await writeFile(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  await atomicWrite(filePath, payload);
   return fname;
 }
 

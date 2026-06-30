@@ -15,6 +15,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 import {
   assertSafeFilename,
+  atomicWrite,
   ensureDir,
   pathExists,
   expandHome,
@@ -858,6 +859,54 @@ describe('fileUtils', () => {
       const realFailure = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
       fsPromises.mkdir.mockRejectedValueOnce(realFailure);
       await expect(ensureDir(target)).rejects.toThrow(/EACCES/);
+    });
+  });
+
+  describe('atomicWrite', () => {
+    let tmpRoot;
+
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-atomicwrite-'));
+    });
+
+    afterEach(() => {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('serializes a plain object with 2-space indentation', async () => {
+      const target = join(tmpRoot, 'obj.json');
+      await atomicWrite(target, { b: 2, a: 1 });
+      expect(await readFile(target, 'utf8')).toBe('{\n  "b": 2,\n  "a": 1\n}');
+    });
+
+    it('writes a string payload verbatim (preserving a trailing newline)', async () => {
+      const target = join(tmpRoot, 'raw.json');
+      await atomicWrite(target, '{"x":1}\n');
+      expect(await readFile(target, 'utf8')).toBe('{"x":1}\n');
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'preserves the destination file\'s restrictive mode on rewrite (regression: #1837)',
+      async () => {
+        const target = join(tmpRoot, 'secret.json');
+        // Seed a hand-restricted secret file (e.g. an OAuth tokens.json the user
+        // chmod 600'd). The temp-write + rename must NOT widen it to the umask
+        // default — a plain writeFile(existing) kept the inode's mode, and
+        // atomicWrite mirrors that.
+        writeFileSync(target, '{"token":"old"}', { mode: 0o600 });
+        const { chmodSync } = await import('fs');
+        chmodSync(target, 0o600); // ensure 600 regardless of umask at creation
+        await atomicWrite(target, { token: 'new' });
+        const { statSync } = await import('fs');
+        expect(statSync(target).mode & 0o777).toBe(0o600);
+        expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ token: 'new' });
+      }
+    );
+
+    it('creates a new file at the default mode when the destination does not exist', async () => {
+      const target = join(tmpRoot, 'fresh.json');
+      await atomicWrite(target, { created: true });
+      expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ created: true });
     });
   });
 });

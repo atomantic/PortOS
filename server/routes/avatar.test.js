@@ -71,10 +71,15 @@ describe('avatar routes', () => {
       expect(res.status).toBe(404);
       // The route sets Content-Type to gltf-binary before piping; res.json() does
       // not overwrite an existing Content-Type, so the body arrives as text.
-      expect(JSON.parse(res.text).error).toMatch(/unavailable/i);
+      const body = JSON.parse(res.text);
+      expect(body.error).toMatch(/unavailable/i);
+      // Standard error envelope: { error, code, timestamp } — same shape
+      // errorMiddleware stamps everywhere else (regression for issue-1836).
+      expect(body.code).toBe('NOT_FOUND');
+      expect(typeof body.timestamp).toBe('number');
     });
 
-    it('responds with 500 on non-ENOENT stream error before headers sent', async () => {
+    it('responds with 500 + full error envelope on non-ENOENT stream error before headers sent', async () => {
       pathExists.mockResolvedValue(true);
       const errStream = new Readable({
         read() {
@@ -89,6 +94,10 @@ describe('avatar routes', () => {
 
       const res = await request(buildApp()).get('/api/avatar/model.glb');
       expect(res.status).toBe(500);
+      const body = JSON.parse(res.text);
+      expect(body.error).toMatch(/unavailable/i);
+      expect(body.code).toBe('INTERNAL_ERROR');
+      expect(typeof body.timestamp).toBe('number');
     });
   });
 

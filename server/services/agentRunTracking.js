@@ -9,7 +9,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession, recordMessages } from './usage.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -45,7 +45,7 @@ export async function createAgentRun(agentId, task, model, provider, workspacePa
     outputSize: 0
   };
 
-  await writeFile(join(runDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
+  await atomicWrite(join(runDir, 'metadata.json'), metadata);
   await writeFile(join(runDir, 'prompt.txt'), task.description || '');
   await writeFile(join(runDir, 'output.txt'), '');
 
@@ -127,7 +127,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
     }
   }
 
-  await writeFile(metaPath, JSON.stringify(metadata, null, 2));
+  await atomicWrite(metaPath, metadata);
   await writeFile(join(runDir, 'output.txt'), output || '');
 
   // Record usage for successful CoS agent runs (estimate ~4 chars per token)

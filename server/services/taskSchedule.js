@@ -19,11 +19,10 @@
  *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
 
-import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
+import { atomicWrite, DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
@@ -552,7 +551,7 @@ export async function loadSchedule() {
 async function saveSchedule(schedule) {
   await ensureDataDir();
   schedule.lastUpdated = new Date().toISOString();
-  await writeFile(SCHEDULE_FILE, JSON.stringify(schedule, null, 2));
+  await atomicWrite(SCHEDULE_FILE, schedule);
 }
 
 // ============================================================
