@@ -198,10 +198,9 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: 'C:\\Users\\Joe\\AppData\\npm\\claude.cmd\r\n', stderr: '' });
-      // Even with the runner's shell:true workaround, simulate a genuinely
-      // unspawnable shim (e.g. corrupted/missing target) — a spawn error
-      // carries a string code (ENOENT), distinct from a non-zero exit's
-      // numeric code.
+      // Simulate a genuinely unspawnable shim even after resolveWindowsExecutable
+      // picks it (e.g. corrupted/missing target) — a spawn error carries a
+      // string code (ENOENT), distinct from a non-zero exit's numeric code.
       const e = new Error('spawn claude.cmd ENOENT'); e.code = 'ENOENT';
       return cb(e);
     });
