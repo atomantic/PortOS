@@ -55,9 +55,30 @@ const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
  */
 function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
   if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return { command: 'cmd.exe', args: ['/c', command, ...args] };
+    return { command: 'cmd.exe', args: ['/c', command, ...args.map(escapeCmdMetacharsIfUnquoted)] };
   }
   return { command, args };
+}
+
+// cmd.exe metacharacters that act as command separators / redirection /
+// grouping on its raw command line.
+const CMD_METACHAR_RE = /[&|<>^()]/g;
+// Node's argv→command-line quoting wraps an argument in literal double
+// quotes only when it contains whitespace or a `"`; characters inside that
+// quoted span are not re-interpreted by cmd.exe.
+const NEEDS_NODE_QUOTING_RE = /[\s"]/;
+
+/**
+ * Caret-escape cmd.exe metacharacters, but ONLY when Node's own quoting
+ * would otherwise leave the argument unquoted on cmd.exe's raw command line
+ * (an argument WITH whitespace is already double-quoted by Node, and
+ * caret-escaping it too would inject literal `^` into the value the target
+ * program receives). Mirrors server/lib/bufferedSpawn.js for self-containment.
+ */
+function escapeCmdMetacharsIfUnquoted(value) {
+  const str = String(value);
+  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
+  return str.replace(CMD_METACHAR_RE, '^$&');
 }
 
 // On Windows, taskkill (used below) runs in a separate detached process that

@@ -195,6 +195,32 @@ describe('prepareWindowsSafeSpawn', () => {
     const result = prepareWindowsSafeSpawn('opencode', ['exec', '-'], true);
     expect(result).toEqual({ command: 'opencode', args: ['exec', '-'] });
   });
+
+  it('caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
+    // foo&calc has no whitespace, so Node's own argv quoting would NOT wrap
+    // it in literal quotes — the bare `&` would reach cmd.exe's raw command
+    // line and be interpreted as a command separator without this.
+    const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['foo&calc'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^&calc']);
+  });
+
+  it('does NOT escape metacharacters in an arg that already contains whitespace (Node will quote it)', () => {
+    // An arg with a space is already wrapped in literal double quotes by
+    // Node's own argv escaping — caret-escaping it too would inject literal
+    // `^` characters into the value the target program receives.
+    const result = prepareWindowsSafeSpawn('C:\\npm\\codex.cmd', ['describe this & list colors'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\codex.cmd', 'describe this & list colors']);
+  });
+
+  it('escapes multiple metacharacters in an unquoted arg', () => {
+    const result = prepareWindowsSafeSpawn('C:\\npm\\tool.cmd', ['a|b>c<d'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^|b^>c^<d']);
+  });
+
+  it('never escapes off Windows, even for an unquoted metacharacter arg', () => {
+    const result = prepareWindowsSafeSpawn('/usr/local/bin/tool.cmd', ['foo&bar'], false);
+    expect(result.args).toEqual(['foo&bar']);
+  });
 });
 
 describe('bufferedSpawn — structured result', () => {
