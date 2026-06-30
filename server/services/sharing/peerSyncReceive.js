@@ -260,6 +260,13 @@ export async function applyIncomingPush(payload) {
   // so a swallowed merge failure would strand the record the receiver needs to
   // render. Signal so the sender withholds lastPushedHash and re-sends.
   let trackSyncPending = false;
+  // #1922: true only once the bundled linkedTrack merge actually RAN and
+  // succeeded — gates whether `linkedTrack` may contribute to
+  // `ackedDeletesUpTo` below. Stays false on every skip path (mismatched id,
+  // local-ephemeral, tombstoned project) and on a merge failure
+  // (`trackSyncPending`), so the sender can never be told "the receiver
+  // applied this track tombstone" when it didn't.
+  let linkedTrackApplied = false;
   // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
   // — gates whether a present-but-different local draft body may be overwritten.
   let workMergeApplied = false;
@@ -341,7 +348,9 @@ export async function applyIncomingPush(payload) {
     // music-video push (the project only needs the track it actually links).
     if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)
         && linkedTrack.id === record.trackId) {
-      await mergeTracksFromSync([linkedTrack], { source }).catch((err) => {
+      await mergeTracksFromSync([linkedTrack], { source }).then(() => {
+        linkedTrackApplied = true;
+      }).catch((err) => {
         console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
         trackSyncPending = true;
       });
@@ -399,7 +408,18 @@ export async function applyIncomingPush(payload) {
   const missingAssets = localEphemeral ? [] : await diffAssetManifestAgainstLocal(assetManifest);
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the
-  // record + its issues (a single push can carry multiple tombstones).
+  // record + its issues + a bundled linkedTrack tombstone (#1858 bundles the
+  // music-video project's linked track; #1922 folds its deletedAt into this
+  // water-mark too — without it, a musicVideoProjects-only peer with no
+  // independent `track` subscription would never ack a bundled track delete
+  // through ANY cursor, so the sender's track-tombstone GC could prune the
+  // tombstone before a transient delivery failure got a chance to retry).
+  // Only pass `linkedTrack` through when `linkedTrackApplied` — i.e. the
+  // merge gate above actually ran AND succeeded. Acking it unconditionally
+  // would tell the sender "delivered" for a track that was skipped (mismatched
+  // id, local-ephemeral, tombstoned project) or whose merge threw
+  // (`trackSyncPending`), letting the sender's cursor advance past a deletion
+  // this receiver never actually applied.
   // We return this to the sender so THEY can advance THEIR cursor (which
   // tracks what we — the receiver — have acked of THEIR pushes). We do
   // NOT call ackDeletesUpTo here: that would write
@@ -411,7 +431,7 @@ export async function applyIncomingPush(payload) {
   // seen them — even though peer-A is just telling us about ITS own
   // tombstones. In bidirectional sync, that lets peer-A's stale live
   // records resurrect after GC drops our tombstones.
-  const ackedDeletesUpTo = computeAckedDeletesFromPayload(record, issues);
+  const ackedDeletesUpTo = computeAckedDeletesFromPayload(record, issues, linkedTrackApplied ? linkedTrack : null);
 
   // Best-effort reverse subscription. Failures don't fail the push — the
   // record is already merged and the response will tell the sender what
@@ -479,7 +499,7 @@ export async function applyIncomingPush(payload) {
   };
 }
 
-function computeAckedDeletesFromPayload(record, issues) {
+function computeAckedDeletesFromPayload(record, issues, linkedTrack) {
   let max = 0;
   const consider = (rec) => {
     if (!rec?.deleted || !isStr(rec.deletedAt)) return;
@@ -488,6 +508,7 @@ function computeAckedDeletesFromPayload(record, issues) {
   };
   consider(record);
   if (Array.isArray(issues)) for (const i of issues) consider(i);
+  consider(linkedTrack);
   return max;
 }
 
