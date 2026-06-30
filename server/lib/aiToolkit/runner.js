@@ -37,6 +37,17 @@ export function createRunnerService(config = {}) {
   const RUNS_PATH = join(dataDir, runsDir);
   const activeRuns = new Map();
 
+  // ── Declared extension points ────────────────────────────────────────────
+  // PortOS supplies a CLI runner that knows per-CLI argv conventions (Codex
+  // `exec -`, Antigravity `agy --print`, Claude Code `-p -`) and a TUI runner
+  // the toolkit has no built-in for. Rather than reaching into private props
+  // from server/index.js, the host registers them via setCliRunner/setTuiRunner.
+  // Externally-spawned runs (the host owns their child process / pty) are tracked
+  // in `externalRuns` so the toolkit's stopRun/isRunActive/deleteRun see them.
+  // See server/lib/aiToolkit/CLAUDE.md (override contract).
+  let cliRunnerOverride = null;
+  const externalRuns = new Map();
+
   async function ensureRunsDir() {
     if (!existsSync(RUNS_PATH)) {
       await mkdir(RUNS_PATH, { recursive: true });
@@ -99,7 +110,34 @@ export function createRunnerService(config = {}) {
     }
   }
 
-  return {
+  const service = {
+    // ── Extension-point setters / external-run registry ──────────────────
+    // Register a host CLI runner. Pass `null` to revert to the toolkit's
+    // built-in executeCliRun. The override receives the same args the built-in
+    // would and must return the runId.
+    setCliRunner(fn) {
+      if (fn != null && typeof fn !== 'function') {
+        throw new Error('setCliRunner expects a function or null');
+      }
+      cliRunnerOverride = fn;
+    },
+    // Register a host TUI runner. The toolkit has no built-in TUI executor, so
+    // the runs router gates on `typeof runnerService.executeTuiRun === 'function'`.
+    // Attaching/detaching the method keeps that gate honest.
+    setTuiRunner(fn) {
+      if (fn != null && typeof fn !== 'function') {
+        throw new Error('setTuiRunner expects a function or null');
+      }
+      if (fn) service.executeTuiRun = fn;
+      else delete service.executeTuiRun;
+    },
+    // Track a host-spawned run's killable handle (ChildProcess or node-pty IPty —
+    // both expose `.kill(signal?)`; AbortController exposes `.abort()`) so
+    // stopRun/isRunActive/deleteRun account for it alongside the toolkit's own.
+    registerExternalRun(runId, killable) { externalRuns.set(runId, killable); },
+    unregisterExternalRun(runId) { externalRuns.delete(runId); },
+    hasExternalRun(runId) { return externalRuns.has(runId); },
+
     async createRun(options) {
       const {
         providerId,
@@ -218,7 +256,12 @@ export function createRunnerService(config = {}) {
       return { runId, runDir, provider, metadata, timeout: effectiveTimeout, usedFallback, fallbackModel: fallbackModelHint };
     },
 
-    async executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
+    async executeCliRun(opts) {
+      // A host-registered CLI runner (see setCliRunner) wins — it tracks its own
+      // child process via registerExternalRun, so stopRun/isRunActive/deleteRun
+      // still account for it.
+      if (cliRunnerOverride) return cliRunnerOverride(opts);
+      const { runId, provider, prompt, workspacePath, onData, onComplete, timeout } = opts;
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -540,6 +583,16 @@ export function createRunnerService(config = {}) {
     },
 
     async stopRun(runId) {
+      // Host-spawned runs (CLI/TUI) take precedence — kill the registered handle
+      // and drop it so a later isRunActive reports false.
+      const external = externalRuns.get(runId);
+      if (external) {
+        if (external.kill && !external.killed) external.kill('SIGTERM');
+        else if (external.abort) external.abort();
+        externalRuns.delete(runId);
+        return true;
+      }
+
       const active = activeRuns.get(runId);
       if (!active) return false;
 
@@ -607,6 +660,12 @@ export function createRunnerService(config = {}) {
     },
 
     async deleteRun(runId) {
+      // Kill an in-flight host-spawned run before removing its dir so deleting a
+      // live run doesn't leave a zombie child process behind.
+      if (externalRuns.has(runId)) {
+        await service.stopRun(runId);
+      }
+
       const runDir = join(RUNS_PATH, runId);
       if (!existsSync(runDir)) return false;
 
@@ -636,7 +695,9 @@ export function createRunnerService(config = {}) {
     },
 
     async isRunActive(runId) {
-      return activeRuns.has(runId);
+      return externalRuns.has(runId) || activeRuns.has(runId);
     }
   };
+
+  return service;
 }

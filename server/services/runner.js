@@ -201,11 +201,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   childProcess.stdin.write(prompt);
   childProcess.stdin.end();
 
-  // Track active run (store on the runner service itself for stopRun to access)
-  if (!toolkit.services.runner._portosActiveRuns) {
-    toolkit.services.runner._portosActiveRuns = new Map();
-  }
-  toolkit.services.runner._portosActiveRuns.set(runId, childProcess);
+  // Track active run via the toolkit's declared external-run registry so its
+  // stopRun/isRunActive/deleteRun account for this host-spawned child process.
+  toolkit.services.runner.registerExternalRun(runId, childProcess);
 
   // Call hooks
   runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
@@ -235,7 +233,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
   childProcess.on('error', async (err) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    toolkit.services.runner._portosActiveRuns?.delete(runId);
+    toolkit.services.runner.unregisterExternalRun(runId);
     console.error(`❌ Run ${runId} spawn error: ${err.message}`);
 
     const metadata = {
@@ -263,7 +261,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     // the whole body and log via the emoji-prefixed convention.
     try {
       if (timeoutHandle) clearTimeout(timeoutHandle);
-      toolkit.services.runner._portosActiveRuns?.delete(runId);
+      toolkit.services.runner.unregisterExternalRun(runId);
 
       await writeFile(outputPath, output);
 
@@ -329,34 +327,26 @@ export async function executeApiRun(options) {
 
 /**
  * Register an in-flight run's killable process (ChildProcess or IPty) in the
- * same `_portosActiveRuns` map the patched `stopRun`/`isRunActive` consult.
- * Used by `executeTuiRun` so TUI runs can be stopped from /runs the same way
- * CLI runs can. Both ChildProcess and node-pty IPty expose `.kill(signal?)`.
+ * toolkit's declared external-run registry the toolkit `stopRun`/`isRunActive`/
+ * `deleteRun` consult. Used by `executeTuiRun` so TUI runs can be stopped from
+ * /runs the same way CLI runs can. Both ChildProcess and node-pty IPty expose
+ * `.kill(signal?)`.
  */
 export function registerActiveRun(runId, killable) {
-  const toolkit = requireToolkit();
-  if (!toolkit.services.runner._portosActiveRuns) {
-    toolkit.services.runner._portosActiveRuns = new Map();
-  }
-  toolkit.services.runner._portosActiveRuns.set(runId, killable);
+  requireToolkit().services.runner.registerExternalRun(runId, killable);
 }
 
 export function unregisterActiveRun(runId) {
   // No-throw read: cleanup paths may run after the toolkit is gone (e.g.
   // shutdown), so use `getAIToolkitInstance()` rather than `requireToolkit()`.
-  getAIToolkitInstance()?.services?.runner?._portosActiveRuns?.delete(runId);
+  getAIToolkitInstance()?.services?.runner?.unregisterExternalRun?.(runId);
 }
 
 export async function stopRun(runId) {
-  const toolkit = requireToolkit();
-  // Check local active runs first (CLI runs spawned by this override)
-  const localProcess = toolkit.services.runner._portosActiveRuns?.get(runId);
-  if (localProcess && !localProcess.killed) {
-    localProcess.kill('SIGTERM');
-    toolkit.services.runner._portosActiveRuns.delete(runId);
-    return { stopped: true, runId };
-  }
-  return toolkit.services.runner.stopRun(runId);
+  // The toolkit's stopRun now consults the external-run registry first (it kills
+  // the registered child/pty before falling back to its own activeRuns map), so
+  // this is a thin pass-through.
+  return requireToolkit().services.runner.stopRun(runId);
 }
 
 export async function getRun(runId) {

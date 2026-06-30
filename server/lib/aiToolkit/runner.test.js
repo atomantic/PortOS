@@ -126,3 +126,83 @@ describe('AI Toolkit runner service', () => {
     expect('num_ctx' in JSON.parse(fetch.mock.calls[0][1].body)).toBe(false);
   });
 });
+
+describe('AI Toolkit runner — declared extension points', () => {
+  it('setCliRunner delegates executeCliRun to the host runner and back to the built-in on null', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    const builtin = runner.executeCliRun;
+
+    const hostRunner = vi.fn(async (opts) => `host:${opts.runId}`);
+    runner.setCliRunner(hostRunner);
+    const result = await runner.executeCliRun({ runId: 'r1', provider: { command: 'noop' } });
+    expect(result).toBe('host:r1');
+    expect(hostRunner).toHaveBeenCalledTimes(1);
+    // The override receives the full opts object verbatim.
+    expect(hostRunner).toHaveBeenCalledWith(expect.objectContaining({ runId: 'r1' }));
+
+    // Reverting restores the built-in implementation.
+    runner.setCliRunner(null);
+    expect(runner.executeCliRun).toBe(builtin);
+  });
+
+  it('setCliRunner / setTuiRunner reject non-function, non-null values', () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    expect(() => runner.setCliRunner(42)).toThrow(/expects a function/);
+    expect(() => runner.setTuiRunner('nope')).toThrow(/expects a function/);
+  });
+
+  it('setTuiRunner attaches/detaches executeTuiRun so the runs-router gate stays honest', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    // No built-in TUI executor — the runs router gates on typeof === 'function'.
+    expect(typeof runner.executeTuiRun).toBe('undefined');
+
+    const tui = vi.fn(async () => 'tui-run');
+    runner.setTuiRunner(tui);
+    expect(typeof runner.executeTuiRun).toBe('function');
+    await runner.executeTuiRun({ runId: 'tui-1' });
+    expect(tui).toHaveBeenCalledTimes(1);
+
+    runner.setTuiRunner(null);
+    expect(typeof runner.executeTuiRun).toBe('undefined');
+  });
+
+  it('external-run registry drives isRunActive / stopRun and reports unknown ids as inactive', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    expect(await runner.isRunActive('x')).toBe(false);
+
+    const child = { kill: vi.fn(), killed: false };
+    runner.registerExternalRun('x', child);
+    expect(runner.hasExternalRun('x')).toBe(true);
+    expect(await runner.isRunActive('x')).toBe(true);
+
+    expect(await runner.stopRun('x')).toBe(true);
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    // stopRun drops the entry, so a follow-up reports inactive.
+    expect(await runner.isRunActive('x')).toBe(false);
+    expect(await runner.stopRun('x')).toBe(false);
+  });
+
+  it('stopRun aborts an AbortController-style external run', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    const controller = { abort: vi.fn() };
+    runner.registerExternalRun('api-run', controller);
+    expect(await runner.stopRun('api-run')).toBe(true);
+    expect(controller.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('deleteRun kills an in-flight external run before removing its dir', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-del-'));
+    const runner = createRunnerService({ dataDir });
+    const child = { kill: vi.fn(), killed: false };
+    runner.registerExternalRun('live', child);
+
+    // No on-disk dir for this run, but the live process must still be killed.
+    const deleted = await runner.deleteRun('live');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(runner.hasExternalRun('live')).toBe(false);
+    // deleteRun returns false when the run dir doesn't exist on disk.
+    expect(deleted).toBe(false);
+
+    await rm(dataDir, { recursive: true, force: true });
+  });
+});
