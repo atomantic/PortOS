@@ -472,7 +472,6 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           onChange={e => setBlockedReason(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') handleConfirmBlocked();
-            if (e.key === 'Escape') setShowBlockedModal(false);
           }}
           placeholder="e.g., Waiting for API access, Needs design review..."
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"

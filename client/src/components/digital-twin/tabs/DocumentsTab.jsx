@@ -306,13 +306,18 @@ export default function DocumentsTab({ onRefresh }) {
         )}
       </div>
 
-      {/* Create Document Modal */}
+      {/* Create Document Modal — closeOnBackdrop/closeOnEsc disabled so an
+          accidental outside click or Escape can't silently discard a typed
+          draft; matches the pre-Modal markup, which had no backdrop-click or
+          Escape dismissal at all (only the explicit Cancel/Create buttons). */}
       <Modal
         open={showCreate}
         onClose={() => {
           setShowCreate(false);
           setNewDoc({ filename: '', title: '', category: 'core', content: '' });
         }}
+        closeOnBackdrop={false}
+        closeOnEsc={false}
         ariaLabel="Create Soul Document"
         panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
       >

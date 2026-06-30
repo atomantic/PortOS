@@ -11,7 +11,7 @@ const RSVP_STYLES = {
 
 export default function EventDetail({ event, onClose }) {
   return (
-    <Drawer open onClose={onClose} title={event.title}>
+    <Drawer open onClose={onClose} title={event.title} closeLabel="Close">
       <div className="space-y-4">
         {/* Time */}
         <div className="flex items-start gap-3">

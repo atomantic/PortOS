@@ -13,7 +13,7 @@ const baseEvent = {
 describe('EventDetail', () => {
   it('renders a close button that meets the 44px minimum touch target', () => {
     render(<EventDetail event={baseEvent} onClose={() => {}} />);
-    const closeBtn = screen.getByRole('button', { name: 'Close settings' });
+    const closeBtn = screen.getByRole('button', { name: 'Close' });
     expect(closeBtn.className).toContain('min-w-[44px]');
     expect(closeBtn.className).toContain('min-h-[44px]');
     // icon stays visually centered
@@ -24,7 +24,7 @@ describe('EventDetail', () => {
   it('invokes onClose when the close button is clicked', () => {
     const onClose = vi.fn();
     render(<EventDetail event={baseEvent} onClose={onClose} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
