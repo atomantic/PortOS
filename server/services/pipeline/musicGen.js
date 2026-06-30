@@ -335,6 +335,17 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
 // lifecycle), so they resolve a structured result instead.
 function runSidecarProcess({ bin, args, env, signal, engineId = DEFAULT_ENGINE_ID, onActivity }) {
   return new Promise((resolve) => {
+    // A cancel arriving between the caller awaiting up to here and this Promise
+    // executor running (e.g. the audio job-kind adapter's controller is aborted
+    // in the same tick it was created) would otherwise be silently missed —
+    // the 'abort' listener below is only attached AFTER spawn, so an
+    // already-aborted signal would let the sidecar spawn, run to completion,
+    // and report success despite the cancel. Check synchronously before
+    // spawning anything.
+    if (signal?.aborted) {
+      resolve({ ok: false, reason: 'cancelled (aborted before spawn)', stdout: '' });
+      return;
+    }
     const proc = spawn(bin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderrTail = '';
