@@ -285,13 +285,8 @@ export async function updateMemory(id, updates) {
   }
 
   // Update summary if content changed but no explicit summary. Gate on "is a
-  // string", not truthiness, to mirror the file backend (memory.js): a content
-  // edit must refresh the summary rather than leave the stale one behind
-  // (absent-vs-cleared, CLAUDE.md). The typeof check also keeps null/undefined
-  // out of generateSummary, which would throw on `.length`. (Empty content is
-  // separately blocked at the API by memoryUpdateSchema's min(1), so in practice
-  // this only fires for a real non-empty edit — the guard keeps both backends
-  // consistent and crash-safe regardless of caller.)
+  // string" not truthiness, mirroring the file backend (memory.js) and keeping
+  // null/undefined out of generateSummary (absent-vs-cleared, CLAUDE.md).
   if (typeof updates.content === 'string' && !updates.summary) {
     fields.push(`summary = $${paramIdx++}`);
     params.push(generateSummary(updates.content));
