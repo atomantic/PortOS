@@ -14,9 +14,8 @@
  * the download/persist orchestration in `services/moodBoard/pinterest.js`.
  */
 
-import { decodeXmlEntities } from './xmlEntities.js';
-
 import { ServerError } from './errorHandler.js';
+import { decodeXmlEntities } from './xmlEntities.js';
 
 // Explicit allow-list of Pinterest's REGISTRABLE domains. A registrable-label
 // check ("second-to-last label is pinterest") is NOT enough: an attacker can
