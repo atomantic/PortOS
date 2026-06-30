@@ -121,8 +121,9 @@ export const creativeDirectorSceneSchema = z.object({
   // Per-scene casting (#1808) — the catalog cast members the agent bound to this
   // scene, referencing the project `cast` by ingredientId. Optional: the agent
   // only sets it when a scene features specific characters/places, and bare
-  // (non-remix) projects never carry it.
-  cast: z.array(creativeDirectorCastMemberSchema).max(20).optional(),
+  // (non-remix) projects never carry it. Capped at the same 50 as the project
+  // cast so a busy scene can't make the whole treatment fail validation.
+  cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(1).optional(),
     notes: z.string().max(2000).optional(),
