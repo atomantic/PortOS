@@ -28,10 +28,6 @@ export function AgentsPage() {
     setExpandedPid(prev => prev === pid ? null : pid);
   };
 
-  const formatStartTime = (timestamp) => {
-    return formatDateTime(timestamp);
-  };
-
   const totalCpu = agents.reduce((sum, a) => sum + (a.cpu || 0), 0);
   const totalMemory = agents.reduce((sum, a) => sum + (a.memory || 0), 0);
 
@@ -240,7 +236,7 @@ export function AgentsPage() {
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Started At</div>
-                              <div className="text-sm text-gray-300">{formatStartTime(agent.startTime)}</div>
+                              <div className="text-sm text-gray-300">{formatDateTime(agent.startTime)}</div>
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime (ms)</div>

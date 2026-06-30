@@ -28,9 +28,11 @@ const store = () => writersRoomStore();
 
 // ---------- text analysis ----------
 
-// `countWords` now lives in lib/textUtils.js (the canonical home that
-// issueLength.js and the editorial checks also share). Re-exported here so
-// existing importers of this module keep working unchanged.
+// `countWords` now lives in lib/textUtils.js (the canonical home it shares with
+// issueLength.js). Re-exported here so existing importers of this module keep
+// working unchanged. (The editorial checks keep their own copies on purpose:
+// checkInfra.js uses a different alphabetic-only tokenizer, and
+// letteringDensity.js is held byte-for-byte in sync with its client mirror.)
 export { countWords };
 
 export function contentHash(text) {
