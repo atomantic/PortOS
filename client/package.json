@@ -27,8 +27,7 @@
     "react-router-dom": "7.18.0",
     "recharts": "3.8.1",
     "socket.io-client": "4.8.3",
-    "three": "0.184.0",
-    "three-fenestra": "^0.3.0"
+    "three": "0.184.0"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

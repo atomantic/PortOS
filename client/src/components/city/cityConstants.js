@@ -221,7 +221,7 @@ export const cityDayMix = (settings) => {
 export const cityShowDetail = (settings) => (settings?.particleDensity ?? 1) > 0.5;
 
 // True when the active quality preset is "high" or above (particleDensity ≥ 1.0)
-// — the gate for the heavier three-fenestra interior-mapping window panes, which
+// — the gate for the heavier InteriorMappingMaterial window panes, which
 // ray-march a fake interior per pane and so cost more than the flat window
 // texture. Held one tier above cityShowDetail so medium-tier machines keep the
 // rest of the set dressing but skip the per-pane interior shader.

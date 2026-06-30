@@ -79,7 +79,7 @@ its tunable constants and placement helpers.
 | `cityFlowLines` | Inter-building flow-line connections between active/agent nodes (`computeFlowConnections`). |
 | `cityGoalMonuments` | Goal monuments & forest: stall detection, milestone segments, placement (`computeGoalMonuments`, `computeGoalForest`). |
 | `cityHealthTower` | Health-metric tower segments from the latest health entry (`computeHealthTower`). |
-| `cityInteriorWindows` | Per-building interior-mapping window grid + selection predicate for three-fenestra panes (`computeWindowGrid`, `buildingHasInteriorWindows`, `INTERIOR_WINDOW`). |
+| `cityInteriorWindows` | Per-building interior-mapping window grid + selection predicate for InteriorMappingMaterial panes (`computeWindowGrid`, `buildingHasInteriorWindows`, `INTERIOR_WINDOW`). |
 | `cityJiraDistrict` | Jira ticket district: ticket state, sprint structures, placement (`computeJiraDistrict`). |
 | `cityMemoryDistrict` | Brain-graph memory district: category clustering, bridges, placement (`computeMemoryDistrict`). |
 | `cityMiniMap` | Mini-map projection of building positions into 2D bounds, plus opt-in waterfront geography (bay/shoreline/harbor) read from `cityPlan` (`computeMiniMap`, `projectPoint`, `geographyWorldPoints`, `projectGeography`). |
