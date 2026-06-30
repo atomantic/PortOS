@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { cancelImageGen } from '../services/apiImageVideo';
+import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
 import toast from '../components/ui/Toast';
 
 // useImageGenQueue — work-scoped live queue of in-flight image renders.
@@ -16,10 +17,10 @@ import toast from '../components/ui/Toast';
 // Orphan-event buffer hygiene: image-gen:* events are emitted globally
 // (server only knows generationId, not which page issued it), so any image
 // render anywhere in the app would otherwise pile up entries here. We cap
-// the buffer to ORPHAN_MAX_ENTRIES and evict each entry ORPHAN_TTL_MS after
-// last write — preventing unbounded memory growth on long-lived sessions.
+// the buffer to ORPHAN_BUFFER_MAX (shared with the other orphan race-buffers)
+// and evict each entry ORPHAN_TTL_MS after last write — preventing unbounded
+// memory growth on long-lived sessions.
 const ORPHAN_TTL_MS = 30_000;
-const ORPHAN_MAX_ENTRIES = 64;
 
 export default function useImageGenQueue() {
   const [queue, setQueue] = useState([]);
@@ -81,15 +82,13 @@ export default function useImageGenQueue() {
       orphanEventsRef.current.delete(jobId);
     }, ORPHAN_TTL_MS);
     orphanTimersRef.current.set(jobId, t);
-    // Hard cap: drop the oldest entry if we're over budget.
-    while (orphanEventsRef.current.size > ORPHAN_MAX_ENTRIES) {
-      const oldest = orphanEventsRef.current.keys().next().value;
-      if (oldest === undefined) break;
+    // Hard cap: drop the oldest entry(ies) if we're over budget, tearing down
+    // each evicted entry's companion TTL timer as it goes.
+    evictOldest(orphanEventsRef.current, ORPHAN_BUFFER_MAX, (oldest) => {
       const oldTimer = orphanTimersRef.current.get(oldest);
       if (oldTimer) clearTimeout(oldTimer);
       orphanTimersRef.current.delete(oldest);
-      orphanEventsRef.current.delete(oldest);
-    }
+    });
   }, []);
 
   const register = useCallback(({ jobId, sceneId, sceneLabel }) => {

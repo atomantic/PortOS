@@ -999,6 +999,14 @@ function setupMediaGenEventForwarding() {
     if (ioInstance) ioInstance.emit('video-gen:failed', data);
   });
 
+  // Map a media-job kind to its gen-event namespace prefix. Only image/video
+  // jobs drive scene spinners and have `*-gen:*` consumers; the shared media
+  // queue also runs `training` (LoRA) jobs, which have their own UI and NO
+  // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
+  // (returning null skips them) rather than falling through to `image-gen:*`.
+  const genEvtPrefix = (kind) =>
+    kind === 'video' ? 'video-gen' : kind === 'image' ? 'image-gen' : null;
+
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
   // `generationId` (#1791). The internal gen modules emit started/progress/
   // completed/failed but have NO 'canceled' — a job canceled *while queued*
@@ -1012,7 +1020,25 @@ function setupMediaGenEventForwarding() {
   // both clear the spinner and the handlers are idempotent.
   mediaJobEvents.on('canceled', (job) => {
     if (!ioInstance || !job?.id) return;
-    const evt = job.kind === 'video' ? 'video-gen:canceled' : 'image-gen:canceled';
-    ioInstance.emit(evt, { generationId: job.id });
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:canceled`, { generationId: job.id });
+  });
+
+  // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
+  // `generationId` (#1799) — the failure-side analog of the canceled bridge
+  // above. A job that fails *before* the gen run starts (e.g. an unready BYOV
+  // runtime throws synchronously in the queue worker, or the watchdog times the
+  // job out) emits only `mediaJobEvents 'failed'` and never a `*-gen:failed`
+  // frame, so the scene button stays stuck on "Rendering…". Forward it with the
+  // same `{ generationId, error }` shape the gen modules use so the client's
+  // `onFailed` clears the spinner and can toast the reason. For a job that fails
+  // *while running* this fires alongside the gen module's own `failed`; both
+  // settle the spinner to 'failed' and the handler is idempotent.
+  mediaJobEvents.on('failed', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }

@@ -439,24 +439,34 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'cli' || provider.type === 'tui') {
+        // Resolve the command on PATH. Windows has no `which` — it ships `where`
+        // instead — so a `which` lookup there always fails and falsely reports the
+        // command "not found in PATH" even when it resolves fine from a shell.
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
-        const { stdout } = await execFileAsync('which', [provider.command])
+        const lookup = process.platform === 'win32' ? 'where' : 'which';
+        const { stdout } = await execFileAsync(lookup, [provider.command])
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
-        if (!stdout.trim()) {
+        // `where` lists every match (one per line); `which` prints one. Take the
+        // first non-empty line as the resolved absolute path.
+        const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+
+        if (!commandPath) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
         const tryVersion = async (flag) => {
-          const out = await execFileAsync(provider.command, [flag]).catch(() => null);
+          // Invoke the resolved path so Windows runs the exact `.exe` we found —
+          // execFile won't re-apply PATHEXT to a bare command name.
+          const out = await execFileAsync(commandPath, [flag]).catch(() => null);
           return out?.stdout?.trim() || null;
         };
         const versionOut = (await tryVersion('--version')) || (await tryVersion('-v')) || 'available';
 
         return {
           success: true,
-          path: stdout.trim(),
+          path: commandPath,
           version: versionOut
         };
       }
