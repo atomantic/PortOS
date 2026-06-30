@@ -45,6 +45,7 @@
 ## UX & Accessibility
 
 - **[issue-1850] Calendar and message action buttons now meet the 44px minimum touch-target size** — the day/week/month calendar nav chevrons, the event-detail close button, and the message-detail action row (Reply / Voice / AI Reply / Refresh / Archive / Delete) previously rendered at ~28–31px, below the WCAG 2.5.5 / Apple HIG 44px minimum and awkward to tap on mobile. Each now enforces `min-w-[44px] min-h-[44px]` with centered icons, matching the shared `Drawer` close-button pattern, without changing the visual layout. (#1850)
+- **[issue-1852] Fixed mobile content clipping behind the browser's URL bar** — `calc(100vh - …)` heights don't update when a mobile browser's address bar shows or hides, so the bottom of the Wiki Browse/Graph tabs, the JIRA report list/detail panes, and the Brain inbox "Needs Review" rail could clip behind the chrome. Those now size off `dvh` instead of `vh`. The sidebar `<aside>` now mirrors the page root's existing `h-screen h-[100dvh]` fallback pattern so it tracks the same dynamic viewport. The Writers Room render-queue dock (pinned to the bottom of the screen) now pads for `env(safe-area-inset-bottom)` so it no longer sits under the iOS home indicator. (#1852)
 
 ## Internal
 

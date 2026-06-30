@@ -95,7 +95,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     : [];
 
   return (
-    <div className="flex -m-4" style={{ height: 'calc(100vh - 220px)' }}>
+    <div className="flex -m-4" style={{ height: 'calc(100dvh - 220px)' }}>
       {/* Left panel */}
       <div className="w-80 border-r border-port-border flex flex-col shrink-0">
         {/* Section toggle */}
