@@ -37,7 +37,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   // response is `[]` and still clears. Callers (notably handleDelete) use the
   // return value to fall back to a local update when the refresh fails.
   async function loadItems() {
-    const data = await getMemoryItems().catch(() => null);
+    const data = await getMemoryItems().catch(err => { console.warn('⚠️ Failed to load memory items: ' + err.message); return null; });
     if (!Array.isArray(data)) return false;
     setItems(data);
     return true;

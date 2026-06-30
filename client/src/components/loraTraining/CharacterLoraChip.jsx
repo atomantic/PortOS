@@ -23,7 +23,7 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
     if (!entryId && !ingredientId) return;
     getCharacterLoras({ entryId, ingredientId }, { silent: true })
       .then((list) => setLoras(Array.isArray(list) ? list : []))
-      .catch(() => setLoras([]));
+      .catch(err => { console.warn('⚠️ Failed to load character LoRAs: ' + err.message); setLoras([]); });
   }, [entryId, ingredientId]);
 
   const canCreate = !!(universeId && entryId);
@@ -31,7 +31,7 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
     if (canCreate || (!entryId && !ingredientId)) return;
     listLoraDatasets(entryId ? { entryKind: 'characters', entryId } : { entryKind: 'characters', ingredientId })
       .then((list) => setExistingDataset(list?.[0] || null))
-      .catch(() => {});
+      .catch(err => console.warn('⚠️ Failed to load LoRA datasets: ' + err.message));
   }, [canCreate, entryId, ingredientId]);
 
   const openDataset = async () => {

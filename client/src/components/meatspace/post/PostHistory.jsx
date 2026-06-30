@@ -22,8 +22,8 @@ export default function PostHistory({ onBack }) {
       ? new Date(Date.now() - range * 86400000).toISOString().split('T')[0]
       : undefined;
     const [s, st] = await Promise.all([
-      getPostSessions(from).catch(() => []),
-      getPostStats(range).catch(() => null)
+      getPostSessions(from).catch(err => { console.warn('⚠️ Failed to load POST sessions: ' + err.message); return []; }),
+      getPostStats(range).catch(err => { console.warn('⚠️ Failed to load POST stats: ' + err.message); return null; })
     ]);
     setSessions((s || []).slice().reverse());
     setStats(st);

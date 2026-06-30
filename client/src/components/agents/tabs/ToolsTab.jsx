@@ -56,7 +56,7 @@ export default function ToolsTab({ agentId, agent }) {
         setAccountName(active[0].credentials?.username || '');
       }
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(err => { console.warn('⚠️ Failed to resolve moltbook account: ' + err.message); setLoading(false); });
   }, [agentId]);
 
   // Load rate limits + submolts when account resolves
@@ -65,11 +65,11 @@ export default function ToolsTab({ agentId, agent }) {
       setRateLimits(null);
       return;
     }
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
     api.getAgentSubmolts(selectedAccountId).then(data => {
       const list = data.submolts || data || [];
       setSubmolts(Array.isArray(list) ? list : []);
-    }).catch(() => {});
+    }).catch(err => console.warn('⚠️ Failed to load submolts: ' + err.message));
   }, [selectedAccountId]);
 
   // Calculate cooldown end timestamps from rate limit data
@@ -89,7 +89,7 @@ export default function ToolsTab({ agentId, agent }) {
     cooldownEnds,
     onAllExpired: () => {
       if (selectedAccountId) {
-        api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+        api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       }
     },
   });
@@ -159,7 +159,7 @@ export default function ToolsTab({ agentId, agent }) {
 
     if (!result) {
       setPublishing(false);
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       return;
     }
 
@@ -171,7 +171,7 @@ export default function ToolsTab({ agentId, agent }) {
           status: 'published',
           publishedPostId: result?.id || result?._id || result?.post_id || null,
           publishedAt: new Date().toISOString()
-        }).catch(() => {});
+        }).catch(err => console.warn('⚠️ Failed to mark draft published: ' + err.message));
         setActiveDraftId(null);
         toast.success('Post published');
       }
@@ -185,7 +185,7 @@ export default function ToolsTab({ agentId, agent }) {
       setPostContent('');
     }
     setPublishing(false);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   // Comment generation (auto-saves as draft)
@@ -223,7 +223,7 @@ export default function ToolsTab({ agentId, agent }) {
 
     if (!result) {
       setPublishingComment(false);
-      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+      api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
       return;
     }
 
@@ -234,7 +234,7 @@ export default function ToolsTab({ agentId, agent }) {
         await api.updateAgentDraft(agentId, activeDraftId, {
           status: 'published',
           publishedAt: new Date().toISOString()
-        }).catch(() => {});
+        }).catch(err => console.warn('⚠️ Failed to mark comment draft published: ' + err.message));
         setActiveDraftId(null);
         toast.success('Comment published');
       }
@@ -249,7 +249,7 @@ export default function ToolsTab({ agentId, agent }) {
     }
     setPublishingComment(false);
     handleViewPost(selectedPost);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   // Engage
@@ -261,7 +261,7 @@ export default function ToolsTab({ agentId, agent }) {
     setEngageResult(result);
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   // Check Posts (Monitor)
@@ -274,7 +274,7 @@ export default function ToolsTab({ agentId, agent }) {
     if (!result) return;
     setCheckResult(result);
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
+    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
   };
 
   const handleLoadDraft = (draft) => {
@@ -293,7 +293,7 @@ export default function ToolsTab({ agentId, agent }) {
         api.getAgentPost(acctId, draft.postId).then(details => {
           setSelectedPost(details);
           setPostComments(details.comments || []);
-        }).catch(() => {});
+        }).catch(err => console.warn('⚠️ Failed to load draft post details: ' + err.message));
       }
     }
     toast.success(`Loaded ${draft.type} draft`);

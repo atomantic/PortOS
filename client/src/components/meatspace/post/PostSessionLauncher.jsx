@@ -10,7 +10,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
   const [providers, setProviders] = useState([]);
 
   useEffect(() => {
-    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(() => {});
+    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
   }, []);
 
   if (!config) {

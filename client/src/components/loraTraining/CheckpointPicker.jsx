@@ -33,7 +33,7 @@ export default function CheckpointPicker({ run, onPromoted }) {
     setLoading(true);
     listLoraTrainingCheckpoints(run.id)
       .then((res) => setCheckpoints(Array.isArray(res?.checkpoints) ? res.checkpoints : []))
-      .catch(() => setCheckpoints([]))
+      .catch(err => { console.warn('⚠️ Failed to load checkpoints: ' + err.message); setCheckpoints([]); })
       .finally(() => setLoading(false));
   }, [run.id]);
 
