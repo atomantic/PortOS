@@ -230,7 +230,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
           <button
             onClick={handleComplete}
             disabled={saving || !canProceed()}
-            className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-green-600 text-white rounded-lg hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-port-success text-white rounded-lg hover:bg-port-success/80 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? (
               <>
@@ -266,7 +266,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
               index === currentStep
                 ? 'bg-port-accent'
                 : index < currentStep
-                ? 'bg-green-500'
+                ? 'bg-port-success'
                 : 'bg-port-border'
             }`}
           />

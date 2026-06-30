@@ -217,7 +217,7 @@ export default function DocumentsTab({ onRefresh }) {
                   <button
                     onClick={() => handleToggleEnabled(selectedDoc, !selectedDoc.enabled)}
                     className={`p-2 min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors ${
-                      selectedDoc.enabled ? 'text-green-400' : 'text-gray-500'
+                      selectedDoc.enabled ? 'text-port-success' : 'text-gray-500'
                     }`}
                     title={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'}
                   >
@@ -228,7 +228,7 @@ export default function DocumentsTab({ onRefresh }) {
                       <button
                         onClick={handleSave}
                         disabled={saving}
-                        className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-green-400 hover:text-green-300 transition-colors disabled:opacity-50"
+                        className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-port-success hover:text-port-success/80 transition-colors disabled:opacity-50"
                         title="Save"
                       >
                         <Save size={18} />

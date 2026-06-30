@@ -31,9 +31,9 @@ const DIMENSION_ICONS = {
 };
 
 function getConfidenceColor(score) {
-  if (score >= 0.8) return { text: 'text-green-400', bg: 'bg-green-500', border: 'border-green-500/30' };
-  if (score >= 0.6) return { text: 'text-yellow-400', bg: 'bg-yellow-500', border: 'border-yellow-500/30' };
-  return { text: 'text-red-400', bg: 'bg-red-500', border: 'border-red-500/30' };
+  if (score >= 0.8) return { text: 'text-port-success', bg: 'bg-port-success', border: 'border-port-success/30' };
+  if (score >= 0.6) return { text: 'text-port-warning', bg: 'bg-port-warning', border: 'border-port-warning/30' };
+  return { text: 'text-port-error', bg: 'bg-port-error', border: 'border-port-error/30' };
 }
 
 function getConfidenceLabel(score) {
@@ -164,7 +164,7 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
             <div
               key={dimension}
               className={`flex items-center gap-3 p-2 rounded-lg ${
-                isLow ? 'bg-red-500/5 border border-red-500/20' : ''
+                isLow ? 'bg-port-error/5 border border-port-error/20' : ''
               }`}
             >
               <span className="text-lg">{icon}</span>
@@ -183,10 +183,10 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
                 </div>
               </div>
               {isLow && (
-                <TrendingDown className="w-4 h-4 text-red-400 shrink-0" />
+                <TrendingDown className="w-4 h-4 text-port-error shrink-0" />
               )}
               {score >= 0.8 && (
-                <TrendingUp className="w-4 h-4 text-green-400 shrink-0" />
+                <TrendingUp className="w-4 h-4 text-port-success shrink-0" />
               )}
             </div>
           );
@@ -196,15 +196,15 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
       {/* Legend */}
       <div className="flex items-center gap-4 mt-4 pt-4 border-t border-port-border text-xs">
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-green-500" />
+          <div className="w-2 h-2 rounded-full bg-port-success" />
           <span className="text-gray-400">Strong (80%+)</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-yellow-500" />
+          <div className="w-2 h-2 rounded-full bg-port-warning" />
           <span className="text-gray-400">Moderate (60-79%)</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-red-500" />
+          <div className="w-2 h-2 rounded-full bg-port-error" />
           <span className="text-gray-400">Needs Work (&lt;60%)</span>
         </div>
       </div>

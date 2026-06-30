@@ -27,9 +27,9 @@ const HORIZON_OPTIONS = [
 
 function urgencyColor(urgency) {
   if (urgency == null) return 'text-gray-500';
-  if (urgency >= 0.7) return 'text-red-400';
-  if (urgency >= 0.4) return 'text-yellow-400';
-  return 'text-green-400';
+  if (urgency >= 0.7) return 'text-port-error';
+  if (urgency >= 0.4) return 'text-port-warning';
+  return 'text-port-success';
 }
 
 function urgencyLabel(urgency) {
@@ -189,12 +189,12 @@ export default function GoalsTab({ onRefresh }) {
               <div className="text-xs text-gray-600 mt-1">
                 Baseline: {longevity.lifeExpectancy.baseline}
                 {longevity.lifeExpectancy.longevityAdjustment !== 0 && (
-                  <span className={longevity.lifeExpectancy.longevityAdjustment > 0 ? 'text-green-500' : 'text-red-500'}>
+                  <span className={longevity.lifeExpectancy.longevityAdjustment > 0 ? 'text-port-success' : 'text-port-error'}>
                     {' '}{longevity.lifeExpectancy.longevityAdjustment > 0 ? '+' : ''}{longevity.lifeExpectancy.longevityAdjustment} longevity
                   </span>
                 )}
                 {longevity.lifeExpectancy.cardiovascularAdjustment !== 0 && (
-                  <span className={longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? 'text-green-500' : 'text-red-500'}>
+                  <span className={longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? 'text-port-success' : 'text-port-error'}>
                     {' '}{longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? '+' : ''}{longevity.lifeExpectancy.cardiovascularAdjustment} cardio
                   </span>
                 )}
@@ -208,7 +208,7 @@ export default function GoalsTab({ onRefresh }) {
                   <div className="text-xs text-gray-500">Current Age</div>
                 </div>
                 <div className="bg-port-bg rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-green-400">{timeHorizons.yearsRemaining}</div>
+                  <div className="text-2xl font-bold text-port-success">{timeHorizons.yearsRemaining}</div>
                   <div className="text-xs text-gray-500">Years Remaining</div>
                   <div className="text-xs text-gray-600 mt-1">{timeHorizons.healthyYearsRemaining} healthy</div>
                 </div>
@@ -411,7 +411,7 @@ export default function GoalsTab({ onRefresh }) {
                                   onClick={() => !ms.completedAt && handleCompleteMilestone(goal.id, ms.id)}
                                   className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                                     ms.completedAt
-                                      ? 'bg-green-500/20 border-green-500 text-green-400'
+                                      ? 'bg-port-success/20 border-port-success text-port-success'
                                       : 'border-gray-600 hover:border-port-accent'
                                   }`}
                                 >
@@ -462,7 +462,7 @@ export default function GoalsTab({ onRefresh }) {
                       <div className="flex gap-2 pt-1">
                         <button
                           onClick={() => handleUpdateGoalStatus(goal.id, 'completed')}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
                         >
                           <Check className="w-3 h-3" />
                           Complete
@@ -498,7 +498,7 @@ export default function GoalsTab({ onRefresh }) {
       {completedGoals.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <h3 className="font-medium text-gray-400 mb-3 flex items-center gap-2">
-            <Check className="w-4 h-4 text-green-400" />
+            <Check className="w-4 h-4 text-port-success" />
             Completed ({completedGoals.length})
           </h3>
           <div className="space-y-1">
@@ -537,8 +537,8 @@ export default function GoalsTab({ onRefresh }) {
                         <span className="text-gray-500 ml-1">({marker.rsid})</span>
                       </div>
                       <span className={
-                        marker.status === 'beneficial' ? 'text-green-400' :
-                        marker.status === 'concern' ? 'text-red-400' : 'text-gray-400'
+                        marker.status === 'beneficial' ? 'text-port-success' :
+                        marker.status === 'concern' ? 'text-port-error' : 'text-gray-400'
                       }>
                         {marker.genotype} — {marker.status}
                       </span>
@@ -558,8 +558,8 @@ export default function GoalsTab({ onRefresh }) {
                         <span className="text-gray-500 ml-1">({marker.rsid})</span>
                       </div>
                       <span className={
-                        marker.status === 'beneficial' ? 'text-green-400' :
-                        marker.status === 'concern' || marker.status === 'major_concern' ? 'text-red-400' : 'text-gray-400'
+                        marker.status === 'beneficial' ? 'text-port-success' :
+                        marker.status === 'concern' || marker.status === 'major_concern' ? 'text-port-error' : 'text-gray-400'
                       }>
                         {marker.genotype} — {marker.status}
                       </span>

@@ -92,11 +92,11 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
   const getResultIcon = (result) => {
     switch (result) {
       case 'aligned':
-        return <CheckCircle className="w-5 h-5 text-green-400" />;
+        return <CheckCircle className="w-5 h-5 text-port-success" />;
       case 'misaligned':
-        return <XCircle className="w-5 h-5 text-red-400" />;
+        return <XCircle className="w-5 h-5 text-port-error" />;
       case 'partial':
-        return <AlertCircle className="w-5 h-5 text-yellow-400" />;
+        return <AlertCircle className="w-5 h-5 text-port-warning" />;
       default:
         return <Clock className="w-5 h-5 text-gray-400" />;
     }
@@ -244,11 +244,11 @@ export default function ValuesAlignmentPanel({ selectedProviders = [], personaId
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                       <div>
-                        <div className="text-green-400 text-xs mb-1">Aligned Response</div>
+                        <div className="text-port-success text-xs mb-1">Aligned Response</div>
                         <div className="text-gray-400 bg-port-card p-3 rounded">{dilemma.alignedResponse}</div>
                       </div>
                       <div>
-                        <div className="text-red-400 text-xs mb-1">Misaligned Response</div>
+                        <div className="text-port-error text-xs mb-1">Misaligned Response</div>
                         <div className="text-gray-400 bg-port-card p-3 rounded">{dilemma.misalignedResponse}</div>
                       </div>
                     </div>

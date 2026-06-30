@@ -240,9 +240,9 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                   <span className="text-gray-400 font-medium min-w-[140px] shrink-0">{change.field}</span>
                   {change.before !== undefined && change.after !== undefined ? (
                     <span className="text-gray-300">
-                      <span className="text-red-400">{JSON.stringify(change.before)}</span>
+                      <span className="text-port-error">{JSON.stringify(change.before)}</span>
                       {' → '}
-                      <span className="text-green-400">{JSON.stringify(change.after)}</span>
+                      <span className="text-port-success">{JSON.stringify(change.after)}</span>
                     </span>
                   ) : (
                     <span className="text-gray-300">

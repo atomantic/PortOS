@@ -300,10 +300,10 @@ export default function TasteTab({ onRefresh }) {
         ) : (
           <div className="space-y-4">
             {reviewResponses.map((r, i) => (
-              <div key={i} className={`bg-port-card rounded-lg border ${r.isPersonalized ? 'border-purple-500/30' : 'border-port-border'} p-4`}>
+              <div key={i} className={`bg-port-card rounded-lg border ${r.isPersonalized ? 'border-port-accent-2/30' : 'border-port-border'} p-4`}>
                 <div className="flex items-start gap-2 mb-2">
                   {r.isPersonalized ? (
-                    <span className="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">personalized</span>
+                    <span className="text-xs px-2 py-0.5 bg-port-accent-2/20 text-port-accent-2 rounded">personalized</span>
                   ) : r.isFollowUp ? (
                     <span className="text-xs px-2 py-0.5 bg-port-accent/20 text-port-accent rounded">follow-up</span>
                   ) : null}
@@ -314,8 +314,8 @@ export default function TasteTab({ onRefresh }) {
             ))}
 
             {section?.summary && (
-              <div className="bg-port-card rounded-lg border border-violet-500/30 p-4">
-                <h3 className="text-sm font-medium text-violet-400 mb-2 flex items-center gap-2">
+              <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-4">
+                <h3 className="text-sm font-medium text-port-accent-2 mb-2 flex items-center gap-2">
                   <Sparkles size={14} />
                   AI Summary
                 </h3>
@@ -326,9 +326,9 @@ export default function TasteTab({ onRefresh }) {
                   <p className="text-xs text-gray-500 mb-2">Does this summary capture your taste accurately?</p>
                   <div className="flex items-center gap-2">
                     {[
-                      { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, active: 'bg-green-500/20 text-green-400 border border-green-500/30', inactive: 'text-gray-400 border border-port-border hover:text-green-400 hover:border-green-500/30 disabled:opacity-30' },
-                      { key: 'not_quite', label: 'Not quite', icon: Minus, active: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30', inactive: 'text-gray-400 border border-port-border hover:text-yellow-400 hover:border-yellow-500/30 disabled:opacity-30' },
-                      { key: 'doesnt_sound_like_me', label: 'Not me', icon: ThumbsDown, active: 'bg-red-500/20 text-red-400 border border-red-500/30', inactive: 'text-gray-400 border border-port-border hover:text-red-400 hover:border-red-500/30 disabled:opacity-30' }
+                      { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, active: 'bg-port-success/20 text-port-success border border-port-success/30', inactive: 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30' },
+                      { key: 'not_quite', label: 'Not quite', icon: Minus, active: 'bg-port-warning/20 text-port-warning border border-port-warning/30', inactive: 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30' },
+                      { key: 'doesnt_sound_like_me', label: 'Not me', icon: ThumbsDown, active: 'bg-port-error/20 text-port-error border border-port-error/30', inactive: 'text-gray-400 border border-port-border hover:text-port-error hover:border-port-error/30 disabled:opacity-30' }
                     ].map(({ key, label, icon: FbIcon, active, inactive }) => (
                       <button
                         key={key}
@@ -351,7 +351,7 @@ export default function TasteTab({ onRefresh }) {
               <button
                 onClick={() => handleGenerateSummary(reviewSection)}
                 disabled={generatingSummary || reviewResponses.length === 0}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50"
+                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               >
                 {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
                 {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
@@ -395,15 +395,15 @@ export default function TasteTab({ onRefresh }) {
               <h2 className="text-xl font-semibold text-white">{section?.label}</h2>
             </div>
           </div>
-          <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg mb-4">
+          <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg mb-4">
             <div className="flex items-center gap-3">
-              <Check className="w-5 h-5 text-green-400" />
-              <span className="text-green-400">All questions for this section are complete.</span>
+              <Check className="w-5 h-5 text-port-success" />
+              <span className="text-port-success">All questions for this section are complete.</span>
             </div>
           </div>
           {section?.summary && (
-            <div className="bg-port-card rounded-lg border border-violet-500/30 p-4 mb-4">
-              <h3 className="text-sm font-medium text-violet-400 mb-2 flex items-center gap-2">
+            <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-4 mb-4">
+              <h3 className="text-sm font-medium text-port-accent-2 mb-2 flex items-center gap-2">
                 <Sparkles size={14} />
                 AI Summary
               </h3>
@@ -423,7 +423,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={handleGoDeeper}
               disabled={loadingPersonalized || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {loadingPersonalized ? <BrailleSpinner /> : <Telescope size={16} />}
@@ -439,7 +439,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={() => handleGenerateSummary(activeSection)}
               disabled={generatingSummary || !selectedProvider}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50"
               title={!selectedProvider ? NO_API_PROVIDER_TITLE : ''}
             >
               {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
@@ -497,10 +497,10 @@ export default function TasteTab({ onRefresh }) {
             )}
           </div>
         ) : (
-          <div className={`bg-port-card rounded-lg border ${currentQuestion?.isPersonalized ? 'border-purple-500/30' : 'border-port-border'} p-6`}>
+          <div className={`bg-port-card rounded-lg border ${currentQuestion?.isPersonalized ? 'border-port-accent-2/30' : 'border-port-border'} p-6`}>
             <div className="mb-6">
               {currentQuestion?.isPersonalized ? (
-                <span className="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded uppercase tracking-wider">
+                <span className="text-xs px-2 py-0.5 bg-port-accent-2/20 text-port-accent-2 rounded uppercase tracking-wider">
                   Personalized — referencing your identity
                 </span>
               ) : (
@@ -593,7 +593,7 @@ export default function TasteTab({ onRefresh }) {
       <div className="bg-port-card rounded-lg border border-port-border p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <Palette className="w-6 h-6 text-violet-400" />
+            <Palette className="w-6 h-6 text-port-accent-2" />
             <h2 className="text-lg font-semibold text-white">Aesthetic Taste Profile</h2>
           </div>
           <span className="text-gray-400">
@@ -603,7 +603,7 @@ export default function TasteTab({ onRefresh }) {
 
         <div className="h-3 bg-port-border rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-violet-500 to-pink-500 transition-all"
+            className="h-full bg-gradient-to-r from-port-accent-2 to-port-accent-2/40 transition-all"
             style={{ width: `${profile?.overallPercentage || 0}%` }}
           />
         </div>
@@ -627,7 +627,7 @@ export default function TasteTab({ onRefresh }) {
             <div
               key={section.id}
               className={`bg-port-card rounded-lg border transition-all ${
-                isComplete ? 'border-green-500/30' : isStarted ? 'border-port-accent/30' : 'border-port-border'
+                isComplete ? 'border-port-success/30' : isStarted ? 'border-port-accent/30' : 'border-port-border'
               }`}
             >
               <button
@@ -639,7 +639,7 @@ export default function TasteTab({ onRefresh }) {
                     <Icon className={`w-5 h-5 text-${color}-400`} />
                   </div>
                   {isComplete ? (
-                    <Check className="w-5 h-5 text-green-400" />
+                    <Check className="w-5 h-5 text-port-success" />
                   ) : (
                     <ChevronRight className="w-5 h-5 text-gray-500" />
                   )}
@@ -653,7 +653,7 @@ export default function TasteTab({ onRefresh }) {
                     {section.progress?.coreAnswered || 0}/{section.progress?.coreTotal || 0} core
                     {section.progress?.followUpsAnswered > 0 && ` + ${section.progress.followUpsAnswered} follow-ups`}
                   </span>
-                  <span className={isComplete ? 'text-green-400' : 'text-gray-500'}>
+                  <span className={isComplete ? 'text-port-success' : 'text-gray-500'}>
                     {section.progress?.percentage || 0}%
                   </span>
                 </div>
@@ -661,7 +661,7 @@ export default function TasteTab({ onRefresh }) {
                 {/* Mini progress bar */}
                 <div className="h-1 bg-port-border rounded-full mt-2 overflow-hidden">
                   <div
-                    className={`h-full transition-all ${isComplete ? 'bg-green-500' : 'bg-port-accent'}`}
+                    className={`h-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
                     style={{ width: `${section.progress?.percentage || 0}%` }}
                   />
                 </div>
@@ -685,7 +685,7 @@ export default function TasteTab({ onRefresh }) {
                 <div className="px-4 pb-3">
                   <button
                     onClick={() => setExpandedSummary(expandedSummary === section.id ? null : section.id)}
-                    className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1 py-1"
+                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1"
                   >
                     <Sparkles size={12} />
                     Summary
@@ -705,9 +705,9 @@ export default function TasteTab({ onRefresh }) {
 
       {/* Overall Summary */}
       {profile?.profileSummary && (
-        <div className="bg-port-card rounded-lg border border-violet-500/30 p-6">
+        <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-6">
           <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-violet-400" />
+            <Sparkles className="w-5 h-5 text-port-accent-2" />
             Unified Taste Profile
           </h3>
           <div className="text-sm"><MarkdownOutput content={profile.profileSummary} /></div>
@@ -743,7 +743,7 @@ export default function TasteTab({ onRefresh }) {
             <button
               onClick={handleGenerateOverallSummary}
               disabled={generatingSummary || (profile?.completedCount || 0) === 0}
-              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-violet-600 text-white rounded-lg text-sm hover:bg-violet-500 disabled:opacity-50 whitespace-nowrap"
+              className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] bg-port-accent-2 text-white rounded-lg text-sm hover:bg-port-accent-2/80 disabled:opacity-50 whitespace-nowrap"
             >
               {generatingSummary ? <BrailleSpinner /> : <Sparkles size={16} />}
               {profile?.profileSummary ? 'Regenerate' : 'Generate Profile'}
@@ -755,7 +755,7 @@ export default function TasteTab({ onRefresh }) {
       {/* Info */}
       <div className="bg-port-card rounded-lg border border-port-border p-4">
         <div className="flex items-start gap-4">
-          <Palette className="w-6 h-6 text-violet-400 shrink-0" />
+          <Palette className="w-6 h-6 text-port-accent-2 shrink-0" />
           <div>
             <h3 className="font-medium text-white mb-1">How the Taste Questionnaire Works</h3>
             <p className="text-sm text-gray-400">
