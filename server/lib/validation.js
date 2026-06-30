@@ -417,6 +417,34 @@ export function parsePagination(query, { defaultLimit = 50, maxLimit = 200 } = {
   return { limit, offset };
 }
 
+/**
+ * Did the caller explicitly ask for pagination? True when either `limit` or
+ * `offset` is present in the query string. Lets a list endpoint stay
+ * backward-compatible (return the full array when neither is set) while opting
+ * into a bounded `{ items, total, limit, offset }` envelope the moment a client
+ * passes a pagination param.
+ * @param {object} query - req.query object
+ * @returns {boolean}
+ */
+export function isPaginationRequested(query) {
+  return query?.limit !== undefined || query?.offset !== undefined;
+}
+
+/**
+ * Slice an array into a bounded page using the same limit/offset parsing as
+ * `parsePagination`. Returns the page plus the metadata needed to render the
+ * envelope every paginated PortOS list endpoint shares.
+ * @param {Array} items - the full list (already filtered/sorted by the caller)
+ * @param {object} query - req.query object
+ * @param {object} options - { defaultLimit, maxLimit }
+ * @returns {{ items: Array, total: number, limit: number, offset: number }}
+ */
+export function paginateArray(items, query, options = {}) {
+  const list = Array.isArray(items) ? items : [];
+  const { limit, offset } = parsePagination(query, options);
+  return { items: list.slice(offset, offset + limit), total: list.length, limit, offset };
+}
+
 // =============================================================================
 // SHARING (cross-network share buckets via cloud-synced folders)
 // =============================================================================
