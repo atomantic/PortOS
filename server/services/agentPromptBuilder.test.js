@@ -55,7 +55,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
 
 function makeTask(overrides = {}) {
@@ -216,7 +216,7 @@ describe('buildLightContextPrompt', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
-        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt' },
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
         { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
       expect(prompt).toMatch(/## Completion Workflow/);
@@ -226,10 +226,11 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/simplify`/);
       // /simplify is a Claude built-in — OpenCode gets the inline equivalent.
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
-      // Plain git/gh commit → push → PR → merge → verify.
+      // Plain git/gh commit → push → PR → merge → verify. The PR base is pinned
+      // to the worktree's base branch when known.
       expect(prompt).toMatch(/git commit -m/);
       expect(prompt).toMatch(/git push -u origin claim\/issue-1/);
-      expect(prompt).toMatch(/gh pr create --fill/);
+      expect(prompt).toMatch(/gh pr create --fill --base main/);
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
       expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
       expect(prompt).toMatch(/MERGED/);
@@ -622,5 +623,50 @@ describe('buildAgentPrompt — provider type routing', () => {
     // Agent must verify the PR is actually merged before exiting.
     expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state -q \.state/);
     expect(prompt).toMatch(/MERGED/);
+  });
+});
+
+describe('buildCompletionGuidelineBullet', () => {
+  it('read-only short-circuits regardless of other flags', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: true, isTui: true, slashdoFree: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/read-only task/i);
+  });
+
+  it('slashdo TUI bullet references the slashdo command', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, slashdoFree: false,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/`\/do:pr`/);
+    expect(bullet).not.toMatch(/plain `git`\/`gh`/);
+    expect(bullet).toMatch(/do NOT run `\/quit`/);
+  });
+
+  it('slashdo-free TUI bullet points at the plain git/gh workflow, not a /do:* command', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, slashdoFree: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/plain `git`\/`gh`/);
+    expect(bullet).toMatch(/no slashdo commands/);
+    expect(bullet).not.toMatch(/`\/do:pr`/);
+    expect(bullet).toMatch(/do NOT run `\/quit`/);
+  });
+
+  it('non-TUI worktree+openPR bullet defers push/PR to the system, and read-only/null cases return null', () => {
+    const prBullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(prBullet).toMatch(/the system will push your branch and open a pull request/);
+    // No worktree, not TUI, not read-only → no bullet.
+    const none = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:push',
+      worktreeInfo: null, willOpenPR: false, willReviewLoop: false,
+    });
+    expect(none).toBeNull();
   });
 });
