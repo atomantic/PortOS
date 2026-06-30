@@ -101,6 +101,10 @@ export default function useSceneRenderLifecycle({
     const onAttach = (data) => cfgRef.current.apply(data);
     // jobId → pending error-toast timer (running-cancel deferral; see onFailed).
     const failTimers = new Map();
+    // Unmount/re-run guard for the deferred fail-toast fetch below: cleared in
+    // cleanup so a `getMediaJob` promise still in flight (or a re-arm) can't pop
+    // a "render failed" toast onto whatever page the user navigated to.
+    let mounted = true;
     const settle = (data, failed) => {
       const jobId = data?.generationId || data?.jobId;
       if (!jobId) return;
@@ -132,14 +136,16 @@ export default function useSceneRenderLifecycle({
     const armFailToast = (jobId, attempt = 0) => {
       failTimers.set(jobId, setTimeout(() => {
         failTimers.delete(jobId);
+        if (!mounted) return; // navigated away before the timer fired
         getMediaJob(jobId)
           .then((job) => {
+            if (!mounted) return; // unmounted while the status fetch was in flight
             const status = job?.status;
             if (status === 'canceled') return; // user cancel — never a failure toast
             if (status === 'failed' || status === 'error') { toast.error(cfgRef.current.failMessage); return; }
             if (attempt < 2) armFailToast(jobId, attempt + 1); // non-terminal: wait, don't toast yet
           })
-          .catch(() => toast.error(cfgRef.current.failMessage));
+          .catch(() => { if (mounted) toast.error(cfgRef.current.failMessage); });
       }, 800));
     };
     const onFailed = (data) => {
@@ -175,6 +181,7 @@ export default function useSceneRenderLifecycle({
       socket.off(completedEvent, onCompleted);
       socket.off(failedEvent, onFailed);
       socket.off(canceledEvent, onCanceled);
+      mounted = false;
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };

@@ -126,6 +126,10 @@ export async function resolveSceneClips(project) {
     if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); continue; }
     const duration = entry.numFrames && entry.fps ? entry.numFrames / entry.fps : null;
     if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); continue; }
+    // A dimensionless history entry would make buildMusicVideoFfmpegArgs emit
+    // `scale=undefined:undefined` (opaque ffmpeg failure); treat it as a missing
+    // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
+    if (!entry.width || entry.width <= 0 || !entry.height || entry.height <= 0) { missing.push(scene.videoHistoryId); continue; }
     clips.push({
       sceneId: scene.sceneId,
       videoPath,

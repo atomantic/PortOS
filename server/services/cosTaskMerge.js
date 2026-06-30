@@ -234,7 +234,7 @@ export function mergeTaskLists(localTasks, remoteTasks, { now = Date.now() } = {
   const merged = [];
   const seen = new Set();
   for (const l of local) {
-    if (!l || typeof l.id !== 'string' || !l.id) continue;
+    if (!l || typeof l.id !== 'string' || !l.id || seen.has(l.id)) continue;
     seen.add(l.id);
     const r = remoteById.get(l.id);
     if (!r) { merged.push(l); continue; }
@@ -243,6 +243,7 @@ export function mergeTaskLists(localTasks, remoteTasks, { now = Date.now() } = {
   // Remote-only tasks — adopt so the backlog replicates both directions.
   for (const r of remote) {
     if (!r || typeof r.id !== 'string' || !r.id || seen.has(r.id)) continue;
+    seen.add(r.id);
     merged.push(normalizeAdopted(r));
   }
   return merged;

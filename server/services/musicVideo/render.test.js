@@ -137,6 +137,14 @@ describe('resolveSceneClips', () => {
     await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] }))
       .rejects.toMatchObject({ status: 404, code: 'MISSING_CLIPS' });
   });
+
+  it('throws MISSING_CLIPS for a dimensionless history entry instead of an opaque ffmpeg failure', async () => {
+    // A clip lacking width/height would render `scale=undefined:undefined`; treat
+    // it as a missing clip so the caller gets the clean 4xx (mirrors the duration guard).
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', fps: 24, numFrames: 48 }]); // no width/height
+    await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] }))
+      .rejects.toMatchObject({ status: 404, code: 'MISSING_CLIPS' });
+  });
 });
 
 describe('renderMusicVideo mutex (#1760 re-entrancy guard)', () => {
