@@ -117,11 +117,14 @@ describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
     expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
   });
 
-  it('skips pinning (no dispatcher) when the lookup fails — preserves fail-open', async () => {
+  it('fails closed when the validation lookup fails (no unpinned connect-time re-resolve)', async () => {
     lookupMock.mockRejectedValue(new Error('ENOTFOUND'));
-    fetchMock.mockResolvedValue(res({ text: 'ok' }));
-    await fetchPublicText('https://transient-dns.example.com/x');
-    expect(fetchMock.mock.calls[0][1].dispatcher).toBeUndefined();
+    // A hostname we can't vet must not fall through to an unpinned fetch — the
+    // first hop throws like any other unsafe URL and never reaches the network.
+    await expect(fetchPublicText('https://unresolvable.example.com/x'))
+      .rejects.toMatchObject({ status: 400, code: 'UNSAFE_URL' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await isPublicHttpUrlSafe('https://unresolvable.example.com/x')).toBe(false);
   });
 
   // End-to-end proof the mechanism actually defeats rebinding: a hostname that
