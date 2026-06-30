@@ -1,11 +1,13 @@
 import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
-import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
+import { Sparkles, Loader2 } from 'lucide-react';
+import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
 export default function OverviewTab({ project, onProjectUpdate }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
+  const [autoCasting, setAutoCasting] = useState(false);
   // Track the project id this tab is currently mounted for. If the user
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
@@ -56,6 +58,26 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         }
       });
   };
+  // Autonomous auto-cast (#1810): the director queries the catalog from the
+  // project's brief and APPENDS the fresh matches to the cast. Guarded against a
+  // project switch mid-request so the result lands on the project that asked.
+  const handleAutoCast = () => {
+    setAutoCasting(true);
+    const requestProjectId = project.id;
+    applyCreativeDirectorAutoCast(requestProjectId, {}, { silent: true })
+      .then((result) => {
+        if (projectIdRef.current !== requestProjectId) return;
+        const added = result?.added?.length || 0;
+        onProjectUpdate?.({ cast: result?.project?.cast || [] });
+        if (added > 0) toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);
+        else toast.info('Auto-cast found no new catalog matches for this brief');
+      })
+      .catch((err) => toast.error(err.message || 'Auto-cast failed'))
+      .finally(() => {
+        if (projectIdRef.current === requestProjectId) setAutoCasting(false);
+      });
+  };
+
   const collectionLink = `/media/collections/${project.collectionId}`;
   const final = project.finalVideoId
     ? <Link to={`/media/history?selected=${project.finalVideoId}`} className="text-port-accent">{project.finalVideoId}</Link>
@@ -109,14 +131,32 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         </section>
       )}
 
-      {Array.isArray(project.cast) && project.cast.length > 0 && (
-        <section className="bg-port-card border border-port-border rounded p-4">
-          <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide mb-2">
-            Cast ({project.cast.length})
+      <section className="bg-port-card border border-port-border rounded p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide">
+            Cast ({Array.isArray(project.cast) ? project.cast.length : 0})
           </h2>
-          <p className="text-xs text-port-text-muted mb-2">
-            Catalog ingredients remixed into this project — the director grounds the treatment and per-scene casting on them.
-          </p>
+          {/* Autonomous auto-cast (#1810): seed the cast from the catalog without
+              hand-picking. Disabled with no brief to search on. */}
+          <button
+            type="button"
+            onClick={handleAutoCast}
+            disabled={autoCasting || !hasSearchableBrief(project)}
+            title={hasSearchableBrief(project)
+              ? 'Let the director pick catalog ingredients from this project’s brief'
+              : 'Add a style spec or story first — auto-cast searches the catalog from the project brief'}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-port-text hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {autoCasting
+              ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+              : <Sparkles size={12} aria-hidden="true" />}
+            {autoCasting ? 'Auto-casting…' : 'Auto-cast'}
+          </button>
+        </div>
+        <p className="text-xs text-port-text-muted mb-2">
+          Catalog ingredients remixed into this project — the director grounds the treatment and per-scene casting on them. Auto-cast appends new matches; you can always edit the result.
+        </p>
+        {Array.isArray(project.cast) && project.cast.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             {project.cast.map((member) => {
               // Ingredient detail route is /catalog/:type/:id (matches CatalogCard);
@@ -137,8 +177,12 @@ export default function OverviewTab({ project, onProjectUpdate }) {
               );
             })}
           </div>
-        </section>
-      )}
+        ) : (
+          <p className="text-sm text-port-text-muted italic">
+            No cast yet — use Auto-cast to pull matching catalog ingredients, or remix them in from the Catalog.
+          </p>
+        )}
+      </section>
 
       {project.failureReason && (
         <section className="bg-port-card border border-port-error rounded p-4">
@@ -147,6 +191,17 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         </section>
       )}
     </div>
+  );
+}
+
+// True when the project carries enough authored brief (style spec or user story)
+// to be worth an auto-cast search. The server also folds in the project name, but
+// a name alone is low signal — so the UI only offers auto-cast once there's a real
+// brief to match catalog ingredients against.
+function hasSearchableBrief(project) {
+  return Boolean(
+    (typeof project?.styleSpec === 'string' && project.styleSpec.trim())
+    || (typeof project?.userStory === 'string' && project.userStory.trim()),
   );
 }
 
