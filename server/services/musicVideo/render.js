@@ -10,10 +10,14 @@
  * one external audio input as the sole output audio, ended on `-shortest` so the
  * render runs only as long as the shorter of (video, track).
  *
- * Lightweight beat-snap: when the project carries a cached beat analysis, each
- * cut is trimmed back to the nearest beat (never extended — a clip can't grow),
- * so cuts land on the music. With no analysis the clips render at their natural
- * length. The full beat-quantized arranger is a follow-up.
+ * Beat-snap: when the project carries a cached beat analysis, each cut is
+ * trimmed back to the nearest beat (never extended — a clip can't grow), so
+ * cuts land on the music. With no analysis the clips render at their natural
+ * length. A scene the director has explicitly arranged on the beat-quantized
+ * timeline (#1854 — `startSec`/`endSec`/`beatAligned` saved via drag-snap in
+ * the client) skips this live re-derivation entirely: its saved boundaries
+ * are honored exactly, so the render matches what was shown on the timeline
+ * rather than whatever the current beat grid would produce.
  */
 
 import { spawn } from 'child_process';
@@ -154,12 +158,35 @@ export async function resolveSceneClips(project) {
 // at least `minClipSec` long. Snapping only ever SHORTENS a clip (a clip can't
 // be extended past its rendered length), so a cut can move earlier onto a beat
 // but never later. Returns a NEW clips array with adjusted `outSec`/`duration`.
-// With no beats (no analysis) the clips are returned unchanged.
-export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 0.4 } = {}) {
+// With no beats (no analysis) and no persisted scene arrangement, clips are
+// returned unchanged.
+//
+// `scenes` (optional) is the project's scene list — when a clip's matching
+// scene has `beatAligned: true` and a valid `startSec`/`endSec` (persisted by
+// the BeatTimeline drag-snap arranger, #1854), that scene's saved duration is
+// honored EXACTLY instead of being re-derived from the live beat grid: the
+// director already snapped and saved it, so the render shouldn't silently
+// recompute a different cut from whatever the grid says today. Clamped to the
+// clip's own rendered length (a saved duration can't make a clip longer than
+// what was actually generated) and to `minClipSec`. The running cursor still
+// advances by the honored duration so any later, non-aligned clips keep
+// snapping against the correct cumulative position.
+export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 0.4, scenes = null } = {}) {
   const grid = Array.isArray(beats) ? beats.filter((b) => typeof b === 'number' && b >= 0).sort((a, b) => a - b) : [];
-  if (grid.length === 0) return clips.map((c) => ({ ...c }));
+  const scenesById = Array.isArray(scenes) ? new Map(scenes.map((s) => [s.sceneId, s])) : null;
+  if (grid.length === 0 && !scenesById) return clips.map((c) => ({ ...c }));
   let running = 0;
   return clips.map((clip) => {
+    const scene = scenesById?.get(clip.sceneId);
+    if (scene?.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec) {
+      const outSec = Math.min(clip.duration, Math.max(minClipSec, scene.endSec - scene.startSec));
+      running += outSec;
+      return { ...clip, inSec: 0, outSec, duration: outSec };
+    }
+    if (grid.length === 0) {
+      running += clip.duration;
+      return { ...clip };
+    }
     const naturalEnd = running + clip.duration;
     // Nearest beat at or before the natural end (snap trims, never extends).
     let best = null;
@@ -255,7 +282,7 @@ export async function renderMusicVideo(projectId) {
     const rawClips = await resolveSceneClips(project);
     const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
     const beats = project.audioAnalysis?.beats;
-    const clips = beatSnapClips(rawClips, beats);
+    const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 

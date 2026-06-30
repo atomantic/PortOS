@@ -18,6 +18,7 @@ import {
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks } from '../services/apiTracks.js';
+import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
@@ -200,6 +201,12 @@ export default function MusicVideo() {
   const saveScene = (sceneId, patch) => {
     updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save scene'));
+  };
+  // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
+  // the other scene field editors (#1854).
+  const commitSceneTiming = (sceneId, patch) => {
+    editSceneLocal(sceneId, patch);
+    saveScene(sceneId, patch);
   };
 
   const handleDeleteScene = (sceneId) => {
@@ -404,6 +411,10 @@ export default function MusicVideo() {
                   </div>
                 )}
               </div>
+
+              {selected.audioAnalysis && (selected.scenes || []).length > 0 && (
+                <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} onCommit={commitSceneTiming} />
+              )}
 
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-medium">Scene board</h3>
