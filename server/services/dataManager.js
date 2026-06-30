@@ -212,10 +212,15 @@ export async function getBackups() {
 // filename legitimately contains dots. Validate the dotted value directly — the
 // old `filename.replace(/[.]/g,'')` double-pass never checked the real filename,
 // leaving only the startsWith(backupDir) guard against traversal (issue #1822).
+// The regex forbids `/` and `\`, so no traversal segment can form; the only
+// regex-passing names that resolve dangerously are the bare `.`/`..` (e.g.
+// join(backupDir,'.') === backupDir), so reject those explicitly.
 const SAFE_FILENAME = /^[a-z0-9._-]+$/i;
 
 export async function deleteBackup(filename) {
-  if (!SAFE_FILENAME.test(filename) || filename.includes('..')) throw new Error('Invalid filename');
+  if (!SAFE_FILENAME.test(filename) || filename === '.' || filename === '..') {
+    throw new Error('Invalid filename');
+  }
   const backupDir = join(DATA_DIR, 'backup');
   const fullPath = join(backupDir, filename);
   if (!fullPath.startsWith(backupDir)) throw new Error('Path traversal not allowed');

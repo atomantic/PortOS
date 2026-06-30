@@ -37,6 +37,12 @@ describe('deleteBackup filename validation (#1822)', () => {
     expect(rm).not.toHaveBeenCalled();
   });
 
+  it('rejects the bare "." and ".." entries (which resolve to the backup dir / its parent)', async () => {
+    await expect(deleteBackup('.')).rejects.toThrow('Invalid filename');
+    await expect(deleteBackup('..')).rejects.toThrow('Invalid filename');
+    expect(rm).not.toHaveBeenCalled();
+  });
+
   it('rejects path separators and other unsafe characters', async () => {
     await expect(deleteBackup('sub/dir.tar.gz')).rejects.toThrow('Invalid filename');
     await expect(deleteBackup('name with spaces.tar.gz')).rejects.toThrow('Invalid filename');
