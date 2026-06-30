@@ -741,6 +741,20 @@ export async function spawnDirectly({
           console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
         }
       }
+      // Persist a terminal failure record so the agent/run don't stay stuck as
+      // running with no live process to finish them — the process now survives
+      // instead of restarting. Mirrors the error handler's completion path; each
+      // call is guarded so a persistence failure can't re-crash the handler.
+      try {
+        await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
+      } catch (completeErr) {
+        console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
+      }
+      try {
+        await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+      } catch (runErr) {
+        console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
+      }
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
     }
