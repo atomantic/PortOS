@@ -16,6 +16,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import {
   assertSafeFilename,
   ensureDir,
+  pathExists,
   expandHome,
   isValidJSON,
   listDirectoryByExtension,
@@ -381,6 +382,27 @@ describe('fileUtils', () => {
         .rejects.toThrow(/JSON-serializable/);
       await expect(writeJSONLines(join(testDir, 'bad.jsonl'), [undefined]))
         .rejects.toThrow(/JSON-serializable/);
+    });
+  });
+
+  describe('pathExists', () => {
+    const tmpRoot = join(tmpdir(), `fileutils-pathexists-${process.pid}-${Date.now()}`);
+
+    beforeEach(() => mkdir(tmpRoot, { recursive: true }));
+    afterEach(() => rm(tmpRoot, { recursive: true, force: true }));
+
+    it('resolves true for an existing file', async () => {
+      const f = join(tmpRoot, 'present.txt');
+      await writeFile(f, 'hi');
+      expect(await pathExists(f)).toBe(true);
+    });
+
+    it('resolves true for an existing directory', async () => {
+      expect(await pathExists(tmpRoot)).toBe(true);
+    });
+
+    it('resolves false for a missing path without throwing', async () => {
+      expect(await pathExists(join(tmpRoot, 'nope.txt'))).toBe(false);
     });
   });
 

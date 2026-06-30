@@ -28,6 +28,7 @@ import {
 } from './projectsLogic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'creative-director-projects.json');
@@ -152,7 +153,10 @@ export async function pruneTombstonedProjects(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('creativeDirectorProject', id);
+  // Coalesce the per-project base-hash evictions into ONE disk write.
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('creativeDirectorProject', id);
+  });
   return { pruned: pruned.length };
 }
 

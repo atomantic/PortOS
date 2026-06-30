@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -131,6 +131,22 @@ export async function ensureDir(dir) {
     }
     throw err;
   });
+}
+
+/**
+ * Async existence check — the non-blocking replacement for `existsSync` on
+ * request/hot paths. Resolves true iff `path` is accessible, false otherwise.
+ * Never throws (a missing path, permission error, etc. all resolve false), so
+ * it drops in wherever `existsSync` guarded a request handler.
+ *
+ * @param {string} path - File or directory path to test.
+ * @returns {Promise<boolean>}
+ *
+ * @example
+ * if (!(await pathExists(filepath))) throw new ServerError('Not found', { status: 404 });
+ */
+export async function pathExists(path) {
+  return access(path).then(() => true, () => false);
 }
 
 /**

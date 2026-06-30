@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import { existsSync, statSync, createReadStream } from 'fs';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
 import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, pathExists } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const router = Router();
@@ -18,22 +19,12 @@ function resolveVariant(variant) {
   return join(AVATAR_DIR, `${variant}.glb`);
 }
 
-// Non-throwing stat wrapper used by the HEAD handler — file may be removed between
-// existsSync() and statSync() (TOCTOU), which would otherwise crash the process.
-function safeStat(p) {
-  try {
-    return statSync(p);
-  } catch {
-    return null;
-  }
-}
-
-router.head('/model.glb', (req, res) => {
+router.head('/model.glb', async (req, res) => {
   const path = resolveVariant(req.query.variant);
-  if (!path || !existsSync(path)) {
-    return res.status(404).end();
-  }
-  const s = safeStat(path);
+  if (!path) return res.status(404).end();
+  // Single async stat off the event loop, doubling as the existence check —
+  // a missing/removed file (TOCTOU) just resolves null → 404.
+  const s = await stat(path).catch(() => null);
   if (!s) return res.status(404).end();
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Content-Length', String(s.size));
@@ -41,9 +32,9 @@ router.head('/model.glb', (req, res) => {
   return res.status(200).end();
 });
 
-router.get('/model.glb', (req, res) => {
+router.get('/model.glb', async (req, res) => {
   const path = resolveVariant(req.query.variant);
-  if (!path || !existsSync(path)) {
+  if (!path || !(await pathExists(path))) {
     throw new ServerError('No avatar model configured. Drop a GLB at data/avatar/model.glb', { status: 404 });
   }
   res.set('Content-Type', 'model/gltf-binary');

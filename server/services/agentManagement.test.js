@@ -53,7 +53,7 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('./agentRunTracking.js', () => ({
-  checkForTaskCommit: vi.fn().mockReturnValue(false)
+  checkForTaskCommit: vi.fn().mockResolvedValue(false)
 }));
 
 // Stub other transitive imports we don't exercise in handleOrphanedTask.

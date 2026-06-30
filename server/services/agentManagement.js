@@ -556,7 +556,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn) {
   }
 
   // Check if the agent actually committed work before treating as orphaned
-  const commitFound = checkForTaskCommit(taskId, ROOT_DIR);
+  const commitFound = await checkForTaskCommit(taskId, ROOT_DIR);
   if (commitFound) {
     emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
     await updateTask(taskId, { status: 'completed' }, task.taskType || 'user');

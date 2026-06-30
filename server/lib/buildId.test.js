@@ -47,7 +47,7 @@ describe('buildId — cache invalidation', () => {
     utimesSync(INDEX_PATH, t0, t0);
 
     const mod = await import('./buildId.js');
-    const idA = mod.getBuildId();
+    const idA = mod.getBuildId(); // primes the cache synchronously
     const htmlA = mod.getStampedIndexHtml();
     expect(idA).not.toBe('dev');
     expect(htmlA).toContain(`<meta name="portos-build-id" content="${idA}">`);
@@ -58,11 +58,37 @@ describe('buildId — cache invalidation', () => {
     const t1 = new Date('2026-02-01T00:00:00Z');
     utimesSync(INDEX_PATH, t1, t1);
 
+    // The refresh is async + off the hot path, so settle it explicitly (this
+    // bypasses the throttle the synchronous getters honor).
+    await mod.refreshBuildId();
+
     const idB = mod.getBuildId();
     const htmlB = mod.getStampedIndexHtml();
     expect(idB).not.toBe(idA);
     expect(htmlB).toContain(`<meta name="portos-build-id" content="${idB}">`);
     expect(htmlB).toContain('body>B');
+  });
+
+  it('getters serve the cached snapshot until the async refresh settles (no hot-path re-stat)', async () => {
+    writeFileSync(INDEX_PATH, '<html><head></head><body>old</body></html>');
+    const t0 = new Date('2026-05-01T00:00:00Z');
+    utimesSync(INDEX_PATH, t0, t0);
+
+    const mod = await import('./buildId.js');
+    const idOld = mod.getBuildId(); // primes
+    expect(idOld).not.toBe('dev');
+
+    // Rebuild on disk. The synchronous getter must still return the cached
+    // (stale) value within the throttle window — it does not re-stat per call.
+    writeFileSync(INDEX_PATH, '<html><head></head><body>new</body></html>');
+    const t1 = new Date('2026-05-02T00:00:00Z');
+    utimesSync(INDEX_PATH, t1, t1);
+    expect(mod.getBuildId()).toBe(idOld);
+
+    // Once the explicit refresh settles, the next read reflects the rebuild.
+    const snap = await mod.refreshBuildId();
+    expect(snap.id).not.toBe(idOld);
+    expect(mod.getStampedIndexHtml()).toContain('body>new');
   });
 
   it('returns the same id from cache when mtime is unchanged', async () => {

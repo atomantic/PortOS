@@ -6,11 +6,10 @@
 
 import { join } from 'path';
 import { writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { spawnSync } from 'child_process';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession, recordMessages } from './usage.js';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+import { ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -21,9 +20,8 @@ export async function createAgentRun(agentId, task, model, provider, workspacePa
   const runId = uuidv4();
   const runDir = join(RUNS_DIR, runId);
 
-  if (!existsSync(RUNS_DIR)) {
-    await ensureDir(RUNS_DIR);
-  }
+  // ensureDir is idempotent (mkdir recursive) — no existence pre-check needed.
+  await ensureDir(RUNS_DIR);
   await mkdir(runDir);
 
   const metadata = {
@@ -63,21 +61,29 @@ export async function createAgentRun(agentId, task, model, provider, workspacePa
  * Check if a commit was made with the task ID.
  * Returns true if a recent commit contains [task-{taskId}].
  * Returns false if git command fails (not a repo, git not available, etc.)
+ *
+ * Async + buffered: `git log` on a large repo can block for 100ms–2s, and this
+ * runs on the run-completion path of every failed CoS agent run — a `spawnSync`
+ * here froze all in-flight SSE/socket traffic for that window. `bufferedSpawn`
+ * runs it off the event loop with a hard timeout (a hung git is treated as
+ * "no commit found" rather than stalling completion forever).
  */
-export function checkForTaskCommit(taskId, workspacePath) {
+export async function checkForTaskCommit(taskId, workspacePath) {
   // Check if it's a git repo first
   const gitDir = join(workspacePath, '.git');
-  if (!existsSync(gitDir)) return false;
+  if (!(await pathExists(gitDir))) return false;
 
   const searchPattern = `[task-${taskId}]`;
   // --fixed-strings / -F: treat pattern as literal string, not regex. Without
   // this, square brackets in `[task-123]` would be parsed as a character class
   // and fail to match the literal commit message.
-  const result = spawnSync('git', ['log', '--all', '--oneline', '--fixed-strings', '--grep', searchPattern, '-1'], {
-    cwd: workspacePath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false
-  });
-  if (result.status !== 0 || result.error) return false;
-  return (result.stdout?.trim().length ?? 0) > 0;
+  const result = await bufferedSpawn(
+    'git',
+    ['log', '--all', '--oneline', '--fixed-strings', '--grep', searchPattern, '-1'],
+    { cwd: workspacePath, timeoutMs: 10_000, shell: false },
+  );
+  if (!result.success) return false; // non-zero exit, spawn error, or timeout
+  return result.stdout.trim().length > 0;
 }
 
 /**
@@ -99,7 +105,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // Post-execution validation: check for task commit even if exit code is non-zero
   let success = exitCode === 0;
   if (!success && metadata.taskId && metadata.workspacePath) {
-    const commitFound = checkForTaskCommit(metadata.taskId, metadata.workspacePath);
+    const commitFound = await checkForTaskCommit(metadata.taskId, metadata.workspacePath);
     if (commitFound) {
       console.log(`⚠️ Agent ${metadata.agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${metadata.taskId}`);
       success = true;
