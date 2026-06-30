@@ -375,7 +375,7 @@ describe('tuiHandshake.buildTuiInvocation', () => {
   });
 
   it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
-    const provider = { id: 'opencode-ollama-tui', command: 'opencode', args: [] };
+    const provider = { id: 'opencode-ollama-tui', command: 'opencode', args: [], ollamaBacked: true };
     const out = buildTuiInvocation(provider, 'qwen2.5:7b');
     expect(out.command).toBe('opencode');
     expect(out.args).toEqual(['--model', 'ollama/qwen2.5:7b']);

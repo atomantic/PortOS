@@ -106,7 +106,7 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveBedrockCliModel: vi.fn((m) => m),
   // Mirror the real ollama/ namespacing for opencode providers (fully unit-
   // tested in providerModels.test.js).
-  prefixOpencodeModel: vi.fn((p, m) => (p?.command === 'opencode' && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m)
+  prefixOpencodeModel: vi.fn((p, m) => (p?.command === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m)
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
@@ -217,7 +217,7 @@ describe('agent TUI spawning', () => {
 
   it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
     const config = buildTuiSpawnConfig({
-      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [],
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [], ollamaBacked: true,
     }, 'qwen2.5:7b');
     expect(config.command).toBe('opencode');
     expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);

@@ -77,20 +77,20 @@ describe('cliProviderArgs', () => {
 
     it('prepends the run subcommand when the saved args dropped it', () => {
       const args = buildCliArgs({
-        id: 'opencode-ollama', command: 'opencode', args: [],
+        id: 'opencode-ollama', command: 'opencode', args: [], ollamaBacked: true,
         defaultModel: 'qwen2.5:7b',
       });
       expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
     });
 
     it('omits -m when no model is configured (opencode falls back to its own default)', () => {
-      const args = buildCliArgs({ id: 'opencode-ollama', command: 'opencode', args: ['run'], defaultModel: null });
+      const args = buildCliArgs({ id: 'opencode-ollama', command: 'opencode', args: ['run'], ollamaBacked: true, defaultModel: null });
       expect(args).toEqual(['run']);
     });
 
     it('respects a user-baked -m pin and skips injection', () => {
       const args = buildCliArgs({
-        id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'],
+        id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'], ollamaBacked: true,
         defaultModel: 'qwen2.5:7b',
       });
       expect(args).toEqual(['run', '-m', 'ollama/custom']);

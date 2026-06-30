@@ -30,9 +30,9 @@ describe('providerModels', () => {
   });
 
   describe('prefixOpencodeModel', () => {
-    const oc = { command: 'opencode' };
+    const oc = { command: 'opencode', ollamaBacked: true };
 
-    it('namespaces a bare Ollama id under ollama/ for opencode providers', () => {
+    it('namespaces a bare Ollama id under ollama/ for ollama-backed opencode providers', () => {
       expect(prefixOpencodeModel(oc, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
     });
 
@@ -44,8 +44,16 @@ describe('providerModels', () => {
       expect(prefixOpencodeModel(oc, 'hf.co/user/model:tag')).toBe('ollama/hf.co/user/model:tag');
     });
 
+    it('does NOT prefix a non-ollama-backed opencode provider (keeps its qualified id)', () => {
+      // A user-configured OpenCode provider on another backend stores an
+      // already-qualified provider/model id — prefixing would mis-route it.
+      const ocOther = { command: 'opencode' };
+      expect(prefixOpencodeModel(ocOther, 'openai/gpt-4o')).toBe('openai/gpt-4o');
+      expect(prefixOpencodeModel({ command: 'opencode', ollamaBacked: false }, 'anthropic/claude-sonnet')).toBe('anthropic/claude-sonnet');
+    });
+
     it('is a no-op for non-opencode providers', () => {
-      expect(prefixOpencodeModel({ command: 'claude' }, 'qwen2.5:7b')).toBe('qwen2.5:7b');
+      expect(prefixOpencodeModel({ command: 'claude', ollamaBacked: true }, 'qwen2.5:7b')).toBe('qwen2.5:7b');
       expect(prefixOpencodeModel({ command: 'codex' }, 'gpt-5')).toBe('gpt-5');
     });
 

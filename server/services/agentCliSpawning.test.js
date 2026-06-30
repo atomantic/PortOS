@@ -201,14 +201,14 @@ describe('buildCliSpawnConfig', () => {
   });
 
   it('prepends the run subcommand for OpenCode even if saved args dropped it', () => {
-    const config = buildCliSpawnConfig({ id: 'opencode-ollama', command: 'opencode', args: [] }, 'qwen2.5:7b');
+    const config = buildCliSpawnConfig({ id: 'opencode-ollama', command: 'opencode', args: [], ollamaBacked: true }, 'qwen2.5:7b');
 
     expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
   });
 
   it('respects a user-baked -m pin on an OpenCode provider and does not duplicate it', () => {
     const config = buildCliSpawnConfig(
-      { id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'] },
+      { id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'], ollamaBacked: true },
       'qwen2.5:7b',
     );
 

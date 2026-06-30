@@ -25,14 +25,19 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
  * `opencode run -m` / `opencode --model`. Idempotent — an id that already starts
  * with `ollama/` is returned untouched, and a `/`-bearing Ollama id
  * (`hf.co/user/model:tag`) is namespaced as `ollama/hf.co/...` since OpenCode
- * splits provider/model on the FIRST slash only. No-op for non-OpenCode
- * providers and empty models.
- * @param {{command?:string}} provider
+ * splits provider/model on the FIRST slash only.
+ *
+ * Gated on the `ollamaBacked` marker, NOT just `command === 'opencode'`: a
+ * user-configured OpenCode provider pointed at a different backend stores an
+ * already-qualified id (`openai/gpt-4o`, `anthropic/claude-sonnet`), and blindly
+ * prefixing `ollama/` would route it to the wrong backend. No-op for
+ * non-Ollama-backed / non-OpenCode providers and empty models.
+ * @param {{command?:string, ollamaBacked?:boolean}} provider
  * @param {string|null|undefined} model
  * @returns {string|null|undefined}
  */
 export function prefixOpencodeModel(provider, model) {
-  if (provider?.command !== 'opencode' || !model) return model;
+  if (provider?.command !== 'opencode' || provider?.ollamaBacked !== true || !model) return model;
   const id = String(model);
   return id.startsWith('ollama/') ? id : `ollama/${id}`;
 }
