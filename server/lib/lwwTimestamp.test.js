@@ -73,9 +73,17 @@ describe('compareNewerWins', () => {
     expect(compareNewerWins(null, undefined)).toBe(false);
   });
 
-  it('compares ISO vs non-ISO formats by epoch value', () => {
-    // RFC form is one second newer than the ISO form despite different shapes.
-    expect(compareNewerWins('Fri, 02 Jan 2026 03:04:06 GMT', '2026-01-02T03:04:05.000Z')).toBe(true);
+  it('decides newer-wins by epoch even when lexical order disagrees', () => {
+    // The 2030 ISO value is chronologically NEWER but sorts EARLIER as a string
+    // ('2' < 'F') than the 2026 RFC value — so a lexicographic compare would get
+    // BOTH directions wrong. Pinning both directions rules out a string-compare
+    // regression that a same-direction case (e.g. RFC newer AND lexically larger)
+    // would silently pass.
+    const isoNewer = '2030-01-01T00:00:00.000Z';
+    const rfcOlder = 'Fri, 02 Jan 2026 03:04:06 GMT';
+    expect(isoNewer < rfcOlder).toBe(true);                 // lexical: ISO sorts first
+    expect(compareNewerWins(isoNewer, rfcOlder)).toBe(true);  // epoch: ISO is newer → overrides
+    expect(compareNewerWins(rfcOlder, isoNewer)).toBe(false); // epoch: RFC is older → loses
   });
 
   it('is antisymmetric for two distinct valid timestamps', () => {
@@ -119,8 +127,13 @@ describe('compareEarlierWins', () => {
     expect(compareEarlierWins(early, late)).toBe(-1 * compareEarlierWins(late, early));
   });
 
-  it('compares ISO vs non-ISO formats by epoch value', () => {
-    // RFC form is one second earlier → a wins.
-    expect(compareEarlierWins('Fri, 02 Jan 2026 03:04:04 GMT', '2026-01-02T03:04:05.000Z')).toBe(-1);
+  it('decides earlier-wins by epoch even when lexical order disagrees', () => {
+    // a (2030 ISO) is chronologically LATER but sorts EARLIER as a string than
+    // b (2026 RFC) — a lexicographic compare would wrongly call a "earlier" and
+    // return -1; epoch comparison correctly returns 1 (b is earlier, b wins).
+    const aLater = '2030-01-01T00:00:00.000Z';
+    const bEarlier = 'Fri, 02 Jan 2026 03:04:06 GMT';
+    expect(aLater < bEarlier).toBe(true);              // lexical: a sorts first
+    expect(compareEarlierWins(aLater, bEarlier)).toBe(1); // epoch: b is earlier → b wins
   });
 });
