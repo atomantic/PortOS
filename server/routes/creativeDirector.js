@@ -108,8 +108,15 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   const { brief, types, limit, compose } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
-  const cast = result.project?.cast;
-  const composing = Boolean(compose) && Array.isArray(cast) && cast.length > 0 && !result.project?.treatment;
+  const project = result.project;
+  const cast = project?.cast;
+  // `advanceAfterSceneSettled` (what startCreativeDirectorProject calls) bails
+  // immediately for paused/failed projects, so kicking off there would no-op
+  // while we falsely report `composing` to the UI. Auto-compose deliberately
+  // does NOT do /start's failed-scene recovery — it's only the first-pass
+  // treatment path — so we simply skip those statuses.
+  const composable = project && project.status !== 'paused' && project.status !== 'failed';
+  const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
   if (composing) {
     startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
   }
