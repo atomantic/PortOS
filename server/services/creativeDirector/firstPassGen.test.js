@@ -16,7 +16,7 @@ vi.mock('../catalogDB.js', () => ({
   listMediaForIngredient: vi.fn(),
 }));
 
-import { buildPortraitPrompt, enqueueFirstPassPortraits } from './firstPassGen.js';
+import { buildPortraitPrompt, enqueueFirstPassPortraits, enqueueFirstPassSceneFrames } from './firstPassGen.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
@@ -147,5 +147,60 @@ describe('enqueueFirstPassPortraits', () => {
     getIngredient.mockResolvedValue({ id: 'a', type: 'character', name: 'A', payload: { physicalDescription: 'd' } });
     const out = await enqueueFirstPassPortraits([{ foo: 'bar' }, null, { ingredientId: 'a' }]);
     expect(out.enqueued).toEqual([{ ingredientId: 'a', jobId: 'job-1' }]);
+  });
+});
+
+describe('enqueueFirstPassSceneFrames (#1867)', () => {
+  const scene = (over = {}) => ({
+    sceneId: 's1', order: 0, intent: 'x', prompt: 'a cat walks into a noir alley',
+    durationSeconds: 4, status: 'pending', ...over,
+  });
+
+  it('enqueues a creativeDirector-tagged job per scene lacking a reference frame', async () => {
+    const project = { id: 'cd-1', treatment: { scenes: [scene({ sceneId: 's1' }), scene({ sceneId: 's2' })] } };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out.mode).toBe('local');
+    expect(out.enqueued).toEqual([
+      { sceneId: 's1', jobId: 'job-1' },
+      { sceneId: 's2', jobId: 'job-2' },
+    ]);
+    expect(out.skipped).toEqual([]);
+    const firstJob = enqueueJob.mock.calls[0][0];
+    expect(firstJob.kind).toBe('image');
+    expect(firstJob.params.creativeDirector).toEqual({ projectId: 'cd-1', sceneId: 's1' });
+    expect(firstJob.params.prompt).toBe('a cat walks into a noir alley');
+    expect(firstJob.params.pythonPath).toBe('/py');
+  });
+
+  it('skips a scene that already has a reference frame (idempotent re-run)', async () => {
+    const project = {
+      id: 'cd-1',
+      treatment: { scenes: [scene({ sceneId: 's1', sourceImageFile: 'existing.png' }), scene({ sceneId: 's2' })] },
+    };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out.enqueued).toEqual([{ sceneId: 's2', jobId: 'job-1' }]);
+    expect(out.skipped).toEqual([{ sceneId: 's1', reason: 'has-reference' }]);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a scene with a blank prompt', async () => {
+    const project = { id: 'cd-1', treatment: { scenes: [scene({ sceneId: 's1', prompt: '   ' })] } };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out.enqueued).toEqual([]);
+    expect(out.skipped).toEqual([{ sceneId: 's1', reason: 'no-prompt' }]);
+  });
+
+  it('skips gracefully for external mode (not queue-backed)', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+    const project = { id: 'cd-1', treatment: { scenes: [scene()] } };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out).toEqual({ mode: 'external', enqueued: [], skipped: [], reason: 'mode-unsupported' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty summary for no treatment / no scenes (never reads settings)', async () => {
+    expect(await enqueueFirstPassSceneFrames({ id: 'cd-1', treatment: null })).toEqual({ mode: null, enqueued: [], skipped: [] });
+    expect(await enqueueFirstPassSceneFrames({ id: 'cd-1', treatment: { scenes: [] } })).toEqual({ mode: null, enqueued: [], skipped: [] });
+    expect(getSettings).not.toHaveBeenCalled();
   });
 });

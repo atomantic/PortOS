@@ -1,11 +1,18 @@
 /**
- * Creative Director — first-pass asset generation (#1818).
+ * Creative Director — first-pass asset generation (#1818, extended by #1867).
  *
  * Follow-up to the Auto-cast MVP (#1810) and auto-compose (#1817). When the
  * autonomous path seeds a project's cast from the catalog, an opt-in
  * "generate first-pass assets" step kicks off a catalog portrait render for
  * each freshly-cast member that has no portrait yet — so the cast "arrives
  * on-model" without the user hand-rendering each ingredient.
+ *
+ * #1867 extends the same opt-in step one stage later: once auto-compose has
+ * written a treatment (a scene plan exists), `enqueueFirstPassSceneFrames`
+ * seeds a first reference frame per scene the same way portraits are seeded.
+ * The other two downstream modalities #1818 named (scene clips / i2v, music
+ * bed) are genuinely separate pipelines and are tracked as their own issues
+ * rather than folded in here.
  *
  * Reuse, not a new pipeline (the issue's explicit constraint). Each render is
  * an ordinary image-gen job enqueued onto the SAME mediaJobQueue with the same
@@ -56,8 +63,11 @@ export function buildPortraitPrompt(ingredient) {
  * (external mode, codex disabled). Reads settings the same way the imageGen
  * route + universeBuilderRender do, so the cleanC2PA / denoise cleaners apply
  * to first-pass renders exactly like a manual portrait render.
+ *
+ * Exported so `enqueueFirstPassSceneFrames` (#1867) shares the exact same
+ * queue-backed-mode gate as the portrait path rather than re-deriving it.
  */
-async function resolveQueueModeParams() {
+export async function resolveQueueModeParams() {
   const settings = await getSettings();
   const mode = settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
   if (mode === IMAGE_GEN_MODE.CODEX) {
@@ -157,5 +167,65 @@ export async function enqueueFirstPassPortraits(members = []) {
     enqueued.push({ ingredientId, jobId: queued.jobId });
   }
   console.log(`🎨 CD first-pass portraits: ${enqueued.length} queued, ${skipped.length} skipped (${resolved.mode})`);
+  return { mode: resolved.mode, enqueued, skipped };
+}
+
+/**
+ * Enqueue first-pass scene reference-frame renders for a project's treatment
+ * (#1867 — the first slice of #1818's deferred "extend beyond portraits"
+ * follow-up). Once auto-compose (#1817) has written a scene plan, seed an
+ * on-model reference frame per scene the same way `enqueueFirstPassPortraits`
+ * seeds cast portraits: one image-gen job per scene tagged for the durable
+ * `creativeDirectorSceneImageHook`, which files the finished render onto
+ * `scene.sourceImageFile` — the SAME field a manually-set reference image or
+ * an i2v-continuation source already populates (sceneRunner.js reads it as
+ * the render's source image), so first-pass gen fills the gap rather than
+ * adding a parallel field.
+ *
+ * Director-first + idempotent: a scene that already carries a
+ * `sourceImageFile` (set by hand, a prior first-pass run, or the agent
+ * itself) is left alone. Best-effort and self-contained — a single scene
+ * missing a prompt is recorded in `skipped`, never thrown, since this runs as
+ * a side effect of writing the treatment and must not fail that write.
+ *
+ * Returns `{ mode, enqueued: [{ sceneId, jobId }], skipped: [{ sceneId, reason }], reason? }`.
+ */
+export async function enqueueFirstPassSceneFrames(project) {
+  const scenes = Array.isArray(project?.treatment?.scenes) ? project.treatment.scenes : [];
+  if (scenes.length === 0) return { mode: null, enqueued: [], skipped: [] };
+
+  const resolved = await resolveQueueModeParams();
+  if (!resolved.ready) {
+    return { mode: resolved.mode, enqueued: [], skipped: [], reason: resolved.reason };
+  }
+
+  const enqueued = [];
+  const skipped = [];
+  for (const scene of scenes) {
+    if (!scene?.sceneId) continue;
+    if (scene.sourceImageFile) {
+      skipped.push({ sceneId: scene.sceneId, reason: 'has-reference' });
+      continue;
+    }
+    const prompt = typeof scene.prompt === 'string' ? scene.prompt.trim() : '';
+    if (!prompt) {
+      skipped.push({ sceneId: scene.sceneId, reason: 'no-prompt' });
+      continue;
+    }
+    const queued = enqueueJob({
+      kind: 'image',
+      params: {
+        ...resolved.jobParams,
+        prompt,
+        // Tag the job so the durable creativeDirectorSceneImageHook files the
+        // finished render onto this scene's sourceImageFile — no mounted
+        // client required. Mirrors the catalogAttach tag the portrait path
+        // uses for the catalog hook.
+        creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
+      },
+    });
+    enqueued.push({ sceneId: scene.sceneId, jobId: queued.jobId });
+  }
+  console.log(`🎬 CD first-pass scene frames: ${enqueued.length} queued, ${skipped.length} skipped (${resolved.mode})`);
   return { mode: resolved.mode, enqueued, skipped };
 }

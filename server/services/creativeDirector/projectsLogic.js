@@ -86,7 +86,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     name, aspectRatio, quality, modelId, targetDurationSeconds,
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null,
-    cast = [],
+    cast = [], generateFirstPass = false,
   } = input;
   return {
     id,
@@ -109,6 +109,13 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     cast: Array.isArray(cast) ? cast : [],
     disableAudio,
     autoAcceptScenes,
+    // Server-managed intent flag (#1867) — set on the project by the
+    // auto-cast route when a user opts into both `compose` and
+    // `generateFirstPass`, since the actual scene-frame seeding can only run
+    // once the treatment lands (asynchronously, after this record is
+    // created). Not part of the public create/update schema; see
+    // creativeDirector.js's `/:id/auto-cast` and `/:id/treatment` handlers.
+    generateFirstPass,
     // Optional back-pointer to the pipeline issue that spawned this project.
     // The stitch step uses it to look up `stages.audio.music` and mix it into
     // the final cut. Bare CD projects leave this null and skip the audio-mux.
