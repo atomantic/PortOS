@@ -120,17 +120,18 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   const composable = project && project.status !== 'paused' && project.status !== 'failed';
   const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
   if (composing) {
-    startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
     // Scene reference frames (#1867) depend on a treatment existing, which
-    // auto-compose only writes asynchronously above. Persist the user's
-    // opt-in on the project record so the `/:id/treatment` handler (where the
-    // agent's scene plan actually lands) knows to also seed first-pass frames
-    // — there is no other durable hand-off point between this request and
-    // that later write.
+    // auto-compose only writes asynchronously below. Persist the user's
+    // opt-in on the project record BEFORE kicking off the compose chain —
+    // there is no other durable hand-off point between this request and the
+    // agent's much-later `/:id/treatment` write, and awaiting it here (rather
+    // than firing it alongside startCreativeDirectorProject) rules out any
+    // ordering ambiguity between the write and the orchestrator's first read.
     if (generateFirstPass) {
-      updateProject(req.params.id, { generateFirstPass: true })
+      await updateProject(req.params.id, { generateFirstPass: true })
         .catch((e) => console.log(`⚠️ CD persist generateFirstPass flag failed: ${e.message}`));
     }
+    startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
   }
   // First-pass gen (#1818): when opted in, kick off a catalog portrait render
   // for each member auto-cast just added that has no portrait yet. The renders
