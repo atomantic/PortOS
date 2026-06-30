@@ -12,6 +12,11 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   // the treatment agent so the director writes a first-pass treatment + scene
   // plan. Director-first — off by default so the user opts into the autonomy.
   const [composeAfter, setComposeAfter] = useState(false);
+  // First-pass gen (#1818): when checked, auto-cast also enqueues a catalog
+  // portrait render for each newly-cast member lacking one, so the cast arrives
+  // on-model. Off by default — opt into the autonomy. Independent of compose:
+  // portraits are useful with or without an auto-written treatment.
+  const [generateFirstPass, setGenerateFirstPass] = useState(false);
   // Track the project id this tab is currently mounted for. If the user
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
@@ -36,6 +41,8 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     setAutoCasting(false);
     // The compose toggle is a per-project intent — don't carry it across a switch.
     setComposeAfter(false);
+    // First-pass toggle is per-project intent too — reset on switch.
+    setGenerateFirstPass(false);
   }, [project.id]);
   useEffect(() => {
     if (!savingRef.current) {
@@ -78,11 +85,19 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     // guards this too, but gating here keeps the toast honest. Omit the flag
     // entirely in the default case so the request body stays minimal.
     const wantCompose = composeAfter && !project.treatment;
-    applyCreativeDirectorAutoCast(requestProjectId, wantCompose ? { compose: true } : {}, { silent: true })
+    applyCreativeDirectorAutoCast(
+      requestProjectId,
+      {
+        ...(wantCompose ? { compose: true } : {}),
+        ...(generateFirstPass ? { generateFirstPass: true } : {}),
+      },
+      { silent: true },
+    )
       .then((result) => {
         if (projectIdRef.current !== requestProjectId) return;
         const added = result?.added?.length || 0;
         const composing = Boolean(result?.composing);
+        const firstPassQueued = result?.firstPass?.enqueued?.length || 0;
         // When the director starts composing, optimistically flip the status to
         // 'planning' as well — the detail page disables polling for 'draft'
         // projects, so without this the treatment + runs the agent produces stay
@@ -91,10 +106,15 @@ export default function OverviewTab({ project, onProjectUpdate }) {
           cast: result?.project?.cast || [],
           ...(composing ? { status: 'planning' } : {}),
         });
+        // Suffix the portrait-gen count onto whichever success toast fires, so a
+        // user who opted into first-pass gen sees it kicked off in one place.
+        const portraitSuffix = firstPassQueued > 0
+          ? ` — rendering ${firstPassQueued} first-pass portrait${firstPassQueued === 1 ? '' : 's'}`
+          : '';
         if (composing) {
-          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…`);
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…${portraitSuffix}`);
         } else if (added > 0) {
-          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}${portraitSuffix}`);
         } else {
           toast.info('Auto-cast found no new catalog matches for this brief');
         }
@@ -185,6 +205,24 @@ export default function OverviewTab({ project, onProjectUpdate }) {
                 <span>+ treatment</span>
               </label>
             )}
+            {/* First-pass gen (#1818): render an on-model portrait for each
+                newly-cast member lacking one. Independent of the treatment
+                toggle, so it's always offered alongside auto-cast. */}
+            <label
+              htmlFor="cd-first-pass"
+              className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+              title="After seeding the cast, queue a catalog portrait render for each new member that has no portrait yet"
+            >
+              <input
+                id="cd-first-pass"
+                type="checkbox"
+                checked={generateFirstPass}
+                onChange={(e) => setGenerateFirstPass(e.target.checked)}
+                disabled={autoCasting}
+                className="accent-port-accent"
+              />
+              <span>+ portraits</span>
+            </label>
             <button
               type="button"
               onClick={handleAutoCast}

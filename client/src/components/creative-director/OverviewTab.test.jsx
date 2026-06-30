@@ -140,3 +140,56 @@ describe('OverviewTab auto-compose (#1817)', () => {
     expect(onProjectUpdate).toHaveBeenCalledWith(expect.not.objectContaining({ status: expect.anything() }));
   });
 });
+
+describe('OverviewTab first-pass gen (#1818)', () => {
+  it('offers the +portraits toggle even when the project already has a treatment', () => {
+    const { unmount } = renderTab(baseProject);
+    expect(screen.getByLabelText(/\+ portraits/i)).toBeTruthy();
+    unmount();
+    // Independent of the +treatment toggle — still offered with a treatment present.
+    renderTab({ ...baseProject, treatment: { scenes: [] } });
+    expect(screen.getByLabelText(/\+ portraits/i)).toBeTruthy();
+  });
+
+  it('passes generateFirstPass:true when the toggle is checked', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByLabelText(/\+ portraits/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', { generateFirstPass: true }, { silent: true }));
+  });
+
+  it('combines compose + generateFirstPass when both toggles are checked', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByLabelText(/\+ treatment/i));
+    fireEvent.click(screen.getByLabelText(/\+ portraits/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', { compose: true, generateFirstPass: true }, { silent: true }));
+  });
+
+  it('suffixes the portrait count onto the success toast', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({
+      project: { id: 'cd-1', cast: [{ ingredientId: 'p1', name: 'The Spire' }] },
+      added: [{ ingredientId: 'p1', name: 'The Spire' }],
+      suggestions: [],
+      firstPass: { mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'j1' }], skipped: [] },
+    });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByLabelText(/\+ portraits/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/rendering 1 first-pass portrait/i)));
+  });
+
+  it('omits the flag and portrait suffix when the toggle is unchecked', async () => {
+    applyCreativeDirectorAutoCast.mockResolvedValue({
+      project: { id: 'cd-1', cast: [{ ingredientId: 'p1', name: 'The Spire' }] },
+      added: [{ ingredientId: 'p1', name: 'The Spire' }],
+      suggestions: [],
+    });
+    renderTab(baseProject);
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
+    await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', {}, { silent: true }));
+    expect(toast.success).toHaveBeenCalledWith(expect.not.stringMatching(/first-pass portrait/i));
+  });
+});

@@ -28,6 +28,7 @@ import {
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
+import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 
@@ -106,7 +107,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // treatment as they land. The response carries `composing` so the UI can tell
 // the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
-  const { brief, types, limit, compose } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
+  const { brief, types, limit, compose, generateFirstPass } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
   const project = result.project;
   const cast = project?.cast;
@@ -120,7 +121,20 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   if (composing) {
     startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
   }
-  res.json({ ...result, composing });
+  // First-pass gen (#1818): when opted in, kick off a catalog portrait render
+  // for each member auto-cast just added that has no portrait yet. The renders
+  // are enqueued onto the media-job queue and land via the durable catalog
+  // attach hook (#1359) — we await only the (fast) enqueue so the response can
+  // report how many were queued; the renders themselves run in the background.
+  let firstPass = null;
+  if (generateFirstPass && Array.isArray(result.added) && result.added.length > 0) {
+    firstPass = await enqueueFirstPassPortraits(result.added)
+      .catch((e) => {
+        console.log(`⚠️ CD first-pass portraits failed: ${e.message}`);
+        return null;
+      });
+  }
+  res.json({ ...result, composing, ...(firstPass ? { firstPass } : {}) });
 }));
 
 // Agent-callable: write the treatment doc.
