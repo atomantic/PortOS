@@ -18,6 +18,7 @@
 
 import { spawn } from 'child_process';
 import { buildCliArgs } from './cliProviderArgs.js';
+import { IS_WIN32, killProcessTree } from './bufferedSpawn.js';
 
 /**
  * Resolve which CLI provider + model a feature should use from the providers
@@ -98,7 +99,9 @@ export function runCliProviderPrompt(args = {}) {
     // think it's running inside the parent Claude Code session.
     const child = spawn(provider.command, spawnArgs, {
       cwd: cwd || process.cwd(),
-      shell: false,
+      // npm-installed CLI providers are .cmd/.bat shims on Windows, which
+      // need a shell to execute (see server/lib/bufferedSpawn.js IS_WIN32).
+      shell: IS_WIN32,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
       windowsHide: true,
@@ -115,7 +118,7 @@ export function runCliProviderPrompt(args = {}) {
     };
 
     const timer = setTimeout(() => {
-      if (!child.killed) child.kill('SIGTERM');
+      if (!child.killed) killProcessTree(child);
       done({ error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr });
     }, timeoutMs);
 

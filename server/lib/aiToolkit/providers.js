@@ -439,12 +439,16 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'cli' || provider.type === 'tui') {
+        // Read fresh per call (not hoisted to module scope) so tests can drive
+        // both branches by stubbing process.platform per test.
+        const isWin32 = process.platform === 'win32';
+
         // Resolve the command on PATH. Windows has no `which` — it ships `where`
         // instead — so a `which` lookup there always fails and falsely reports the
         // command "not found in PATH" even when it resolves fine from a shell.
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
-        const lookup = process.platform === 'win32' ? 'where' : 'which';
+        const lookup = isWin32 ? 'where' : 'which';
         const { stdout } = await execFileAsync(lookup, [provider.command])
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
@@ -457,17 +461,20 @@ export function createProviderService(config = {}) {
         }
 
         // Track whether the resolved path could actually be spawned. A bare PATH
-        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims,
-        // which execFile (shell:false) — and the agent runner, which also spawns
-        // shell:false — cannot launch. Without this, a non-spawnable shim falls
-        // through to `version: 'available'` and the Test button reports a provider
-        // the runner can never actually invoke as usable.
+        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims.
+        // Without this, a non-spawnable shim falls through to `version:
+        // 'available'` and the Test button reports a provider the runner can
+        // never actually invoke as usable.
         let everSpawned = false;
         const tryVersion = async (flag) => {
           // Invoke the resolved path so Windows runs the exact `.exe` we found —
-          // execFile won't re-apply PATHEXT to a bare command name.
+          // execFile won't re-apply PATHEXT to a bare command name. `commandPath`
+          // is frequently a `.cmd`/`.bat` npm shim on Windows, which execFile
+          // can't launch without a shell — route through one there (the agent
+          // runner does the same; see server/services/runner.js IS_WIN32) so
+          // this probe matches what a real run can actually do.
           try {
-            const out = await execFileAsync(commandPath, [flag]);
+            const out = await execFileAsync(commandPath, [flag], { shell: isWin32 });
             everSpawned = true;
             return out?.stdout?.trim() || null;
           } catch (err) {

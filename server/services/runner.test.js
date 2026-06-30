@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
+import { IS_WIN32 } from '../lib/bufferedSpawn.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal();
@@ -176,6 +177,30 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     const metadata = await completed;
     expect(metadata.success).toBe(false);
     expect(metadata.errorAnalysis).toMatchObject({ requiresFallback: true });
+  });
+});
+
+describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
+  // IS_WIN32 (imported from bufferedSpawn.js) is bound once at module load
+  // from the real `process.platform`, like the rest of the codebase's
+  // win32-gated tests (see bufferedSpawn.test.js) — it can't be faked by
+  // mutating process.platform mid-test. Assert the spawn option mirrors the
+  // constant so this pins the wiring on every platform CI actually runs on.
+  it('passes shell: IS_WIN32 to spawn so npm-installed CLI shims (opencode, codex, claude) can launch on Windows', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = { id: 'opencode', command: 'opencode', args: [], timeout: 5000 };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-shell-opt', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+
+    const [, , options] = spawn.mock.calls.at(-1);
+    expect(options.shell).toBe(IS_WIN32);
   });
 });
 

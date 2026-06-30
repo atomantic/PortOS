@@ -30,6 +30,7 @@ import { join } from 'path';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
+import { IS_WIN32, killProcessTree } from '../lib/bufferedSpawn.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
@@ -120,6 +121,9 @@ export async function describeImageViaCli({
         env: (() => { const e = { ...process.env, ...provider?.envVars }; delete e.CLAUDECODE; return e; })(),
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
+        // npm-installed CLI providers are .cmd/.bat shims on Windows, which
+        // need a shell to execute (see server/lib/bufferedSpawn.js IS_WIN32).
+        shell: IS_WIN32,
       });
       let out = '';
       let err = '';
@@ -129,7 +133,7 @@ export async function describeImageViaCli({
       // the promise would hang forever and the temp dir (cleaned in `finally`)
       // would leak. Escalate to SIGKILL on a short grace timer.
       const timer = timeout > 0 ? setTimeout(() => {
-        if (!child.killed) child.kill('SIGTERM');
+        if (!child.killed) killProcessTree(child);
         killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 5000);
         killTimer?.unref?.();
         reject(new Error(`${command} vision call timed out after ${timeout}ms`));
