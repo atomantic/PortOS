@@ -16,12 +16,12 @@
 
 import { homedir } from 'os'
 import { join, dirname } from 'path'
-import { readdir, stat, link, mkdir } from 'fs/promises'
+import { readdir, stat, link } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
-import { readJSONFile, sha256File, safeJSONParse } from '../lib/fileUtils.js'
+import { readJSONFile, sha256File, safeJSONParse, ensureDir } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
@@ -918,7 +918,7 @@ async function prelinkBlob(ggufPath) {
   const hex = await sha256File(ggufPath)
   const blobPath = join(getModelsDir(), 'blobs', digestToBlobFilename(`sha256:${hex}`))
   if (await fileExists(blobPath)) return true // already present (content-addressed dedup)
-  await mkdir(dirname(blobPath), { recursive: true })
+  await ensureDir(dirname(blobPath))
   await link(ggufPath, blobPath)
   return true
 }
