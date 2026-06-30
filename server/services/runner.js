@@ -10,6 +10,7 @@ import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
+import { IS_WIN32, killProcessTree } from '../lib/bufferedSpawn.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -158,8 +159,16 @@ export async function patchRunMetadata(runId, patch) {
 }
 
 /**
- * Override executeCliRun to fix shell security issue
- * This removes 'shell: true' which causes DEP0190 warning and potential security issues
+ * Override executeCliRun.
+ *
+ * Runs without a shell on POSIX (Node 18.20+/20.10+ already auto-escapes args
+ * for Windows .bat/.cmd shims per CVE-2024-27980, so `shell:false` there
+ * avoided the old DEP0190 warning and metacharacter-injection surface). On
+ * win32, `shell: IS_WIN32` is required: npm-installed CLI providers
+ * (opencode, codex, claude, …) are .cmd/.bat shims that Node can't execute
+ * without going through cmd.exe — see #1865. Prompt content rides stdin, not
+ * argv, and `args` is still escaped by Node for the shell, so this doesn't
+ * reopen the injection surface DEP0190 warned about.
  */
 export async function executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   const toolkit = requireToolkit();
@@ -182,7 +191,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     if (!analysis) return;
     immediateFallbackAnalysis = analysis;
     console.log(`⚡ Run ${runId} detected fallback signal (${analysis.category}); stopping ${provider.name || provider.id || provider.command}`);
-    childProcess.kill('SIGTERM');
+    killProcessTree(childProcess);
   };
 
   // Build provider-specific args for stdin-based prompt delivery
@@ -194,7 +203,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
     // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
     env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })(),
-    windowsHide: true
+    windowsHide: true,
+    // npm-installed CLI providers (opencode, codex, claude, …) are .cmd/.bat
+    // shims on Windows; Node can't execute those without going through
+    // cmd.exe. See server/lib/bufferedSpawn.js for the same IS_WIN32 pattern
+    // used elsewhere in PortOS. Array args are still escaped by Node for the
+    // shell, so this doesn't reopen metacharacter injection in `args`.
+    shell: IS_WIN32
   });
 
   // Pass prompt via stdin to avoid OS argv limits
@@ -213,7 +228,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const timeoutHandle = effectiveTimeout > 0 ? setTimeout(() => {
     if (childProcess && !childProcess.killed) {
       console.log(`⏱️ Run ${runId} timed out after ${effectiveTimeout}ms`);
-      childProcess.kill('SIGTERM');
+      killProcessTree(childProcess);
     }
   }, effectiveTimeout) : null;
 

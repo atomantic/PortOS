@@ -6,6 +6,26 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 
+// npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
+// shims on Windows; Node's spawn() can't execute those without going through
+// cmd.exe. Mirrors `server/lib/bufferedSpawn.js`'s IS_WIN32/killProcessTree
+// pattern — duplicated rather than imported, since this directory must stay
+// self-contained (see ./CLAUDE.md).
+const IS_WIN32 = process.platform === 'win32';
+
+// On Windows, shell:true wraps the child in a cmd.exe process, so a plain
+// SIGTERM only kills that wrapper and orphans the real child. Use taskkill to
+// take down the whole process tree there; SIGTERM is sufficient elsewhere.
+function killProcessTree(child) {
+  if (IS_WIN32 && child.pid) {
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
+      .on('error', () => {})
+      .unref();
+  } else {
+    child.kill('SIGTERM');
+  }
+}
+
 // Invoke a completion hook / callback so a throw is logged but never
 // propagates — these run at out-of-request boundaries where an uncaught throw
 // is an unhandled rejection that crashes the process. Each call is isolated so
@@ -293,7 +313,9 @@ export function createRunnerService(config = {}) {
       const childProcess = spawn(provider.command, args, {
         cwd: workspacePath,
         env: { ...process.env, ...provider.envVars },
-        windowsHide: true
+        windowsHide: true,
+        // See IS_WIN32 above — .cmd/.bat npm shims need a shell on Windows.
+        shell: IS_WIN32
       });
       if (childProcess.stdin) {
         childProcess.stdin.write(prompt);
@@ -306,7 +328,7 @@ export function createRunnerService(config = {}) {
       const timeoutHandle = setTimeout(() => {
         if (childProcess && !childProcess.killed) {
           console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
-          childProcess.kill('SIGTERM');
+          killProcessTree(childProcess);
         }
       }, timeout);
 
@@ -601,7 +623,7 @@ export function createRunnerService(config = {}) {
       // and drop it so a later isRunActive reports false.
       const external = externalRuns.get(runId);
       if (external) {
-        if (external.kill && !external.killed) external.kill('SIGTERM');
+        if (external.kill && !external.killed) killProcessTree(external);
         else if (external.abort) external.abort();
         externalRuns.delete(runId);
         return true;
@@ -611,7 +633,7 @@ export function createRunnerService(config = {}) {
       if (!active) return false;
 
       if (active.kill) {
-        active.kill('SIGTERM');
+        killProcessTree(active);
       } else if (active.abort) {
         active.abort();
       }

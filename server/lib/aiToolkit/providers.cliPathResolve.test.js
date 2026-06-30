@@ -37,10 +37,17 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
   const setPlatform = (value) => Object.defineProperty(process, 'platform', { value, configurable: true });
 
+  // execFile's callback is always its last argument — the version probe now
+  // passes an extra `{ shell }` options object (4 args) while the which/where
+  // lookup stays at 3, so find the callback positionally instead of assuming
+  // a fixed arity.
+  const lastCallback = (args) => args[args.length - 1];
+
   // Drive the mocked execFile: `lookup` is the stdout the which/where call emits,
   // `version` is the stdout the resolved-binary --version probe emits.
   const stubExec = ({ lookup, version = 'claude 1.0.0\n' }) => {
-    vi.mocked(execFile).mockImplementation((cmd, argv, cb) => {
+    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+      const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') {
         if (lookup === null) return cb(new Error('not found'));
         return cb(null, { stdout: lookup, stderr: '' });
@@ -78,6 +85,28 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result.success).toBe(true);
     expect(result.path).toBe('C:\\a\\claude.exe');
+  });
+
+  it('routes the win32 version probe through a shell (so .cmd/.bat shims can execute)', async () => {
+    setPlatform('win32');
+    stubExec({ lookup: 'C:\\Users\\Joe\\AppData\\Roaming\\npm\\claude.cmd\r\n' });
+    const p = await makeCliProvider();
+
+    await providerService.testProvider(p.id);
+
+    const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
+    expect(versionCall?.[2]).toEqual({ shell: true });
+  });
+
+  it('does not enable a shell for the version probe on non-win32 platforms', async () => {
+    setPlatform('linux');
+    stubExec({ lookup: '/usr/local/bin/claude\n' });
+    const p = await makeCliProvider();
+
+    await providerService.testProvider(p.id);
+
+    const versionCall = vi.mocked(execFile).mock.calls.find((c) => c[0] !== 'where' && c[0] !== 'which');
+    expect(versionCall?.[2]).toEqual({ shell: false });
   });
 
   it('invokes the resolved path for the version probe (so win32 runs the exact .exe)', async () => {
@@ -119,7 +148,8 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
   it('falls back to "available" when the binary spawns but supports no version flag', async () => {
     setPlatform('linux');
-    vi.mocked(execFile).mockImplementation((cmd, argv, cb) => {
+    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+      const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
       // The binary ran (it's spawnable) but exited non-zero on the unknown flag —
       // a numeric exit code is how Node surfaces a non-zero exit from execFile.
@@ -136,10 +166,13 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
   it('reports failure when the resolved path cannot be spawned (Windows .cmd/.bat shim)', async () => {
     setPlatform('win32');
-    vi.mocked(execFile).mockImplementation((cmd, argv, cb) => {
+    vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
+      const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: 'C:\\Users\\Joe\\AppData\\npm\\claude.cmd\r\n', stderr: '' });
-      // execFile (shell:false) cannot launch a .cmd shim — a spawn error carries a
-      // string code (ENOENT), distinct from a non-zero exit's numeric code.
+      // Even with the runner's shell:true workaround, simulate a genuinely
+      // unspawnable shim (e.g. corrupted/missing target) — a spawn error
+      // carries a string code (ENOENT), distinct from a non-zero exit's
+      // numeric code.
       const e = new Error('spawn claude.cmd ENOENT'); e.code = 'ENOENT';
       return cb(e);
     });

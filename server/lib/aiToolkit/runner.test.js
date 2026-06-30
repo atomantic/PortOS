@@ -2,7 +2,15 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
-import { createRunnerService } from './runner.js';
+import EventEmitter from 'events';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: vi.fn() };
+});
+
+const { spawn } = await import('child_process');
+const { createRunnerService } = await import('./runner.js');
 
 describe('AI Toolkit runner service', () => {
   const tempDirs = [];
@@ -255,6 +263,50 @@ describe('AI Toolkit runner — declared extension points', () => {
     // deleteRun returns false when the run dir doesn't exist on disk.
     expect(deleted).toBe(false);
 
+    await rm(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
+  // Mirrors server/services/runner.test.js's equivalent assertion — this is
+  // the toolkit's OWN spawn path (inert in PortOS, which always registers a
+  // host CLI runner via setCliRunner, but must stay behaviorally in sync per
+  // the override-consistency contract in ./CLAUDE.md).
+  function makeChild() {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { write: vi.fn(), end: vi.fn() };
+    child.kill = vi.fn();
+    child.killed = false;
+    return child;
+  }
+
+  it('passes shell: IS_WIN32 to spawn so npm-installed CLI shims can launch on Windows', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-spawn-'));
+    const runner = createRunnerService({ dataDir });
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = { id: 'opencode', command: 'opencode', args: [], timeout: 5000, defaultModel: null };
+    let resolveComplete;
+    const completed = new Promise((resolve) => { resolveComplete = resolve; });
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await runner.executeCliRun({
+      runId: 'builtin-run', provider, prompt: 'test prompt', onComplete: resolveComplete,
+    });
+
+    const [, , options] = spawn.mock.calls.at(-1);
+    expect(options.shell).toBe(process.platform === 'win32');
+
+    // The 'close' handler's atomicWrite calls run after executeCliRun returns
+    // — wait for completion before removing dataDir, or rm races the writes.
+    await completed;
     await rm(dataDir, { recursive: true, force: true });
   });
 });
