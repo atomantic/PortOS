@@ -95,6 +95,9 @@ export const musicVideoAudioAnalysisSchema = z.object({
     label: z.string(),
     startSec: z.number(),
     endSec: z.number(),
+    // Normalized 0..1 section loudness used by the energy-weighted auto-arranger
+    // (#1915). Additive + optional so older cached analyses still validate.
+    energy: z.number().min(0).optional(),
   })),
   durationSec: z.number(),
 }).strict();

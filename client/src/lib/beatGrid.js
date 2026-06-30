@@ -77,3 +77,161 @@ export function computeSceneSpans(scenes, durationSec) {
     return { sceneId: scene.sceneId, startSec, endSec, persisted: false };
   });
 }
+
+const DEFAULT_MIN_SCENE_SEC = 0.5;
+const round3 = (n) => Number(n.toFixed(3));
+
+// Hand out `total` whole units across `weights` by the largest-remainder method.
+// Returns an integer array summing to EXACTLY `total`. All-zero weights fall back
+// to an even split. (Shared by both the base-floor pass and the remainder pass.)
+function distributeByWeight(weights, total) {
+  const counts = weights.map(() => 0);
+  if (total <= 0 || weights.length === 0) return counts;
+  const positive = weights.map((w) => (typeof w === 'number' && w > 0 ? w : 0));
+  const sum = positive.reduce((a, b) => a + b, 0);
+  const eff = sum > 0 ? positive : weights.map(() => 1);
+  const effSum = sum > 0 ? sum : weights.length;
+  const raw = eff.map((w) => (w / effSum) * total);
+  for (let i = 0; i < raw.length; i++) counts[i] = Math.floor(raw[i]);
+  let remaining = total - counts.reduce((a, b) => a + b, 0);
+  const byFrac = raw
+    .map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let k = 0; remaining > 0 && k < byFrac.length; k++) {
+    counts[byFrac[k].i] += 1;
+    remaining -= 1;
+  }
+  return counts;
+}
+
+// Allocate `total` scenes across the weighted sections, guaranteeing each section
+// `minEach` scenes WHEN there are enough to go round (so no section is silently
+// skipped and the arrangement covers the whole track). When `total` can't even
+// satisfy the floor, the scarce scenes go to the heaviest sections — coverage is
+// impossible with fewer scenes than sections, so weight decides who gets one.
+function allocateByWeight(weights, total, minEach = 0) {
+  const n = weights.length;
+  const base = total >= n * minEach ? minEach : 0;
+  const counts = weights.map(() => base);
+  const extra = distributeByWeight(weights, total - base * n);
+  for (let i = 0; i < n; i++) counts[i] += extra[i];
+  return counts;
+}
+
+// Split one section's [startSec, endSec] span into `count` contiguous cut
+// boundaries (length `count + 1`). Each interior cut snaps to the nearest grid
+// point WITHIN `toleranceSec` (a finite tolerance, like the manual arranger — an
+// unbounded snap would collapse a beatless section's interior cuts onto its own
+// outer edges); when nothing is close enough the even-division time is kept. The
+// result is then clamped into [prev + minSceneSec, endSec - remainingCuts *
+// minSceneSec] so every produced span is at least `minSceneSec` long AND enough
+// room is reserved for the cuts still to come. When the section is too short to
+// honor minSceneSec for `count` cuts, fall back to plain even division (best
+// effort — the render clamps clips to its own floor anyway). Outer edges never move.
+function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec, toleranceSec) {
+  const span = endSec - startSec;
+  const even = (k) => startSec + (span * k) / count;
+  if (span < count * minSceneSec) {
+    return Array.from({ length: count + 1 }, (_, k) => even(k));
+  }
+  const boundaries = [startSec];
+  for (let k = 1; k < count; k++) {
+    const raw = even(k);
+    const snap = snapTimeToGrid(raw, gridPoints, toleranceSec);
+    const candidate = snap ? snap.t : raw;
+    const minB = boundaries[boundaries.length - 1] + minSceneSec;
+    const maxB = endSec - (count - k) * minSceneSec; // leave room for remaining cuts
+    boundaries.push(Math.min(Math.max(candidate, minB), maxB));
+  }
+  boundaries.push(endSec);
+  return boundaries;
+}
+
+// Auto-arrange a project's scenes across the analyzed song sections, weighted by
+// each section's energy (#1915). Higher-energy sections receive MORE scenes
+// (hence shorter, snappier cuts); lower-energy sections receive fewer, longer
+// ones. Within each section the allotted scenes tile its time span contiguously,
+// with interior cuts snapped to the beat grid. Returns a proposed arrangement —
+// `[{ sceneId, startSec, endSec, beatAligned }]` in scene order — written with
+// the SAME persisted fields the manual drag-snap arranger (#1854) writes, so the
+// result is a director-tunable starting point honored exactly at render time by
+// the server's `beatSnapClips`.
+//
+// Pure + side-effect-free, so it's unit-tested in isolation before the UI button.
+// Edge cases return a sensible no-op:
+//   - no scenes → []
+//   - no usable `sections` AND no `durationSec` → [] (nothing to arrange against)
+//   - no `sections` but a `durationSec` → treat the whole track as one section
+//   - missing per-section `energy` (older analyses) → weight by duration only
+//     (an even, energy-agnostic spread across the track)
+export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT_MIN_SCENE_SEC } = {}) {
+  const ordered = (Array.isArray(scenes) ? scenes : [])
+    .filter((s) => s && typeof s.sceneId === 'string')
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (ordered.length === 0) return [];
+
+  const durationSec = typeof audioAnalysis?.durationSec === 'number' && audioAnalysis.durationSec > 0
+    ? audioAnalysis.durationSec
+    : null;
+
+  let sections = (Array.isArray(audioAnalysis?.sections) ? audioAnalysis.sections : [])
+    .filter((s) => typeof s?.startSec === 'number' && typeof s?.endSec === 'number' && s.endSec > s.startSec)
+    .map((s) => ({
+      startSec: s.startSec,
+      endSec: s.endSec,
+      energy: typeof s.energy === 'number' && s.energy > 0 ? s.energy : null,
+    }));
+
+  if (sections.length === 0) {
+    if (!durationSec) return [];
+    sections = [{ startSec: 0, endSec: durationSec, energy: null }];
+  }
+
+  // Weight = energy × duration, so a section's scene COUNT scales with both its
+  // loudness and its length — making cut DENSITY (cuts per second) track energy.
+  // Weighting by energy alone would give an 80s calm section and an 8s loud one
+  // similar counts, leaving the long section sparsely cut. When no section
+  // carries energy (legacy analyses, or the single synthetic fallback section),
+  // weight by duration alone so scenes still spread evenly across the track.
+  // Every section is guaranteed at least one scene when scenes ≥ sections, so a
+  // near-silent section still gets a single long cut rather than a coverage gap.
+  const haveEnergy = sections.some((s) => s.energy != null);
+  const weights = sections.map((s) => (s.endSec - s.startSec) * (haveEnergy ? (s.energy ?? 0) : 1));
+  const counts = allocateByWeight(weights, ordered.length, 1);
+
+  // Build the snap grid from the EFFECTIVE sections (filtered/synthesized above),
+  // not the raw analysis — so the single-section fallback still contributes its
+  // edges and real beats/downbeats are honored when present.
+  const gridPoints = buildBeatGridPoints({
+    beats: audioAnalysis?.beats,
+    downbeats: audioAnalysis?.downbeats,
+    sections,
+  });
+
+  const result = [];
+  let sceneIdx = 0;
+  for (let si = 0; si < sections.length; si++) {
+    const count = counts[si];
+    if (count <= 0) continue;
+    const boundaries = sectionCutBoundaries(
+      sections[si].startSec, sections[si].endSec, count, gridPoints, minSceneSec, DEFAULT_TOLERANCE_SEC,
+    );
+    for (let k = 0; k < count; k++) {
+      const scene = ordered[sceneIdx];
+      sceneIdx += 1;
+      result.push({
+        sceneId: scene.sceneId,
+        startSec: round3(boundaries[k]),
+        endSec: round3(boundaries[k + 1]),
+        // Auto-arrange always marks its spans beat-aligned: the computed per-scene
+        // duration IS the director's intentional starting point, which the render
+        // (`beatSnapClips`) then honors exactly rather than re-deriving its own cut.
+        // The director can drag any scene afterward to fine-tune (a non-snapped
+        // drag will clear this per the manual arranger).
+        beatAligned: true,
+      });
+    }
+  }
+  return result;
+}
