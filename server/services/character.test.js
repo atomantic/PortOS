@@ -9,6 +9,14 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(async () => {}),
   readJSONFile: vi.fn(async (_file, fallback) => (store.value ?? fallback)),
   writeFile: vi.fn(),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) site (#1837); route
+  // it through the mocked fs/promises.writeFile so the in-memory store update
+  // (and read-modify-save round-trip) keeps working unchanged.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
 }));
 
 // character.js eagerly imports the jira/cos services at module load; stub them

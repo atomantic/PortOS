@@ -7,12 +7,12 @@
  * - In-memory caching with TTL for performance
  */
 
-import { readFile, writeFile, appendFile } from 'fs/promises';
+import { readFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
-import { ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getInstanceId } from './instances.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -177,7 +177,7 @@ export async function loadMeta() {
  */
 export async function saveMeta(meta) {
   await ensureBrainDir();
-  await writeFile(FILES.meta, JSON.stringify(meta, null, 2));
+  await atomicWrite(FILES.meta, meta);
   caches.meta.data = meta;
   caches.meta.timestamp = Date.now();
   brainEvents.emit('meta:changed', meta);
@@ -219,7 +219,7 @@ async function loadJsonStore(type) {
  */
 async function saveJsonStore(type, data) {
   await ensureBrainDir();
-  await writeFile(FILES[type], JSON.stringify(data, null, 2));
+  await atomicWrite(FILES[type], data);
   caches[type].data = data;
   caches[type].timestamp = Date.now();
   brainEvents.emit(`${type}:changed`, data);
@@ -825,7 +825,7 @@ export async function applyRemoteRecord(type, id, record, op) {
     }
 
     await ensureBrainDir();
-    await writeFile(FILES[type], JSON.stringify(data, null, 2));
+    await atomicWrite(FILES[type], data);
     caches[type].data = data;
     caches[type].timestamp = Date.now();
 
@@ -853,7 +853,7 @@ export async function pruneTombstones(type, cutoffMs) {
     }
     if (pruned > 0) {
       await ensureBrainDir();
-      await writeFile(FILES[type], JSON.stringify(data, null, 2));
+      await atomicWrite(FILES[type], data);
       caches[type].data = data;
       caches[type].timestamp = Date.now();
     }
@@ -884,7 +884,7 @@ export async function backfillOriginInstanceId() {
 
     if (changed) {
       await ensureBrainDir();
-      await writeFile(FILES[type], JSON.stringify(data, null, 2));
+      await atomicWrite(FILES[type], data);
       caches[type].data = data;
       caches[type].timestamp = Date.now();
     }

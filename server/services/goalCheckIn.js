@@ -1,7 +1,6 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 
@@ -114,7 +113,7 @@ export async function runGoalCheckIn() {
 
   goals.updatedAt = now;
   await ensureDir(PATHS.digitalTwin);
-  await writeFile(GOALS_FILE, JSON.stringify(goals, null, 2));
+  await atomicWrite(GOALS_FILE, goals);
 
   // Send Telegram notification
   const statusEmoji = { 'on-track': '🟢', 'behind': '🟡', 'at-risk': '🔴' };

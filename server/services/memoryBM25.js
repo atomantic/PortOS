@@ -17,7 +17,7 @@ import {
   deserializeIndex,
   getIndexStats
 } from '../lib/bm25.js'
-import { ensureDir, PATHS } from '../lib/fileUtils.js'
+import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js'
 
 const DATA_DIR = PATHS.memory
 const INDEX_FILE = path.join(DATA_DIR, 'bm25-index.json')
@@ -77,7 +77,7 @@ async function saveIndex() {
 
   await ensureDir(DATA_DIR)
   const serialized = serializeIndex(indexCache)
-  await fs.writeFile(INDEX_FILE, JSON.stringify(serialized, null, 2))
+  await atomicWrite(INDEX_FILE, serialized)
   isDirty = false
 
   console.log(`💾 BM25 index saved: ${indexCache.totalDocs} docs, ${Object.keys(indexCache.terms).length} terms`)

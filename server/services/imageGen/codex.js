@@ -26,7 +26,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -364,7 +364,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // (which doesn't expose one) — uniquely identifies the run and is
       // useful for traceability even though it doesn't reproduce the output.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await writeFile(sidecar, JSON.stringify({ ...meta, codexSessionId: sessionId }, null, 2)).catch(() => {});
+      await atomicWrite(sidecar, { ...meta, codexSessionId: sessionId }).catch(() => {});
       // Cleaners run BEFORE the SSE complete + completed events so subscribers
       // see the cleaned bytes. codex output is the highest-value target for
       // C2PA stripping because gpt-image is the one provider that embeds
