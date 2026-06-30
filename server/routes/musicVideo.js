@@ -33,6 +33,7 @@ import {
   reorderProjectScenes,
 } from '../services/musicVideo/projects.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
+import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -98,6 +99,25 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   const updated = await setProjectAnalysis(project.id, analysis);
   res.json(updated);
 }));
+
+// --- Render (#1760, Phase 2) ---
+// Assemble the scenes' i2v clips into one MP4 over the track as the master audio
+// bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
+// videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
+router.post('/:id/render', asyncHandler(async (req, res) => {
+  res.json(await renderMusicVideo(req.params.id));
+}));
+
+// SSE progress stream for a render job. Two-segment path — distinct from the
+// one-segment GET /:id project read, so it can't shadow it.
+router.get('/render/:jobId/events', (req, res) => {
+  const ok = attachRenderSseClient(req.params.jobId, res);
+  if (!ok) throw new ServerError('Render job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+
+router.post('/render/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelRender(req.params.jobId) });
+});
 
 // --- Director scene board ---
 

@@ -11,11 +11,15 @@ import {
   updateMusicVideoScene,
   deleteMusicVideoScene,
   reorderMusicVideoScenes,
+  renderMusicVideoProject,
+  musicVideoRenderEventsUrl,
+  cancelMusicVideoRender,
 } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
+import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
 const MODES = ['director', 'autonomous'];
@@ -120,6 +124,67 @@ export default function MusicVideo() {
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
+  };
+
+  // --- Render (#1760, Phase 2): assemble scene clips over the master audio bed.
+  // The kickoff returns a jobId; progress streams over SSE via useSseProgress.
+  const [render, setRender] = useState(null); // { jobId, projectId } while in flight
+  const renderSse = useSseProgress(render ? musicVideoRenderEventsUrl(render.jobId) : null);
+  const renderProgress = render ? Math.round((renderSse.latest?.progress ?? 0) * 100) : 0;
+  // The number of scenes that already have a generated clip — the render's inputs.
+  const renderableSceneCount = (selected?.scenes || []).filter((s) => s.videoHistoryId).length;
+
+  // React to terminal SSE frames: record the render on the project, surface the
+  // outcome, and clear the in-flight job. Functional update keys on the captured
+  // projectId so a project switch mid-render can't misattribute the result.
+  useEffect(() => {
+    const frame = renderSse.latest;
+    if (!render || !frame) return;
+    if (frame.type === 'complete') {
+      const result = frame.result || {};
+      setProjects((prev) => prev.map((p) => (p.id === render.projectId
+        ? { ...p, renderHistoryId: result.id || p.renderHistoryId, status: 'complete' } : p)));
+      toast.success('Music video rendered');
+      setRender(null);
+    } else if (frame.type === 'error') {
+      toast.error(frame.error || 'Render failed');
+      setProjects((prev) => prev.map((p) => (p.id === render.projectId ? { ...p, status: 'failed' } : p)));
+      setRender(null);
+    } else if (frame.type === 'canceled' || frame.type === 'cancelled') {
+      toast.info('Render cancelled');
+      setRender(null);
+    }
+  }, [renderSse.latest]);
+  // Stream closed on a NON-terminal frame (server restart mid-render, or the job
+  // was pruned before/after attach so the 404 closes the stream) — recover so the
+  // spinner can't hang. Gating on `!latest` is wrong: `latest` holds the last
+  // *progress* frame once any progress streamed, so it would never fire. Mirror
+  // VideoTimelineEditor: recover whenever the final frame isn't terminal.
+  useEffect(() => {
+    if (render && renderSse.closed && !isTerminalSseFrame(renderSse.latest)) {
+      setRender(null);
+      toast.info('Lost connection to the render — check Media History for the result');
+    }
+  }, [renderSse.closed]);
+
+  const handleRender = () => {
+    if (!selected) return;
+    const projectId = selected.id;
+    renderMusicVideoProject(projectId, { silent: true })
+      .then(({ jobId }) => setRender({ jobId, projectId }))
+      .catch((err) => {
+        // 409 → a render is already in flight for this project; attach to it.
+        if (err?.status === 409 && err?.context?.jobId) {
+          setRender({ jobId: err.context.jobId, projectId });
+          return;
+        }
+        toast.error(err?.message || 'Failed to start render');
+      });
+  };
+
+  const handleCancelRender = () => {
+    if (!render) return;
+    cancelMusicVideoRender(render.jobId, { silent: true }).catch(() => {});
   };
 
   const handleAddScene = () => {
@@ -297,12 +362,39 @@ export default function MusicVideo() {
                       className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
                       <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
                     </button>
+                    {render ? (
+                      <button onClick={handleCancelRender} title="Cancel render"
+                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                        <Activity size={15} className="animate-spin" /> {renderProgress}% · Cancel
+                      </button>
+                    ) : (
+                      <button onClick={handleRender} disabled={renderableSceneCount === 0}
+                        title={renderableSceneCount === 0 ? 'Generate at least one scene video first' : 'Render the music video over the track'}
+                        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                        <Film size={15} /> Render
+                      </button>
+                    )}
                     <button onClick={() => handleDelete(selected.id)} title="Delete project"
                       className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
                       <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
+                {render && (
+                  <div className="mt-2">
+                    <div className="h-1.5 bg-port-bg rounded overflow-hidden">
+                      <div className="h-full bg-port-accent transition-all" style={{ width: `${renderProgress}%` }} />
+                    </div>
+                    <p className="text-xs text-port-text-muted mt-1">Rendering music video — {renderProgress}%</p>
+                  </div>
+                )}
+                {!render && selected.renderHistoryId && (
+                  <div className="mt-2 text-xs flex items-center gap-2">
+                    <Film size={14} className="text-port-success" />
+                    <a href={`/media/history?preview=${encodeURIComponent(`video:${selected.renderHistoryId}`)}`}
+                      className="text-port-accent">View rendered music video →</a>
+                  </div>
+                )}
                 {selected.audioAnalysis && (
                   <div className="text-xs text-port-text-muted mt-2 flex flex-wrap gap-x-4 gap-y-1">
                     <span>Tempo: {selected.audioAnalysis.bpm ? `${selected.audioAnalysis.bpm} BPM` : '—'}</span>
