@@ -194,6 +194,37 @@ describe('executeCliRun — close handler crash guard', () => {
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
     errorSpy.mockRestore();
   });
+
+  it('still settles onComplete when the recovery onRunFailed hook itself throws', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Metadata write fails, AND the recovery onRunFailed hook throws — the
+    // caller must STILL be settled (the hook must not block onComplete).
+    writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('ENOSPC: disk full'));
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunFailed: () => { throw new Error('hook boom'); } },
+    });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-hook-throws', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
+    errorSpy.mockRestore();
+  });
 });
 
 describe('buildCliArgs — claude-code defaultModel honoring', () => {
