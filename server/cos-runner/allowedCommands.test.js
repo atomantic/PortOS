@@ -25,6 +25,17 @@ describe('isAllowedCommand', () => {
       expect(isAllowedCommand('opencode')).toBe(true);
       expect(isAllowedCommand('/opt/homebrew/bin/opencode')).toBe(true);
     });
+
+    it('allows Windows npm/bun shim extensions (.cmd / .bat) for allowed commands', () => {
+      // Bare + forward-slash forms parse the same on POSIX and Windows. (A full
+      // backslash path like C:\\...\\opencode.cmd only splits via path.basename on
+      // a Windows host — the existing claude.exe case documents that limitation.)
+      expect(isAllowedCommand('opencode.cmd')).toBe(true);
+      expect(isAllowedCommand('claude.bat')).toBe(true);
+      expect(isAllowedCommand('/c/npm/opencode.cmd')).toBe(true);
+      // still rejects a non-allowlisted command regardless of shim extension
+      expect(isAllowedCommand('rm.cmd')).toBe(false);
+    });
   });
 
   describe('Windows .exe stripping', () => {
