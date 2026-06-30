@@ -187,6 +187,7 @@ export * from './pipelineIssueOrder.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
+export * from './textUtils.js';
 
 // === Model & config ===
 export * from './browserConfig.js';

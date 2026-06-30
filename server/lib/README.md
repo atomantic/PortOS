@@ -207,6 +207,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
 | `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
+| `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |

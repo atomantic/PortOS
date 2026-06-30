@@ -17,6 +17,7 @@
 import { randomUUID, createHash } from 'crypto';
 import { readFile, rm } from 'fs/promises';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
@@ -27,11 +28,10 @@ const store = () => writersRoomStore();
 
 // ---------- text analysis ----------
 
-export function countWords(text) {
-  if (!text) return 0;
-  const matches = String(text).trim().match(/\S+/g);
-  return matches ? matches.length : 0;
-}
+// `countWords` now lives in lib/textUtils.js (the canonical home that
+// issueLength.js and the editorial checks also share). Re-exported here so
+// existing importers of this module keep working unchanged.
+export { countWords };
 
 export function contentHash(text) {
   return createHash('sha256').update(text || '').digest('hex');
