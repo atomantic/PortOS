@@ -871,7 +871,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="h-screen h-[100dvh] print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
+    <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -894,7 +894,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 h-screen print:hidden
+          fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}

@@ -129,6 +129,20 @@ body {
   min-height: 100dvh;
 }
 
+/* Tailwind v4 sorts generated utility classes into a canonical order (by
+   bucket, then alphabetically) rather than preserving JSX className source
+   order, so pairing `h-screen h-[100dvh]` on one element does NOT give
+   `h-[100dvh]` cascade priority as the "h-screen now, h-[100dvh] override"
+   naming suggests — `.h-screen` is emitted after `.h-[100dvh]` in the
+   compiled stylesheet and wins outright, silently defeating the dvh fix.
+   This plain-CSS class declares the same property twice in real source
+   order (mirrors the #root rule above) so the dvh value reliably overrides
+   the vh fallback in browsers that support it. */
+.h-dvh-screen {
+  height: 100vh;
+  height: 100dvh;
+}
+
 body::before {
   content: "";
   position: fixed;
