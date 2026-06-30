@@ -211,9 +211,23 @@ describe('autoArrangeScenes', () => {
     expect(out[1].startSec).toBe(4);
   });
 
-  it('marks spans not beatAligned when there is no grid at all', () => {
+  it('marks every auto-arranged span beatAligned so the render honors the durations', () => {
+    // Even the synthetic single-section fallback (no real sections) is honored.
     const out = autoArrangeScenes(scenes(2), { durationSec: 6 });
-    expect(out.every((a) => a.beatAligned === false)).toBe(true);
+    expect(out.every((a) => a.beatAligned === true)).toBe(true);
+    expect(out.map((a) => [a.startSec, a.endSec])).toEqual([[0, 3], [3, 6]]);
+  });
+
+  it('divides a section with no interior beats evenly instead of collapsing to its edges', () => {
+    // The section's own outer edges are grid points; with a finite snap tolerance
+    // the interior cuts must NOT collapse onto them — they stay at even thirds.
+    const analysis = {
+      durationSec: 30,
+      beats: [], // no interior beats
+      sections: [{ startSec: 0, endSec: 30, energy: 1 }],
+    };
+    const out = autoArrangeScenes(scenes(3), analysis);
+    for (const a of out) expect(a.endSec - a.startSec).toBeCloseTo(10, 3);
   });
 
   it('keeps every span at least minSceneSec long rather than snapping them away', () => {

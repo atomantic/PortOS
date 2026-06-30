@@ -119,13 +119,16 @@ function allocateByWeight(weights, total, minEach = 0) {
 }
 
 // Split one section's [startSec, endSec] span into `count` contiguous cut
-// boundaries (length `count + 1`). Interior cuts snap to the nearest grid point,
-// then clamp into [prev + minSceneSec, endSec - remainingCuts * minSceneSec] so
-// every produced span is at least `minSceneSec` long AND enough room is reserved
-// for the cuts still to come. When the section is too short to honor minSceneSec
-// for `count` cuts, fall back to plain even division (best effort — the render
-// clamps clips to its own floor anyway). The section's own outer edges never move.
-function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec) {
+// boundaries (length `count + 1`). Each interior cut snaps to the nearest grid
+// point WITHIN `toleranceSec` (a finite tolerance, like the manual arranger — an
+// unbounded snap would collapse a beatless section's interior cuts onto its own
+// outer edges); when nothing is close enough the even-division time is kept. The
+// result is then clamped into [prev + minSceneSec, endSec - remainingCuts *
+// minSceneSec] so every produced span is at least `minSceneSec` long AND enough
+// room is reserved for the cuts still to come. When the section is too short to
+// honor minSceneSec for `count` cuts, fall back to plain even division (best
+// effort — the render clamps clips to its own floor anyway). Outer edges never move.
+function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec, toleranceSec) {
   const span = endSec - startSec;
   const even = (k) => startSec + (span * k) / count;
   if (span < count * minSceneSec) {
@@ -134,7 +137,7 @@ function sectionCutBoundaries(startSec, endSec, count, gridPoints, minSceneSec) 
   const boundaries = [startSec];
   for (let k = 1; k < count; k++) {
     const raw = even(k);
-    const snap = snapTimeToGrid(raw, gridPoints, Infinity);
+    const snap = snapTimeToGrid(raw, gridPoints, toleranceSec);
     const candidate = snap ? snap.t : raw;
     const minB = boundaries[boundaries.length - 1] + minSceneSec;
     const maxB = endSec - (count - k) * minSceneSec; // leave room for remaining cuts
@@ -197,19 +200,23 @@ export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT
   const weights = sections.map((s) => (s.endSec - s.startSec) * (haveEnergy ? (s.energy ?? 0) : 1));
   const counts = allocateByWeight(weights, ordered.length, 1);
 
-  const gridPoints = buildBeatGridPoints(audioAnalysis);
-  // A grid (beats/downbeats/section edges) means the cuts are genuinely
-  // beat-aligned; mark every produced span aligned so the render honors these
-  // computed durations exactly (the director can then drag to fine-tune). With
-  // no grid at all the spans are still intentional, but not beat-locked.
-  const beatAligned = gridPoints.length > 0;
+  // Build the snap grid from the EFFECTIVE sections (filtered/synthesized above),
+  // not the raw analysis — so the single-section fallback still contributes its
+  // edges and real beats/downbeats are honored when present.
+  const gridPoints = buildBeatGridPoints({
+    beats: audioAnalysis?.beats,
+    downbeats: audioAnalysis?.downbeats,
+    sections,
+  });
 
   const result = [];
   let sceneIdx = 0;
   for (let si = 0; si < sections.length; si++) {
     const count = counts[si];
     if (count <= 0) continue;
-    const boundaries = sectionCutBoundaries(sections[si].startSec, sections[si].endSec, count, gridPoints, minSceneSec);
+    const boundaries = sectionCutBoundaries(
+      sections[si].startSec, sections[si].endSec, count, gridPoints, minSceneSec, DEFAULT_TOLERANCE_SEC,
+    );
     for (let k = 0; k < count; k++) {
       const scene = ordered[sceneIdx];
       sceneIdx += 1;
@@ -217,7 +224,12 @@ export function autoArrangeScenes(scenes, audioAnalysis, { minSceneSec = DEFAULT
         sceneId: scene.sceneId,
         startSec: round3(boundaries[k]),
         endSec: round3(boundaries[k + 1]),
-        beatAligned,
+        // Auto-arrange always marks its spans beat-aligned: the computed per-scene
+        // duration IS the director's intentional starting point, which the render
+        // (`beatSnapClips`) then honors exactly rather than re-deriving its own cut.
+        // The director can drag any scene afterward to fine-tune (a non-snapped
+        // drag will clear this per the manual arranger).
+        beatAligned: true,
       });
     }
   }
