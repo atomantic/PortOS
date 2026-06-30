@@ -11,6 +11,12 @@ vi.mock('../services/settings.js', () => ({
     store = { ...store, ...patch };
     return { ...store };
   }),
+  // The PUT handler uses updateSettingsWith so it can re-inject persisted
+  // write-only tokens omitted by the patch (see preserveWriteOnlyTokens).
+  updateSettingsWith: vi.fn(async (mutate) => {
+    store = await mutate({ ...store });
+    return { ...store };
+  }),
 }));
 vi.mock('../services/aiAssignments.js', () => ({
   getAiAssignments: vi.fn(async () => ({})),

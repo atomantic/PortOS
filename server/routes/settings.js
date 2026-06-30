@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getSettings, updateSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import {
   setCodexParallelLimit,
@@ -55,6 +55,29 @@ const redactExternalTokens = (settings) => {
     const { apiKey, ...rest } = next.civitai;
     next.civitai = rest;
   }
+  return next;
+};
+
+// Write-path counterpart to the redaction above. Because GET /api/settings no
+// longer returns these tokens, a client that GETs settings, rebuilds a full
+// top-level object and PUTs it back (e.g. `patchSettingsSlice('imageGen.local',
+// …)`) would otherwise drop the persisted token — `updateSettings` shallow-
+// merges top-level keys, so an incoming `imageGen`/`civitai` replaces the
+// stored object wholesale. PUT /api/settings is never the write path for these
+// tokens (the dedicated /setup/hf-token and /loras/auth/civitai routes are), so
+// re-inject the persisted value whenever an incoming parent object omits it.
+// A parent absent from the patch needs nothing — the top-level merge keeps the
+// stored object (token included) untouched.
+const preserveWriteOnlyTokens = (next, current) => {
+  const carryOver = (parentKey, tokenKey) => {
+    const incoming = next[parentKey];
+    const stored = current?.[parentKey]?.[tokenKey];
+    if (isPlainObject(incoming) && !(tokenKey in incoming) && stored !== undefined) {
+      next[parentKey] = { ...incoming, [tokenKey]: stored };
+    }
+  };
+  carryOver('imageGen', 'hfToken');
+  carryOver('civitai', 'apiKey');
   return next;
 };
 
@@ -156,7 +179,11 @@ router.put('/', asyncHandler(async (req, res) => {
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
   const { secrets: _ignoredSecrets, catalogUserTypes: _ignoredTypes, ...settingsPatch } = req.body || {};
-  const merged = await updateSettings(settingsPatch);
+  // updateSettingsWith (not updateSettings) so we can re-inject persisted
+  // write-only tokens the incoming patch omits, against the freshest snapshot
+  // inside the write queue (see preserveWriteOnlyTokens).
+  const merged = await updateSettingsWith((current) =>
+    preserveWriteOnlyTokens({ ...current, ...settingsPatch }, current));
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without
   // re-reading the file.
