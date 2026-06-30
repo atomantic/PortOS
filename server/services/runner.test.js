@@ -29,11 +29,20 @@ const runner = await import('./runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
 
-// Minimal toolkit stub that satisfies executeCliRun's expectations
+// Minimal toolkit stub that satisfies executeCliRun's expectations. Mirrors the
+// real toolkit runner's declared external-run registry (registerExternalRun /
+// unregisterExternalRun) that the override now drives instead of poking a
+// private `_portosActiveRuns` map.
 function fakeToolkit(errorDetection = null) {
+  const externalRuns = new Map();
   return {
     services: {
-      runner: { _portosActiveRuns: new Map() },
+      runner: {
+        registerExternalRun: (runId, killable) => externalRuns.set(runId, killable),
+        unregisterExternalRun: (runId) => externalRuns.delete(runId),
+        hasExternalRun: (runId) => externalRuns.has(runId),
+        _externalRuns: externalRuns,
+      },
       errorDetection,
     },
   };

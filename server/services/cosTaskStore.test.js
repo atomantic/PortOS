@@ -311,6 +311,24 @@ describe('cosTaskStore.updateTask', () => {
     expect(updated.metadata.updatedAt).toBe(new Date(T1).toISOString());
   });
 
+  it('preserves a legacy direct field cleared to empty string (absent-vs-cleared, #1826)', async () => {
+    // `context` is a LEGACY_DIRECT_FIELD. Clearing it to "" is an intentional edit
+    // and must persist as "" — the `|| undefined` form mapped "" to undefined and
+    // the cleanup pass then deleted the key, conflating "cleared" with "absent".
+    await addTask({ description: 'ctx', id: 'task-ctx', context: 'original context' }, 'user');
+    const updated = await updateTask('task-ctx', { context: '' }, 'user');
+    expect(updated.metadata.context).toBe('');
+    // And it survives a round-trip through markdown serialization.
+    const reloaded = await getTaskById('task-ctx');
+    expect(reloaded.metadata.context).toBe('');
+  });
+
+  it('still drops a legacy direct field set to null', async () => {
+    await addTask({ description: 'ctx2', id: 'task-ctx2', context: 'original' }, 'user');
+    const updated = await updateTask('task-ctx2', { context: null }, 'user');
+    expect(updated.metadata.context).toBeUndefined();
+  });
+
   it('returns an error object when the file is missing', async () => {
     const result = await updateTask('task-x', { status: 'completed' }, 'user');
     expect(result.error).toBe('Task file not found');
