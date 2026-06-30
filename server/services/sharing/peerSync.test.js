@@ -2481,6 +2481,51 @@ describe('peerSync', () => {
       expect(refreshed.lastConfirmedPushedAt).toBeTruthy();
     });
 
+    it('does NOT stamp lastConfirmedTrackBundleAtMs when the project still has a trackId but the sender omitted linkedTrack (#1922)', async () => {
+      // Regression (codex review round 3): a project can still carry a
+      // `trackId` while buildPushPayload's own getTrack() lookup transiently
+      // returns null/throws, so `linkedTrack` is omitted from the payload
+      // entirely. The receiver never sees a linkedTrack key, so it can't
+      // report trackSyncPending either — `!trackSyncPending` alone would
+      // wrongly look "confirmed". A track is still owed (trackId is set), so
+      // the bundle floor must stay unstamped until a future push actually
+      // ships the track.
+      enableMusicVideoPeer();
+      vi.mocked(getTrack).mockResolvedValue(null); // transient lookup failure
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-12', name: 'Lookup failed', mode: 'director', trackId: 'track-12',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-12' },
+        { adoptedFromReverse: true },
+      );
+      await pushRecordToPeer(sub);
+      const refreshed = await findPeerSubscription('peer-a', 'musicVideoProject', 'mv-12');
+      expect(refreshed.lastConfirmedTrackBundleAtMs).toBeNull();
+      expect(refreshed.lastConfirmedPushedAt).toBeTruthy();
+    });
+
+    it('DOES stamp lastConfirmedTrackBundleAtMs when the project has no trackId at all (nothing owed)', async () => {
+      enableMusicVideoPeer();
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-13', name: 'No track', mode: 'director', trackId: null,
+        uploadedAudioFilename: 'upload.mp3', scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const before = Date.now();
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-13' },
+        { adoptedFromReverse: true },
+      );
+      await pushRecordToPeer(sub);
+      const refreshed = await findPeerSubscription('peer-a', 'musicVideoProject', 'mv-13');
+      expect(refreshed.lastConfirmedTrackBundleAtMs).toBeGreaterThanOrEqual(before);
+    });
+
     it('omits linkedTrack when the project has no linked track', async () => {
       enableMusicVideoPeer();
       vi.mocked(getMusicVideoProject).mockResolvedValue({
@@ -3035,6 +3080,53 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
+      expect(result.ackedDeletesUpTo).toBe(0);
+    });
+
+    it('does NOT fold a mismatched-id linkedTrack tombstone into ackedDeletesUpTo (merge gate refused it, never applied)', async () => {
+      // Regression (codex review round 3 on #1922): the merge gate refuses a
+      // linkedTrack whose id doesn't match the project's trackId (anti-
+      // smuggling guard), so mergeTracksFromSync never runs. Folding its
+      // deletedAt into ackedDeletesUpTo anyway would tell the sender "applied"
+      // for a tombstone this receiver never actually merged.
+      const result = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-14', trackId: 'track-A', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-SMUGGLED', deleted: true, deletedAt: '2026-04-02T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
+      expect(result.ackedDeletesUpTo).toBe(0);
+    });
+
+    it('does NOT fold a bundled linkedTrack tombstone into ackedDeletesUpTo when its merge fails (trackSyncPending)', async () => {
+      // Regression (codex review round 3 on #1922): a thrown merge means the
+      // receiver did NOT actually apply the tombstone — acking it anyway would
+      // let the sender's cursor advance past a deletion that still needs a
+      // retry (the exact failure mode #1922 closes for the success path).
+      vi.mocked(mergeTracksFromSync).mockRejectedValueOnce(new Error('disk full'));
+      const result = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-15', trackId: 'track-15', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-15', deleted: true, deletedAt: '2026-04-03T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.trackSyncPending).toBe(true);
+      expect(result.ackedDeletesUpTo).toBe(0);
+    });
+
+    it('does NOT fold a bundled linkedTrack tombstone into ackedDeletesUpTo for a local-ephemeral project (merge skipped, opted out)', async () => {
+      vi.mocked(getMusicVideoProject).mockResolvedValueOnce({ id: 'mv-16', ephemeral: true });
+      const result = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-16', trackId: 'track-16', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-16', deleted: true, deletedAt: '2026-04-04T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeTracksFromSync).not.toHaveBeenCalled();
       expect(result.ackedDeletesUpTo).toBe(0);
     });
 

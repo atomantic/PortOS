@@ -431,9 +431,24 @@ export async function pushRecordToPeer(sub, options = {}) {
   // latter advances even when the bundled track merge failed or was stripped
   // for a legacy peer (`trackSyncPending`) — using it here would let GC treat
   // an unconfirmed bundled tombstone as delivered.
+  //
+  // `!trackSyncPending` alone isn't enough: `buildPushPayload` can OMIT
+  // `linkedTrack` even though the project still has a `trackId` (the sender's
+  // `getTrack()` lookup returned null or threw — transient or the track was
+  // hard-deleted out from under it) — the receiver never sees a `linkedTrack`
+  // key at all in that case, so it can't report `trackSyncPending` either.
+  // `payload.record` keeps `trackId` for both live AND tombstoned
+  // musicVideoProject pushes (whole-record LWW, no tombstone field-stripping —
+  // see `sanitizeRecordForWire`'s `musicVideoProject` case), so gate on: no
+  // track is owed at all (`trackId` absent), OR a `linkedTrack` was actually
+  // included in this push.
+  const trackOwed = isStr(payload.record?.trackId);
+  const trackBundleConfirmed = sub.recordKind === 'musicVideoProject'
+    && !trackSyncPending
+    && (!trackOwed || Boolean(payload.linkedTrack));
   await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, {
     confirmedAtMs: Date.now(),
-    trackBundleConfirmed: sub.recordKind === 'musicVideoProject' && !trackSyncPending,
+    trackBundleConfirmed,
   });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
