@@ -2643,6 +2643,21 @@ describe('peerSync', () => {
       expect(mergeTracksFromSync).not.toHaveBeenCalled();
     });
 
+    it('signals trackSyncPending when the bundled linkedTrack merge fails (#1858)', async () => {
+      // The linked track has no independent reconciliation cycle for a
+      // musicVideoProjects-only subscriber, so a swallowed failure must surface
+      // a pending flag that makes the sender withhold its hash and re-send.
+      vi.mocked(mergeTracksFromSync).mockRejectedValueOnce(new Error('disk full'));
+      const res = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-9', trackId: 'track-9', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(res.trackSyncPending).toBe(true);
+    });
+
     it('routes a bundled manuscriptReview through mergeReviewFromSync on a series push', async () => {
       const manuscriptReview = {
         schemaVersion: 1,

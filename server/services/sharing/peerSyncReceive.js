@@ -186,6 +186,14 @@ export async function applyIncomingPush(payload) {
       catalogBundle.ingredients.some((i) => i?.deleted !== true)) {
     for (const c of (RECORD_KIND_SCHEMA_CATEGORIES['cat-ingredient'] || ['catalog'])) relevantCategories.add(c);
   }
+  // A bundled linked track (#1858) ships a live, full-shape `track` record. Gate
+  // the `tracks` category so a sender ahead on the track schema can't smuggle a
+  // forward-shaped track row past the gate via a music-video push (same reasoning
+  // as the linkedCollection gate above). Skip the gate for a tombstone track —
+  // id+deleted+deletedAt+updatedAt is schema-safe at every version.
+  if (record.deleted !== true && isPlainObject(linkedTrack) && linkedTrack.deleted !== true) {
+    for (const c of RECORD_KIND_SCHEMA_CATEGORIES.track) relevantCategories.add(c);
+  }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
   if (versionDiff.ahead.length > 0) {
@@ -246,6 +254,11 @@ export async function applyIncomingPush(payload) {
   let reviewSyncPending = false;
   // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
   let outlineSyncPending = false;
+  // Same contract again, for the #1858 bundled linked-track record: a
+  // musicVideoProjects-only subscriber has NO independent `tracks` sync cycle,
+  // so a swallowed merge failure would strand the record the receiver needs to
+  // render. Signal so the sender withholds lastPushedHash and re-sends.
+  let trackSyncPending = false;
   // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
   // — gates whether a present-but-different local draft body may be overwritten.
   let workMergeApplied = false;
@@ -325,6 +338,7 @@ export async function applyIncomingPush(payload) {
     if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)) {
       await mergeTracksFromSync([linkedTrack], { source }).catch((err) => {
         console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
+        trackSyncPending = true;
       });
     }
   }
@@ -456,6 +470,7 @@ export async function applyIncomingPush(payload) {
     ackedDeletesUpTo,
     ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
     ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
+    ...(trackSyncPending ? { trackSyncPending: true } : {}),
   };
 }
 

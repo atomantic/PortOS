@@ -235,6 +235,37 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
     });
 
+    it('accepts a linkedTrack bundle on a music-video push (#1858)', async () => {
+      // Regression: musicVideoProjectPushSchema's strict() branch must include
+      // `linkedTrack` — without it every track-linked project push would 400 at
+      // the receiver before its merge, stranding the master audio.
+      svc.applyIncomingPush.mockResolvedValue({ missingAssets: [], reverseSubscriptionCreated: false, ackedDeletesUpTo: 0 });
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'musicVideoProject',
+          record: { id: 'mv-1', trackId: 'track-1' },
+          assetManifest: [],
+          linkedTrack: { id: 'track-1', audioFilename: 'song.mp3' },
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(200);
+    });
+
+    it('400s when a track push carries linkedTrack (no smuggled extra track)', async () => {
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'track',
+          record: { id: 'track-1' },
+          assetManifest: [],
+          linkedTrack: { id: 'track-smuggled' },
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+      expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+    });
+
     it('400s when a mediaCollection push carries linkedCollection (no smuggled extra collection)', async () => {
       // A mediaCollection push IS the collection — accepting linkedCollection
       // would be a side-channel to overwrite an unrelated collection.
