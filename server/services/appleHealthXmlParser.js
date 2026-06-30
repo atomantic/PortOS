@@ -112,32 +112,30 @@ export function createAppleHealthRecordStream({ onRecord }) {
 
   const drain = () => {
     let i = 0;
-    // Index we must retain from because a *valid* record is only partially
-    // buffered (token or opening tag split across a chunk boundary). -1 = none.
-    let pending = -1;
     while (true) {
       const idx = buffer.indexOf(RECORD_TAG, i);
-      if (idx === -1) break;
+      if (idx === -1) {
+        // No record token in flight — keep only a short tail so a `<Record`
+        // token split across the next chunk boundary is still found. All the
+        // scanned-past junk (DTD, other elements, false matches) is dropped, so
+        // the buffer can't accumulate.
+        buffer = buffer.slice(Math.max(0, buffer.length - (RECORD_TAG.length - 1)));
+        return;
+      }
       // The char after `<Record` must be a tag boundary (whitespace, `/`, `>`),
       // so a longer element like `<RecordingDevice` can't be taken for a Record.
       const after = buffer[idx + RECORD_TAG.length];
-      if (after === undefined) { pending = idx; break; } // token split — wait for more
+      if (after === undefined) { buffer = buffer.slice(idx); return; } // token split — wait for more
       if (after !== ' ' && after !== '\t' && after !== '\n' && after !== '\r'
         && after !== '/' && after !== '>') {
         i = idx + RECORD_TAG.length; // false match (e.g. <RecordingDevice) — skip past
         continue;
       }
       const end = findTagEnd(buffer, idx + RECORD_TAG.length);
-      if (end === -1) { pending = idx; break; } // opening tag not fully buffered — wait
+      if (end === -1) { buffer = buffer.slice(idx); return; } // opening tag not fully buffered — wait
       onRecord({ name: 'record', attributes: parseAttributes(buffer.slice(idx, end + 1)) });
       i = end + 1;
     }
-    // Retain only the incomplete-record fragment, or a short tail so a `<Record`
-    // token split across the next chunk boundary is still found. Rejected
-    // false-matches are dropped, so junk can't accumulate in the buffer.
-    buffer = pending !== -1
-      ? buffer.slice(pending)
-      : buffer.slice(Math.max(0, buffer.length - (RECORD_TAG.length - 1)));
   };
 
   return new Writable({
