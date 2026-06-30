@@ -29,6 +29,7 @@ import {
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
 import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
+import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 
@@ -107,7 +108,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // treatment as they land. The response carries `composing` so the UI can tell
 // the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
-  const { brief, types, limit, compose, generateFirstPass } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
+  const { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
   const project = result.project;
   const cast = project?.cast;
@@ -135,7 +136,26 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
         return null;
       });
   }
-  res.json({ ...result, composing, ...(firstPass ? { firstPass } : {}) });
+  // First-pass music bed (#1928, split from #1867): optional sibling step —
+  // enqueue one background audio render for the project itself (not a catalog
+  // ingredient, see firstPassMusicGen.js doc comment). Gated only on the
+  // project existing (unlike portraits, it doesn't depend on auto-cast having
+  // added new members — a re-running director may want a bed even when the
+  // cast was already seeded).
+  let firstPassMusicBed = null;
+  if (generateFirstPassMusicBed && project) {
+    firstPassMusicBed = await enqueueFirstPassMusicBed(project)
+      .catch((e) => {
+        console.log(`⚠️ CD first-pass music bed failed: ${e.message}`);
+        return null;
+      });
+  }
+  res.json({
+    ...result,
+    composing,
+    ...(firstPass ? { firstPass } : {}),
+    ...(firstPassMusicBed ? { firstPassMusicBed } : {}),
+  });
 }));
 
 // Agent-callable: write the treatment doc.
