@@ -391,11 +391,21 @@ describe('creativeDirector routes', () => {
       expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
     });
 
-    it('does not persist generateFirstPass when not composing', async () => {
+    it('persists generateFirstPass even when not composing this request (#1867) — the toggles are independent, and the project may only be started later via /:id/start', async () => {
       autoCast.applyAutoCastToProject.mockResolvedValue({
         project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
       });
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
+    it('does not persist generateFirstPass when the flag is omitted', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
       expect(r.status).toBe(200);
       expect(cdService.updateProject).not.toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
     });

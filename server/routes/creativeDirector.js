@@ -119,18 +119,23 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   // treatment path — so we simply skip those statuses.
   const composable = project && project.status !== 'paused' && project.status !== 'failed';
   const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
+  // Scene reference frames (#1867) depend on a treatment existing, which may
+  // land well after THIS request — either because `compose` kicks it off
+  // asynchronously below, or because the user opted into `generateFirstPass`
+  // without `compose` and only starts the project later via a separate
+  // `/:id/start` call (the OverviewTab toggles are independent, per its own
+  // "Independent of the treatment toggle" copy). Persist the user's opt-in on
+  // the project record unconditionally — NOT gated on `composing` — so the
+  // `/:id/treatment` handler (the only place the agent's scene plan actually
+  // lands) can find it regardless of which path triggered composition.
+  // Awaited (rather than fired alongside startCreativeDirectorProject) so
+  // there is no ordering ambiguity between this write and a same-request
+  // compose's first read.
+  if (generateFirstPass) {
+    await updateProject(req.params.id, { generateFirstPass: true })
+      .catch((e) => console.log(`⚠️ CD persist generateFirstPass flag failed: ${e.message}`));
+  }
   if (composing) {
-    // Scene reference frames (#1867) depend on a treatment existing, which
-    // auto-compose only writes asynchronously below. Persist the user's
-    // opt-in on the project record BEFORE kicking off the compose chain —
-    // there is no other durable hand-off point between this request and the
-    // agent's much-later `/:id/treatment` write, and awaiting it here (rather
-    // than firing it alongside startCreativeDirectorProject) rules out any
-    // ordering ambiguity between the write and the orchestrator's first read.
-    if (generateFirstPass) {
-      await updateProject(req.params.id, { generateFirstPass: true })
-        .catch((e) => console.log(`⚠️ CD persist generateFirstPass flag failed: ${e.message}`));
-    }
     startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
   }
   // First-pass gen (#1818): when opted in, kick off a catalog portrait render

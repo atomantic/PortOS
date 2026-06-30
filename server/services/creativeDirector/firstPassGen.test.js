@@ -192,6 +192,20 @@ describe('enqueueFirstPassSceneFrames (#1867)', () => {
     expect(enqueueJob.mock.calls[0][0].params.height).toBeUndefined();
   });
 
+  it('skips a continuation scene — its source comes from the prior scene\'s extracted last frame, not a seeded frame (#1867 fix)', async () => {
+    const project = {
+      id: 'cd-1',
+      treatment: { scenes: [
+        scene({ sceneId: 's1' }),
+        scene({ sceneId: 's2', useContinuationFromPrior: true }),
+      ] },
+    };
+    const out = await enqueueFirstPassSceneFrames(project);
+    expect(out.enqueued).toEqual([{ sceneId: 's1', jobId: 'job-1' }]);
+    expect(out.skipped).toEqual([{ sceneId: 's2', reason: 'continuation' }]);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   it('skips a scene that already has a reference frame (idempotent re-run)', async () => {
     const project = {
       id: 'cd-1',

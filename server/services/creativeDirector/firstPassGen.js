@@ -194,6 +194,11 @@ export async function enqueueFirstPassPortraits(members = []) {
  * image to at actual render time — an unscaled square seed would have its
  * edges cropped away to fit a 16:9/9:16 target.
  *
+ * Skips `useContinuationFromPrior` scenes: sceneRunner.js overwrites their
+ * `sourceImageFile` with the prior scene's extracted last frame whenever
+ * extraction succeeds, so a seeded frame there is generated and then
+ * silently discarded in the common case — not worth the render-queue cost.
+ *
  * Returns `{ mode, enqueued: [{ sceneId, jobId }], skipped: [{ sceneId, reason }], reason? }`.
  */
 export async function enqueueFirstPassSceneFrames(project) {
@@ -223,6 +228,18 @@ export async function enqueueFirstPassSceneFrames(project) {
     if (!scene?.sceneId) continue;
     if (scene.sourceImageFile) {
       skipped.push({ sceneId: scene.sceneId, reason: 'has-reference' });
+      continue;
+    }
+    // A continuation scene's actual render source is the PRIOR scene's
+    // extracted last frame (sceneRunner.js overwrites sourceImageFile with it
+    // whenever extraction succeeds), so a seeded reference frame here is
+    // generated and then silently discarded the moment the chain advances
+    // normally — wasted render-queue/GPU time for the common case. It would
+    // still help as a fallback if continuation extraction ever fails, but
+    // that failure path is the exception, not the case first-pass gen should
+    // spend renders optimizing for.
+    if (scene.useContinuationFromPrior) {
+      skipped.push({ sceneId: scene.sceneId, reason: 'continuation' });
       continue;
     }
     const prompt = typeof scene.prompt === 'string' ? scene.prompt.trim() : '';
