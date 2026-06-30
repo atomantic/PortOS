@@ -39,6 +39,10 @@
      textarea, the AI panel's Evaluate/Format/Adapt result containers, and
      the per-scene cards. Centralized so the shade can be tweaked once. */
   --wr-reading-paper: #f5f1e8;
+  /* Ink color paired with the sepia reading paper above — dark text on light
+     paper, intentionally fixed (not app-theme-following) so it stays legible
+     regardless of the active theme. Centralized so the shade tweaks once. */
+  --wr-reading-ink: #1a1a1a;
   --port-bg-alpha: 1;
   --port-card-alpha: 1;
   --port-border-alpha: 1;

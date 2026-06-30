@@ -37,7 +37,7 @@ const ProseEditor = forwardRef(function ProseEditor({
       // The light reading theme paints the textarea like paper; dark (default)
       // inherits the surrounding surface, so no inline style is needed.
       style={readingTheme === 'light'
-        ? { '--port-input-bg': 'var(--wr-reading-paper)', color: '#1a1a1a' }
+        ? { '--port-input-bg': 'var(--wr-reading-paper)', color: 'var(--wr-reading-ink)' }
         : undefined}
       className={`font-serif leading-relaxed ${className}`.trim()}
       {...rest}

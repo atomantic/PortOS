@@ -114,14 +114,14 @@ export default function GoalPlanSection({
               ))}
               <button
                 onClick={() => setProposedPhases([...proposedPhases, { title: '', description: '', targetDate: goal.targetDate, order: proposedPhases.length }])}
-                className="text-xs text-port-accent hover:text-blue-300 flex items-center gap-1"
+                className="text-xs text-port-accent hover:text-port-accent/80 flex items-center gap-1"
               >
                 <Plus className="w-3 h-3" /> Add phase
               </button>
               <div className="flex gap-2">
                 <button
                   onClick={handleAcceptPhases}
-                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-blue-600"
+                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80"
                 >
                   Accept Plan
                 </button>
@@ -236,7 +236,7 @@ export default function GoalPlanSection({
               <div className="flex gap-2">
                 <button
                   onClick={handleAcceptDecomposition}
-                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-blue-600"
+                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80"
                 >
                   Accept Tasks
                 </button>
