@@ -285,6 +285,62 @@ describe('CatalogIngredient — character sheet', () => {
     fireEvent.click(screen.getByText('Identity'));
     await waitFor(() => expect(screen.queryByDisplayValue('she/her')).toBeNull());
   });
+
+  // The universe style-preset layering is the headline "stays on-model" feature
+  // — pin that the linked universe is fetched by its refId and its embrace/avoid
+  // tokens reach the composed prompt + negative, not just the null path.
+  it('layers the linked universe style preset onto the composed prompt and negative', async () => {
+    const { getUniverse } = await import('../services/apiUniverseBuilder');
+    const { generateImage } = await import('../services/apiSystem');
+    getUniverse.mockResolvedValue({
+      influences: { embrace: ['neon noir', 'rain-slick streets'], avoid: ['cartoon', 'flat colors'] },
+    });
+    // No clearMocks config — clear prior tests' calls so calls[0] is this render's.
+    generateImage.mockClear();
+    generateImage.mockResolvedValue({ jobId: 'job-uni' });
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    const promptBox = await screen.findByPlaceholderText(/Describe the image to render/i);
+    // Preset embrace tokens prepend the subject prompt (diffusion weights earliest
+    // tokens heaviest) — see composeStyledPrompt.
+    await waitFor(() => expect(promptBox.value).toMatch(/neon noir/));
+    expect(promptBox.value).toMatch(/Ada Lovelace/);
+    // Fetched by the ingredient's universe refId, silently (no error toast).
+    expect(getUniverse).toHaveBeenCalledWith('u-1', { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Render$/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    const [payload] = generateImage.mock.calls[0];
+    expect(payload.prompt).toMatch(/neon noir/);
+    // Universe avoid tokens become the render's negative prompt.
+    expect(payload.negativePrompt).toMatch(/cartoon/);
+    getUniverse.mockResolvedValue(null); // restore default for any later test
+  });
+
+  // Regression: the textarea is editable during the awaited universe fetch, so a
+  // user typing before it resolves must NOT have their input clobbered by the
+  // async prefill (codex review). Deferred getUniverse controls the race window.
+  it('does not overwrite a prompt the user typed during the universe prefill', async () => {
+    const { getUniverse } = await import('../services/apiUniverseBuilder');
+    let resolveUniverse;
+    getUniverse.mockImplementation(() => new Promise((res) => { resolveUniverse = res; }));
+    renderPage();
+    await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    const promptBox = await screen.findByPlaceholderText(/Describe the image to render/i);
+    // User types before the universe fetch resolves.
+    fireEvent.change(promptBox, { target: { value: 'my hand-written prompt' } });
+    // Now the fetch resolves with a universe whose preset would otherwise overwrite.
+    resolveUniverse({ influences: { embrace: ['neon noir'], avoid: [] } });
+    // The user's text survives — the prefill is skipped because the field is dirty.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', false));
+    expect(promptBox.value).toBe('my hand-written prompt');
+    expect(promptBox.value).not.toMatch(/neon noir/);
+    getUniverse.mockResolvedValue(null); // restore default
+  });
 });
 
 describe('buildGenerationPromptSeed', () => {

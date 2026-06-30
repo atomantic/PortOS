@@ -355,10 +355,10 @@ export default function CatalogIngredient() {
   const isUserType = typeDef.system === false;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
   // Prompt source for the Media panel's "Generate" affordance — derived from the
-  // currently-edited payload (+ tags) so tweaks to the description feed the next
-  // render's default prompt. The user can still edit the composed prompt before
-  // generating (#1809).
-  const genDescription = buildGenerationPromptSeed(payload, typeDef, record.tags);
+  // currently-edited payload + the live `tags` state (NOT record.tags) so unsaved
+  // tweaks to the description or tags feed the next render's default prompt. The
+  // user can still edit the composed prompt before generating (#1809).
+  const genDescription = buildGenerationPromptSeed(payload, typeDef, tags);
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
   // of `{ refKind, refId, role }` or a server-grouped shape.
@@ -910,9 +910,13 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
       universe,
     });
     if (!mountedRef.current) return;
+    // The textarea is editable during the (awaited) universe fetch, so the user
+    // may have started typing before it resolved — apply the composed prefill
+    // only when the field is still empty, via a functional updater that reads
+    // the latest state (the closure's `prompt` is stale across the await).
     // Trim a dangling "Name:" when the ingredient had no visual description yet.
-    setPrompt((styled.prompt || name || '').replace(/:\s*$/, ''));
-    setNegativePrompt(styled.negativePrompt || '');
+    setPrompt((cur) => (cur.trim() ? cur : (styled.prompt || name || '').replace(/:\s*$/, '')));
+    setNegativePrompt((cur) => (cur.trim() ? cur : (styled.negativePrompt || '')));
     setPrefilling(false);
   };
 
