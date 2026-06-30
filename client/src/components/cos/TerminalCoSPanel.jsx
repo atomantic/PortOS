@@ -83,7 +83,7 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
   };
 
   return (
-    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[#0d1117] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
+    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[var(--port-terminal-bg)] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
       {/* Scanline effect */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.02]"

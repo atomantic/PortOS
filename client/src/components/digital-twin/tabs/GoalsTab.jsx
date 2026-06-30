@@ -168,7 +168,7 @@ export default function GoalsTab({ onRefresh }) {
             />
             <button
               onClick={handleSetBirthDate}
-              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600"
+              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
             >
               Save
             </button>
@@ -258,7 +258,7 @@ export default function GoalsTab({ onRefresh }) {
           </div>
           <button
             onClick={() => setShowNewGoal(!showNewGoal)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
           >
             <Plus className="w-4 h-4" />
             Add Goal
@@ -312,7 +312,7 @@ export default function GoalsTab({ onRefresh }) {
               <button
                 onClick={handleCreateGoal}
                 disabled={!newGoal.title.trim()}
-                className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600 disabled:opacity-50"
+                className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
               >
                 Create
               </button>
