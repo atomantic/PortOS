@@ -34,10 +34,12 @@ const DEFAULT_MAX_BYTES = 12 * 1024 * 1024; // 12 MB — generous for a single i
  * TOCTOU where a re-resolution at connect could land on a private address the
  * validation lookup never saw. Never throws.
  *
- * `address` is null when there is nothing to pin: an IP-literal target (the
- * connect goes straight to the literal — no name to re-resolve, so no TOCTOU)
- * or a lookup that failed (the fetch falls back to its own resolution, exactly
- * as before, preserving prior fail-open-on-resolve behavior).
+ * `address` is null only for an IP-literal target (the connect goes straight to
+ * the literal — there's no name to re-resolve, so no TOCTOU and nothing to pin).
+ * A hostname that can't be resolved fails CLOSED ({ safe: false }) rather than
+ * falling through to an unpinned fetch: an unpinned connect would re-resolve at
+ * connect time, exactly the rebinding window this guard exists to close (an
+ * attacker can fail the validation lookup, then answer a private IP at connect).
  *
  * @returns {Promise<{ safe: boolean, address?: string|null, family?: number }>}
  */
@@ -49,9 +51,9 @@ async function resolvePublicHttpUrl(target) {
   const isIpLiteral = /^[\d.]+$/.test(hostname) || hostname.includes(':');
   if (isIpLiteral) return { safe: true, address: null };
   const resolved = await dns.lookup(hostname).catch(() => null);
-  if (resolved?.address && isBlockedIngestHost(resolved.address)) return { safe: false };
-  // resolved null (lookup failed) → safe but unpinned (matches prior behavior).
-  return { safe: true, address: resolved?.address ?? null, family: resolved?.family };
+  if (!resolved?.address) return { safe: false }; // can't vet → can't safely pin → fail closed
+  if (isBlockedIngestHost(resolved.address)) return { safe: false };
+  return { safe: true, address: resolved.address, family: resolved.family };
 }
 
 /**
