@@ -519,28 +519,25 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
  *
  * Decides whether a failed task should be blocked or retried, the metadata
  * fields to merge over `task.metadata` (timestamps excluded — they belong to
- * the async wrapper), the analysis to hand to an investigation task, and
- * whether such a task will actually be created. Extracted so the branching can
- * be unit-tested directly (see `agentErrorAnalysis.test.js`) instead of through
- * a drift-prone inline copy.
+ * the async wrapper), and the analysis to hand to an investigation task.
+ * Extracted so the branching can be unit-tested directly (see
+ * `agentErrorAnalysis.test.js`) instead of through a drift-prone inline copy.
+ * Whether an investigation task is actually created stays the sole concern of
+ * {@link maybeCreateInvestigationTask}.
  *
  * @returns {{
  *   status: 'blocked'|'pending',
- *   shouldCreateInvestigation: boolean,
  *   investigationAnalysis: object|null,
- *   metadataUpdates: object,
- *   failureCount?: number,
- *   lastErrorCategory?: string
+ *   metadataUpdates: { failureCount?: number, lastErrorCategory?: string, [k: string]: unknown }
  * }}
  */
 export function resolveFailedTaskDecision(task, errorAnalysis) {
-  // Actionable errors get blocked immediately. An investigation task follows
-  // unless the failure is an API-access error (auth/forbidden/usage-limit),
-  // where a fresh agent would hit the same wall.
+  // Actionable errors get blocked immediately. The investigation task (created
+  // by the wrapper unless the failure is an API-access error) gets the original
+  // analysis verbatim.
   if (errorAnalysis?.actionable) {
     return {
       status: 'blocked',
-      shouldCreateInvestigation: !API_ACCESS_ERROR_CATEGORIES.has(errorAnalysis.category),
       investigationAnalysis: errorAnalysis,
       metadataUpdates: {
         blockedReason: errorAnalysis.message,
@@ -564,10 +561,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
     };
     return {
       status: 'blocked',
-      shouldCreateInvestigation: !API_ACCESS_ERROR_CATEGORIES.has(lastErrorCategory),
       investigationAnalysis: blockedAnalysis,
-      failureCount,
-      lastErrorCategory,
       metadataUpdates: {
         failureCount,
         lastErrorCategory,
@@ -581,10 +575,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
   const compaction = errorAnalysis?.compaction || null;
   return {
     status: 'pending',
-    shouldCreateInvestigation: false,
     investigationAnalysis: null,
-    failureCount,
-    lastErrorCategory,
     metadataUpdates: {
       failureCount,
       lastErrorCategory,
@@ -602,7 +593,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
  */
 export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
   const decision = resolveFailedTaskDecision(task, errorAnalysis);
-  const now = new Date().toISOString();
+  const { failureCount, lastErrorCategory } = decision.metadataUpdates;
 
   // Actionable errors get blocked immediately (investigation task created unless API access is denied)
   if (errorAnalysis?.actionable) {
@@ -612,26 +603,27 @@ export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
     await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
     return {
       status: decision.status,
-      metadata: { ...task.metadata, ...decision.metadataUpdates, blockedAt: now }
+      metadata: { ...task.metadata, ...decision.metadataUpdates, blockedAt: new Date().toISOString() }
     };
   }
 
   if (decision.status === 'blocked') {
-    emitLog('warn', `🚫 Task ${task.id} blocked after ${decision.failureCount} failures (${decision.lastErrorCategory})`, {
-      taskId: task.id, failureCount: decision.failureCount, category: decision.lastErrorCategory
+    emitLog('warn', `🚫 Task ${task.id} blocked after ${failureCount} failures (${lastErrorCategory})`, {
+      taskId: task.id, failureCount, category: lastErrorCategory
     });
     await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
+    const now = new Date().toISOString();
     return {
       status: 'blocked',
       metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: now, blockedAt: now }
     };
   }
 
-  emitLog('info', `🔄 Task ${task.id} retry ${decision.failureCount}/${MAX_TASK_RETRIES} (${decision.lastErrorCategory})`, {
-    taskId: task.id, failureCount: decision.failureCount, maxRetries: MAX_TASK_RETRIES, category: decision.lastErrorCategory
+  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
+    taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
   });
   return {
     status: 'pending',
-    metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: now }
+    metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: new Date().toISOString() }
   };
 }
