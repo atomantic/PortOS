@@ -25,9 +25,16 @@ vi.mock('../services/creativeDirector/autoCast.js', () => ({
   toSuggestionView: (hit) => ({ ingredientId: hit.ingredient.id, name: hit.ingredient.name, type: hit.ingredient.type, score: hit.rrfScore, searchMethod: hit.searchMethod }),
 }));
 
+// Mock first-pass gen (#1818) so the route test doesn't pull the real
+// mediaJobQueue/catalogDB graph; the route's job is to gate + dispatch.
+vi.mock('../services/creativeDirector/firstPassGen.js', () => ({
+  enqueueFirstPassPortraits: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
+}));
+
 import * as cdService from '../services/creativeDirector/local.js';
 import * as autoCast from '../services/creativeDirector/autoCast.js';
 import * as hook from '../services/creativeDirector/completionHook.js';
+import * as firstPass from '../services/creativeDirector/firstPassGen.js';
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -348,6 +355,57 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.composing).toBe(false);
       expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/auto-cast — first-pass gen (#1818)', () => {
+    it('enqueues first-pass portraits for the added members and returns the summary', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      firstPass.enqueueFirstPassPortraits.mockResolvedValue({
+        mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'job-1' }], skipped: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(firstPass.enqueueFirstPassPortraits).toHaveBeenCalledWith([{ ingredientId: 'p1' }]);
+      expect(r.body.firstPass).toEqual({ mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'job-1' }], skipped: [] });
+    });
+
+    it('does not enqueue when generateFirstPass is omitted', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({});
+      expect(r.status).toBe(200);
+      expect(firstPass.enqueueFirstPassPortraits).not.toHaveBeenCalled();
+      expect(r.body.firstPass).toBeUndefined();
+    });
+
+    it('does not enqueue when nothing was added', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({ project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [], suggestions: [] });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(firstPass.enqueueFirstPassPortraits).not.toHaveBeenCalled();
+      expect(r.body.firstPass).toBeUndefined();
+    });
+
+    it('composes and generates first-pass portraits together', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      firstPass.enqueueFirstPassPortraits.mockResolvedValue({ mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'j' }], skipped: [] });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true, generateFirstPass: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(true);
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
+      expect(firstPass.enqueueFirstPassPortraits).toHaveBeenCalledWith([{ ingredientId: 'p1' }]);
+    });
+
+    it('400s on a non-boolean generateFirstPass', async () => {
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: 'yes' });
+      expect(r.status).toBe(400);
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
     });
   });
 });

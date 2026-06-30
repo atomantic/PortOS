@@ -101,6 +101,11 @@ export const creativeDirectorAutoCastApplySchema = z.object({
   // grounded in the auto-cast cast. The route only honors it when the project has
   // a non-empty cast and no treatment yet (never clobbers an existing one).
   compose: z.boolean().optional(),
+  // First-pass gen (#1818): when true, enqueue a catalog portrait render for each
+  // newly auto-cast member that lacks a portrait so the cast "arrives on-model".
+  // Reuses the durable media-job → catalog attach hook (#1359); strictly optional
+  // and only seeds queue-backed image-gen modes (local / codex).
+  generateFirstPass: z.boolean().optional(),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /
