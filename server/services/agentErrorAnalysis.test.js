@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+// maybeCreateInvestigationTask → createInvestigationTask → addTask does real
+// store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
+vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn() }));
+
 import {
   analyzeAgentFailure,
   resolveFailedTaskDecision,
+  maybeCreateInvestigationTask,
   MAX_TASK_RETRIES
 } from './agentErrorAnalysis.js';
+import { addTask } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 // analyzeAgentFailure ignores output shorter than 50 chars (treats it as a
@@ -134,36 +141,28 @@ describe('resolveFailedTaskDecision', () => {
   const task = (metadata = {}) => ({ id: 'task-1', description: 'test', metadata });
 
   describe('actionable errors', () => {
-    it('blocks immediately and requests an investigation for a non-API-access category', () => {
-      const decision = resolveFailedTaskDecision(task(), { actionable: true, category: 'model-not-found', message: 'Model not found' });
+    it('blocks immediately and hands the original analysis to the investigation', () => {
+      const errorAnalysis = { actionable: true, category: 'model-not-found', message: 'Model not found' };
+      const decision = resolveFailedTaskDecision(task(), errorAnalysis);
       expect(decision.status).toBe('blocked');
-      expect(decision.shouldCreateInvestigation).toBe(true);
+      expect(decision.investigationAnalysis).toBe(errorAnalysis);
       expect(decision.metadataUpdates.blockedCategory).toBe('model-not-found');
       expect(decision.metadataUpdates.blockedReason).toBe('Model not found');
-    });
-
-    it('blocks but skips investigation for API-access categories', () => {
-      for (const category of ['auth-error', 'forbidden', 'usage-limit']) {
-        const decision = resolveFailedTaskDecision(task(), { actionable: true, category, message: `${category} error` });
-        expect(decision.status).toBe('blocked');
-        expect(decision.shouldCreateInvestigation).toBe(false);
-      }
     });
 
     it('blocks regardless of prior failure count', () => {
       const decision = resolveFailedTaskDecision(task({ failureCount: 0 }), { actionable: true, category: 'bad-request', message: 'bad' });
       expect(decision.status).toBe('blocked');
-      expect(decision.shouldCreateInvestigation).toBe(true);
     });
   });
 
   describe('non-actionable errors with retry tracking', () => {
-    it('retries on the first failure (failureCount → 1)', () => {
+    it('retries on the first failure (failureCount → 1) with no investigation', () => {
       const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'rate-limit', message: 'Rate limited' });
       expect(decision.status).toBe('pending');
       expect(decision.metadataUpdates.failureCount).toBe(1);
       expect(decision.metadataUpdates.lastErrorCategory).toBe('rate-limit');
-      expect(decision.shouldCreateInvestigation).toBe(false);
+      expect(decision.investigationAnalysis).toBeNull();
     });
 
     it('blocks once failureCount reaches MAX_TASK_RETRIES', () => {
@@ -172,7 +171,7 @@ describe('resolveFailedTaskDecision', () => {
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
       expect(decision.metadataUpdates.blockedReason).toContain('Max retries exceeded');
       expect(decision.metadataUpdates.blockedCategory).toBe('network-error');
-      expect(decision.shouldCreateInvestigation).toBe(true);
+      expect(decision.investigationAnalysis.message).toContain(`failed ${MAX_TASK_RETRIES} times`);
     });
 
     it('blocks on the total-spawn ceiling even when the retry count is low (the gap the inline copy missed)', () => {
@@ -182,7 +181,7 @@ describe('resolveFailedTaskDecision', () => {
       );
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(1);
-      expect(decision.shouldCreateInvestigation).toBe(true);
+      expect(decision.investigationAnalysis).not.toBeNull();
     });
 
     it('propagates compaction hints into the retry metadata (also missed by the inline copy)', () => {
@@ -205,7 +204,31 @@ describe('resolveFailedTaskDecision', () => {
       const decision = resolveFailedTaskDecision(task({ failureCount: MAX_TASK_RETRIES - 1 }), null);
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
-      expect(decision.shouldCreateInvestigation).toBe(true);
     });
+  });
+});
+
+// The actual "create an investigation task or skip it" decision lives in
+// maybeCreateInvestigationTask (the sole owner of the API_ACCESS gate). Assert
+// the real branch by spying on the store write it ultimately performs.
+describe('maybeCreateInvestigationTask', () => {
+  beforeEach(() => {
+    addTask.mockReset();
+    addTask.mockResolvedValue({ id: 'investigation-1' });
+  });
+
+  const task = { id: 'task-1', description: 'do the thing', metadata: {} };
+
+  it('skips investigation for API-access categories (auth/forbidden/usage-limit)', async () => {
+    for (const category of ['auth-error', 'forbidden', 'usage-limit']) {
+      addTask.mockClear();
+      await maybeCreateInvestigationTask('agent-1', task, { category, message: `${category} error` });
+      expect(addTask).not.toHaveBeenCalled();
+    }
+  });
+
+  it('creates an investigation task for a non-API-access category', async () => {
+    await maybeCreateInvestigationTask('agent-1', task, { category: 'model-not-found', message: 'Model not found' });
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 });
