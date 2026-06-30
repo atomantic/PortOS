@@ -23,20 +23,24 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `validation.js` | Catch-all Zod schemas + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`). Most route inputs validate through here. |
+| `validation.js` | Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing, document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`, `isSafeRecordId`, `parsePagination`). Re-exports the per-domain validation files below so existing deep imports keep working. |
+| `agentValidation.js` | Social-bot agent schemas (personality, Moltbook/Moltworld accounts, automation schedules, agent tools + Moltworld payloads) and CoS Feature Agent definitions. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
+| `cosValidation.js` | Chief-of-Staff task/job/loop/learning schemas, the Review-Loop reviewer vocabulary + helpers (`normalizeReviewers`/`buildReviewWithArgs`), the Code-Review settings slice, and the task-metadata sanitizer. |
 | `creativeDirectorValidation.js` | Creative Director project/treatment/scene + Create-Suite importer schemas. |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
 | `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
+| `mediaValidation.js` | Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management, CyberCity snapshots, media-collection bulk ops). |
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
+| `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
 | `postValidation.js` | Social post schemas. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
