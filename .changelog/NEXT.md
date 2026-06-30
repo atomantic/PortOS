@@ -40,6 +40,7 @@
 
 ## UX & Accessibility
 
+- **[issue-1853] Consolidated remaining hand-rolled overlays onto the shared `Modal`/`Drawer` components** — `ConversationViewer`, the digital-twin Documents tab's "create document" and "delete document" dialogs, and the CoS task "mark as blocked" dialog had their own bespoke `fixed inset-0` backdrop markup at inconsistent opacities (`bg-black/50` vs `bg-black/70`); they now render through `<Modal>`, picking up its standardized backdrop, Esc/click-outside handling, and stacking behavior for free. The calendar event-detail panel — a bespoke right-side slide-in that duplicated `Drawer`'s mobile-full-width/desktop-~520px/backdrop/Esc behavior — now renders through `<Drawer>` directly, and `Drawer`'s close button is bumped from 40px to the project's 44px minimum touch target (#1850) so the conversion doesn't regress that fix; the bump applies to every `Drawer` consumer. (#1853)
 - **[issue-1850] Calendar and message action buttons now meet the 44px minimum touch-target size** — the day/week/month calendar nav chevrons, the event-detail close button, and the message-detail action row (Reply / Voice / AI Reply / Refresh / Archive / Delete) previously rendered at ~28–31px, below the WCAG 2.5.5 / Apple HIG 44px minimum and awkward to tap on mobile. Each now enforces `min-w-[44px] min-h-[44px]` with centered icons, matching the shared `Drawer` close-button pattern, without changing the visual layout. (#1850)
 
 ## Internal

@@ -47,7 +47,7 @@ export default function Drawer({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close settings"
           >
             <X className="w-5 h-5" />
