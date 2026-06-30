@@ -6,6 +6,18 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 
+// Invoke a completion hook / callback so a throw is logged but never
+// propagates — these run at out-of-request boundaries where an uncaught throw
+// is an unhandled rejection that crashes the process. Each call is isolated so
+// a throwing hook can't prevent a later `onComplete` from settling the caller.
+function safeSettle(fn, label) {
+  try {
+    fn();
+  } catch (err) {
+    console.error(`❌ ${label} threw during recovery: ${err.message}`);
+  }
+}
+
 export function createRunnerService(config = {}) {
   const {
     dataDir = './data',
@@ -249,40 +261,58 @@ export function createRunnerService(config = {}) {
       });
 
       childProcess.on('close', async (code) => {
-        clearTimeout(timeoutHandle);
-        activeRuns.delete(runId);
+        // Runs outside the request lifecycle — an uncaught throw from
+        // atomicWrite/handleProviderError/hooks would surface as an unhandled
+        // rejection and crash the process, so guard the body and still settle
+        // the caller on failure.
+        try {
+          clearTimeout(timeoutHandle);
+          activeRuns.delete(runId);
 
-        await atomicWrite(outputPath, output);
+          await atomicWrite(outputPath, output);
 
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.exitCode = code;
-        metadata.success = code === 0;
-        metadata.outputSize = Buffer.byteLength(output);
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.exitCode = code;
+          metadata.success = code === 0;
+          metadata.outputSize = Buffer.byteLength(output);
 
-        if (!metadata.success) {
-          const errorAnalysis = analyzeError(output, code);
-          metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
-          metadata.errorCategory = errorAnalysis.category;
-          metadata.errorAnalysis = errorAnalysis;
+          if (!metadata.success) {
+            const errorAnalysis = analyzeError(output, code);
+            metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+            metadata.errorCategory = errorAnalysis.category;
+            metadata.errorAnalysis = errorAnalysis;
 
-          if (errorAnalysis.hasError &&
-              (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
-               errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-            await handleProviderError(provider.id, errorAnalysis, output);
+            if (errorAnalysis.hasError &&
+                (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
+                 errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
+              await handleProviderError(provider.id, errorAnalysis, output);
+            }
           }
+
+          await atomicWrite(metadataPath, metadata);
+
+          if (metadata.success) {
+            hooks.onRunCompleted?.(metadata, output);
+          } else {
+            hooks.onRunFailed?.(metadata, metadata.error, output);
+          }
+
+          onComplete?.(metadata);
+        } catch (err) {
+          console.error(`❌ Run ${runId} close handler error: ${err.message}`);
+          const failMetadata = {
+            endTime: new Date().toISOString(),
+            duration: Date.now() - startTime,
+            exitCode: code,
+            success: false,
+            error: `Run finalization failed: ${err.message}`,
+            outputSize: Buffer.byteLength(output),
+          };
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
         }
-
-        await atomicWrite(metadataPath, metadata);
-
-        if (metadata.success) {
-          hooks.onRunCompleted?.(metadata, output);
-        } else {
-          hooks.onRunFailed?.(metadata, metadata.error, output);
-        }
-
-        onComplete?.(metadata);
       });
 
       return runId;
@@ -492,16 +522,8 @@ export function createRunnerService(config = {}) {
             error: `Run finalization failed: ${handlerErr.message}`,
             outputSize: Buffer.byteLength(output),
           };
-          try {
-            hooks.onRunFailed?.(failMetadata, failMetadata.error, output);
-          } catch (hookErr) {
-            console.error(`❌ Run ${runId} onRunFailed hook threw during recovery: ${hookErr.message}`);
-          }
-          try {
-            onComplete?.(failMetadata);
-          } catch (settleErr) {
-            console.error(`❌ Run ${runId} onComplete threw during recovery: ${settleErr.message}`);
-          }
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
         }
       });
 
