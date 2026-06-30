@@ -119,6 +119,15 @@ describe('memory service', () => {
     existsSync.mockReturnValue(true);
   });
 
+  // Shared readJSONFile mock builder: routes memory.json / index.json / embeddings.json
+  // reads to the supplied fixtures, falling back to the default for everything else.
+  const makeReadMock = (memory, index, embeddings) => (path, def) => {
+    if (path.includes('memory.json')) return Promise.resolve(memory ? { ...memory } : def);
+    if (path.includes('index.json')) return Promise.resolve(index || def);
+    if (path.includes('embeddings.json')) return Promise.resolve(embeddings || def);
+    return Promise.resolve(def);
+  };
+
   // ===========================================================================
   // createMemory
   // ===========================================================================
@@ -522,11 +531,7 @@ describe('memory service', () => {
       // Absent-vs-cleared: clearing content to "" is an intentional edit and must
       // refresh the (now-empty) summary, not leave the stale one behind (#1826).
       const mockMemory = { id: 'mem-1', type: 'fact', content: 'old', summary: 'old summary', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old summary', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
-        return Promise.resolve(def);
-      });
+      readJSONFile.mockImplementation(makeReadMock(mockMemory, { version: 1, memories: [{ id: 'mem-1', status: 'active' }] }));
 
       const result = await updateMemory('mem-1', { content: '' });
 
@@ -538,11 +543,7 @@ describe('memory service', () => {
       // The string-typed gate must keep a content-less update out of generateSummary,
       // which would throw on `undefined.length` (#1826).
       const mockMemory = { id: 'mem-1', type: 'fact', content: 'old', summary: 'old summary', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old summary', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
-        return Promise.resolve(def);
-      });
+      readJSONFile.mockImplementation(makeReadMock(mockMemory, { version: 1, memories: [{ id: 'mem-1', status: 'active' }] }));
 
       const result = await updateMemory('mem-1', { status: 'archived' });
 
@@ -589,11 +590,7 @@ describe('memory service', () => {
       // document stops matching its old terms — the falsy-gated version skipped
       // the reindex and left the old text searchable (#1826).
       const mockMemory = { id: 'mem-1', type: 'fact', content: 'searchable old text', summary: 'old', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'old', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
-        return Promise.resolve(def);
-      });
+      readJSONFile.mockImplementation(makeReadMock(mockMemory, { version: 1, memories: [{ id: 'mem-1', status: 'active' }] }));
 
       await updateMemory('mem-1', { content: '' });
 
@@ -604,11 +601,7 @@ describe('memory service', () => {
 
     it('should not reindex BM25 when neither content nor tags are in the update', async () => {
       const mockMemory = { id: 'mem-1', type: 'fact', content: 'test', summary: 'test', category: 'other', tags: [], importance: 0.5, relatedMemories: [], status: 'active', sourceAppId: null };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', type: 'fact', category: 'other', tags: [], summary: 'test', importance: 0.5, createdAt: '', status: 'active', sourceAppId: null }] });
-        return Promise.resolve(def);
-      });
+      readJSONFile.mockImplementation(makeReadMock(mockMemory, { version: 1, memories: [{ id: 'mem-1', status: 'active' }] }));
 
       await updateMemory('mem-1', { category: 'engineering' });
 
@@ -664,13 +657,6 @@ describe('memory service', () => {
   // ===========================================================================
 
   describe('deleteMemory', () => {
-    const makeReadMock = (memory, index, embeddings) => (path, def) => {
-      if (path.includes('memory.json')) return Promise.resolve(memory ? { ...memory } : def);
-      if (path.includes('index.json')) return Promise.resolve(index || def);
-      if (path.includes('embeddings.json')) return Promise.resolve(embeddings || def);
-      return Promise.resolve(def);
-    };
-
     it('should soft delete (archive) by default', async () => {
       const mockMemory = { id: 'mem-1', status: 'active', updatedAt: '' };
       const mockIndex = { version: 1, lastUpdated: '', count: 1, memories: [{ id: 'mem-1', status: 'active' }] };
