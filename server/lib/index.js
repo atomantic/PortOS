@@ -16,19 +16,23 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * as agentValidation from './agentValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as cosValidation from './cosValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
+export * as mediaValidation from './mediaValidation.js';
 export * as memoryValidation from './memoryValidation.js';
 export * as moodBoardValidation from './moodBoardValidation.js';
 export * as musicVideoValidation from './musicVideoValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
+export * as pipelineValidation from './pipelineValidation.js';
 export * as postValidation from './postValidation.js';
 export * as socketValidation from './socketValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
