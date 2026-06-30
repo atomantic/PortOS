@@ -279,6 +279,24 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
       onComplete?.(metadata);
     } catch (err) {
       console.error(`❌ Run ${runId} close handler error: ${err.message}`);
+      // The timeout was already cleared and the child has closed, so callers
+      // waiting on onComplete would hang forever if we only logged. Settle them
+      // with failure metadata so a disk/hook failure surfaces as a failed run.
+      try {
+        const failMetadata = {
+          endTime: new Date().toISOString(),
+          duration: Date.now() - startTime,
+          exitCode: code,
+          success: false,
+          error: `Run finalization failed: ${err.message}`,
+          errorCategory: 'finalization_error',
+          outputSize: Buffer.byteLength(output),
+        };
+        runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output);
+        onComplete?.(failMetadata);
+      } catch (settleErr) {
+        console.error(`❌ Run ${runId} failed to settle after close handler error: ${settleErr.message}`);
+      }
     }
   });
 

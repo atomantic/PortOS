@@ -481,6 +481,21 @@ export function createRunnerService(config = {}) {
           onComplete?.(metadata);
         } catch (handlerErr) {
           console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
+          // Still settle callers waiting on onComplete so a persistence/hook
+          // failure surfaces as a failed run instead of hanging forever.
+          try {
+            const failMetadata = {
+              endTime: new Date().toISOString(),
+              duration: Date.now() - startTime,
+              success: false,
+              error: `Run finalization failed: ${handlerErr.message}`,
+              outputSize: Buffer.byteLength(output),
+            };
+            hooks.onRunFailed?.(failMetadata, failMetadata.error, output);
+            onComplete?.(failMetadata);
+          } catch (settleErr) {
+            console.error(`❌ Run ${runId} failed to settle after failure handler error: ${settleErr.message}`);
+          }
         }
       });
 
