@@ -456,18 +456,41 @@ export function createProviderService(config = {}) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
+        // Track whether the resolved path could actually be spawned. A bare PATH
+        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims,
+        // which execFile (shell:false) — and the agent runner, which also spawns
+        // shell:false — cannot launch. Without this, a non-spawnable shim falls
+        // through to `version: 'available'` and the Test button reports a provider
+        // the runner can never actually invoke as usable.
+        let everSpawned = false;
         const tryVersion = async (flag) => {
           // Invoke the resolved path so Windows runs the exact `.exe` we found —
           // execFile won't re-apply PATHEXT to a bare command name.
-          const out = await execFileAsync(commandPath, [flag]).catch(() => null);
-          return out?.stdout?.trim() || null;
+          try {
+            const out = await execFileAsync(commandPath, [flag]);
+            everSpawned = true;
+            return out?.stdout?.trim() || null;
+          } catch (err) {
+            // A numeric `code` is a non-zero EXIT — the process DID run (it just
+            // doesn't support this flag), so the path is spawnable. A string code
+            // (ENOENT/EACCES) or a spawn error means it could not be launched.
+            if (typeof err?.code === 'number') everSpawned = true;
+            return null;
+          }
         };
-        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v')) || 'available';
+        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v'));
+
+        if (!everSpawned) {
+          return {
+            success: false,
+            error: `Resolved '${provider.command}' to ${commandPath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+          };
+        }
 
         return {
           success: true,
           path: commandPath,
-          version: versionOut
+          version: versionOut || 'available'
         };
       }
 

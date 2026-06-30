@@ -117,11 +117,14 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     expect(result.error).toBe("Command 'claude' not found in PATH");
   });
 
-  it('falls back to "available" when no version flag yields output', async () => {
+  it('falls back to "available" when the binary spawns but supports no version flag', async () => {
     setPlatform('linux');
     vi.mocked(execFile).mockImplementation((cmd, argv, cb) => {
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
-      return cb(new Error('unknown flag')); // every --version / -v probe fails
+      // The binary ran (it's spawnable) but exited non-zero on the unknown flag —
+      // a numeric exit code is how Node surfaces a non-zero exit from execFile.
+      const e = new Error('Command failed: claude --version'); e.code = 1;
+      return cb(e);
     });
     const p = await makeCliProvider();
 
@@ -129,5 +132,23 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
 
     expect(result.success).toBe(true);
     expect(result.version).toBe('available');
+  });
+
+  it('reports failure when the resolved path cannot be spawned (Windows .cmd/.bat shim)', async () => {
+    setPlatform('win32');
+    vi.mocked(execFile).mockImplementation((cmd, argv, cb) => {
+      if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: 'C:\\Users\\Joe\\AppData\\npm\\claude.cmd\r\n', stderr: '' });
+      // execFile (shell:false) cannot launch a .cmd shim — a spawn error carries a
+      // string code (ENOENT), distinct from a non-zero exit's numeric code.
+      const e = new Error('spawn claude.cmd ENOENT'); e.code = 'ENOENT';
+      return cb(e);
+    });
+    const p = await makeCliProvider();
+
+    const result = await providerService.testProvider(p.id);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('could not be executed');
+    expect(result.path).toBeUndefined();
   });
 });
