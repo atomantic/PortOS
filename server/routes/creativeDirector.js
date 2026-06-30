@@ -97,10 +97,23 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // project (or accept an explicit one), search the catalog, APPEND the fresh
 // candidates to the project cast, and link them as creative-director refs.
 // Returns the updated project plus what was added/considered.
+//
+// Auto-compose (#1817): with `compose: true`, once the cast is seeded the
+// director autonomously writes a treatment + scene plan grounded in that cast.
+// We only kick off when the project ends up with a non-empty cast and has no
+// treatment yet — never clobber an existing treatment or trip the render/stitch
+// path. Fire-and-forget like /start; the UI's polling reflects the agent run +
+// treatment as they land. The response carries `composing` so the UI can tell
+// the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
-  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
+  const { brief, types, limit, compose } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
-  res.json(result);
+  const cast = result.project?.cast;
+  const composing = Boolean(compose) && Array.isArray(cast) && cast.length > 0 && !result.project?.treatment;
+  if (composing) {
+    startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
+  }
+  res.json({ ...result, composing });
 }));
 
 // Agent-callable: write the treatment doc.

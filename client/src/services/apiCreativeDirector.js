@@ -42,13 +42,17 @@ export const suggestCreativeDirectorAutoCast = (brief, { types, limit } = {}, op
     body: JSON.stringify({ brief, ...(types ? { types } : {}), ...(limit ? { limit } : {}) }),
     ...options,
   });
-export const applyCreativeDirectorAutoCast = (id, { brief, types, limit } = {}, options = {}) =>
+// `compose: true` (#1817) tells the director to autonomously write a treatment +
+// scene plan grounded in the freshly-seeded cast — the response carries
+// `composing: true` when the server actually kicked the agent off.
+export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose } = {}, options = {}) =>
   request(`/creative-director/${encodeURIComponent(id)}/auto-cast`, {
     method: 'POST',
     body: JSON.stringify({
       ...(brief ? { brief } : {}),
       ...(types ? { types } : {}),
       ...(limit ? { limit } : {}),
+      ...(compose ? { compose: true } : {}),
     }),
     ...options,
   });

@@ -8,6 +8,10 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
   const [autoCasting, setAutoCasting] = useState(false);
+  // Auto-compose (#1817): when checked, auto-cast also hands the seeded cast to
+  // the treatment agent so the director writes a first-pass treatment + scene
+  // plan. Director-first — off by default so the user opts into the autonomy.
+  const [composeAfter, setComposeAfter] = useState(false);
   // Track the project id this tab is currently mounted for. If the user
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
@@ -30,6 +34,8 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     // id matching, so without this a same-instance project swap could strand the
     // flag (defensive; the parent currently remounts on id change).
     setAutoCasting(false);
+    // The compose toggle is a per-project intent — don't carry it across a switch.
+    setComposeAfter(false);
   }, [project.id]);
   useEffect(() => {
     if (!savingRef.current) {
@@ -68,13 +74,22 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   const handleAutoCast = () => {
     setAutoCasting(true);
     const requestProjectId = project.id;
-    applyCreativeDirectorAutoCast(requestProjectId, {}, { silent: true })
+    // Only ask the server to compose when there's no treatment yet — the server
+    // guards this too, but gating here keeps the toast honest. Omit the flag
+    // entirely in the default case so the request body stays minimal.
+    const wantCompose = composeAfter && !project.treatment;
+    applyCreativeDirectorAutoCast(requestProjectId, wantCompose ? { compose: true } : {}, { silent: true })
       .then((result) => {
         if (projectIdRef.current !== requestProjectId) return;
         const added = result?.added?.length || 0;
         onProjectUpdate?.({ cast: result?.project?.cast || [] });
-        if (added > 0) toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);
-        else toast.info('Auto-cast found no new catalog matches for this brief');
+        if (result?.composing) {
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…`);
+        } else if (added > 0) {
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);
+        } else {
+          toast.info('Auto-cast found no new catalog matches for this brief');
+        }
       })
       .catch((err) => toast.error(err.message || 'Auto-cast failed'))
       .finally(() => {
@@ -141,21 +156,42 @@ export default function OverviewTab({ project, onProjectUpdate }) {
             Cast ({Array.isArray(project.cast) ? project.cast.length : 0})
           </h2>
           {/* Autonomous auto-cast (#1810): seed the cast from the catalog without
-              hand-picking. Disabled with no brief to search on. */}
-          <button
-            type="button"
-            onClick={handleAutoCast}
-            disabled={autoCasting || !hasSearchableBrief(project)}
-            title={hasSearchableBrief(project)
-              ? 'Let the director pick catalog ingredients from this project’s brief'
-              : 'Add a style spec or story first — auto-cast searches the catalog from the project brief'}
-            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-port-text hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {autoCasting
-              ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-              : <Sparkles size={12} aria-hidden="true" />}
-            {autoCasting ? 'Auto-casting…' : 'Auto-cast'}
-          </button>
+              hand-picking. Disabled with no brief to search on. The compose
+              toggle (#1817) chains the treatment agent after seeding — only
+              offered while there's no treatment yet (it can't clobber one). */}
+          <div className="flex items-center gap-2">
+            {!project.treatment && (
+              <label
+                htmlFor="cd-compose-after"
+                className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+                title="After seeding the cast, let the director write a first-pass treatment + scene plan grounded in it"
+              >
+                <input
+                  id="cd-compose-after"
+                  type="checkbox"
+                  checked={composeAfter}
+                  onChange={(e) => setComposeAfter(e.target.checked)}
+                  disabled={autoCasting}
+                  className="accent-port-accent"
+                />
+                <span>+ treatment</span>
+              </label>
+            )}
+            <button
+              type="button"
+              onClick={handleAutoCast}
+              disabled={autoCasting || !hasSearchableBrief(project)}
+              title={hasSearchableBrief(project)
+                ? 'Let the director pick catalog ingredients from this project’s brief'
+                : 'Add a style spec or story first — auto-cast searches the catalog from the project brief'}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-port-text hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {autoCasting
+                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                : <Sparkles size={12} aria-hidden="true" />}
+              {autoCasting ? 'Auto-casting…' : 'Auto-cast'}
+            </button>
+          </div>
         </div>
         <p className="text-xs text-port-text-muted mb-2">
           Catalog ingredients remixed into this project — the director grounds the treatment and per-scene casting on them. Auto-cast appends new matches; you can always edit the result.

@@ -293,4 +293,51 @@ describe('creativeDirector routes', () => {
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
     });
   });
+
+  describe('POST /:id/auto-cast — auto-compose (#1817)', () => {
+    it('kicks off the treatment agent and reports composing when compose:true and the cast is seeded', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(true);
+      expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
+    });
+
+    it('does not compose when compose is omitted', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({});
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(false);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
+    it('does not compose when the project ends up with an empty cast', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({ project: { id: 'cd-1', cast: [] }, added: [], suggestions: [] });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(false);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
+    it('never clobbers an existing treatment even with compose:true', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }], treatment: { scenes: [{ sceneId: 's1' }] } },
+        added: [], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(false);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
+    it('400s on a non-boolean compose', async () => {
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: 'yes' });
+      expect(r.status).toBe(400);
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -96,6 +96,11 @@ export const creativeDirectorAutoCastApplySchema = z.object({
   brief: z.string().max(10000).optional(),
   types: autoCastTypes,
   limit: autoCastLimit,
+  // Auto-compose (#1817): when true, kick off the treatment agent after the cast
+  // is seeded so the director autonomously writes a treatment + scene plan
+  // grounded in the auto-cast cast. The route only honors it when the project has
+  // a non-empty cast and no treatment yet (never clobbers an existing one).
+  compose: z.boolean().optional(),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /
