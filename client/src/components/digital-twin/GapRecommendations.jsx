@@ -50,7 +50,7 @@ export default function GapRecommendations({ gaps, maxDisplay = 3 }) {
     return (
       <div className="bg-port-card rounded-lg border border-port-border p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Lightbulb size={20} className="text-green-400" />
+          <Lightbulb size={20} className="text-port-success" />
           <h2 className="text-lg font-semibold text-white">Enrichment Complete!</h2>
         </div>
         <p className="text-gray-400">
