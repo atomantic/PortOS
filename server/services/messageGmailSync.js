@@ -7,6 +7,7 @@ import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getAuthenticatedClient } from './googleAuth.js';
+import { decodeXmlEntities } from '../lib/xmlEntities.js';
 
 function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
@@ -27,7 +28,7 @@ function decodeBase64Url(str) {
  * Convert HTML to readable plain text by stripping style/script/head blocks, then tags.
  */
 function htmlToText(html) {
-  return html
+  const stripped = html
     .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
@@ -36,14 +37,10 @@ function htmlToText(html) {
     .replace(/<\/div>/gi, '\n')
     .replace(/<\/tr>/gi, '\n')
     .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&zwnj;/g, '')
+    .replace(/<[^>]*>/g, '');
+  // Shared decoder handles the named + numeric entities; `&nbsp;`/`&zwnj;` are
+  // mail-specific so they're passed as extra entities (space / zero-width strip).
+  return decodeXmlEntities(stripped, { nbsp: ' ', zwnj: '' })
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+/g, ' ')
     .trim();

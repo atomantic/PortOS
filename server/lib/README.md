@@ -182,6 +182,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `jsonExtract.js` | Pull JSON blocks out of LLM responses. |
 | `taskParser.js` | Parse `TASKS.md` format. |
+| `xmlEntities.js` | Shared dependency-free XML/HTML entity decoder. `decodeXmlEntities(str, extraEntities?)` — single-pass (double-decode-safe) decode of the five predefined named entities + decimal/hex numeric refs, with an optional caller-supplied extra-entity map (e.g. `{ nbsp: ' ', zwnj: '' }`). Unknown/out-of-range refs left untouched. Used by the Apple Health XML parser, Claude changelog feed, Pinterest RSS, generic feeds, and Gmail HTML-to-text. |
 
 ## Curated static data
 

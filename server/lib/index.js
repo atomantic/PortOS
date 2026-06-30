@@ -164,6 +164,7 @@ export * from './vectorMath.js';
 // === Extraction & parsing ===
 export * from './jsonExtract.js';
 export * from './taskParser.js';
+export * from './xmlEntities.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
