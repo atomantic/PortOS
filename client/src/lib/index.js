@@ -17,6 +17,7 @@ export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
 export * from './beatColors.js';
+export * from './beatGrid.js';
 export * from './bibleLimits.js';
 export * from './catalogTypes.js';
 export * from './editorialRoadmap.js';

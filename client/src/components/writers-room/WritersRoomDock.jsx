@@ -27,7 +27,7 @@ export default function WritersRoomDock({
   return (
     <section
       aria-label="Image render queue"
-      className="fixed bottom-0 left-0 right-0 z-30 border-t border-port-border bg-port-card/95 backdrop-blur-sm shadow-[0_-4px_18px_-8px_rgba(0,0,0,0.6)]"
+      className="fixed bottom-0 left-0 right-0 z-30 border-t border-port-border bg-port-card/95 backdrop-blur-sm shadow-[0_-4px_18px_-8px_rgba(0,0,0,0.6)] pb-[env(safe-area-inset-bottom)]"
     >
       <div className="flex items-center gap-3 px-3 py-2 max-w-7xl mx-auto">
         <div className="flex items-center gap-2 shrink-0">

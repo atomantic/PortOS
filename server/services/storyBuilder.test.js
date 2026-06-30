@@ -277,7 +277,8 @@ describe('storyBuilder — catalog ingredient linking (#1761)', () => {
     // Session was saved despite the link failure, and the shells exist.
     expect(s.id).toMatch(/^stb-/);
     expect((await sb.listStorySessions()).map((x) => x.id)).toContain(s.id);
-    expect(await seriesSvc.getSeries(s.seriesId)).toBeTruthy();
+    const persistedSeries = await seriesSvc.getSeries(s.seriesId);
+    expect(persistedSeries.id).toBe(s.seriesId);
     expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
   });
 
@@ -299,7 +300,8 @@ describe('storyBuilder — lock state machine + gating', () => {
     const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
     const locked = await sb.lockStep(s.id, 'idea');
     expect(locked.steps.idea.locked).toBe(true);
-    expect(locked.steps.idea.lockedAt).toBeTruthy();
+    // lockedAt is a round-trippable ISO-8601 timestamp, not merely truthy.
+    expect(new Date(locked.steps.idea.lockedAt).toISOString()).toBe(locked.steps.idea.lockedAt);
     // Shape AND derivation: the stamped hash must be the SAME value the
     // integrity helper produces from the idea step's whitelisted upstream
     // inputs — not just any 64-char hex digest. Asserting against the real
