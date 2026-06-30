@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { existsSync } from 'fs';
-import { join, extname, basename, resolve, sep } from 'path';
+import { join, extname, basename, isAbsolute } from 'path';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
@@ -66,40 +66,22 @@ export function createRunnerService(config = {}) {
     return mimeTypes[ext] || 'image/png';
   }
 
-  // Allow-list of image extensions a screenshot may carry. Mirrors getMimeType's
-  // keys — a path with any other extension (or none) is rejected before we read
-  // it off disk.
-  const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
-
-  // Resolve a caller-supplied screenshot reference to an absolute path that is
-  // provably contained in screenshotsDir, or return null. `screenshots[]` on
-  // POST /api/runs is unauthenticated user input, so without this guard a value
-  // like `../../../../etc/passwd` (or an absolute path) would have any readable
-  // file base64-encoded and forwarded to the configured external vision
-  // provider — an arbitrary-file-read exfiltration. Mirrors the basename +
-  // extension-allow-list + `resolve().startsWith(root)` containment semantics of
-  // PortOS's resolveScreenshot (server/lib/fileUtils.js), reimplemented here
-  // because the aiToolkit is self-contained and must not import out to PortOS.
-  function resolveScreenshotPath(imagePath) {
-    if (typeof imagePath !== 'string' || !imagePath) return null;
-    // basename strips every directory component, so `../`-traversal and
-    // absolute paths collapse to a bare filename before we touch disk.
-    const safe = basename(imagePath);
-    if (!safe || safe === '.' || safe === '..') return null;
-    if (!ALLOWED_SCREENSHOT_EXTENSIONS.has(extname(safe).toLowerCase())) return null;
-    const fullPath = resolve(join(screenshotsDir, safe));
-    // Defense-in-depth: even after basename, confirm the resolved path stays
-    // under the screenshots root before reading it.
-    const rootPrefix = resolve(screenshotsDir) + sep;
-    if (!fullPath.startsWith(rootPrefix)) return null;
-    return fullPath;
-  }
-
   async function loadImageAsBase64(imagePath) {
-    const fullPath = resolveScreenshotPath(imagePath);
-    if (!fullPath) {
-      throw new Error(`Invalid or disallowed screenshot path: ${imagePath}`);
+    if (typeof imagePath !== 'string' || !imagePath) {
+      throw new Error(`Invalid screenshot path: ${imagePath}`);
     }
+    // Relative references are anchored under screenshotsDir with `basename`
+    // applied, so a `../`-traversal collapses to a bare filename and can't
+    // escape the screenshots dir. Absolute paths come only from trusted
+    // in-process callers (e.g. PortOS's Universe Builder, whose
+    // `resolveImageSources` has already validated them against an approved
+    // image root) and pass through unchanged. The untrusted POST /api/runs
+    // surface is additionally sanitized at the route boundary
+    // (sanitizeScreenshotRefs in routes/runs.js) so an attacker-supplied
+    // absolute path never reaches this loader. See issue #1870 / #1820.
+    const fullPath = isAbsolute(imagePath)
+      ? imagePath
+      : join(screenshotsDir, basename(imagePath));
 
     if (!existsSync(fullPath)) {
       throw new Error(`Image not found: ${fullPath}`);
