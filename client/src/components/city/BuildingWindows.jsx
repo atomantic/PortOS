@@ -1,10 +1,10 @@
 import { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
-import { InteriorMappingMaterial } from 'three-fenestra';
+import { InteriorMappingMaterial } from './InteriorMappingMaterial';
 import { computeWindowGrid, INTERIOR_WINDOW } from '../../utils/cityInteriorWindows';
 import { mixHex, seededRand } from './cityConstants';
 
-// Interior-mapped window panes for a building, using the three-fenestra
+// Interior-mapped window panes for a building, using the in-tree
 // InteriorMappingMaterial — a parallax shader that fakes furnished 3D rooms
 // behind flat window planes (no real interior geometry). Selected towers get a
 // grid of these panes proud of each face so you can "look into" lit rooms as the
@@ -88,7 +88,7 @@ function getInteriorAtlas() {
 }
 
 // Hex → HDR-ish THREE.Color: emissive contributions want values >1 to read as a
-// glow under tone mapping, mirroring three-fenestra's own warm/cool defaults.
+// glow under tone mapping, mirroring InteriorMappingMaterial's warm/cool defaults.
 function emissiveColor(hex, scale) {
   return new THREE.Color(hex).multiplyScalar(scale);
 }
