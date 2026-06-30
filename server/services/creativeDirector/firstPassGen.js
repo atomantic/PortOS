@@ -189,6 +189,16 @@ export async function enqueueFirstPassPortraits(members = []) {
  * missing a prompt is recorded in `skipped`, never thrown, since this runs as
  * a side effect of writing the treatment and must not fail that write.
  *
+ * Fire-and-forget, NOT awaited by anything downstream: the orchestrator can
+ * advance to rendering the first pending scene (`completionHook.js`) before
+ * its seed job here has finished, in which case that scene falls back to
+ * text-to-video for its first attempt — the seeded frame still lands
+ * afterward for retries / manual reference. This is the same "autonomy
+ * seeds, the director takes over" contract #1818 establishes for portraits;
+ * see #1929 for the specific race window and possible tighter-coupling fixes
+ * (deliberately out of scope here — they'd touch completionHook.js's
+ * pause/resume/orphan-detection state machine).
+ *
  * Renders at the project's locked-in `aspectRatio` (via `ASPECT_PRESETS`) so
  * the seeded frame matches what sceneRunner.js will force-crop the source
  * image to at actual render time — an unscaled square seed would have its
