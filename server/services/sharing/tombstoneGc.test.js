@@ -790,3 +790,110 @@ describe('sweepTombstones — mediaCollection GC (Task 1.10b)', () => {
     expect(result.collections).toBe(0);
   });
 });
+
+describe('sweepTombstones — track GC cohort widened by musicVideoProject bundling (#1922)', () => {
+  // #1858 bundles a music-video project's linked track record on the project
+  // push so a peer subscribed to musicVideoProjects ONLY (no `track`
+  // subscription) can still resolve it. Before #1922, such a peer was
+  // entirely invisible to the `track` cutoff cohort — its ack/confirm never
+  // gated track-tombstone GC at all, so a transient bundled-delivery failure
+  // plus GC pruning the tombstone before a retry could strand stale audio on
+  // that peer forever.
+  it('includes a musicVideoProject-only peer in the track ack cohort (peer has no track subscription)', async () => {
+    mockSubs({ musicVideoProject: [{ peerId: 'peer-a', lastConfirmedTrackBundleAtMs: NOW }] });
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    getMinAckAcrossPeers.mockResolvedValue(NOW - 1000);
+    await sweepTombstones({ now: NOW });
+    // peerIdsSubscribedToKind('track') must include peer-a even though peer-a
+    // has zero `track`-kind subscription rows.
+    const trackAckCall = getMinAckAcrossPeers.mock.calls.find((call) => call[0].includes('peer-a'));
+    expect(trackAckCall).toBeTruthy();
+  });
+
+  it('does NOT prune a track tombstone until the musicVideoProject peer confirms the bundled delivery', async () => {
+    // The per-peer ack cursor (getMinAckAcrossPeers) is already past the
+    // tombstone — mimics #1922's failure mode where the coarse cursor jumped
+    // ahead via an unrelated push. The musicVideoProject row's bundle-specific
+    // floor (lastConfirmedTrackBundleAtMs absent → floors to createdAt) must
+    // still hold the cutoff back.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const createdAt = NOW - 30 * 60 * 1000;
+    mockSubs({
+      musicVideoProject: [
+        // No lastConfirmedTrackBundleAtMs yet (bundle never confirmed) — floors
+        // to createdAt, NOT the mockSubs lastConfirmedPushedAt default.
+        { peerId: 'peer-a', createdAt: new Date(createdAt).toISOString(), lastConfirmedTrackBundleAtMs: null },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(createdAt + 1);
+  });
+
+  it('prunes a track tombstone once the musicVideoProject peer confirms the bundled track merge', async () => {
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    mockSubs({
+      musicVideoProject: [
+        { peerId: 'peer-a', createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(), lastConfirmedTrackBundleAtMs: NOW },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(NOW + 1);
+  });
+
+  it('does NOT release the track cutoff off a musicVideoProject row whose bundled merge never confirmed, even though lastConfirmedPushedAt (the generic field) is fresh', async () => {
+    // Regression for the field-confusion bug: mockSubs defaults
+    // lastConfirmedPushedAt to NOW (every push lands), but that field reflects
+    // confirmed delivery of the PROJECT record, not the bundled TRACK — using
+    // it for the `track` cutoff would let GC treat an unconfirmed bundled
+    // tombstone as delivered.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const createdAt = NOW - 30 * 60 * 1000;
+    mockSubs({
+      // lastConfirmedPushedAt defaults to NOW via mockSubs; only
+      // lastConfirmedTrackBundleAtMs is left unset here.
+      musicVideoProject: [{ peerId: 'peer-a', createdAt: new Date(createdAt).toISOString() }],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedTracks.mock.calls[0][0];
+    expect(cutoff).toBe(createdAt + 1); // floors to createdAt, ignores the fresh lastConfirmedPushedAt
+  });
+
+  it('does NOT widen the musicVideoProject cutoff cohort itself (only `track` borrows musicVideoProject rows)', async () => {
+    // The OWN musicVideoProject cutoff must keep reading lastConfirmedPushedAt
+    // (its own record's confirmed-delivery floor) — confirming this isn't
+    // accidentally redirected to the bundle-specific field too.
+    getMinAckAcrossPeers.mockResolvedValue(NOW);
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    const stuckConfirm = NOW - 40 * 60 * 1000;
+    mockSubs({
+      musicVideoProject: [
+        {
+          peerId: 'peer-a',
+          createdAt: new Date(NOW - 60 * 60 * 1000).toISOString(),
+          lastConfirmedPushedAt: stuckConfirm,
+          lastConfirmedTrackBundleAtMs: NOW, // fresh — must NOT be what gates the project's own cutoff
+        },
+      ],
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    const cutoff = pruneTombstonedMusicVideoProjects.mock.calls[0][0];
+    expect(cutoff).toBe(stuckConfirm + 1);
+  });
+
+  it('a peer with only a track subscription (no musicVideoProject) still gates track GC as before', async () => {
+    const minAck = NOW - 10 * 60 * 1000;
+    mockSubs({ track: [{ peerId: 'peer-a', lastConfirmedPushedAt: NOW }] });
+    getPeers.mockResolvedValue([{ instanceId: 'peer-a', enabled: true }]);
+    getMinAckAcrossPeers.mockImplementation(async (peerIds) => {
+      if (peerIds.includes('peer-a')) return minAck;
+      return Infinity;
+    });
+    await sweepTombstones({ now: NOW, graceMs: 0 });
+    expect(pruneTombstonedTracks).toHaveBeenCalledWith(minAck + 1);
+  });
+});

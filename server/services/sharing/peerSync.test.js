@@ -2425,6 +2425,62 @@ describe('peerSync', () => {
       expect(captured.assetManifest.filter(a => a.kind === 'music')).toEqual([]);
     });
 
+    it('stamps lastConfirmedTrackBundleAtMs on a confirmed push whose bundled track merge succeeded (#1922)', async () => {
+      // tombstoneGc's `track` cutoff reads this bundle-specific floor off
+      // musicVideoProject subscription rows (a peer with no `track`
+      // subscription of its own would otherwise be invisible to track GC).
+      enableMusicVideoPeer();
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-10', title: 'Bundled', audioFilename: 'linked.mp3',
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-10', name: 'Bundled', mode: 'director', trackId: 'track-10',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const before = Date.now();
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-10' },
+        { adoptedFromReverse: true },
+      );
+      expect(sub.lastConfirmedTrackBundleAtMs).toBeNull();
+      await pushRecordToPeer(sub);
+      const refreshed = await findPeerSubscription('peer-a', 'musicVideoProject', 'mv-10');
+      expect(refreshed.lastConfirmedTrackBundleAtMs).toBeGreaterThanOrEqual(before);
+    });
+
+    it('does NOT stamp lastConfirmedTrackBundleAtMs when the bundled track merge failed on the receiver (#1922)', async () => {
+      // trackSyncPending means the receiver applied the project but the
+      // bundled track merge threw — the peer never actually got the track,
+      // so the bundle-specific floor must stay unset (the generic
+      // lastConfirmedPushedAt still advances; that's a separate water-mark
+      // for the project record itself, not the bundled track).
+      enableMusicVideoPeer();
+      vi.mocked(getTrack).mockResolvedValue({
+        id: 'track-11', title: 'Pending', audioFilename: 'linked.mp3',
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(getMusicVideoProject).mockResolvedValue({
+        id: 'mv-11', name: 'Pending', mode: 'director', trackId: 'track-11',
+        uploadedAudioFilename: null, scenes: [],
+        updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+      });
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ missingAssets: [], trackSyncPending: true }),
+      });
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'musicVideoProject', recordId: 'mv-11' },
+        { adoptedFromReverse: true },
+      );
+      await pushRecordToPeer(sub);
+      const refreshed = await findPeerSubscription('peer-a', 'musicVideoProject', 'mv-11');
+      expect(refreshed.lastConfirmedTrackBundleAtMs).toBeNull();
+      expect(refreshed.lastConfirmedPushedAt).toBeTruthy();
+    });
+
     it('omits linkedTrack when the project has no linked track', async () => {
       enableMusicVideoPeer();
       vi.mocked(getMusicVideoProject).mockResolvedValue({
@@ -2953,6 +3009,33 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-a',
       });
       expect(result.ackedDeletesUpTo).toBe(Date.parse('2026-03-01T00:00:00Z'));
+    });
+
+    it('folds a bundled linkedTrack tombstone into ackedDeletesUpTo (#1922)', async () => {
+      // Regression: a musicVideoProjects-only peer has no independent `track`
+      // subscription, so the bundled linkedTrack tombstone (#1858) was the
+      // ONLY way it could ever ack a track delete. Before this fix,
+      // computeAckedDeletesFromPayload ignored `linkedTrack` entirely, so the
+      // sender's track-tombstone GC cohort never waited on this peer at all.
+      const result = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-12', trackId: 'track-12', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-12', deleted: true, deletedAt: '2026-04-01T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.ackedDeletesUpTo).toBe(Date.parse('2026-04-01T00:00:00Z'));
+    });
+
+    it('does NOT fold a LIVE bundled linkedTrack into ackedDeletesUpTo (only tombstones count)', async () => {
+      const result = await applyIncomingPush({
+        kind: 'musicVideoProject',
+        record: { id: 'mv-13', trackId: 'track-13', deleted: false, deletedAt: null },
+        linkedTrack: { id: 'track-13', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.ackedDeletesUpTo).toBe(0);
     });
 
     it('auto-creates a reverse subscription back to the sender', async () => {

@@ -222,6 +222,12 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
         // line. Lives on the row → cleaned up for free when the row is
         // removed (`unsubscribePeer`), no separate storage to leak.
         lastConfirmedPushedAt: null,
+        // #1922: same contract as `lastConfirmedPushedAt`, scoped to confirmed
+        // delivery of a BUNDLED `linkedTrack` tombstone/record (#1858) on a
+        // musicVideoProject subscription — see peerSyncPush.js
+        // `persistPushSuccess` and tombstoneGc.js's `track` cutoff. Stays
+        // `null` for every other recordKind.
+        lastConfirmedTrackBundleAtMs: null,
         adoptedFromReverse: opts.adoptedFromReverse === true,
       };
       state.subscriptions.push(existing);

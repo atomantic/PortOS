@@ -422,7 +422,19 @@ export async function pushRecordToPeer(sub, options = {}) {
   // the tombstone's deletedAt once it lands. The `missingAssets` case still
   // counts as confirmed delivery of the RECORD (merge ran on the receiver);
   // only the asset-stranded hash is withheld, not the confirmation mark.
-  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, { confirmedAtMs: Date.now() });
+  //
+  // #1922: a musicVideoProject subscription is also a delivery vehicle for
+  // its bundled `linkedTrack` (#1858) — the receiver has no independent
+  // `track` subscription to ack through. Stamp a SEPARATE floor
+  // (`trackBundleConfirmed`) tombstoneGc's `track` cutoff reads off
+  // musicVideoProject rows, distinct from `lastConfirmedPushedAt` because the
+  // latter advances even when the bundled track merge failed or was stripped
+  // for a legacy peer (`trackSyncPending`) — using it here would let GC treat
+  // an unconfirmed bundled tombstone as delivered.
+  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, {
+    confirmedAtMs: Date.now(),
+    trackBundleConfirmed: sub.recordKind === 'musicVideoProject' && !trackSyncPending,
+  });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -472,7 +484,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
 }
 
-async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now() } = {}) {
+async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), trackBundleConfirmed = false } = {}) {
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
@@ -487,6 +499,13 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now() } = 
     // kind's rows, so a regression here would let a stale tombstone prune.
     if (Number.isFinite(confirmedAtMs) && confirmedAtMs > (sub.lastConfirmedPushedAt ?? 0)) {
       sub.lastConfirmedPushedAt = confirmedAtMs;
+    }
+    // #1922: same monotonic-floor treatment, but scoped to confirmed delivery
+    // of a BUNDLED linkedTrack (musicVideoProject subscriptions only — see the
+    // call site). tombstoneGc's `track` cutoff reads this instead of
+    // `lastConfirmedPushedAt` for musicVideoProject rows.
+    if (trackBundleConfirmed && Number.isFinite(confirmedAtMs) && confirmedAtMs > (sub.lastConfirmedTrackBundleAtMs ?? 0)) {
+      sub.lastConfirmedTrackBundleAtMs = confirmedAtMs;
     }
     // A successful push (or even a no-asset-stranded push) clears any prior
     // schema-version block — the peer can receive again.
