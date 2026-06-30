@@ -102,17 +102,20 @@ describe('OverviewTab auto-compose (#1817)', () => {
     await waitFor(() => expect(applyCreativeDirectorAutoCast).toHaveBeenCalledWith('cd-1', { compose: true }, { silent: true }));
   });
 
-  it('toasts a composing message when the server kicks off the treatment', async () => {
+  it('toasts a composing message and flips status to planning when the server kicks off the treatment', async () => {
+    const onProjectUpdate = vi.fn();
     applyCreativeDirectorAutoCast.mockResolvedValue({
       project: { id: 'cd-1', cast: [{ ingredientId: 'p1', name: 'The Spire' }] },
       added: [{ ingredientId: 'p1', name: 'The Spire' }],
       suggestions: [],
       composing: true,
     });
-    renderTab(baseProject);
+    renderTab(baseProject, onProjectUpdate);
     fireEvent.click(screen.getByLabelText(/\+ treatment/i));
     fireEvent.click(screen.getByRole('button', { name: /^Auto-cast$/i }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/composing the treatment/i)));
+    // Optimistically enable polling — the detail page disables it for 'draft'.
+    expect(onProjectUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: 'planning' }));
   });
 
   it('omits the compose flag when the toggle is left unchecked', async () => {

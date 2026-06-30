@@ -82,8 +82,16 @@ export default function OverviewTab({ project, onProjectUpdate }) {
       .then((result) => {
         if (projectIdRef.current !== requestProjectId) return;
         const added = result?.added?.length || 0;
-        onProjectUpdate?.({ cast: result?.project?.cast || [] });
-        if (result?.composing) {
+        const composing = Boolean(result?.composing);
+        // When the director starts composing, optimistically flip the status to
+        // 'planning' as well — the detail page disables polling for 'draft'
+        // projects, so without this the treatment + runs the agent produces stay
+        // invisible until a manual refresh. The 5s poll re-corrects if needed.
+        onProjectUpdate?.({
+          cast: result?.project?.cast || [],
+          ...(composing ? { status: 'planning' } : {}),
+        });
+        if (composing) {
           toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…`);
         } else if (added > 0) {
           toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);

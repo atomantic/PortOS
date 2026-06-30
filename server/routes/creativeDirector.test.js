@@ -339,5 +339,15 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(400);
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
     });
+
+    it.each(['paused', 'failed'])('does not compose a %s project (orchestrator would no-op)', async (status) => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', status, cast: [{ ingredientId: 'p1' }] }, added: [], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(false);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
   });
 });
