@@ -33,8 +33,8 @@ function runCmd(cmd, args, timeout = 120_000, env = process.env) {
     execFile(cmd, args, { cwd: rootDir, timeout, env }, (err, stdout, stderr) => {
       const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       if (exitCode !== 0) {
-        const detail = stripAnsi(stderr || stdout || err.message || '');
-        console.error(`🗄️ ${cmd} ${args.join(' ')} exited ${exitCode}:\n${detail}`);
+        const detail = stripAnsi(stderr || stdout || err.message || '').replace(/\s+/g, ' ').trim();
+        console.error(`🗄️ ${cmd} ${args.join(' ')} exited ${exitCode}: ${detail}`);
       }
       resolve({
         stdout: stripAnsi(stdout || ''),

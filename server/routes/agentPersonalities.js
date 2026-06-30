@@ -15,7 +15,6 @@ const router = Router();
 
 // GET / - Get all agent personalities
 router.get('/', asyncHandler(async (req, res) => {
-  console.log('🤖 GET /api/agents/personalities');
   const { userId } = req.query;
 
   const agents = userId
@@ -28,7 +27,6 @@ router.get('/', asyncHandler(async (req, res) => {
 // GET /:id - Get agent by ID
 router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🤖 GET /api/agents/personalities/${id}`);
 
   const agent = await agentPersonalities.getAgentById(id);
   if (!agent) {
@@ -40,8 +38,6 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // POST / - Create new agent
 router.post('/', asyncHandler(async (req, res) => {
-  console.log('🤖 POST /api/agents/personalities');
-
   const data = validateRequest(agentSchema, req.body);
   const agent = await agentPersonalities.createAgent(data);
   await logAction('create', 'agent-personality', agent.id, { name: agent.name });
@@ -52,8 +48,6 @@ router.post('/', asyncHandler(async (req, res) => {
 // PUT /:id - Update agent
 router.put('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🤖 PUT /api/agents/personalities/${id}`);
-
   const data = validateRequest(agentUpdateSchema, req.body);
   const agent = await agentPersonalities.updateAgent(id, data);
   if (!agent) {
@@ -67,7 +61,6 @@ router.put('/:id', asyncHandler(async (req, res) => {
 // DELETE /:id - Delete agent
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🤖 DELETE /api/agents/personalities/${id}`);
 
   const deleted = await agentPersonalities.deleteAgent(id);
   if (!deleted) {
@@ -80,8 +73,6 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // POST /generate - Generate agent personality using AI
 router.post('/generate', asyncHandler(async (req, res) => {
-  console.log('🎨 POST /api/agents/personalities/generate');
-
   const { seed = {}, providerId, model } = req.body;
 
   const generated = await generateAgentPersonality(seed, providerId, model);
@@ -93,7 +84,6 @@ router.post('/generate', asyncHandler(async (req, res) => {
 router.post('/:id/toggle', asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { enabled } = req.body;
-  console.log(`🤖 POST /api/agents/personalities/${id}/toggle enabled=${enabled}`);
 
   const agent = await agentPersonalities.toggleAgent(id, enabled);
   if (!agent) {

@@ -17,7 +17,6 @@ const router = Router();
 
 // GET / - Get all platform accounts
 router.get('/', asyncHandler(async (req, res) => {
-  console.log('🔗 GET /api/agents/accounts');
   const { agentId, platform } = req.query;
 
   let accounts;
@@ -38,7 +37,6 @@ router.get('/', asyncHandler(async (req, res) => {
 // GET /:id - Get account by ID
 router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🔗 GET /api/agents/accounts/${id}`);
 
   const account = await platformAccounts.getAccountById(id);
   if (!account) {
@@ -50,8 +48,6 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // POST / - Create/link new platform account
 router.post('/', asyncHandler(async (req, res) => {
-  console.log('🔗 POST /api/agents/accounts');
-
   // Check if this is a registration request (for new Moltbook accounts)
   // or a direct account creation (with existing credentials)
   if (req.body.credentials) {
@@ -158,7 +154,6 @@ router.post('/', asyncHandler(async (req, res) => {
 // DELETE /:id - Remove account
 router.delete('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🔗 DELETE /api/agents/accounts/${id}`);
 
   const deleted = await platformAccounts.deleteAccount(id);
   if (!deleted) {
@@ -172,7 +167,6 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // POST /:id/test - Test account connection
 router.post('/:id/test', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🔗 POST /api/agents/accounts/${id}/test`);
 
   const account = await platformAccounts.getAccountWithCredentials(id);
   if (!account) {
@@ -234,7 +228,6 @@ router.post('/:id/test', asyncHandler(async (req, res) => {
 // POST /:id/claim - Mark account as claimed (after user visits claim URL)
 router.post('/:id/claim', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  console.log(`🔗 POST /api/agents/accounts/${id}/claim`);
 
   const account = await platformAccounts.getAccountById(id);
   if (!account) {

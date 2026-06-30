@@ -755,7 +755,7 @@ router.post('/feedback/recalculate', asyncHandler(async (req, res) => {
  */
 router.get('/feedback/recent', asyncHandler(async (req, res) => {
   const contentType = req.query.contentType || null;
-  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
   const entries = await feedbackService.getRecentFeedback(contentType, limit);
   res.json(entries);
 }));
