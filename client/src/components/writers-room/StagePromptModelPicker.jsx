@@ -26,9 +26,11 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     Promise.all([
-      fetch(`/api/prompts/${encodeURIComponent(stageName)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/providers').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/prompts/${encodeURIComponent(stageName)}`, { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/providers', { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([s, p]) => {
       if (cancelled) return;
       // Normalize stage.timeout through parseTimeoutMs so a legacy on-disk
@@ -43,7 +45,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       setActiveProviderId(p?.activeProvider || null);
       setLoaded(true);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [stageName]);
 
   const persist = async (next) => {

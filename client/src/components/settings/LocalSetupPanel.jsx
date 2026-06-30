@@ -24,6 +24,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   // directly so they take effect immediately.
   const [draftPath, setDraftPath] = useState(pythonPath || '');
   const commitTimerRef = useRef(null);
+  // Track mount + the latest in-flight /setup/check abort controller so a fetch
+  // that's still resolving after unmount (or superseded by a newer check)
+  // neither sets state on a dead component nor wastes the round-trip.
+  const mountedRef = useRef(true);
+  const checkAbortRef = useRef(null);
+  useEffect(() => () => { mountedRef.current = false; checkAbortRef.current?.abort(); }, []);
   useEffect(() => { setDraftPath(pythonPath || ''); }, [pythonPath]);
   useEffect(() => () => clearTimeout(commitTimerRef.current), []);
   const commitDraft = (value) => {
@@ -38,17 +44,27 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
 
   const refreshCheck = useCallback(async (path) => {
     if (!path) { setCheck(null); return; }
+    // Abort any prior in-flight check so a stale response can't clobber a
+    // newer one, and so the fetch is dropped on unmount.
+    checkAbortRef.current?.abort();
+    const controller = new AbortController();
+    checkAbortRef.current = controller;
     setChecking(true);
     try {
-      const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(path)}`);
+      const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(path)}`, { signal: controller.signal });
+      if (!mountedRef.current) return;
       if (!res.ok) { setCheck(null); return; }
       setCheck(await res.json());
-    } catch {
+    } catch (err) {
+      // Aborted (unmount or superseded) — leave state alone.
+      if (err?.name === 'AbortError') return;
       // Server down / offline — clear the check rather than getting stuck
       // in a perpetual "Checking…" state.
-      setCheck(null);
+      if (mountedRef.current) setCheck(null);
     } finally {
-      setChecking(false);
+      // Only settle the spinner for the current request; an aborted/superseded
+      // call must not flip a newer in-flight check's spinner off.
+      if (mountedRef.current && checkAbortRef.current === controller) setChecking(false);
     }
   }, []);
 
