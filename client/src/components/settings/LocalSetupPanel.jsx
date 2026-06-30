@@ -44,10 +44,12 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   };
 
   const refreshCheck = useCallback(async (path) => {
-    if (!path) { setCheck(null); return; }
-    // Abort any prior in-flight check so a stale response can't clobber a
-    // newer one, and so the fetch is dropped on unmount.
+    // Abort any prior in-flight check first — even when the path was cleared —
+    // so a stale response can't resolve and clobber state for a path that's no
+    // longer selected, and so the fetch is dropped on unmount.
     checkAbortRef.current?.abort();
+    checkAbortRef.current = null;
+    if (!path) { setCheck(null); setChecking(false); return; }
     const controller = new AbortController();
     checkAbortRef.current = controller;
     setChecking(true);
