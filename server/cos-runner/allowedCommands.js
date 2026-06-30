@@ -14,7 +14,8 @@ export const ALLOWED_COMMANDS = new Set([
   'codex',
   'copilot',
   'agy',
-  'gemini'
+  'gemini',
+  'opencode'
 ]);
 
 /**
@@ -31,7 +32,10 @@ export function isAllowedCommand(command) {
   // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
   // Uses path.basename for correct handling on both Unix and Windows
   let baseName = basename(command);
-  // Normalize for Windows: strip trailing .exe (case-insensitive)
+  // Normalize for Windows: strip trailing .exe (case-insensitive). Only .exe —
+  // .cmd/.bat npm shims are deliberately NOT accepted because the spawn path runs
+  // `spawn(cmd, args, { shell: false })`, which cannot execute a shim batch file;
+  // accepting them here would only move the failure to spawn time.
   if (baseName.toLowerCase().endsWith('.exe')) {
     baseName = baseName.slice(0, -4);
   }

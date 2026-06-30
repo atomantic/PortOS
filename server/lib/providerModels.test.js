@@ -10,7 +10,9 @@ import {
   isBedrockEnabled,
   hasBedrockRegionPrefix,
   toBedrockModelId,
-  resolveBedrockCliModel
+  resolveBedrockCliModel,
+  prefixOpencodeModel,
+  isOpencodeCommand
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -25,6 +27,65 @@ describe('providerModels', () => {
       expect(isCodexConfiguredDefault('')).toBe(false);
       expect(isCodexConfiguredDefault(null)).toBe(false);
       expect(isCodexConfiguredDefault(undefined)).toBe(false);
+    });
+  });
+
+  describe('isOpencodeCommand', () => {
+    it('matches the bare binary, a path, and a Windows .exe', () => {
+      expect(isOpencodeCommand('opencode')).toBe(true);
+      expect(isOpencodeCommand('/opt/homebrew/bin/opencode')).toBe(true);
+      expect(isOpencodeCommand('./bin/opencode')).toBe(true);
+      expect(isOpencodeCommand('C:\\tools\\opencode.exe')).toBe(true);
+    });
+
+    it('rejects other commands, batch shims, and non-strings', () => {
+      expect(isOpencodeCommand('claude')).toBe(false);
+      expect(isOpencodeCommand('/usr/bin/codex')).toBe(false);
+      expect(isOpencodeCommand('opencode-wrapper')).toBe(false);
+      // .cmd/.bat shims aren't directly spawnable (shell:false), so not matched
+      expect(isOpencodeCommand('opencode.cmd')).toBe(false);
+      expect(isOpencodeCommand('')).toBe(false);
+      expect(isOpencodeCommand(null)).toBe(false);
+      expect(isOpencodeCommand(undefined)).toBe(false);
+    });
+  });
+
+  describe('prefixOpencodeModel', () => {
+    const oc = { command: 'opencode', ollamaBacked: true };
+
+    it('namespaces for a path-configured opencode binary (not just the bare command)', () => {
+      expect(prefixOpencodeModel({ command: '/opt/homebrew/bin/opencode', ollamaBacked: true }, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
+
+    it('namespaces a bare Ollama id under ollama/ for ollama-backed opencode providers', () => {
+      expect(prefixOpencodeModel(oc, 'qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
+
+    it('is idempotent — an already-namespaced id is returned unchanged', () => {
+      expect(prefixOpencodeModel(oc, 'ollama/qwen2.5:7b')).toBe('ollama/qwen2.5:7b');
+    });
+
+    it('namespaces a slash-bearing Ollama id (opencode splits on the first slash)', () => {
+      expect(prefixOpencodeModel(oc, 'hf.co/user/model:tag')).toBe('ollama/hf.co/user/model:tag');
+    });
+
+    it('does NOT prefix a non-ollama-backed opencode provider (keeps its qualified id)', () => {
+      // A user-configured OpenCode provider on another backend stores an
+      // already-qualified provider/model id — prefixing would mis-route it.
+      const ocOther = { command: 'opencode' };
+      expect(prefixOpencodeModel(ocOther, 'openai/gpt-4o')).toBe('openai/gpt-4o');
+      expect(prefixOpencodeModel({ command: 'opencode', ollamaBacked: false }, 'anthropic/claude-sonnet')).toBe('anthropic/claude-sonnet');
+    });
+
+    it('is a no-op for non-opencode providers', () => {
+      expect(prefixOpencodeModel({ command: 'claude', ollamaBacked: true }, 'qwen2.5:7b')).toBe('qwen2.5:7b');
+      expect(prefixOpencodeModel({ command: 'codex' }, 'gpt-5')).toBe('gpt-5');
+    });
+
+    it('is a no-op for empty / nullish models', () => {
+      expect(prefixOpencodeModel(oc, '')).toBe('');
+      expect(prefixOpencodeModel(oc, null)).toBeNull();
+      expect(prefixOpencodeModel(oc, undefined)).toBeUndefined();
     });
   });
 

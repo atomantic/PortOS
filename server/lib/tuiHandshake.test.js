@@ -374,6 +374,13 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(buildTuiInvocation(provider, '').args).toEqual(['-p', '-']);
   });
 
+  it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
+    const provider = { id: 'opencode-ollama-tui', command: 'opencode', args: [], ollamaBacked: true };
+    const out = buildTuiInvocation(provider, 'qwen2.5:7b');
+    expect(out.command).toBe('opencode');
+    expect(out.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+  });
+
   it('handles a provider with no args (treats as empty array)', () => {
     const out = buildTuiInvocation({ id: 'claude' }, 'opus-x');
     expect(out.command).toBe('claude');

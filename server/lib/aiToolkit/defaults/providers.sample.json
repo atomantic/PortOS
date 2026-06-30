@@ -77,6 +77,23 @@
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
     },
+    "opencode-ollama": {
+      "id": "opencode-ollama",
+      "name": "OpenCode Ollama (local model)",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"ollama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Ollama (local)\",\"options\":{\"baseURL\":\"http://localhost:11434/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
     "codex": {
       "id": "codex",
       "name": "Codex CLI",

@@ -31,7 +31,7 @@ import { getCharacter } from './character.js';
 import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
@@ -558,6 +558,11 @@ async function* streamCompletion(provider, model, prompt, signal) {
   const args = isAntigravityCliProvider(provider)
     ? ensureAntigravityPrintArgs(provider.args || [])
     : [...(provider.args || [])];
+  // OpenCode runs headless via the `run` subcommand (reads the prompt from
+  // stdin); ensure it leads the argv even if a customized/TUI provider config
+  // omitted it — a bare `opencode` launches the interactive TUI, which never
+  // consumes the piped prompt and hangs until the provider timeout fires.
+  if (isOpencodeCommand(provider?.command) && !args.includes('run')) args.unshift('run');
   if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
   const cliModel = resolveCliModel(model);
   if (isAntigravityCliProvider(provider)) {
@@ -565,6 +570,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
   } else if (provider.id === 'gemini-cli') {
     if (!args.includes('--output-format') && !args.includes('-o')) args.push('--output-format', 'text');
     if (cliModel) args.push('--model', cliModel);
+  } else if (isOpencodeCommand(provider?.command)) {
+    // OpenCode addresses its Ollama model as `ollama/<id>`; respect a user-baked
+    // -m/--model pin (mirrors buildCliArgs) rather than duplicating the flag.
+    if (cliModel && !hasModelFlag(args)) args.push('--model', prefixOpencodeModel(provider, cliModel));
   } else if (cliModel) {
     args.push('--model', cliModel);
   }

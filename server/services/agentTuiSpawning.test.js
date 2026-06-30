@@ -103,7 +103,15 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
   // Bedrock map is a no-op off Bedrock — mirror that pass-through here (the
   // mapper itself is unit-tested in providerModels.test.js).
-  resolveBedrockCliModel: vi.fn((m) => m)
+  resolveBedrockCliModel: vi.fn((m) => m),
+  // Mirror the real opencode-command basename match (fully unit-tested in
+  // providerModels.test.js).
+  isOpencodeCommand: vi.fn((c) => typeof c === 'string' && c.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode'),
+  // Mirror the real ollama/ namespacing for opencode providers (fully unit-
+  // tested in providerModels.test.js).
+  prefixOpencodeModel: vi.fn((p, m) => (typeof p?.command === 'string' && p.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m),
+  // Mirror hasModelFlag (real impl unit-tested in providerModels.test.js).
+  hasModelFlag: vi.fn((a) => Array.isArray(a) && a.some((x) => x === '--model' || x === '-m' || (typeof x === 'string' && (x.startsWith('--model=') || x.startsWith('-m=')))))
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
@@ -210,6 +218,22 @@ describe('agent TUI spawning', () => {
     expect(config.commandLine).toBe("claude --dangerously-skip-permissions --add-dir '/tmp/with space' --model claude-sonnet");
     expect(config.promptDelayMs).toBe(1000);
     expect(config.idleTimeoutMs).toBe(30000);
+  });
+
+  it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [], ollamaBacked: true,
+    }, 'qwen2.5:7b');
+    expect(config.command).toBe('opencode');
+    expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+  });
+
+  it('respects a user-baked --model pin on an OpenCode TUI and does not duplicate it', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode',
+      args: ['--model', 'ollama/custom'], ollamaBacked: true,
+    }, 'qwen2.5:7b');
+    expect(config.args).toEqual(['--model', 'ollama/custom']);
   });
 
   it('falls back to the default command via id heuristic when command is omitted', () => {
