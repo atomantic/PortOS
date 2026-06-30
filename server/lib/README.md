@@ -150,6 +150,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
+| `abortTimeout.js` | `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
 | `safeUrlFetch.js` | SSRF-guarded public-URL fetch: `isPublicHttpUrlSafe`/`assertPublicHttpUrl` (scheme + blocked-host-literal via `catalogValidation.isBlockedIngestHost` + DNS-resolve), plus `fetchPublicText`/`fetchPublicBinary` (timeout, redirect revalidation, size cap). Reuse instead of copying the SSRF guard for any "fetch this remote thing the user pointed us at" flow. |
 | `pinterestFeed.js` | Pure Pinterest board RSS helpers: `normalizePinterestFeedUrl(input)` (board URL or `.rss` → `{ feedUrl, boardUrl }`, host-gated) + `parsePinterestRss(xml)` (per-pin `pinUrl`/`imageUrl`/title/description, 736x size upgrade). Feeds the mood-board Pinterest importer. |

@@ -15,6 +15,7 @@ import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
 import { sanitizeAssetFilename } from './buckets.js';
@@ -219,23 +220,20 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
 
   const url = `${peerBaseUrl(peer)}/api/peer-sync/push`;
-  // peerFetch wraps node-fetch with the Tailnet-insecure agent. fetchWithTimeout
-  // can't be reused here because it always calls global fetch (no custom-client
-  // hook), so the timeout is enforced inline with an AbortController so a
-  // hung peer can't keep the push promise pending forever and block subsequent
-  // debounced pushes for the same sub.
+  // withAbortTimeout aborts after PUSH_TIMEOUT_MS so a hung peer can't keep the
+  // push promise pending forever and block subsequent debounced pushes for the
+  // same sub. (The shared `fetchWithTimeout` helper can't be reused — it always
+  // calls global fetch with no custom-client hook for the insecure agent.)
   const postPayload = async (body) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-    return peerFetch(url, {
+    return withAbortTimeout(PUSH_TIMEOUT_MS, (signal) => peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    }, peer).catch((err) => {
+      signal,
+    }, peer)).catch((err) => {
       console.log(`⚠️ peerSync: push to ${peer.name || peer.instanceId} failed: ${err.message}`);
       return null;
-    }).finally(() => clearTimeout(timeoutId));
+    });
   };
   let res = await postPayload(payload);
   // Set when the older-peer retry below strips `manuscriptReview`: the retry

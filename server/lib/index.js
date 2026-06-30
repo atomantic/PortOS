@@ -137,6 +137,7 @@ export * from './processEnv.js';
 export * from './pythonSetup.js';
 
 // === Networking ===
+export * from './abortTimeout.js';
 export * from './fetchWithTimeout.js';
 export * from './requestAbort.js';
 export * from './httpClient.js';
