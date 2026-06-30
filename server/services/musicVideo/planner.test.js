@@ -179,6 +179,45 @@ describe('planProject', () => {
     expect(result.promptsSkippedReason).toBeNull();
   });
 
+  // A CLI-style provider can echo its own input (including this prompt's
+  // JSON schema example, which uses literal `<...>` placeholders) ahead of
+  // its real answer. extractJson's shapePredicate must skip the all-
+  // placeholder echoed block and pick the later, genuine response — not
+  // persist the placeholder text as if it were a real scene plan.
+  it('skips an echoed placeholder array and uses the real response that follows it', async () => {
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({
+      text: `Respond with ONLY a JSON array...
+[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]
+
+Here is my answer:
+[{ "index": 0, "framePrompt": "actual neon alley shot", "prompt": "slow dolly in" }]`,
+    });
+
+    const result = await planProject('mv-1');
+
+    const seededInputs = addProjectScenes.mock.calls[0][1];
+    expect(seededInputs[0].framePrompt).toBe('actual neon alley shot');
+    expect(seededInputs[0].prompt).toBe('slow dolly in');
+    expect(result.promptsSeeded).toBe(true);
+  });
+
+  it('treats a wholly placeholder response (no real answer anywhere) as unparsable', async () => {
+    getProject.mockResolvedValue(makeProject());
+    addProjectScenes.mockResolvedValue(freshProjectResult());
+    resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
+    runPromptThroughProvider.mockResolvedValue({
+      text: '[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot\'s motion, ready to render>" }]',
+    });
+
+    const result = await planProject('mv-1');
+
+    expect(result.promptsSeeded).toBe(false);
+    expect(result.promptsSkippedReason).toBe('unparsable-response');
+  });
+
   it('degrades to plain scenes when the LLM call throws', async () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());

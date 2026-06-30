@@ -101,20 +101,43 @@ For EACH section above, propose ONE shot for a generative video model:
 - "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
 - "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections should read more kinetic; calmer sections more static/lingering.
 
-Respond with ONLY a JSON array, one object per section, in section-index order, no other text:
-[{ "index": 0, "framePrompt": "...", "prompt": "..." }]`;
+Respond with ONLY a JSON array, one object per section, in section-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
+[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]`;
+}
+
+// A CLI-style provider can echo its input (including this prompt's own JSON
+// schema example) ahead of its real answer — extractJson would otherwise grab
+// the FIRST balanced array it finds, which can be that echoed example. Mirrors
+// mediaPromptRefiner.js#isPlaceholderPrompt: if a field still equals the
+// literal `<...>` placeholder, the model parroted the schema rather than
+// answering.
+const isPlaceholderText = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
+
+// shapePredicate for extractJson: an array counts as a real answer only if at
+// least one entry has a non-placeholder framePrompt/prompt — so a wholly
+// placeholder block (the echoed schema example) is skipped in favor of a
+// later candidate block (the model's actual answer), rather than being
+// returned outright as extractJson's default "first parseable block" would.
+function isUsableScenePlanArray(parsed) {
+  return Array.isArray(parsed) && parsed.some((entry) => {
+    const fp = typeof entry?.framePrompt === 'string' ? entry.framePrompt : '';
+    const p = typeof entry?.prompt === 'string' ? entry.prompt : '';
+    return (fp && !isPlaceholderText(fp)) || (p && !isPlaceholderText(p));
+  });
 }
 
 /** Parse the LLM's scene-prompt response into a `Map<index, {framePrompt, prompt}>`. */
 function parseScenePlanResponse(text, count) {
-  const { value: parsed } = extractJson(text, { blockType: 'array' });
+  const { value: parsed } = extractJson(text, { blockType: 'array', shapePredicate: isUsableScenePlanArray });
   if (!Array.isArray(parsed)) return null;
   const byIndex = new Map();
   for (const entry of parsed) {
     const idx = Number(entry?.index);
     if (!Number.isInteger(idx) || idx < 0 || idx >= count) continue;
-    const framePrompt = typeof entry?.framePrompt === 'string' ? entry.framePrompt.trim().slice(0, SCENE_TEXT_MAX) : '';
-    const prompt = typeof entry?.prompt === 'string' ? entry.prompt.trim().slice(0, SCENE_TEXT_MAX) : '';
+    let framePrompt = typeof entry?.framePrompt === 'string' ? entry.framePrompt.trim().slice(0, SCENE_TEXT_MAX) : '';
+    let prompt = typeof entry?.prompt === 'string' ? entry.prompt.trim().slice(0, SCENE_TEXT_MAX) : '';
+    if (isPlaceholderText(framePrompt)) framePrompt = '';
+    if (isPlaceholderText(prompt)) prompt = '';
     if (!framePrompt && !prompt) continue;
     byIndex.set(idx, { framePrompt, prompt });
   }
