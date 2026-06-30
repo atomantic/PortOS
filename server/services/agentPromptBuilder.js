@@ -380,6 +380,11 @@ export function buildCompletionGuidelineBullet({
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
   }
   if (isTui) {
+    // NOTE: in production this branch is only reachable from the full/api prompt
+    // path, where `isTui` is currently always false (TUI providers route through
+    // buildLightContextPrompt, which emits the live TUI completion via
+    // buildTuiCompletionSection — not this bullet). It's kept provider-aware and
+    // directly unit-tested so the guideline stays correct if that routing changes.
     const howTo = slashdoFree
       ? 'the Completion Workflow above (plain `git`/`gh` commands — this provider has no slashdo commands)'
       : `the Completion Workflow above (\`${tuiCompletionCommand}\`)`;
@@ -804,6 +809,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
       willOpenPR, willReviewLoop, simplifyEnabled, providerId, slashdoFree: tuiSlashdoFree,
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       branchName: worktreeInfo?.branchName || null,
+      baseBranch: worktreeInfo?.baseBranch || null,
       reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
@@ -880,9 +886,9 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  * slash commands), the agent can't run `/do:pr` / `/do:push`, so it delegates to
  * the plain-git/`gh` variant below — same sentinel handshake, no slashdo.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
-    return buildManualTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, branchName });
+    return buildManualTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, branchName, baseBranch });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
@@ -943,8 +949,12 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
  * configured reviewer / human, preserving the same review gate the slashdo `/do:pr`
  * flow enforces. Only when no review loop is requested does it merge directly.
  */
-function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, simplifyEnabled, sentinelPath, branchName = null }) {
+function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null }) {
   const branchRef = branchName || 'HEAD';
+  // Pin the PR base to the worktree's base branch when known, so `gh pr create`
+  // doesn't guess (and a fork install targets the intended branch rather than the
+  // default). `--fill` still supplies title/body from the commits.
+  const prCreate = baseBranch ? `gh pr create --fill --base ${baseBranch}` : 'gh pr create --fill';
   const simplifyStep = simplifyEnabled
     ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
     : '1. (simplify disabled — skip)';
@@ -974,7 +984,7 @@ function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, s
       `${step++}. Open a pull request against the default branch and capture the PR URL it prints:`,
       '',
       '   ```bash',
-      '   gh pr create --fill',
+      `   ${prCreate}`,
       '   ```',
     );
     if (willReviewLoop) {
@@ -992,7 +1002,7 @@ function buildManualTuiCompletionSection({ willOpenPR, willReviewLoop = false, s
         '   ```bash',
         '   gh pr merge "<PR_URL>" --merge --delete-branch',
         '   ```',
-        `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
+        `${step++}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If \`gh pr merge\` exited non-zero (it can fail to delete/checkout the branch locally from inside a worktree even though the **remote** merge succeeded) but this shows \`MERGED\`, you are done — do NOT retry. If it shows \`OPEN\` or \`CLOSED\`, investigate (failing check, branch protection), fix, and retry.`,
       );
     }
   }
