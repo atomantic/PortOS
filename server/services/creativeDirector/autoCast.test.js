@@ -33,6 +33,13 @@ const hit = (id, type, name, rrfScore = 0.5, searchMethod = 'hybrid') => ({
   searchMethod,
 });
 
+// suggestCastForBrief now queries hybridSearchIngredients once per castable type,
+// so the mock must honor the `type` filter (the real query does) — return only
+// the rows whose ingredient.type matches the requested type.
+const mockSearch = (rows) =>
+  hybridSearchIngredients.mockImplementation(async (_q, _emb, { type } = {}) =>
+    rows.filter((r) => !type || r.ingredient.type === type));
+
 beforeEach(() => {
   vi.clearAllMocks();
   generateQueryEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
@@ -68,7 +75,7 @@ describe('suggestCastForBrief', () => {
   });
 
   it('filters hits to the castable types and slices to the limit', async () => {
-    hybridSearchIngredients.mockResolvedValue([
+    mockSearch([
       hit('c1', 'character', 'Mara'),
       hit('i1', 'idea', 'A loose notion'), // not castable by default → dropped
       hit('p1', 'place', 'The Spire'),
@@ -79,14 +86,14 @@ describe('suggestCastForBrief', () => {
   });
 
   it('respects an explicit types override', async () => {
-    hybridSearchIngredients.mockResolvedValue([hit('c1', 'character', 'Mara'), hit('i1', 'idea', 'Notion')]);
+    mockSearch([hit('c1', 'character', 'Mara'), hit('i1', 'idea', 'Notion')]);
     const out = await suggestCastForBrief({ brief: 'x', types: ['idea'] });
     expect(out.map((h) => h.ingredient.id)).toEqual(['i1']);
   });
 
   it('degrades to FTS-only when the embedding provider fails', async () => {
     generateQueryEmbedding.mockRejectedValue(new Error('no provider'));
-    hybridSearchIngredients.mockResolvedValue([hit('c1', 'character', 'Mara')]);
+    mockSearch([hit('c1', 'character', 'Mara')]);
     const out = await suggestCastForBrief({ brief: 'rain noir' });
     expect(out).toHaveLength(1);
     // embedding arg is null when the provider failed
@@ -124,7 +131,7 @@ describe('applyAutoCastToProject', () => {
       id: 'p1', name: 'Neon Run', styleSpec: 'rain noir', userStory: null,
       cast: [{ ingredientId: 'c1', name: 'Mara', type: 'character', role: 'cast' }],
     });
-    hybridSearchIngredients.mockResolvedValue([
+    mockSearch([
       hit('c1', 'character', 'Mara'),   // already cast → skipped
       hit('p1', 'place', 'The Spire'),  // fresh → added
     ]);
@@ -148,7 +155,7 @@ describe('applyAutoCastToProject', () => {
       id: 'p1', name: 'Neon Run', styleSpec: 'rain noir',
       cast: [{ ingredientId: 'c1', name: 'Mara', type: 'character', role: 'cast' }],
     });
-    hybridSearchIngredients.mockResolvedValue([hit('c1', 'character', 'Mara')]);
+    mockSearch([hit('c1', 'character', 'Mara')]);
     const result = await applyAutoCastToProject('p1', {});
     expect(result.added).toEqual([]);
     expect(updateProject).not.toHaveBeenCalled();
@@ -157,7 +164,7 @@ describe('applyAutoCastToProject', () => {
 
   it('uses an explicit brief over the project-derived one', async () => {
     getProject.mockResolvedValue({ id: 'p1', name: 'Neon Run', styleSpec: 'rain noir', cast: [] });
-    hybridSearchIngredients.mockResolvedValue([]);
+    mockSearch([]);
     await applyAutoCastToProject('p1', { brief: 'sunlit meadow' });
     expect(hybridSearchIngredients).toHaveBeenCalledWith('sunlit meadow', expect.anything(), expect.any(Object));
   });
@@ -165,7 +172,7 @@ describe('applyAutoCastToProject', () => {
   it('caps the merged cast at 50 members', async () => {
     const existing = Array.from({ length: 49 }, (_, i) => ({ ingredientId: `e${i}`, name: `E${i}`, type: 'character', role: 'cast' }));
     getProject.mockResolvedValue({ id: 'p1', name: 'Neon Run', styleSpec: 'rain noir', cast: existing });
-    hybridSearchIngredients.mockResolvedValue([
+    mockSearch([
       hit('n1', 'character', 'N1'), hit('n2', 'character', 'N2'), hit('n3', 'character', 'N3'),
     ]);
     updateProject.mockImplementation(async (_id, patch) => ({ id: 'p1', ...patch }));

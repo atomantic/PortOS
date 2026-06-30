@@ -79,11 +79,26 @@ export async function suggestCastForBrief({ brief, types = DEFAULT_CASTABLE_TYPE
   if (!text) return [];
   const castable = Array.isArray(types) && types.length ? types : DEFAULT_CASTABLE_TYPES;
   const embedding = await generateQueryEmbedding(text, { types: castable }).catch(() => null);
-  // hybridSearchIngredients filters by a single `type`; fetch a wider unfiltered
-  // page and post-filter to the castable set so multiple types work in one query.
-  const hits = await hybridSearchIngredients(text, embedding, { limit: limit * 3 });
-  const allowed = new Set(castable);
-  return hits.filter((h) => allowed.has(h.ingredient?.type)).slice(0, limit);
+  // hybridSearchIngredients filters by a SINGLE `type`, so query each castable
+  // type and merge — post-filtering one global page would let a brief that
+  // matches many non-castable items (ideas/concepts/custom types) fill the page
+  // before any castable rows are reached, starving the cast candidates (codex
+  // review). Per-type queries guarantee each castable type gets a fair page; one
+  // failing type degrades to the rest rather than the whole search.
+  const perType = await Promise.all(
+    castable.map((type) => hybridSearchIngredients(text, embedding, { limit, type }).catch(() => [])),
+  );
+  // Types partition ingredient ids, but dedupe defensively (keep the best score).
+  const byId = new Map();
+  for (const hit of perType.flat()) {
+    const id = hit?.ingredient?.id;
+    if (!id) continue;
+    const prev = byId.get(id);
+    if (!prev || (hit.rrfScore || 0) > (prev.rrfScore || 0)) byId.set(id, hit);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => (b.rrfScore || 0) - (a.rrfScore || 0))
+    .slice(0, limit);
 }
 
 /**

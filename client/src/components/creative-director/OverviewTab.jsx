@@ -26,6 +26,10 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     setDisableAudio(project.disableAudio === true);
     setSaving(false);
     savingRef.current = false;
+    // Reset auto-cast spinner on project switch too — its .finally gates on the
+    // id matching, so without this a same-instance project swap could strand the
+    // flag (defensive; the parent currently remounts on id change).
+    setAutoCasting(false);
   }, [project.id]);
   useEffect(() => {
     if (!savingRef.current) {
