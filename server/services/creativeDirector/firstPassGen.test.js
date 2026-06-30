@@ -122,6 +122,14 @@ describe('enqueueFirstPassPortraits', () => {
     expect(getIngredient).not.toHaveBeenCalled();
   });
 
+  it('skips gracefully when local mode has no pythonPath (default model would fail unseen)', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'local', local: {} } });
+    const out = await enqueueFirstPassPortraits([{ ingredientId: 'a' }]);
+    expect(out).toEqual({ mode: 'local', enqueued: [], skipped: [], reason: 'local-not-configured' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(getIngredient).not.toHaveBeenCalled();
+  });
+
   it('skips gracefully for external mode (not queue-backed)', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
     const out = await enqueueFirstPassPortraits([{ ingredientId: 'a' }]);

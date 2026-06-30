@@ -124,7 +124,8 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   // First-pass gen (#1818): when opted in, kick off a catalog portrait render
   // for each member auto-cast just added that has no portrait yet. The renders
   // are enqueued onto the media-job queue and land via the durable catalog
-  // attach hook (#1359) — we await only the (fast) enqueue so the response can
+  // attach hook (#1359). We await the enqueue (which resolves each member's
+  // render decision concurrently, then queues synchronously) so the response can
   // report how many were queued; the renders themselves run in the background.
   let firstPass = null;
   if (generateFirstPass && Array.isArray(result.added) && result.added.length > 0) {
