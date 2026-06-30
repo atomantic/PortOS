@@ -9,7 +9,7 @@
 // fire-and-forget coordinator shape.
 
 import { randomUUID } from 'crypto';
-import { SSE_HEADERS } from './sseDownload.js';
+import { SSE_HEADERS } from './sseHeaders.js';
 
 // Filters Python child noise (HF/torch/bitsandbytes/xformers warnings, deprecation
 // notices, etc.) that would otherwise drown the user's view of real progress.
