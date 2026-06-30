@@ -638,6 +638,25 @@ describe('validation.js', () => {
         .toEqual({ useWorktree: true });
     });
 
+    it('should accept swarmCount 0 + 2..6 and drop 1/out-of-range/non-integer', () => {
+      // 0 is an explicit "off" (kept so a per-app override can disable swarm).
+      expect(sanitizeTaskMetadata({ swarmCount: 0 })).toEqual({ swarmCount: 0 });
+      expect(sanitizeTaskMetadata({ swarmCount: 2 })).toEqual({ swarmCount: 2 });
+      expect(sanitizeTaskMetadata({ swarmCount: 6 })).toEqual({ swarmCount: 6 });
+      // 1 (a one-agent swarm is just the single-issue flow) and out-of-range are dropped.
+      expect(sanitizeTaskMetadata({ swarmCount: 1 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: 7 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: -1 })).toBeNull();
+      // Non-integers can't smuggle an unbounded swarm size.
+      expect(sanitizeTaskMetadata({ swarmCount: 3.5 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: '3' })).toBeNull();
+      // Drops the bad value but keeps a valid sibling key.
+      expect(sanitizeTaskMetadata({ useWorktree: true, swarmCount: 99 }))
+        .toEqual({ useWorktree: true });
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any', swarmCount: 3 }))
+        .toEqual({ issueAuthorFilter: 'any', swarmCount: 3 });
+    });
+
     it('should accept an ordered reviewers list, dedupe, and drop unknowns', () => {
       expect(sanitizeTaskMetadata({ reviewers: ['codex', 'antigravity', 'copilot'] }))
         .toEqual({ reviewers: ['codex', 'antigravity', 'copilot'] });
