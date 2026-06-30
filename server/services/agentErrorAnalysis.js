@@ -515,6 +515,85 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
 }
 
 /**
+ * Pure decision logic for {@link resolveFailedTaskUpdate} — no I/O, no clock.
+ *
+ * Decides whether a failed task should be blocked or retried, the metadata
+ * fields to merge over `task.metadata` (timestamps excluded — they belong to
+ * the async wrapper), the analysis to hand to an investigation task, and
+ * whether such a task will actually be created. Extracted so the branching can
+ * be unit-tested directly (see `agentErrorAnalysis.test.js`) instead of through
+ * a drift-prone inline copy.
+ *
+ * @returns {{
+ *   status: 'blocked'|'pending',
+ *   shouldCreateInvestigation: boolean,
+ *   investigationAnalysis: object|null,
+ *   metadataUpdates: object,
+ *   failureCount?: number,
+ *   lastErrorCategory?: string
+ * }}
+ */
+export function resolveFailedTaskDecision(task, errorAnalysis) {
+  // Actionable errors get blocked immediately. An investigation task follows
+  // unless the failure is an API-access error (auth/forbidden/usage-limit),
+  // where a fresh agent would hit the same wall.
+  if (errorAnalysis?.actionable) {
+    return {
+      status: 'blocked',
+      shouldCreateInvestigation: !API_ACCESS_ERROR_CATEGORIES.has(errorAnalysis.category),
+      investigationAnalysis: errorAnalysis,
+      metadataUpdates: {
+        blockedReason: errorAnalysis.message,
+        blockedCategory: errorAnalysis.category
+      }
+    };
+  }
+
+  // Non-actionable errors: track retry count and block once the task has either
+  // failed too many times in a row or spawned too many agents in total.
+  const failureCount = (Number(task.metadata?.failureCount) || 0) + 1;
+  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
+  const lastErrorCategory = errorAnalysis?.category || 'unknown';
+
+  if (totalSpawns >= MAX_TOTAL_SPAWNS || failureCount >= MAX_TASK_RETRIES) {
+    const blockedAnalysis = {
+      ...(errorAnalysis || {}),
+      message: `Task failed ${failureCount} times: ${errorAnalysis?.message || 'unknown error'}`,
+      suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
+      category: lastErrorCategory
+    };
+    return {
+      status: 'blocked',
+      shouldCreateInvestigation: !API_ACCESS_ERROR_CATEGORIES.has(lastErrorCategory),
+      investigationAnalysis: blockedAnalysis,
+      failureCount,
+      lastErrorCategory,
+      metadataUpdates: {
+        failureCount,
+        lastErrorCategory,
+        blockedReason: `Max retries exceeded (${failureCount}/${MAX_TASK_RETRIES}): ${lastErrorCategory}`,
+        blockedCategory: lastErrorCategory
+      }
+    };
+  }
+
+  // Retry: propagate compaction hints for retry prompt injection.
+  const compaction = errorAnalysis?.compaction || null;
+  return {
+    status: 'pending',
+    shouldCreateInvestigation: false,
+    investigationAnalysis: null,
+    failureCount,
+    lastErrorCategory,
+    metadataUpdates: {
+      failureCount,
+      lastErrorCategory,
+      ...(compaction && { compaction })
+    }
+  };
+}
+
+/**
  * Handle task status update after agent failure.
  * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
  * creating an investigation task instead of retrying endlessly.
@@ -522,68 +601,37 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
  * Returns { status, metadata } to apply to the task.
  */
 export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
+  const decision = resolveFailedTaskDecision(task, errorAnalysis);
+  const now = new Date().toISOString();
+
   // Actionable errors get blocked immediately (investigation task created unless API access is denied)
   if (errorAnalysis?.actionable) {
     emitLog('warn', `🚫 Task ${task.id} blocked: ${errorAnalysis.message} (${errorAnalysis.category})`, {
       taskId: task.id, category: errorAnalysis.category
     });
-    await maybeCreateInvestigationTask(agentId, task, errorAnalysis);
+    await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
     return {
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        blockedReason: errorAnalysis.message,
-        blockedCategory: errorAnalysis.category,
-        blockedAt: new Date().toISOString()
-      }
+      status: decision.status,
+      metadata: { ...task.metadata, ...decision.metadataUpdates, blockedAt: now }
     };
   }
 
-  // Non-actionable errors: track retry count and block after max retries
-  const failureCount = (Number(task.metadata?.failureCount) || 0) + 1;
-  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
-  const lastErrorCategory = errorAnalysis?.category || 'unknown';
-
-  if (totalSpawns >= MAX_TOTAL_SPAWNS || failureCount >= MAX_TASK_RETRIES) {
-    emitLog('warn', `🚫 Task ${task.id} blocked after ${failureCount} failures (${lastErrorCategory})`, {
-      taskId: task.id, failureCount, category: lastErrorCategory
+  if (decision.status === 'blocked') {
+    emitLog('warn', `🚫 Task ${task.id} blocked after ${decision.failureCount} failures (${decision.lastErrorCategory})`, {
+      taskId: task.id, failureCount: decision.failureCount, category: decision.lastErrorCategory
     });
-    const blockedAnalysis = {
-      ...(errorAnalysis || {}),
-      message: `Task failed ${failureCount} times: ${errorAnalysis?.message || 'unknown error'}`,
-      suggestedFix: `Task has failed ${failureCount} consecutive times with ${lastErrorCategory} errors. ${errorAnalysis?.suggestedFix || 'Investigate agent output logs.'}`,
-      category: lastErrorCategory
-    };
-    await maybeCreateInvestigationTask(agentId, task, blockedAnalysis);
+    await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
     return {
       status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        failureCount,
-        lastFailureAt: new Date().toISOString(),
-        lastErrorCategory,
-        blockedReason: `Max retries exceeded (${failureCount}/${MAX_TASK_RETRIES}): ${lastErrorCategory}`,
-        blockedCategory: lastErrorCategory,
-        blockedAt: new Date().toISOString()
-      }
+      metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: now, blockedAt: now }
     };
   }
 
-  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
-    taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
+  emitLog('info', `🔄 Task ${task.id} retry ${decision.failureCount}/${MAX_TASK_RETRIES} (${decision.lastErrorCategory})`, {
+    taskId: task.id, failureCount: decision.failureCount, maxRetries: MAX_TASK_RETRIES, category: decision.lastErrorCategory
   });
-
-  // Propagate compaction hints to task metadata for retry prompt injection
-  const compaction = errorAnalysis?.compaction || null;
-
   return {
     status: 'pending',
-    metadata: {
-      ...task.metadata,
-      failureCount,
-      lastFailureAt: new Date().toISOString(),
-      lastErrorCategory,
-      ...(compaction && { compaction })
-    }
+    metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: now }
   };
 }
