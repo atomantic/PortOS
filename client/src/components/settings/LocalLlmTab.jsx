@@ -986,7 +986,7 @@ export function LocalLlmTab() {
               {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}
               <Link
                 to={`/local-llm/playground?backend=${encodeURIComponent(selected)}&model=${encodeURIComponent(m.id)}`}
-                className="px-2.5 py-1 text-xs bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 rounded flex items-center gap-1 shrink-0 no-underline"
+                className="px-2.5 py-1 text-xs bg-port-accent-2/15 hover:bg-port-accent-2/25 text-port-accent-2 rounded flex items-center gap-1 shrink-0 no-underline"
                 title={`Chat with ${m.name || m.id}`}
               >
                 <FlaskConical size={12} />

@@ -48,10 +48,10 @@ const LINK_TYPE_COLORS = {
 
 const CLONE_STATUS_STYLES = {
   none: '',
-  pending: 'text-yellow-400',
-  cloning: 'text-blue-400 animate-pulse',
-  cloned: 'text-green-400',
-  failed: 'text-red-400'
+  pending: 'text-port-warning',
+  cloning: 'text-port-accent animate-pulse',
+  cloned: 'text-port-success',
+  failed: 'text-port-error'
 };
 
 export default function LinksTab({ onRefresh }) {

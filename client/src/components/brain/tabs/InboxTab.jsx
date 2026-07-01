@@ -300,7 +300,7 @@ export default function InboxTab({ onRefresh, settings }) {
             aria-pressed={creative}
             aria-label="Toggle creative capture mode"
             className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm ${creative
-              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+              ? 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40'
               : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}
             title="Creative mode: flag captures as creative ideas you can send to the Catalog"
           >
@@ -318,7 +318,7 @@ export default function InboxTab({ onRefresh, settings }) {
         </div>
         <p className="mt-2 text-xs text-gray-500">
           Capture a thought — type or use the mic. AI will classify and route it automatically.
-          {creative && <span className="text-purple-300"> Creative mode on — captures are flagged for the Catalog.</span>}
+          {creative && <span className="text-port-accent-2"> Creative mode on — captures are flagged for the Catalog.</span>}
           {settings?.confidenceThreshold && (
             <span> Confidence threshold: {Math.round(settings.confidenceThreshold * 100)}%</span>
           )}
@@ -328,15 +328,15 @@ export default function InboxTab({ onRefresh, settings }) {
       {/* Creative batch action — appears once any captured note is flagged
           creative. Sends them all into the catalog ingest review in one hop. */}
       {creativeEntries.length > 0 && (
-        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-          <span className="text-sm text-purple-200 flex items-center gap-2">
+        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
+          <span className="text-sm text-port-accent-2 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             {creativeEntries.length} creative {creativeEntries.length === 1 ? 'note' : 'notes'} ready to become catalog ingredients
           </span>
           <button
             type="button"
             onClick={handleSendCreativeToCatalog}
-            className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
+            className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 border border-port-accent-2/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
           >
             <Library className="w-4 h-4" /> Send to Catalog
           </button>
@@ -669,7 +669,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       <div className="flex-1">
                         <p className="text-white">
                           {entry.creative && (
-                            <Sparkles className="inline w-3.5 h-3.5 text-purple-300 mr-1.5 -mt-0.5" aria-label="Creative note" />
+                            <Sparkles className="inline w-3.5 h-3.5 text-port-accent-2 mr-1.5 -mt-0.5" aria-label="Creative note" />
                           )}
                           {entry.capturedText}
                         </p>
