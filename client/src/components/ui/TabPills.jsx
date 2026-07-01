@@ -63,7 +63,7 @@ export default function TabPills({
         <div
           ref={listRef}
           onScroll={onScroll}
-          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} shrink-0 items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto touch-pan-x ${className}`}
+          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} shrink-0 items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto scrollbar-hide touch-pan-x ${className}`}
           role="tablist"
           aria-label={ariaLabel}
         >

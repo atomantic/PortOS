@@ -2061,7 +2061,7 @@ export default function VideoGen() {
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
       />
 
-      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
+      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">
         <ImageGenTab />
       </Drawer>
 
