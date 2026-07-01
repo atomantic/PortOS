@@ -436,7 +436,7 @@ export default function ChiefOfStaff() {
       <StatCard
         label="Pending"
         value={pendingTaskCount}
-        icon={<Clock className="w-4 h-4 text-yellow-500" />}
+        icon={<Clock className="w-4 h-4 text-port-warning" />}
         compact
       />
       <StatCard
@@ -481,25 +481,25 @@ export default function ChiefOfStaff() {
         <button
           type="button"
           onClick={handleStop}
-          className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+          className="bg-port-error/20 hover:bg-port-error/30 text-port-error border border-port-error/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
           aria-label="Stop Chief of Staff agent"
         >
           <Square size={16} className="shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0 text-left">
             <div className="text-[10px] text-gray-600">Agent</div>
-            <div className="text-sm font-bold text-red-600">Stop</div>
+            <div className="text-sm font-bold text-port-error">Stop</div>
           </div>
         </button>
       ) : (
         <button
           type="button"
           onClick={handleStart}
-          className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+          className="bg-port-success/20 hover:bg-port-success/30 text-port-success border border-port-success/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
           aria-label="Start Chief of Staff agent"
         >
           <Play size={16} className="shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0 text-left">
-            <div className="text-[10px] text-emerald-600/80">Agent</div>
+            <div className="text-[10px] text-port-success/80">Agent</div>
             <div className="text-sm font-bold">Start</div>
           </div>
         </button>
@@ -533,7 +533,7 @@ export default function ChiefOfStaff() {
       {desktopPanelCollapsed && (
         <button
           onClick={toggleDesktopPanel}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-slate-800/80 bg-slate-900/60 border border-l-0 border-indigo-500/20"
+          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-slate-800/80 bg-slate-900/60 border border-l-0 border-port-accent-2/20"
           aria-label="Expand CoS panel"
           title="Expand CoS panel"
         >
@@ -588,10 +588,10 @@ export default function ChiefOfStaff() {
         <>
           <div className="hidden lg:block overflow-hidden min-w-0" />
           {/* Mobile: still show the compact header */}
-          <div className="lg:hidden border-b border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
             <button
               onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-              className="flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-indigo-500/20 min-h-[40px]"
+              className="flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
               aria-expanded={!agentPanelCollapsed}
               aria-controls="cos-agent-panel"
             >
@@ -619,7 +619,7 @@ export default function ChiefOfStaff() {
                 {/* Mobile Stats Grid */}
                 <div className="flex-1 grid grid-cols-2 gap-1.5 relative z-10 content-center">
                   <StatCard label="Active" value={activeAgentCount} icon={<Cpu className="w-4 h-4 text-port-accent" />} active={activeAgentCount > 0} compact />
-                  <StatCard label="Pending" value={pendingTaskCount} icon={<Clock className="w-4 h-4 text-yellow-500" />} compact />
+                  <StatCard label="Pending" value={pendingTaskCount} icon={<Clock className="w-4 h-4 text-port-warning" />} compact />
                   <StatCard label="Done" value={status?.stats?.tasksCompleted || 0} icon={<CheckCircle className="w-4 h-4 text-port-success" />} compact />
                   <StatCard label="Issues" value={health?.issues?.length || 0} icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />} compact />
                 </div>
@@ -628,7 +628,7 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-indigo-500/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
@@ -642,7 +642,7 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-indigo-500/20 min-h-[40px]"
+            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
@@ -755,7 +755,7 @@ export default function ChiefOfStaff() {
           <StatCard
             label="Pending"
             value={pendingTaskCount}
-            icon={<Clock className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-yellow-500" />}
+            icon={<Clock className="w-3 h-3 sm:w-4 sm:h-4 lg:w-5 lg:h-5 text-port-warning" />}
             mini
           />
           <StatCard
