@@ -145,4 +145,19 @@ describe('EditAppDrawer required-field validation across tabs', () => {
     );
     expect(api.updateApp).not.toHaveBeenCalled();
   });
+
+  it('blocks Save when a hidden port field holds a non-integer value', async () => {
+    renderDrawer({ app: { ...APP, uiPort: '1.5' } });
+    // Leave the Ports tab and try to save; the unmounted number input can't
+    // self-validate, so handleSubmit must catch it and surface the Ports tab.
+    await openTab('Workflow');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('UI Port must be a whole number between 1 and 65535.')).toBeInTheDocument()
+    );
+    expect(api.updateApp).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText('UI Port')).toBeInTheDocument();
+  });
 });
