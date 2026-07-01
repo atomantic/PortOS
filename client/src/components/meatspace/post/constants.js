@@ -83,6 +83,33 @@ export const DRILL_LABELS = {
   'reframe': 'Reframe',
 };
 
+// Human-readable label for a domain key. `other` collects drills whose type
+// isn't mapped to a DOMAINS bucket (e.g. legacy/removed drill types).
+export const domainLabel = (key) => (key === 'other' ? 'Other' : DOMAINS[key]?.label || key);
+
+// Derive per-domain averages from getPostStats().byDrill, which is keyed
+// `${task.module}:${task.type}`. task.module is COARSE (`mental-math`,
+// `llm-drills`, `memory`) so the real fine-grained domain must come from the
+// drill TYPE via DRILL_TO_DOMAIN — NOT the module segment. The per-domain score
+// is the mean of that domain's per-drill averages. Returns an array of
+// { key, label, score } sorted by score descending (strongest first).
+export function computeDomainAverages(byDrill = {}) {
+  const groups = {};
+  for (const [key, score] of Object.entries(byDrill)) {
+    const type = key.slice(key.indexOf(':') + 1);
+    const domain = DRILL_TO_DOMAIN[type] || 'other';
+    if (!groups[domain]) groups[domain] = [];
+    groups[domain].push(score);
+  }
+  return Object.entries(groups)
+    .map(([key, scores]) => ({
+      key,
+      label: domainLabel(key),
+      score: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
 // Difficulty badge color helper
 export const getDifficultyColor = (difficulty) => {
   if (difficulty === 'hard') return 'bg-port-error/20 text-port-error';
