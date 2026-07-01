@@ -1556,8 +1556,8 @@ describe('instances.js', () => {
       stopPolling();
     });
 
-    it('starts polling when peers exist and Tailscale is connected', async () => {
-      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true }] });
+    it('starts polling when tailnet peers exist and Tailscale is connected', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
       getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
 
       startPolling();
@@ -1569,8 +1569,24 @@ describe('instances.js', () => {
       stopPolling();
     });
 
-    it('defers polling when peers exist but Tailscale is down, then starts once it comes up', async () => {
-      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true }] });
+    it('probes immediately for a LAN/IP peer even when Tailscale is down (never stranded)', async () => {
+      // A peer addressed by a plain LAN IP (no MagicDNS host, not a CGNAT addr)
+      // is reachable without Tailscale, so the gate must not defer it.
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'lan', enabled: true, address: '192.168.1.50' }] });
+      getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
+
+      startPolling();
+      await flush();
+
+      expect(logged('Instance polling started')).toBe(true);
+      expect(logged('Peer sync deferred')).toBe(false);
+      // A non-tailnet peer means we don't even need to ask Tailscale.
+      expect(getTailscaleStatus).not.toHaveBeenCalled();
+      stopPolling();
+    });
+
+    it('defers polling when all peers are tailnet-only and Tailscale is down, then starts once it comes up', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
       getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
 
       startPolling();
@@ -1602,7 +1618,7 @@ describe('instances.js', () => {
     });
 
     it('stop clears a pending Tailscale watch so it never starts polling later', async () => {
-      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true }] });
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
       getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
 
       startPolling();
@@ -1618,6 +1634,24 @@ describe('instances.js', () => {
       await flush();
 
       expect(logged('Instance polling started')).toBe(false);
+    });
+
+    it('aborts startup if stopPolling is called during the async gate window', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
+      getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
+
+      startPolling();      // kicks off the async gate (loadData → getTailscaleStatus)
+      stopPolling();       // lands before the gate resolves — must cancel it
+      await flush();
+
+      // The generation bump makes the resolving gate bail before beginPolling().
+      expect(logged('Instance polling started')).toBe(false);
+
+      // And a fresh start afterward still works (state wasn't left wedged).
+      startPolling();
+      await flush();
+      expect(logged('Instance polling started')).toBe(true);
+      stopPolling();
     });
   });
 });

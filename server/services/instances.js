@@ -55,6 +55,11 @@ let pollTimer = null;
 // tear down either state, and so the boot gate is idempotent under double-start.
 let tailscaleWatchTimer = null;
 let pollingStartPending = false;
+// Bumped by stopPolling() to cancel any in-flight startPolling gate or deferred
+// watcher callback that is mid-await when the stop lands — without it, a stop
+// during the async window is a silent no-op and a timer gets created after stop
+// was requested.
+let pollingGeneration = 0;
 
 function classifyProbeError(err, peer) {
   const code = err?.code;
@@ -1074,41 +1079,68 @@ function beginPolling() {
   pollTimer = setInterval(() => probeAllPeers(), POLL_INTERVAL_MS);
 }
 
+// A peer we can only reach over the tailnet: its probe URL (see peerBaseUrl)
+// resolves to a MagicDNS name (*.ts.net) or a Tailscale CGNAT address
+// (100.64.0.0/10 for IPv4, fd7a:115c:a1e0::/48 for IPv6). A peer addressed by a
+// plain LAN/routable IP or a non-tailnet DNS host is reachable with Tailscale
+// down, so it must NOT be deferred by the gate below.
+function peerRequiresTailscale(peer) {
+  if (peer.host) return /\.ts\.net$/i.test(peer.host.trim());
+  const addr = (peer.address || '').trim();
+  const v4 = addr.match(/^100\.(\d{1,3})\./);
+  if (v4) {
+    const second = Number(v4[1]);
+    if (second >= 64 && second <= 127) return true;   // 100.64.0.0/10 CGNAT
+  }
+  if (/^fd7a:115c:a1e0:/i.test(addr)) return true;     // Tailscale IPv6 ULA
+  return false;
+}
+
 // Decide whether to start probing now or defer until Tailscale connects.
-// PortOS peers live on the tailnet, so probing their MagicDNS hostnames while
-// Tailscale is down just spams DNS-failure + backoff logs (a laptop booted
-// off-tailnet). When peers are configured but Tailscale isn't connected, defer
-// and install a slow watcher that starts polling automatically once it's up.
-async function evaluatePollingGate() {
+// Probing a tailnet-only peer's MagicDNS hostname while Tailscale is down just
+// spams DNS-failure + backoff logs (a laptop booted off-tailnet). So we defer
+// ONLY when every enabled peer is tailnet-dependent; a LAN/IP-reachable peer is
+// probed immediately (it doesn't need Tailscale). While deferred, a slow watcher
+// starts polling automatically the moment Tailscale connects. `gen` is captured
+// at startPolling time so a stopPolling() during either await aborts cleanly.
+async function evaluatePollingGate(gen) {
   if (pollTimer || tailscaleWatchTimer) return;
 
-  // No peers to probe → run the (silent, no-op) loop exactly as before and skip
-  // the Tailscale probe entirely. Keeps solo single-machine installs unchanged.
   const data = await loadData();
-  const hasEnabledPeers = Array.isArray(data.peers) && data.peers.some(p => p.enabled);
-  if (!hasEnabledPeers) {
+  if (gen !== pollingGeneration) return;   // stopPolling() landed during loadData
+  const enabledPeers = Array.isArray(data.peers) ? data.peers.filter(p => p.enabled) : [];
+
+  // No peers, or at least one peer reachable without Tailscale → run the loop
+  // now (silent no-op when there are no peers). Only an all-tailnet peer set
+  // gets deferred, so solo installs and LAN peers are unaffected.
+  const needsTailscale = enabledPeers.length > 0 && enabledPeers.every(peerRequiresTailscale);
+  if (!needsTailscale) {
     beginPolling();
     return;
   }
 
   const status = await getTailscaleStatus();
+  if (gen !== pollingGeneration) return;   // stopPolling() landed during status check
   if (status.running) {
     beginPolling();
     return;
   }
 
   console.log(`🌐 Peer sync deferred — Tailscale not connected (${status.state || status.reason}); polling starts automatically once it's up`);
-  tailscaleWatchTimer = setInterval(() => {
+  // Capture the handle locally so a stale in-flight callback can't clear/null a
+  // watcher installed by a later startPolling() (identity guard below).
+  const myTimer = setInterval(() => {
     getTailscaleStatus().then((s) => {
-      if (!s.running) return;
-      clearInterval(tailscaleWatchTimer);
+      if (!s.running || tailscaleWatchTimer !== myTimer) return;
+      clearInterval(myTimer);
       tailscaleWatchTimer = null;
       console.log('🌐 Tailscale connected — starting peer sync polling');
       beginPolling();
     }).catch(() => {});
   }, TAILSCALE_RECHECK_MS);
+  tailscaleWatchTimer = myTimer;
   // Don't let the recheck timer keep the process alive on its own.
-  if (typeof tailscaleWatchTimer.unref === 'function') tailscaleWatchTimer.unref();
+  if (typeof myTimer.unref === 'function') myTimer.unref();
 }
 
 export function startPolling() {
@@ -1116,12 +1148,15 @@ export function startPolling() {
   // synchronous startPolling() calls can't each spin up a schedule/watcher.
   if (pollTimer || tailscaleWatchTimer || pollingStartPending) return;
   pollingStartPending = true;
-  evaluatePollingGate()
+  const gen = pollingGeneration;
+  evaluatePollingGate(gen)
     .catch(err => console.error(`❌ Failed to start peer polling: ${err.message}`))
     .finally(() => { pollingStartPending = false; });
 }
 
 export function stopPolling() {
+  // Invalidate any in-flight startPolling gate / deferred watcher callback.
+  pollingGeneration++;
   if (tailscaleWatchTimer) {
     clearInterval(tailscaleWatchTimer);
     tailscaleWatchTimer = null;
