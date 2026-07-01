@@ -595,12 +595,13 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
         />
       ))}
 
-      <Drawer open={settingsOpen} onClose={closeSettings} title="Reference image gen">
+      <Drawer open={settingsOpen} onClose={closeSettings} title="Reference image gen" size="md">
         <ImageGenSettingsForm
           value={imageCfg}
           onChange={persistImageCfg}
           models={imageModels}
           availableBackends={availableBackends}
+          grouped
         />
       </Drawer>
 

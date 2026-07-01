@@ -20,6 +20,11 @@ import TabPills from './ui/TabPills';
 // switch — so no single tab is ever page-length. Omit `tabs` and it stays the
 // original flat-scroll drawer. `bodyClassName` opts a tab into a multi-column
 // layout on wide sizes (e.g. `lg:grid lg:grid-cols-2 lg:gap-x-6`).
+//
+// For MEDIUM forms that should stay fully visible above the fold, prefer the
+// child's own labeled sections over tabs (which hide inactive fields behind a
+// click) — e.g. ImageGenSettingsForm's `grouped` prop in the pipeline image-gen
+// drawers.
 
 // Desktop width brackets. Mobile is always `w-full`. `lg`/`xl` intentionally use
 // more of the viewport (via extra breakpoints) so wide config forms can lay out
