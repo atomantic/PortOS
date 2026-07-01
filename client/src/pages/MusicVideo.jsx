@@ -44,14 +44,14 @@ const STATUS_COLORS = {
 // The URL input + Import/Cancel button pairing for a useYoutubeTrackImport
 // slot — shared by the create form (full-size) and the detail view's
 // track-change row (compact, inline in a flex-wrap toolbar). #1945
-function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false }) {
+function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false, disabled = false }) {
   const size = compact ? 12 : 13;
   const py = compact ? 'py-1' : 'py-1.5';
   const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[40px] sm:min-h-0';
   return (
     <>
       <input
-        id={id} type="url" value={url} onChange={onUrlChange} disabled={job.active}
+        id={id} type="url" value={url} onChange={onUrlChange} disabled={job.active || disabled}
         // The create form's usage sits inside a <form onSubmit={handleCreate}>
         // — without this, Enter (the natural gesture after pasting a URL)
         // submits the form (creating a track-less project) instead of
@@ -67,7 +67,7 @@ function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = f
           <Activity size={size} className="animate-spin" /> {job.percent}%
         </button>
       ) : (
-        <button type="button" onClick={onStart} disabled={!url.trim()}
+        <button type="button" onClick={onStart} disabled={!url.trim() || disabled}
           title="Download and extract this video's audio as a track"
           className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 ${py} ${btnExtra} disabled:opacity-50`}>
           <Download size={size} /> Import
@@ -179,6 +179,14 @@ export default function MusicVideo() {
   const handleCreate = (e) => {
     e.preventDefault();
     if (!form.name.trim()) return;
+    // A YouTube import in flight hasn't set form.trackId yet — creating now
+    // would make a track-less project, and the import's later completion
+    // would only fill in the (already-reset) form's trackId instead of
+    // attaching to the project the user just created.
+    if (ytImportCreate.active) {
+      toast.error('Finish or cancel the in-progress YouTube import before creating the project');
+      return;
+    }
     createMusicVideoProject({ name: form.name.trim(), mode: form.mode, trackId: form.trackId || null })
       .then((proj) => {
         setProjects((prev) => [...prev, proj]);
@@ -278,6 +286,10 @@ export default function MusicVideo() {
   const [render, setRender] = useState(null); // { jobId, projectId } while in flight
   const renderSse = useSseProgress(render ? musicVideoRenderEventsUrl(render.jobId) : null);
   const renderProgress = render ? Math.round((renderSse.latest?.progress ?? 0) * 100) : 0;
+  // The in-flight render already resolved the project's audio at kickoff;
+  // relinking the track now would leave the project pointing at a NEW track
+  // while the video that finishes rendering was produced from the OLD one.
+  const renderTargetsSelected = !!(render && selected && render.projectId === selected.id);
   // The number of scenes that already have a generated clip — the render's inputs.
   const renderableSceneCount = (selected?.scenes || []).filter((s) => s.videoHistoryId).length;
 
@@ -339,6 +351,10 @@ export default function MusicVideo() {
   // project's audio after creation at all).
   const handleChangeTrack = (trackId) => {
     if (!selected) return;
+    if (renderTargetsSelected) {
+      toast.error('Wait for the current render to finish before changing the track');
+      return;
+    }
     updateMusicVideoProject(selected.id, { trackId }, { silent: true })
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to change track'));
@@ -499,7 +515,8 @@ export default function MusicVideo() {
             {form.trackId && !ytImportCreate.active && (
               <p className="text-xs text-port-text-muted">Track set: {trackName(form.trackId)}</p>
             )}
-            <button type="submit" className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+            <button type="submit" disabled={ytImportCreate.active}
+              className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
               <Plus size={16} /> Create
             </button>
           </form>
@@ -575,14 +592,22 @@ export default function MusicVideo() {
                   <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(selected.trackId)}</span>
                   <select value={selected.trackId || ''} aria-label="Change track"
                     onChange={(e) => e.target.value && handleChangeTrack(e.target.value)}
-                    disabled={ytImportEdit.active}
+                    disabled={ytImportEdit.active || renderTargetsSelected}
+                    title={renderTargetsSelected ? 'Wait for the current render to finish before changing the track' : undefined}
                     className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
                     <option value="">Change track…</option>
                     {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
                   </select>
                   <YoutubeImportControls
                     url={ytUrlEdit} onUrlChange={(e) => setYtUrlEdit(e.target.value)}
-                    job={ytImportEdit} onStart={() => ytImportEdit.start(ytUrlEdit, selected.id)}
+                    job={ytImportEdit} disabled={renderTargetsSelected}
+                    onStart={() => {
+                      if (renderTargetsSelected) {
+                        toast.error('Wait for the current render to finish before changing the track');
+                        return;
+                      }
+                      ytImportEdit.start(ytUrlEdit, selected.id);
+                    }}
                     compact
                   />
                 </div>
