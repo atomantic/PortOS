@@ -22,6 +22,20 @@ describe('Drawer', () => {
     expect(screen.getByText('form body')).toBeInTheDocument();
   });
 
+  it('renders an optional subtitle as a second header line', () => {
+    render(<Drawer open onClose={() => {}} title="Sync Details" subtitle="My Collection">b</Drawer>);
+    // subtitle is a header concern (not smuggled into the scrollable body)
+    expect(screen.getByText('My Collection')).toBeInTheDocument();
+    // aria-label still reflects only the title, not the subtitle
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Sync Details');
+  });
+
+  it('omits the subtitle line when none is provided', () => {
+    render(<Drawer open onClose={() => {}} title="X">b</Drawer>);
+    // header holds only the title (an <h2>), no stray <p>
+    expect(screen.getByRole('heading', { name: 'X' })).toBeInTheDocument();
+  });
+
   describe('size variants (back-compat)', () => {
     it('defaults to the original sm (~520px) width', () => {
       render(<Drawer open onClose={() => {}} title="X">b</Drawer>);

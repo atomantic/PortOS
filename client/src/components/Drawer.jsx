@@ -40,6 +40,7 @@ export default function Drawer({
   open,
   onClose,
   title,
+  subtitle,             // optional second header line (e.g. the open record's name)
   children,
   size = 'sm',
   widthClass,           // escape hatch: overrides `size` when provided (back-compat)
@@ -88,7 +89,10 @@ export default function Drawer({
         className={`fixed inset-y-0 right-0 z-50 w-full ${resolvedWidth} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <h2 className="text-base font-medium text-white truncate min-w-0 pr-2">{title}</h2>
+          <div className="min-w-0 pr-2">
+            <h2 className="text-base font-medium text-white truncate">{title}</h2>
+            {subtitle && <p className="text-xs text-gray-400 truncate">{subtitle}</p>}
+          </div>
           <button
             type="button"
             onClick={onClose}
