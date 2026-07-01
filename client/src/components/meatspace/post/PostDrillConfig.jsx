@@ -89,12 +89,23 @@ const LLM_DRILL_META = {
 // persistable state. Without this, a type absent from the saved config renders
 // as enabled (via the `enabled !== false` convention) but never enters
 // `llmDrillTypes`, so Save would omit it and the launcher — which only
-// enumerates persisted keys — would never surface it in a session. Each type
-// starts from its `defaults` and is overlaid with any saved config value.
+// enumerates persisted keys — would never surface it in a session.
+//
+// A type PRESENT in the saved config keeps the launcher's enabled-by-presence
+// convention: an entry with no `enabled` field is active (`enabled !== false`),
+// so we must NOT let the opt-in default silently flip it off on the next save —
+// we overlay the count/timeLimit defaults only to fill empty inputs and resolve
+// `enabled` to the same boolean the launcher would compute. A type ABSENT from
+// the saved config uses its `defaults.enabled` (the 9 newly-exposed drills are
+// opt-in / disabled; the 5 legacy drills, always present via the server's
+// DEFAULT_CONFIG, are enabled).
 function seedLlmDrillTypes(saved) {
   const out = {};
   for (const [type, meta] of Object.entries(LLM_DRILL_META)) {
-    out[type] = { ...meta.defaults, ...(saved?.[type] || {}) };
+    const savedEntry = saved?.[type];
+    out[type] = savedEntry
+      ? { ...meta.defaults, ...savedEntry, enabled: savedEntry.enabled !== false }
+      : { ...meta.defaults };
   }
   return out;
 }
