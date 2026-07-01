@@ -17,7 +17,9 @@ import Modal from './Modal';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 
-const TAIL_OPTIONS = [100, 250, 500, 1000, 2000];
+// Keep the default tailLines (200) present here so the controlled <select>
+// renders a matching option on open rather than a mismatched first entry.
+const TAIL_OPTIONS = [100, 200, 500, 1000, 2000];
 
 export default function ProcessLogModal({ open, onClose, processName, title = 'System Logs' }) {
   const [processes, setProcesses] = useState([]);
