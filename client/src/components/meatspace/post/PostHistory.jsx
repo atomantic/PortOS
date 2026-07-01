@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, ChevronDown, ChevronRight } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { ArrowLeft, ChevronDown, ChevronRight, Flame, Trophy } from 'lucide-react';
+import {
+  LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
+} from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
+import { LLM_DRILL_TYPES, DRILL_LABELS, DOMAINS } from './constants';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -11,6 +13,22 @@ const RANGES = [
   { label: '90d', days: 90 },
   { label: 'All', days: 0 }
 ];
+
+// Concrete hex per domain so recharts SVG fills follow the same palette as the
+// `text-*-400` domain classes in constants.js (SVG can't read CSS custom props).
+const DOMAIN_HEX = {
+  math: '#60a5fa',       // blue-400
+  memory: '#4ade80',     // green-400
+  wordplay: '#c084fc',   // purple-400
+  verbal: '#fbbf24',     // amber-400
+  imagination: '#22d3ee' // cyan-400
+};
+
+const domainLabel = (key) => DOMAINS[key]?.label || key;
+const domainHex = (key) => DOMAIN_HEX[key] || '#a3a3a3';
+
+const scoreColorClass = (score) =>
+  score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
 
 export default function PostHistory({ onBack }) {
   const chartColors = useChartColors();
@@ -35,17 +53,43 @@ export default function PostHistory({ onBack }) {
     loadData();
   }, [loadData]);
 
-  const chartData = sessions.slice().reverse().map(s => ({
-    date: s.date,
-    score: s.score
-  }));
+  const chartData = useMemo(
+    () => sessions.slice().reverse().map(s => ({ date: s.date, score: s.score })),
+    [sessions]
+  );
+
+  // Per-domain averages (byModule is keyed by domain key → avg score).
+  const domainData = useMemo(() => {
+    const byModule = stats?.byModule || {};
+    return Object.entries(byModule)
+      .map(([key, score]) => ({ key, label: domainLabel(key), score }))
+      .sort((a, b) => b.score - a.score);
+  }, [stats]);
+
+  // Per-drill averages grouped by domain (byDrill is keyed by `${module}:${type}`).
+  const drillsByDomain = useMemo(() => {
+    const byDrill = stats?.byDrill || {};
+    const groups = {};
+    for (const [key, score] of Object.entries(byDrill)) {
+      const [module, type] = key.split(':');
+      if (!groups[module]) groups[module] = [];
+      groups[module].push({ type, label: DRILL_LABELS[type] || type, score });
+    }
+    for (const list of Object.values(groups)) list.sort((a, b) => b.score - a.score);
+    // Order domains by their overall average (matching the bar chart order).
+    return domainData
+      .filter(d => groups[d.key])
+      .map(d => ({ key: d.key, label: d.label, drills: groups[d.key] }));
+  }, [stats, domainData]);
+
+  const hasStats = stats && stats.sessionCount > 0;
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors" aria-label="Back">
             <ArrowLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">POST History</h2>
@@ -67,45 +111,111 @@ export default function PostHistory({ onBack }) {
         </div>
       </div>
 
-      {/* Stats Summary */}
-      {stats && stats.sessionCount > 0 && (
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
-            <div className="text-2xl font-mono font-bold text-white">{stats.sessionCount}</div>
-            <div className="text-xs text-gray-500">Sessions</div>
+      {/* Stat summary cards */}
+      {hasStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+          <StatCard label="Sessions" value={stats.sessionCount} />
+          <StatCard label="Avg Score" value={stats.overall} valueClass={scoreColorClass(stats.overall)} />
+          <StatCard
+            label="Current Streak"
+            value={stats.currentStreak}
+            suffix={stats.currentStreak === 1 ? 'day' : 'days'}
+            icon={<Flame size={14} className="text-port-warning" />}
+          />
+          <StatCard
+            label="Longest Streak"
+            value={stats.longestStreak}
+            suffix={stats.longestStreak === 1 ? 'day' : 'days'}
+            icon={<Trophy size={14} className="text-port-accent" />}
+          />
+        </div>
+      )}
+
+      {/* Analytics grid: score trend (wide) + per-domain averages */}
+      {hasStats && (
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
+          <div className="bg-port-card border border-port-border rounded-lg p-4 xl:col-span-2">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Score Trend</h3>
+            {chartData.length > 1 ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={chartData}>
+                  <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartColors.axis }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, borderRadius: 8 }}
+                    labelStyle={{ color: chartColors.axis }}
+                  />
+                  <Line type="monotone" dataKey="score" stroke={chartColors.accent} strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-center text-gray-500 py-12 text-sm">
+                Complete more sessions to chart your trend.
+              </div>
+            )}
           </div>
-          <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
-            <div className={`text-2xl font-mono font-bold ${
-              stats.overall >= 80 ? 'text-port-success' :
-              stats.overall >= 50 ? 'text-port-warning' : 'text-port-error'
-            }`}>{stats.overall}</div>
-            <div className="text-xs text-gray-500">Avg Score</div>
-          </div>
-          <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
-            <div className="text-2xl font-mono font-bold text-white">
-              {Object.keys(stats.byDrill || {}).length}
-            </div>
-            <div className="text-xs text-gray-500">Drill Types</div>
+
+          <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Avg by Domain</h3>
+            {domainData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={domainData} layout="vertical" margin={{ left: 8, right: 16 }}>
+                  <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" horizontal={false} />
+                  <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
+                  <YAxis
+                    type="category"
+                    dataKey="label"
+                    width={80}
+                    tick={{ fontSize: 11, fill: chartColors.axis }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: chartColors.grid, opacity: 0.2 }}
+                    contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, borderRadius: 8 }}
+                    labelStyle={{ color: chartColors.axis }}
+                  />
+                  <Bar dataKey="score" radius={[0, 4, 4, 0]}>
+                    {domainData.map(d => (
+                      <Cell key={d.key} fill={domainHex(d.key)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-center text-gray-500 py-12 text-sm">No domain data yet.</div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Chart */}
-      {chartData.length > 1 && (
+      {/* Per-drill breakdown grouped by domain */}
+      {hasStats && drillsByDomain.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Score Trend</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData}>
-              <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartColors.axis }} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
-              <Tooltip
-                contentStyle={{ backgroundColor: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, borderRadius: 8 }}
-                labelStyle={{ color: chartColors.axis }}
-              />
-              <Line type="monotone" dataKey="score" stroke={chartColors.accent} strokeWidth={2} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <h3 className="text-sm font-medium text-gray-400 mb-4">Drill Breakdown</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+            {drillsByDomain.map(domain => (
+              <div key={domain.key}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: domainHex(domain.key) }} />
+                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">{domain.label}</span>
+                </div>
+                <div className="space-y-2">
+                  {domain.drills.map(drill => (
+                    <div key={drill.type} className="flex items-center gap-3">
+                      <span className="text-xs text-gray-400 w-32 shrink-0 truncate" title={drill.label}>{drill.label}</span>
+                      <div className="flex-1 h-2 bg-port-bg rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${Math.min(100, Math.max(0, drill.score))}%`, backgroundColor: domainHex(domain.key) }}
+                        />
+                      </div>
+                      <span className={`text-xs font-mono w-8 text-right ${scoreColorClass(drill.score)}`}>{drill.score}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -125,8 +235,6 @@ export default function PostHistory({ onBack }) {
             {sessions.flatMap(s => {
               const expanded = expandedId === s.id;
               const durationMin = Math.round((s.durationMs || 0) / 60000);
-              const scoreColor = s.score >= 80 ? 'text-port-success' :
-                s.score >= 50 ? 'text-port-warning' : 'text-port-error';
 
               const rows = [
                 <tr
@@ -140,7 +248,7 @@ export default function PostHistory({ onBack }) {
                   <td className="px-4 py-2 text-white">{s.date}</td>
                   <td className="px-4 py-2 text-gray-400">{durationMin}m</td>
                   <td className="px-4 py-2 text-gray-400">{(s.modules || []).join(', ')}</td>
-                  <td className={`px-4 py-2 text-right font-mono font-medium ${scoreColor}`}>{s.score}</td>
+                  <td className={`px-4 py-2 text-right font-mono font-medium ${scoreColorClass(s.score)}`}>{s.score}</td>
                 </tr>
               ];
 
@@ -175,6 +283,19 @@ export default function PostHistory({ onBack }) {
           <div className="text-center text-gray-500 py-8">No sessions found for this range.</div>
         )}
       </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, suffix, valueClass = 'text-white', icon }) {
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-3 text-center">
+      <div className={`text-2xl font-mono font-bold flex items-center justify-center gap-1.5 ${valueClass}`}>
+        {icon}
+        {value}
+        {suffix && <span className="text-xs font-normal text-gray-500 self-end mb-1">{suffix}</span>}
+      </div>
+      <div className="text-xs text-gray-500">{label}</div>
     </div>
   );
 }
