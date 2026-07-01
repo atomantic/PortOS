@@ -25,8 +25,8 @@ describe('InlineDiff', () => {
   it('highlights only the changed words inside each row, not the unchanged ones', () => {
     const { container } = render(<InlineDiff oldText="The cat sat" newText="The dog sat" />);
     // Removed-word span lives inside the red row.
-    const removedSpans = container.querySelectorAll('.text-port-error .bg-port-error\\/50');
-    const addedSpans = container.querySelectorAll('.text-port-success .bg-port-success\\/50');
+    const removedSpans = container.querySelectorAll('.text-port-error .bg-port-error\\/20');
+    const addedSpans = container.querySelectorAll('.text-port-success .bg-port-success\\/20');
     expect(removedSpans).toHaveLength(1);
     expect(addedSpans).toHaveLength(1);
     expect(removedSpans[0].textContent).toBe('cat');
@@ -45,7 +45,7 @@ describe('InlineDiff', () => {
     const { container } = render(<InlineDiff oldText={buildHuge('a')} newText={buildHuge('b')} />);
     expect(screen.getByText(/Diff too large/i)).toBeInTheDocument();
     // No per-word highlight spans — just the two flat color blocks.
-    expect(container.querySelectorAll('.bg-port-error\\/50, .bg-port-success\\/50')).toHaveLength(0);
+    expect(container.querySelectorAll('.bg-port-error\\/20, .bg-port-success\\/20')).toHaveLength(0);
   });
 
   it('stays within the LCS path when one side is short, even if the other is long', () => {
