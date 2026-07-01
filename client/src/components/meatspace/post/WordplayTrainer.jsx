@@ -96,6 +96,15 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   const providerId = config?.llmDrills?.providerId || null;
   const model = config?.llmDrills?.model || null;
 
+  // The provider/model that generated the CURRENT drill — tracked separately
+  // from the config-derived providerId/model above. handleConfirmFill saves
+  // a newly-chosen provider to config asynchronously and doesn't await it
+  // before calling runMode; if the user answers before that save (and the
+  // resulting config prop update) lands, scoring must still use the provider
+  // that actually generated this drill, not whatever config currently holds.
+  const [activeProviderId, setActiveProviderId] = useState(null);
+  const [activeModel, setActiveModel] = useState(null);
+
   const prompts = getPrompts(drill);
   const totalPrompts = prompts.length;
   const currentPrompt = prompts[questionIndex];
@@ -109,6 +118,8 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     setItems([]);
     setFeedback(null);
     setResults([]);
+    setActiveProviderId(useProviderId);
+    setActiveModel(useModel);
 
     const generated = await generatePostDrill(modeId, { count: 5 }, useProviderId, useModel).catch(() => null);
     setLoading(false);
@@ -159,9 +170,10 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     const chosenProviderId = fillProviderId || null;
     const chosenModel = fillModel || null;
     if (chosenProviderId !== providerId || chosenModel !== model) {
-      // Persist as the new default for scoring calls too, but don't gate the
-      // user-facing actions below on this round-trip — they already have the
-      // chosen provider/model as explicit params.
+      // Persist as the new default for future modes/sessions, but don't gate
+      // the actions below on this round-trip — runMode and handleSubmit both
+      // use the explicit chosen/active provider for this drill regardless of
+      // whether this save has landed yet.
       updatePostConfig({ llmDrills: { providerId: chosenProviderId, model: chosenModel } })
         .then(updated => onConfigUpdate?.(updated))
         .catch(() => {});
@@ -195,10 +207,13 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
       };
     }
 
-    // Score immediately
+    // Score immediately, with the provider/model that generated THIS drill
+    // (activeProviderId/activeModel) — not the config-derived providerId/model,
+    // which may still be lagging an in-flight config save from a just-confirmed
+    // provider switch (see handleConfirmFill).
     setFeedback({ scoring: true });
     const scored = await scorePostLlmDrill(
-      selectedMode, drill, [responseObj], 120000, providerId, model
+      selectedMode, drill, [responseObj], 120000, activeProviderId, activeModel
     ).catch(() => null);
     const fb = scored?.evaluation?.scores?.[0] || {};
     setFeedback({
@@ -214,7 +229,7 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
       score: fb.score ?? scored?.score ?? 0,
       feedback: fb.feedback || '',
     }]);
-  }, [inputValue, items, currentPrompt, selectedMode, drill, providerId, model, questionIndex]);
+  }, [inputValue, items, currentPrompt, selectedMode, drill, activeProviderId, activeModel, questionIndex]);
 
   const handleNext = useCallback(() => {
     setFeedback(null);
