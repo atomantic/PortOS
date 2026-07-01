@@ -171,35 +171,60 @@ const LIGHT_CONTEXT_PROVIDER_TYPES = new Set([PROVIDER_TYPES.TUI, PROVIDER_TYPES
 const SIMPLIFY_INLINE_REVIEW = 'review your changed code for reuse, quality, and efficiency (DRY, dead code, naming, simpler equivalents, missed edge cases)';
 
 /**
- * Build the shared task block — the description plus optional `**Target App**`
- * and `**Screenshots**` fields. Used by BOTH the light and full prompt paths
- * so a new task-metadata field gets surfaced in both without drift.
+ * Render a file-list task field (screenshots, attachments, …) either as a
+ * `### Header` + bulleted-path list (light path) or a single inline
+ * `**Header**: a, b` line (full path). Shared by every file-list field in
+ * `buildTaskBlock` so a wording tweak or a new field can't drift between them.
  *
- * Returns three pre-rendered slots (`description`, `targetApp`, `screenshots`).
- * Absent fields come back as empty strings so the full path's template literal
- * can interpolate them in fixed positions and preserve byte-identical line
- * spacing. The light path filters out the empty strings and joins what remains.
+ * @param {string} header - Section heading / inline label (e.g. "Screenshots").
+ * @param {Array} items - Task-metadata array; anything else renders as ''.
+ * @param {(item: any) => string} formatItem - Renders one item for the bulleted list.
+ * @param {(item: any) => string} formatInline - Renders one item for the inline join.
+ * @param {boolean} asList - Bulleted-list style vs. inline style.
+ * @returns {string}
+ */
+function renderFileListField(header, items, formatItem, formatInline, asList) {
+  if (!Array.isArray(items) || items.length === 0) return '';
+  return asList
+    ? `### ${header}\nUse your filesystem tools to inspect each path:\n` +
+      items.map(i => `- ${formatItem(i)}`).join('\n')
+    : `**${header}**: ${items.map(formatInline).join(', ')}`;
+}
+
+/**
+ * Build the shared task block — the description plus optional `**Target App**`,
+ * `**Screenshots**`, and `**Attachments**` fields. Used by BOTH the light and
+ * full prompt paths so a new task-metadata field gets surfaced in both without
+ * drift.
+ *
+ * Returns pre-rendered slots (`description`, `targetApp`, `screenshots`,
+ * `attachments`). Absent fields come back as empty strings so the full path's
+ * template literal can interpolate them in fixed positions and preserve
+ * byte-identical line spacing. The light path filters out the empty strings
+ * and joins what remains.
  *
  * @param {Object} task
  * @param {Object} [opts]
  * @param {boolean} [opts.screenshotsAsList=false] - When true, render screenshots
- *   as a `### Screenshots` header followed by a bulleted list of paths (light
- *   path style). When false, render as a single inline `**Screenshots**: a, b`
+ *   and attachments as a header followed by a bulleted list of paths (light
+ *   path style). When false, render as a single inline `**Field**: a, b`
  *   line (full path style).
- * @returns {{ description: string, targetApp: string, screenshots: string }}
+ * @returns {{ description: string, targetApp: string, screenshots: string, attachments: string }}
  */
 export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
   const description = task.description;
   const targetApp = task.metadata?.app ? `**Target App**: ${task.metadata.app}` : '';
-  const shots = task.metadata?.screenshots;
-  let screenshots = '';
-  if (Array.isArray(shots) && shots.length > 0) {
-    screenshots = screenshotsAsList
-      ? '### Screenshots\nUse your filesystem tools to inspect each path:\n' +
-        shots.map(s => `- \`${s}\``).join('\n')
-      : `**Screenshots**: ${shots.join(', ')}`;
-  }
-  return { description, targetApp, screenshots };
+  const screenshots = renderFileListField(
+    'Screenshots', task.metadata?.screenshots,
+    (s) => `\`${s}\``, (s) => s, screenshotsAsList
+  );
+  const label = (f) => (f?.originalName || f?.filename || f?.path || '').toString();
+  const path = (f) => (f?.path || '').toString();
+  const attachments = renderFileListField(
+    'Attachments', task.metadata?.attachments,
+    (f) => `\`${path(f)}\` (${label(f)})`, (f) => `${label(f)} (${path(f)})`, screenshotsAsList
+  );
+  return { description, targetApp, screenshots, attachments };
 }
 
 /**
@@ -651,6 +676,7 @@ ${taskBlock.description}
 ${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `\n### Task Context\n\n${task.metadata.context}\n`) : ''}
 ${taskBlock.targetApp}
 ${taskBlock.screenshots}
+${taskBlock.attachments}
 ${worktreeSection}
 ${pipelineSection}
 ${jiraSection}
@@ -713,7 +739,7 @@ Begin working on the task now.`;
  * The agent already has direct access to the project, so we don't paste in:
  *   memory dumps, CLAUDE.md contents, digital twin, tools summary,
  *   `.planning/` snippets, auto-matched skill templates, or compaction
- *   warnings. We just hand it the task, any user-attached context/screenshots,
+ *   warnings. We just hand it the task, any user-attached context/screenshots/attachments,
  *   and the PortOS-specific contract bits it can't infer (worktree branch,
  *   JIRA ticket, pipeline predecessors, completion-sentinel protocol,
  *   review-loop follow-up procedure).
@@ -762,6 +788,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   }
 
   if (taskBlock.screenshots) sections.push(taskBlock.screenshots);
+  if (taskBlock.attachments) sections.push(taskBlock.attachments);
 
   // --- Worktree ----------------------------------------------------------
   if (worktreeInfo) {

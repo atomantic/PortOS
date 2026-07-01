@@ -86,6 +86,17 @@ export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MO
   return parts.join(' ');
 }
 
+// A generic file attachment uploaded via POST /api/attachments and referenced
+// by the returned metadata — matches the fileInfo shape TaskAddForm.jsx sends
+// (client/src/utils/fileUpload.js uploadAttachmentFile).
+const cosTaskAttachmentSchema = z.object({
+  filename: z.string(),
+  originalName: z.string().optional(),
+  path: z.string(),
+  size: z.number().optional(),
+  mimeType: z.string().optional(),
+});
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   priority: z.string().optional(),
@@ -96,7 +107,7 @@ export const createCosTaskSchema = z.object({
   type: z.string().optional().default('user'),
   approvalRequired: z.boolean().optional(),
   screenshots: z.array(z.string()).optional(),
-  attachments: z.array(z.string()).optional(),
+  attachments: z.array(cosTaskAttachmentSchema).optional(),
   position: z.enum(['top', 'bottom']).optional().default('bottom'),
   createJiraTicket: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,

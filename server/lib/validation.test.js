@@ -746,6 +746,25 @@ describe('validation.js', () => {
       expect(createCosTaskSchema.safeParse({ description: 'x', reviewStopMode: 'nope' }).success).toBe(false);
     });
 
+    it('accepts multiple image screenshots and attachment objects', () => {
+      const parsed = createCosTaskSchema.safeParse({
+        description: 'do a thing',
+        screenshots: ['/data/screenshots/a.png', '/data/screenshots/b.png'],
+        attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/data/cos/attachments/a-123.png', size: 100, mimeType: 'image/png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/data/cos/attachments/b-456.png', size: 200, mimeType: 'image/png' },
+        ],
+      });
+      expect(parsed.success).toBe(true);
+      expect(parsed.data.screenshots).toHaveLength(2);
+      expect(parsed.data.attachments).toHaveLength(2);
+      expect(parsed.data.attachments[1].originalName).toBe('photo-two.png');
+    });
+
+    it('rejects a legacy attachments-as-strings shape', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'x', attachments: ['a.png'] }).success).toBe(false);
+    });
+
     it('should reject prototype pollution keys', () => {
       expect(sanitizeTaskMetadata({ __proto__: { malicious: true } })).toBeNull();
       expect(sanitizeTaskMetadata({ constructor: true })).toBeNull();
