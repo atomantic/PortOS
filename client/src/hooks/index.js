@@ -95,6 +95,7 @@ export * from './useArmedAction.js';
 export * from './useAutoRefetch.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
+export { default as useDrawerTab } from './useDrawerTab.js';
 export * from './useKeyboardHelp.js';
 export * from './useLockToggle.js';
 export * from './useScrollLock.js';
