@@ -131,14 +131,22 @@ export default function UpdateTab() {
     // this server process — and its socket — well before update.sh reaches its
     // 'restart' step. That step event, and 'portos:update:complete', are then
     // never emitted, and the UI hangs on "Reconciling..."/"Stopping apps"
-    // forever even though update.sh finishes fine in the background. The
-    // socket disconnecting IS the server dying, so treat it as the same
-    // signal 'restart' would have been — it's a strictly more reliable proxy
-    // for "the update just tore down this process" than waiting on a step
-    // event from the process being torn down.
+    // forever even though update.sh finishes fine in the background. A raw
+    // 'disconnect' isn't proof of that by itself, though — PortOS is commonly
+    // used remotely over Tailscale, and a transient network blip during the
+    // pre-pm2-stop steps (git-pull/submodules, while the server is still very
+    // much alive) would fire 'disconnect' too. Confirm the server is actually
+    // unreachable before treating this as "the update just tore the process
+    // down" — otherwise a blip prematurely arms polling, which can time out
+    // with a false "Restart timed out" error while the real update finishes
+    // fine in the background with nothing left watching it.
     const handleDisconnect = () => {
       if (!updatingRef.current) return;
-      armRestartPolling();
+      setTimeout(async () => {
+        if (!updatingRef.current) return;
+        const ok = await api.checkHealth().catch(() => null);
+        if (!ok && updatingRef.current) armRestartPolling();
+      }, 1500);
     };
 
     socket.on('portos:update:step', handleStep);
