@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS, DOMAINS } from './constants';
+import { LLM_DRILL_TYPES, DRILL_LABELS, DOMAINS, DRILL_TO_DOMAIN } from './constants';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -24,7 +24,7 @@ const DOMAIN_HEX = {
   imagination: '#22d3ee' // cyan-400
 };
 
-const domainLabel = (key) => DOMAINS[key]?.label || key;
+const domainLabel = (key) => (key === 'other' ? 'Other' : DOMAINS[key]?.label || key);
 const domainHex = (key) => DOMAIN_HEX[key] || '#a3a3a3';
 
 const scoreColorClass = (score) =>
@@ -58,29 +58,35 @@ export default function PostHistory({ onBack }) {
     [sessions]
   );
 
-  // Per-domain averages (byModule is keyed by domain key → avg score).
-  const domainData = useMemo(() => {
-    const byModule = stats?.byModule || {};
-    return Object.entries(byModule)
-      .map(([key, score]) => ({ key, label: domainLabel(key), score }))
-      .sort((a, b) => b.score - a.score);
-  }, [stats]);
-
-  // Per-drill averages grouped by domain (byDrill is keyed by `${module}:${type}`).
-  const drillsByDomain = useMemo(() => {
+  // Per-domain averages + per-drill breakdown, both derived from `byDrill`.
+  // getPostStats keys byDrill as `${task.module}:${task.type}`, where task.module
+  // is a COARSE module the runners save (`mental-math`, `llm-drills`, `memory`) —
+  // NOT a DOMAINS key. So the real domain must come from the drill TYPE via
+  // DRILL_TO_DOMAIN, not from the module segment (`byModule` is likewise coarse
+  // and can't be labeled/colored as a domain). The per-domain score is the mean
+  // of that domain's per-drill averages.
+  const { domainData, drillsByDomain } = useMemo(() => {
     const byDrill = stats?.byDrill || {};
-    const groups = {};
+    const groups = {}; // domainKey -> [{ type, label, score }]
     for (const [key, score] of Object.entries(byDrill)) {
-      const [module, type] = key.split(':');
-      if (!groups[module]) groups[module] = [];
-      groups[module].push({ type, label: DRILL_LABELS[type] || type, score });
+      const type = key.slice(key.indexOf(':') + 1);
+      const domain = DRILL_TO_DOMAIN[type] || 'other';
+      if (!groups[domain]) groups[domain] = [];
+      groups[domain].push({ type, label: DRILL_LABELS[type] || type, score });
     }
-    for (const list of Object.values(groups)) list.sort((a, b) => b.score - a.score);
-    // Order domains by their overall average (matching the bar chart order).
-    return domainData
-      .filter(d => groups[d.key])
-      .map(d => ({ key: d.key, label: d.label, drills: groups[d.key] }));
-  }, [stats, domainData]);
+    const domainList = Object.entries(groups)
+      .map(([key, drills]) => ({
+        key,
+        label: domainLabel(key),
+        score: Math.round(drills.reduce((a, d) => a + d.score, 0) / drills.length),
+        drills: drills.slice().sort((a, b) => b.score - a.score)
+      }))
+      .sort((a, b) => b.score - a.score);
+    return {
+      domainData: domainList.map(({ key, label, score }) => ({ key, label, score })),
+      drillsByDomain: domainList.map(({ key, label, drills }) => ({ key, label, drills }))
+    };
+  }, [stats]);
 
   const hasStats = stats && stats.sessionCount > 0;
 

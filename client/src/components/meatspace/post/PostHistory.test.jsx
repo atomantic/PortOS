@@ -11,18 +11,21 @@ vi.mock('../../../services/api', () => ({
 import PostHistory from './PostHistory';
 import { getPostSessions, getPostStats } from '../../../services/api';
 
+// Runners save COARSE module keys (`mental-math`, `llm-drills`) — not DOMAINS
+// keys — so getPostStats keys byModule/byDrill by those. The dashboard must
+// derive the real domain (Mental Math / Wordplay) from the drill TYPE.
 const SESSIONS = [
   {
-    id: 'a', date: '2026-06-01', score: 72, durationMs: 300000, modules: ['math', 'wordplay'],
+    id: 'a', date: '2026-06-01', score: 72, durationMs: 300000, modules: ['mental-math', 'llm-drills'],
     tasks: [
-      { module: 'math', type: 'multiplication', score: 80, questions: [{ correct: true }] },
-      { module: 'wordplay', type: 'pun-wordplay', score: 64, responses: [{}] },
+      { module: 'mental-math', type: 'multiplication', score: 80, questions: [{ correct: true }] },
+      { module: 'llm-drills', type: 'pun-wordplay', score: 64, responses: [{}] },
     ],
   },
   {
-    id: 'b', date: '2026-06-02', score: 88, durationMs: 300000, modules: ['math'],
+    id: 'b', date: '2026-06-02', score: 88, durationMs: 300000, modules: ['mental-math'],
     tasks: [
-      { module: 'math', type: 'multiplication', score: 90, questions: [{ correct: true }] },
+      { module: 'mental-math', type: 'multiplication', score: 90, questions: [{ correct: true }] },
     ],
   },
 ];
@@ -31,8 +34,8 @@ const STATS = {
   days: 30,
   sessionCount: 2,
   overall: 80,
-  byModule: { math: 85, wordplay: 64 },
-  byDrill: { 'math:multiplication': 85, 'wordplay:pun-wordplay': 64 },
+  byModule: { 'mental-math': 85, 'llm-drills': 64 },
+  byDrill: { 'mental-math:multiplication': 85, 'llm-drills:pun-wordplay': 64 },
   currentStreak: 3,
   longestStreak: 5,
 };
@@ -62,6 +65,10 @@ describe('PostHistory analytics dashboard', () => {
     // Per-drill labels render inside the breakdown.
     expect(screen.getByText('Multiplication')).toBeTruthy();
     expect(screen.getByText('Pun & Wordplay')).toBeTruthy();
+    // The 'Mental Math' / 'Wordplay' domain labels above can ONLY appear when the
+    // domain is derived from the drill TYPE (multiplication→math, pun-wordplay→
+    // wordplay). The coarse `byModule`/byDrill keys are 'mental-math'/'llm-drills',
+    // so the earlier byModule-keyed implementation would have rendered those raw.
   });
 
   it('reloads stats when the range selector changes', async () => {
