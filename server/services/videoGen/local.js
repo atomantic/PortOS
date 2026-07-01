@@ -43,7 +43,7 @@ import {
   assertByovRuntimeInstalled,
   invalidateByovReadyCache,
 } from './runtimes.js';
-import { loadHistory, saveHistory } from './history.js';
+import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -1029,7 +1029,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         if (watchdogSuccess) {
           console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
         }
-        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
+        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
       }
     } catch (err) {
       // Finalize/teardown threw — fail the job loudly instead of crashing the
@@ -1262,12 +1262,14 @@ export async function generateChainedVideo({ chunks, jobId: outerJobId, ...rest 
 async function setHistoryItemsHidden(ids, hidden) {
   if (!ids?.length) return;
   const wanted = new Set(ids);
-  const history = await loadHistory().catch(() => null);
-  if (!Array.isArray(history)) return;
-  for (const item of history) {
-    if (wanted.has(item.id)) item.hidden = !!hidden;
-  }
-  await saveHistory(history).catch(() => {});
+  // Serialized through the shared history tail so a concurrent write path
+  // (a download completing, a render finalizing) can't clobber this update.
+  await mutateVideoHistory((history) => {
+    for (const item of history) {
+      if (wanted.has(item.id)) item.hidden = !!hidden;
+    }
+    return history;
+  }).catch(() => {});
 }
 
 // Extract the last frame of a video as a PNG into data/images/ — used to
@@ -1476,9 +1478,10 @@ export async function stitchVideos(videoIds, opts = {}) {
       loraScales: videos[0].loraScales,
     } : {}),
   };
-  const h = await loadHistory();
-  h.unshift(stitchedMeta);
-  await saveHistory(h);
+  // Serialized append against the shared history tail (re-reads the freshest
+  // list inside the mutator) so a concurrent download/render write can't drop
+  // this stitched entry.
+  await mutateVideoHistory((history) => { history.unshift(stitchedMeta); return history; });
   console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
   return stitchedMeta;
 }
@@ -1541,20 +1544,25 @@ export async function upscaleHistoryItem(historyId) {
     // even when the source clip was hidden.
     hidden: false,
   };
-  const refreshedHistory = await loadHistory();
-  refreshedHistory.unshift(newEntry);
-  await saveHistory(refreshedHistory);
+  // Serialized append (re-reads inside the mutator) so a concurrent
+  // download/render write can't drop the upscaled entry.
+  await mutateVideoHistory((history) => { history.unshift(newEntry); return history; });
   console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height})`);
   return newEntry;
 }
 
 export async function setHistoryItemHidden(id, hidden) {
-  const history = await loadHistory();
-  const item = history.find((h) => h.id === id);
-  if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  item.hidden = !!hidden;
-  await saveHistory(history);
-  return { ok: true, hidden: item.hidden };
+  let result;
+  // Serialized find-and-set through the shared tail; a 404 throw inside the
+  // mutator rejects before any save, preserving the not-found semantics.
+  await mutateVideoHistory((history) => {
+    const item = history.find((h) => h.id === id);
+    if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    item.hidden = !!hidden;
+    result = { ok: true, hidden: item.hidden };
+    return history;
+  });
+  return result;
 }
 
 export async function deleteHistoryItem(id) {
@@ -1576,7 +1584,9 @@ export async function deleteHistoryItem(id) {
     const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
     if (frameFile) await unlink(frameFile).catch(() => {});
   }
-  await saveHistory(history.filter((h) => h.id !== id));
+  // Serialized removal through the shared tail (re-filters the freshest list),
+  // so a concurrent download/render append isn't dropped by this save.
+  await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
   console.log(`🗑️ Deleted video: ${item.filename}`);
   return { ok: true };
 }

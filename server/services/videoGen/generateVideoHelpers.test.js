@@ -119,8 +119,7 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     let saved = null;
     await finalizeGeneratedVideo({
       ...baseCtx(job),
-      loadHistory: async () => [],
-      saveHistory: async (h) => { saved = h; },
+      mutateHistory: async (fn) => { saved = await fn([]); return saved; },
     });
     expect(saved).toHaveLength(1);
     expect(saved[0].runtime).toEqual(fp);
@@ -131,8 +130,7 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     let saved = null;
     await finalizeGeneratedVideo({
       ...baseCtx(job),
-      loadHistory: async () => [],
-      saveHistory: async (h) => { saved = h; },
+      mutateHistory: async (fn) => { saved = await fn([]); return saved; },
     });
     expect(saved).toHaveLength(1);
     expect('runtime' in saved[0]).toBe(false);
