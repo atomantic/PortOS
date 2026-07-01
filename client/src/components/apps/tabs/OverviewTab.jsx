@@ -235,7 +235,7 @@ export default function OverviewTab({ app, onRefresh }) {
             <Ticket size={16} className="text-blue-400 shrink-0" />
             <span className="text-sm text-white font-mono">{app.jira.projectKey || '-'}</span>
             {app.jira.issueType && <span className="text-xs text-gray-400">{app.jira.issueType}</span>}
-            {app.jira.createPR !== false && <span className="text-xs text-green-400">+ PR</span>}
+            {app.jira.createPR !== false && <span className="text-xs text-port-success">+ PR</span>}
             {app.jira.labels?.length > 0 && (
               <span className="text-xs text-cyan-400">{app.jira.labels.join(', ')}</span>
             )}

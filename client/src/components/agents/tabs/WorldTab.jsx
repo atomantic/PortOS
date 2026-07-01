@@ -843,7 +843,7 @@ export default function WorldTab({ agentId }) {
               <button
                 onClick={() => handleExplore(true)}
                 disabled={moving}
-                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50"
+                className="px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
               >
                 {moving ? 'Exploring...' : 'Random Explore'}
               </button>

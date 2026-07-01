@@ -188,13 +188,13 @@ export default function DigestTab({ onRefresh }) {
       <section>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Clock className="w-5 h-5 text-purple-400" />
+            <Clock className="w-5 h-5 text-port-accent-2" />
             <h2 className="text-lg font-semibold text-white">Weekly Review</h2>
           </div>
           <button
             onClick={handleRunReview}
             disabled={runningReview}
-            className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/20 text-purple-400 rounded-lg text-sm hover:bg-purple-500/30 disabled:opacity-50"
+            className="flex items-center gap-2 px-3 py-1.5 bg-port-accent-2/20 text-port-accent-2 rounded-lg text-sm hover:bg-port-accent-2/30 disabled:opacity-50"
           >
             {runningReview ? (
               <BrailleSpinner />
@@ -218,7 +218,7 @@ export default function DigestTab({ onRefresh }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
               {/* What Happened */}
               <div className="p-3 bg-port-bg rounded-lg">
-                <h4 className="text-xs font-medium text-blue-400 mb-2">What Happened</h4>
+                <h4 className="text-xs font-medium text-port-accent mb-2">What Happened</h4>
                 <ul className="space-y-1">
                   {latestReview.whatHappened?.map((item, i) => (
                     <li key={i} className="text-sm text-gray-300">• {item}</li>
@@ -251,8 +251,8 @@ export default function DigestTab({ onRefresh }) {
 
             {/* Recurring Theme */}
             {latestReview.recurringTheme && (
-              <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-                <h4 className="text-xs font-medium text-purple-400 mb-1">Pattern Noticed</h4>
+              <div className="p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
+                <h4 className="text-xs font-medium text-port-accent-2 mb-1">Pattern Noticed</h4>
                 <p className="text-sm text-gray-300">{latestReview.recurringTheme}</p>
               </div>
             )}

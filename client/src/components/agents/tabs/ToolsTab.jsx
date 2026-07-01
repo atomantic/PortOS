@@ -381,7 +381,7 @@ export default function ToolsTab({ agentId, agent }) {
                   <button
                     onClick={handleFindRelevant}
                     disabled={feedLoading}
-                    className="px-3 py-1 text-sm bg-purple-500/20 text-purple-400 rounded hover:bg-purple-500/30 disabled:opacity-50"
+                    className="px-3 py-1 text-sm bg-port-accent-2/20 text-port-accent-2 rounded hover:bg-port-accent-2/30 disabled:opacity-50"
                   >
                     Find Relevant
                   </button>
@@ -415,7 +415,7 @@ export default function ToolsTab({ agentId, agent }) {
                       </div>
                       <div className="flex items-center gap-2 ml-2 shrink-0">
                         {post.relevanceScore > 0 && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-port-accent-2/20 text-port-accent-2">
                             {post.relevanceScore}
                           </span>
                         )}
@@ -494,7 +494,7 @@ export default function ToolsTab({ agentId, agent }) {
                 <button
                   onClick={handleCheckPosts}
                   disabled={checking}
-                  className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50"
+                  className="px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
                 >
                   {checking ? 'Checking...' : 'Check Posts'}
                 </button>

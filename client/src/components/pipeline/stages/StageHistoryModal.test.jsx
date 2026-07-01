@@ -67,8 +67,8 @@ describe('StageHistoryModal', () => {
     // Header echoes the current runId.
     expect(screen.getByText(/run run-cur/)).toBeInTheDocument();
     // The diff is rendered (some red/green spans must exist since "newest" → "current").
-    expect(container.querySelector('.text-red-400')).toBeInTheDocument();
-    expect(container.querySelector('.text-green-400')).toBeInTheDocument();
+    expect(container.querySelector('.text-port-error')).toBeInTheDocument();
+    expect(container.querySelector('.text-port-success')).toBeInTheDocument();
   });
 
   it('switches the diff when a different version is selected', async () => {
