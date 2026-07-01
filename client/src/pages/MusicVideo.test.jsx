@@ -271,4 +271,29 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     resolveKickoff({ jobId: 'yt-job-1' });
     await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalledTimes(1));
   });
+
+  it('blocks switching projects during the pending kickoff window, before the job even exists', async () => {
+    const projectB = { ...PROJECT_NO_CLIP, id: 'mv-3', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
+    let resolveKickoff;
+    importTrackFromYoutube.mockImplementation(() => new Promise((resolve) => { resolveKickoff = resolve; }));
+    render(<MusicVideo />);
+    const listBtnA = await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) });
+    fireEvent.click(listBtnA);
+
+    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id !== 'mv-yt-create');
+    fireEvent.change(editInput, { target: { value: 'https://youtu.be/pending' } });
+    fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
+    // The kickoff POST has NOT resolved yet — no jobId, no SSE subscription —
+    // but switching away must already be blocked, or this project's import
+    // would attach with nobody listening once it lands.
+    expect(importTrackFromYoutube).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(projectB.name) }));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i));
+    expect(listBtnA).toHaveClass('border-port-accent');
+
+    resolveKickoff({ jobId: 'yt-job-pending' });
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { importTrackFromYoutube, cancelTrackImport, trackImportEventsUrl } from '../services/apiTracks.js';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
@@ -18,13 +18,16 @@ import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
  */
 export default function useYoutubeTrackImport({ onComplete } = {}) {
   const [job, setJob] = useState(null); // { jobId, context }
+  // `pending` covers the gap between clicking Import and the kickoff request
+  // resolving, when `job` is still null. Without it, `active` (below) would
+  // read false during that window, so a fast double-click could fire a
+  // second request (the second response's setJob would silently orphan the
+  // first job), AND a caller's "block navigation while active" guard
+  // (MusicVideo.jsx's selectProject/handleDelete) would let the user switch
+  // away/delete before the job even exists to be guarded against.
+  const [pending, setPending] = useState(false);
   const sse = useSseProgress(job ? trackImportEventsUrl(job.jobId) : null);
   const percent = Math.round(sse.latest?.percent ?? 0);
-  // Synchronous re-entrancy guard for the gap between clicking Import and the
-  // kickoff request resolving — `job` (state) doesn't flip true until then,
-  // so a fast double-click would otherwise fire two requests and the second
-  // response's setJob would silently orphan the first job.
-  const startingRef = useRef(false);
 
   useEffect(() => {
     const frame = sse.latest;
@@ -53,12 +56,12 @@ export default function useYoutubeTrackImport({ onComplete } = {}) {
 
   const start = (url, context) => {
     const trimmed = url.trim();
-    if (!trimmed || job || startingRef.current) return;
-    startingRef.current = true;
+    if (!trimmed || job || pending) return;
+    setPending(true);
     importTrackFromYoutube(trimmed, { silent: true })
       .then(({ jobId }) => setJob({ jobId, context }))
       .catch((err) => toast.error(err?.message || 'Failed to start YouTube import'))
-      .finally(() => { startingRef.current = false; });
+      .finally(() => setPending(false));
   };
 
   const cancel = () => {
@@ -66,5 +69,5 @@ export default function useYoutubeTrackImport({ onComplete } = {}) {
     cancelTrackImport(job.jobId, { silent: true }).catch(() => {});
   };
 
-  return { active: !!job, percent, start, cancel };
+  return { active: pending || !!job, percent, start, cancel };
 }

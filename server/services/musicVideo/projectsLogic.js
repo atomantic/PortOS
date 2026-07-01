@@ -85,7 +85,15 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !MUSIC_VIDEO_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  return touch(project, patch);
+  // Changing the audio source invalidates the cached beat/tempo analysis —
+  // it was computed from the OLD track. AI Plan / Auto-arrange / BeatTimeline
+  // gate on `audioAnalysis` truthiness, and the render's beat-snap step reads
+  // its `beats` array; a stale analysis would silently apply the previous
+  // song's beat grid to the new audio (#1945 — both the manual "Change
+  // track" picker and the YouTube-import attach PATCH through here).
+  const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
+    || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
+  return touch(project, trackChanged ? { ...patch, audioAnalysis: null } : patch);
 }
 
 /**
