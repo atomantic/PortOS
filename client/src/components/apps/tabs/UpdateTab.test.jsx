@@ -80,6 +80,31 @@ describe('UpdateTab reconcile flow', () => {
     // stay stuck showing "Reconciling..." forever waiting for a step event
     // that will never arrive from the now-dead process.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Restarting...' })).toBeTruthy());
+    // The confirmation check must be silent — a real disconnect is the
+    // primary case this fallback exists for, and a generic "Server
+    // unreachable" toast firing right alongside the intended "restarting"
+    // toast would be a confusing double-toast on the common path.
+    expect(mockCheckHealth).toHaveBeenLastCalledWith({ silent: true });
+  });
+
+  it('does not pop an undismissable "restarting" toast if the component unmounts before the disconnect confirmation resolves', async () => {
+    const { unmount } = render(<UpdateTab />);
+
+    const button = await screen.findByRole('button', { name: 'Reconcile Now' });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reconciling...' })).toBeTruthy());
+
+    // The server really did go down (confirms), but the user navigated away
+    // before the 1.5s confirmation delay elapsed. Nothing is left mounted to
+    // ever dismiss a toast.loading({ duration: Infinity }) popped after this.
+    mockCheckHealth.mockResolvedValue(null);
+    vi.useFakeTimers();
+    handlers.get('disconnect')();
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    vi.useRealTimers();
+
+    expect(mockToast.loading).not.toHaveBeenCalled();
   });
 
   it('ignores a disconnect caused by a transient network blip (server still reachable)', async () => {

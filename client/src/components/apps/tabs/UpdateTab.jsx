@@ -46,6 +46,14 @@ export default function UpdateTab() {
   // Mirrors `updating` for the socket 'disconnect' listener below, which is
   // registered once on mount and would otherwise close over a stale `false`.
   const updatingRef = useRef(false);
+  // Guards the disconnect-confirmation setTimeout below: without this, an
+  // unmount (e.g. the user navigates away) while the timer is pending lets
+  // the deferred callback still fire, pop an undismissable "PortOS is
+  // restarting..." toast (duration: Infinity), and set state on an unmounted
+  // component — nothing is left running to ever dismiss it. Never reset to
+  // `true`; this only ever needs to flip once, on unmount.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   // Tracks whether the health endpoint went down during a restart poll. A
   // reconcile (issue #1779) often lands the SAME version (new commits, no
   // release bump), so version-change detection alone can't confirm completion —
@@ -143,9 +151,13 @@ export default function UpdateTab() {
     const handleDisconnect = () => {
       if (!updatingRef.current) return;
       setTimeout(async () => {
-        if (!updatingRef.current) return;
-        const ok = await api.checkHealth().catch(() => null);
-        if (!ok && updatingRef.current) armRestartPolling();
+        if (!updatingRef.current || !mountedRef.current) return;
+        // silent: true — a failed check here just means "confirmed, arm
+        // polling"; the generic "Server unreachable" toast would otherwise
+        // fire right alongside (and ahead of) the intended "restarting" toast
+        // on the exact real-disconnect case this confirmation exists for.
+        const ok = await api.checkHealth({ silent: true }).catch(() => null);
+        if (!ok && updatingRef.current && mountedRef.current) armRestartPolling();
       }, 1500);
     };
 
@@ -174,7 +186,12 @@ export default function UpdateTab() {
 
   const pollHealth = useCallback(async () => {
     attemptsRef.current += 1;
-    const ok = await api.checkHealth().catch(() => null);
+    // silent: true — the server being unreachable is the EXPECTED state for
+    // most of this restart poll (that's the down→up transition it's
+    // watching for), not an error; the generic toast would spam "Server
+    // unreachable" on every 2s tick throughout the "PortOS is restarting..."
+    // loading toast's own lifetime.
+    const ok = await api.checkHealth({ silent: true }).catch(() => null);
     const preUpdateVersion = preUpdateVersionRef.current;
     if (!ok) {
       // Server is mid-restart (PM2 stopped it) — record the dip so a same-version
