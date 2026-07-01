@@ -1,8 +1,35 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Brain } from 'lucide-react';
-import { updatePostConfig, getProviders } from '../../../services/api';
+import { ArrowLeft, Save, Brain, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
+
+// Human labels for the adaptive difficulty knob each math drill tunes.
+const ADAPTIVE_FIELD_LABELS = {
+  steps: 'steps', count: 'questions', maxDigits: 'max digits',
+  maxExponent: 'max exponent', tolerancePct: 'tolerance %',
+};
+
+// Turn a server adaptive-preview result into a short, transparent status line
+// so the effective difficulty is never a black box.
+function describeAdaptive(info) {
+  if (!info) return null;
+  const field = ADAPTIVE_FIELD_LABELS[info.field] || info.field;
+  const pct = info.score != null ? ` · ${info.score}% recent` : '';
+  if (info.applied) {
+    const harder = info.reason === 'harder';
+    return { text: `Adaptive: ${field} ${info.from} → ${info.to} (${harder ? 'harder' : 'easier'})${pct}`, tone: harder ? 'up' : 'down' };
+  }
+  if (info.reason === 'insufficient-samples') {
+    return { text: `Adaptive: warming up — needs more scored sessions`, tone: 'hold' };
+  }
+  // Use difficulty-relative wording ("hardest"/"easiest"), not "max"/"min": for
+  // estimation the hardest value is the MINIMUM tolerance, so "at max" would read
+  // backwards. `from` is the effective (clamped) value at the boundary.
+  if (info.reason === 'at-hardest') return { text: `Adaptive: hardest ${field} ${info.from}${pct}`, tone: 'up' };
+  if (info.reason === 'at-easiest') return { text: `Adaptive: easiest ${field} ${info.from}${pct}`, tone: 'down' };
+  return { text: `Adaptive: holding ${field} ${info.from}${pct}`, tone: 'hold' };
+}
 
 const DRILL_META = {
   'doubling-chain': {
@@ -119,7 +146,20 @@ const LLM_DRILL_GROUPS = [
 
 const CARD_GRID = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4';
 
-function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField }) {
+function AdaptiveBadge({ info }) {
+  const status = describeAdaptive(info);
+  if (!status) return null;
+  const Icon = status.tone === 'up' ? TrendingUp : status.tone === 'down' ? TrendingDown : Minus;
+  const color = status.tone === 'up' ? 'text-port-success' : status.tone === 'down' ? 'text-port-warning' : 'text-gray-500';
+  return (
+    <div className={`mt-3 flex items-center gap-1.5 text-xs ${color}`}>
+      <Icon size={12} className="shrink-0" />
+      <span>{status.text}</span>
+    </div>
+  );
+}
+
+function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo }) {
   const activeBorder = accent === 'accent-2' ? 'border-port-accent-2/30' : 'border-port-border';
   const toggleBg = accent === 'accent-2' ? 'bg-port-accent-2' : 'bg-port-accent';
   return (
@@ -164,6 +204,8 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
           ))}
         </div>
       )}
+
+      {enabled && <AdaptiveBadge info={adaptiveInfo} />}
     </div>
   );
 }
@@ -184,12 +226,29 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   const [llmModel, setLlmModel] = useState(
     () => config?.llmDrills?.model || ''
   );
+  const [adaptiveEnabled, setAdaptiveEnabled] = useState(
+    () => config?.adaptive?.enabled === true
+  );
+  const [adaptivePreview, setAdaptivePreview] = useState(null);
   const [providers, setProviders] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p?.providers || []).filter(enabledApiProviderFilter))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
   }, []);
+
+  // Load the effective-difficulty preview when Adaptive is on, so each math card
+  // can show what a session would actually use. Reflects saved config + recent
+  // performance from the server (not the unsaved form values), so it may lag an
+  // edit until Save — the badge is a transparency aid, not a live simulator.
+  useEffect(() => {
+    if (!adaptiveEnabled) { setAdaptivePreview(null); return; }
+    let cancelled = false;
+    getPostAdaptivePreview()
+      .then(p => { if (!cancelled) setAdaptivePreview(p?.drills || null); })
+      .catch(err => console.warn('⚠️ Failed to load adaptive preview: ' + err.message));
+    return () => { cancelled = true; };
+  }, [adaptiveEnabled]);
 
   function toggleDrill(type) {
     setDrillTypes(prev => ({
@@ -232,6 +291,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     setSaving(true);
     const updated = await updatePostConfig({
       mentalMath: { drillTypes },
+      adaptive: { enabled: adaptiveEnabled },
       llmDrills: {
         enabled: llmEnabled,
         providerId: llmProviderId || null,
@@ -270,7 +330,31 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
       {/* Mental Math Section */}
       <div className="space-y-3">
-        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Mental Math</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Mental Math</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">Adaptive difficulty</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={adaptiveEnabled}
+              aria-label="Adaptive difficulty"
+              onClick={() => setAdaptiveEnabled(v => !v)}
+              className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
+                adaptiveEnabled ? 'bg-port-accent' : 'bg-port-border'
+              }`}
+            >
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                adaptiveEnabled ? 'translate-x-5' : 'translate-x-0.5'
+              }`} />
+            </button>
+          </div>
+        </div>
+        {adaptiveEnabled && (
+          <p className="text-xs text-gray-500">
+            Math drills auto-adjust from your recent scores — high accuracy raises difficulty, repeated misses ease it, within safe bounds. Manual values below are the starting point.
+          </p>
+        )}
         <div className={CARD_GRID}>
           {Object.entries(DRILL_META).map(([type, meta]) => {
             const drillConfig = drillTypes[type] || {};
@@ -283,6 +367,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 accent="accent"
                 onToggle={() => toggleDrill(type)}
                 onUpdateField={(key, value) => updateField(type, key, value)}
+                adaptiveInfo={adaptiveEnabled ? adaptivePreview?.[type] : null}
               />
             );
           })}

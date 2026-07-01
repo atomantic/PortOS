@@ -132,11 +132,26 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
     return res.json(drill);
   }
 
-  const drill = postService.generateDrill(data.type, data.config);
+  // Adaptive difficulty (opt-in): when the Adaptive toggle is on, math drill
+  // params are nudged from recent scored performance; otherwise config passes
+  // through unchanged. Attaches an `adaptive` explainer when an adjustment ran.
+  const { config: effectiveConfig, adaptive } = await postService.resolveDrillConfig(data.type, data.config);
+  const drill = postService.generateDrill(data.type, effectiveConfig);
   if (!drill) {
     throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
   }
+  if (adaptive) drill.adaptive = adaptive;
   res.json(drill);
+}));
+
+/**
+ * GET /api/meatspace/post/adaptive-preview
+ * Transparent per-type preview of effective adaptive difficulty for math drills,
+ * so the config UI can show what Adaptive will do before a session starts.
+ */
+router.get('/post/adaptive-preview', asyncHandler(async (req, res) => {
+  const preview = await postService.getAdaptivePreview();
+  res.json(preview);
 }));
 
 /**

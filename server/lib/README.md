@@ -41,7 +41,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
-| `postValidation.js` | Social post schemas. |
+| `postValidation.js` | MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill generation/scoring, sessions, memory builder, training log. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
@@ -213,6 +213,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
 | `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
+| `postAdaptive.js` | Pure POST adaptive-difficulty policy — nudges a math drill's primary knob (`steps`/`maxDigits`/`maxExponent`/`tolerancePct`) up/down within clamped bounds from recent scored performance. Opt-in via the config Adaptive toggle. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |

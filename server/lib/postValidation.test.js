@@ -21,6 +21,13 @@ describe('postConfigUpdateSchema llmDrills', () => {
       llmDrills: { drillTypes: { 'not-a-drill': { enabled: true } } }
     })).toThrow();
   });
+
+  it('accepts the opt-in adaptive difficulty toggle', () => {
+    expect(postConfigUpdateSchema.parse({ adaptive: { enabled: true } }).adaptive).toEqual({ enabled: true });
+    expect(postConfigUpdateSchema.parse({ adaptive: { enabled: false } }).adaptive).toEqual({ enabled: false });
+    // Additive + optional — a config with no adaptive key stays valid.
+    expect(postConfigUpdateSchema.parse({}).adaptive).toBeUndefined();
+  });
 });
 
 describe('postLlmScoreRequestSchema', () => {

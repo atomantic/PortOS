@@ -4,11 +4,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 vi.mock('../../../services/api', () => ({
   updatePostConfig: vi.fn(),
   getProviders: vi.fn(),
+  getPostAdaptivePreview: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
 
 // The 14 generatable LLM drill types (mirror server + client constants).
 const ALL_LLM_TYPES = [
@@ -48,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getProviders.mockResolvedValue({ providers: [] });
   updatePostConfig.mockResolvedValue(config);
+  getPostAdaptivePreview.mockResolvedValue({ enabled: false, drills: {} });
 });
 
 describe('PostDrillConfig', () => {
@@ -121,5 +123,57 @@ describe('PostDrillConfig', () => {
     // Legacy enabled drill → switch checked; newly-exposed drill → unchecked.
     expect(screen.getByRole('switch', { name: 'Pun & Wordplay' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('defaults the Adaptive difficulty toggle to off and persists it on save', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Adaptive difficulty' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].adaptive).toEqual({ enabled: false });
+  });
+
+  it('reflects a saved adaptive.enabled=true, fetches the preview, and shows effective difficulty', async () => {
+    getPostAdaptivePreview.mockResolvedValue({
+      enabled: true,
+      drills: {
+        multiplication: { type: 'multiplication', field: 'maxDigits', from: 2, to: 3, applied: true, score: 94, samples: 5, reason: 'harder' },
+      },
+    });
+    const withAdaptive = { ...config, adaptive: { enabled: true } };
+    render(<PostDrillConfig config={withAdaptive} onSaved={vi.fn()} onBack={vi.fn()} />);
+    expect(screen.getByRole('switch', { name: 'Adaptive difficulty' }).getAttribute('aria-checked')).toBe('true');
+    await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
+    // The enabled multiplication card surfaces the effective (adapted) difficulty.
+    await waitFor(() => expect(screen.getByText(/max digits 2 → 3 \(harder\)/)).toBeTruthy());
+  });
+
+  it('labels the estimation hardest boundary by difficulty, not numeric max', async () => {
+    // For estimation, lower tolerance is harder — so the hardest boundary carries
+    // the MINIMUM tolerance value. The badge must read "hardest", never "at max".
+    getPostAdaptivePreview.mockResolvedValue({
+      enabled: true,
+      drills: {
+        estimation: { type: 'estimation', field: 'tolerancePct', from: 3, to: 3, applied: false, score: 96, samples: 6, reason: 'at-hardest' },
+      },
+    });
+    const withAdaptive = {
+      ...config,
+      mentalMath: { drillTypes: { ...config.mentalMath.drillTypes, estimation: { enabled: true, tolerancePct: 3 } } },
+      adaptive: { enabled: true },
+    };
+    render(<PostDrillConfig config={withAdaptive} onSaved={vi.fn()} onBack={vi.fn()} />);
+    await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/hardest tolerance % 3/)).toBeTruthy());
+    expect(screen.queryByText(/at max tolerance/)).toBeNull();
+  });
+
+  it('toggling Adaptive on persists enabled=true', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Adaptive difficulty' }));
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].adaptive).toEqual({ enabled: true });
   });
 });
