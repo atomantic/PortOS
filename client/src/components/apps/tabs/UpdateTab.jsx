@@ -8,6 +8,7 @@ import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import useMounted from '../../../hooks/useMounted';
 
 const STEP_LABELS = {
   starting: 'Starting update',
@@ -50,10 +51,8 @@ export default function UpdateTab() {
   // unmount (e.g. the user navigates away) while the timer is pending lets
   // the deferred callback still fire, pop an undismissable "PortOS is
   // restarting..." toast (duration: Infinity), and set state on an unmounted
-  // component — nothing is left running to ever dismiss it. Never reset to
-  // `true`; this only ever needs to flip once, on unmount.
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // component — nothing is left running to ever dismiss it.
+  const mountedRef = useMounted();
   // Tracks whether the health endpoint went down during a restart poll. A
   // reconcile (issue #1779) often lands the SAME version (new commits, no
   // release bump), so version-change detection alone can't confirm completion —

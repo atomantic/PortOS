@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 
@@ -124,6 +125,26 @@ describe('UpdateTab reconcile flow', () => {
 
     expect(screen.getByRole('button', { name: 'Reconciling...' })).toBeTruthy();
     expect(mockToast.loading).not.toHaveBeenCalled();
+  });
+
+  it('still confirms a real disconnect under StrictMode (mountedRef survives the dev-mode phantom mount→cleanup→remount)', async () => {
+    // React 18 StrictMode (on app-wide in main.jsx) double-invokes effects on
+    // mount: mount → cleanup → remount. A mountedRef implemented as a bare
+    // `useRef(true)` + cleanup-only effect never resets to `true` on the
+    // remount, so it reads permanently `false` for the rest of the
+    // component's real lifetime — silently killing the disconnect
+    // confirmation fallback in dev mode from the very first render. Plain
+    // `render()` doesn't reproduce this; wrap in StrictMode explicitly.
+    render(<StrictMode><UpdateTab /></StrictMode>);
+
+    const button = await screen.findByRole('button', { name: 'Reconcile Now' });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reconciling...' })).toBeTruthy());
+
+    mockCheckHealth.mockResolvedValue(null);
+    await fireDisconnectAndConfirm();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restarting...' })).toBeTruthy());
   });
 
   it('ignores a disconnect that happens while no update is in progress', async () => {
