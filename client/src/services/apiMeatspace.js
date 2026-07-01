@@ -193,6 +193,11 @@ export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, provi
     method: 'POST',
     body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) })
   });
+export const getPostDrillCacheStatus = () => request('/meatspace/post/drill-cache/status');
+export const fillPostDrillCache = (types, providerId, model) => request('/meatspace/post/drill-cache/fill', {
+  method: 'POST',
+  body: JSON.stringify({ ...(types && { types }), ...(providerId && { providerId }), ...(model && { model }) })
+});
 
 // MeatSpace - POST Memory Builder
 export const getMemoryItems = () => request('/meatspace/post/memory-items');

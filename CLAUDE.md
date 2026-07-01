@@ -43,6 +43,22 @@ The default database password `portos` (in `ecosystem.config.cjs`, `docker-compo
 
 **Never run DB-backed tests against the real `portos` database.** There is ONE Postgres per install, shared by every git worktree (including CoS-agent worktrees). The `*.db.test.js` suites `DELETE FROM`/`INSERT` whole tables, so running them against `portos` corrupts the user's real universes/series/writers-room/catalog. They are gated to skip on a non-test DB and run only via `npm run test:db` (→ `portos_test`, provisioned by `npm run setup:db:test`). The gate in `server/lib/db.js` keys on `isTestRunner()` (`NODE_ENV==='test'` **OR** `process.env.VITEST`, not bare `NODE_ENV` — a wrapper that drops `NODE_ENV` must NOT be able to disarm it) and the `query()` backstop refuses ALL row writes (`INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`) to a non-test DB under the runner. Do not weaken either to "just `NODE_ENV`" or "DELETE-only" — that's exactly the hole that wiped real data on 2026-06-13/14. See `server/lib/db.guards.test.js`.
 
+## AI Provider Usage Policy
+
+**No cold-bootstrap LLM calls.** PortOS must never queue up AI provider calls a user hasn't knowingly triggered. A new install (or a freshly merged feature) coming online should be silent on the LLM front until the user actually asks for AI-backed work. This rules out:
+
+- Firing LLM calls from server boot / `server/index.js` init sequences (cache warm-ups, pre-generation, startup backfills).
+- Any background job that silently expands from "generate the one thing the user asked for" into "generate a whole batch for later," without the user having opted into that batch.
+
+**Scheduled automations are the one sanctioned exception** — a cron-style task, autopilot, or CoS agent the user explicitly configured (see `taskSchedule.js`, `backupScheduler.js`, autopilot gates) is expected to call AI providers on its own schedule, because the user set it up and knows it's running. Anything else that touches an AI provider needs either a direct user action in the same request, or an explicit consent/config step first.
+
+**Pattern for background pre-generation (e.g. caches).** If a feature wants to pre-fill a cache of AI-generated content so future requests are instant:
+1. Boot-time init loads only what's already on disk — zero LLM calls.
+2. The bulk/cold fill only runs from an explicit user-triggered endpoint, gated behind a UI prompt that names the provider/model about to be used and lets the user change it (or decline and get a single on-demand generation instead).
+3. Incremental top-ups after the user has already engaged with the feature (e.g. replenishing one item after they consumed one from an already-primed cache) are fine to run silently — the user already consented once, and a small top-up doesn't route through a slow provider unannounced the way a from-zero batch does.
+
+See `server/services/meatspacePostDrillCache.js` (`initDrillCache` / `requestCacheFill` split) and `client/src/components/meatspace/post/WordplayTrainer.jsx` (`CacheFillConsentModal`) for the reference implementation — added after a fresh MeatSpace POST install triggered an unannounced 40-call sequential TUI backfill on first boot.
+
 ## Architecture
 
 PortOS is a monorepo with Express.js server (always user-facing on `:5555`, HTTP or HTTPS) and React/Vite client (Vite dev server on `:5554` in `npm run dev`; in `npm start` the built client is served from `:5555` directly). PM2 manages app lifecycles. Data persists to JSON files in `./data/`.

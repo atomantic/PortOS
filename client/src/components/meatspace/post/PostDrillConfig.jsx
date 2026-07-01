@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain } from 'lucide-react';
 import { updatePostConfig, getProviders } from '../../../services/api';
 import toast from '../../ui/Toast';
-import { filterSelectableModels, isApiProvider } from '../../../utils/providers';
+import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 
 const DRILL_META = {
   'doubling-chain': {
@@ -114,7 +114,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
+    getProviders().then(p => setProviders((p?.providers || []).filter(enabledApiProviderFilter))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
   }, []);
 
   function toggleDrill(type) {

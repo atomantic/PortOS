@@ -1,6 +1,13 @@
-import { useState, useRef, useCallback } from 'react';
-import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight } from 'lucide-react';
-import { generatePostDrill, scorePostLlmDrill } from '../../../services/api';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight, Sparkles } from 'lucide-react';
+import {
+  generatePostDrill, scorePostLlmDrill, getPostDrillCacheStatus, fillPostDrillCache, updatePostConfig,
+} from '../../../services/api';
+import { enabledApiProviderFilter } from '../../../utils/providers';
+import useProviderModels from '../../../hooks/useProviderModels';
+import ProviderModelSelector from '../../ProviderModelSelector';
+import Modal from '../../ui/Modal';
+import toast from '../../ui/Toast';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar } from './WordplayDrillUI';
 
 const GAME_MODES = [
@@ -42,7 +49,7 @@ const GAME_MODES = [
   },
 ];
 
-export default function WordplayTrainer({ onBack, config }) {
+export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   const [selectedMode, setSelectedMode] = useState(null);
   const [drill, setDrill] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -54,6 +61,23 @@ export default function WordplayTrainer({ onBack, config }) {
   const inputRef = useRef(null);
   const questionStartRef = useRef(Date.now());
 
+  // Cache-fill consent: PortOS never issues background LLM calls a user
+  // hasn't asked for. A mode whose drill cache is cold (0 cached) prompts
+  // for provider/model + explicit consent before any bulk generation runs.
+  // Modes primed this session (either filled or explicitly skipped) don't
+  // re-prompt even if the server-side count is still catching up.
+  const [cacheStatus, setCacheStatus] = useState(null);
+  const [primedModes, setPrimedModes] = useState(() => new Set());
+  const [pendingMode, setPendingMode] = useState(null);
+  const {
+    providers, selectedProviderId: fillProviderId, selectedModel: fillModel,
+    availableModels: fillModels, setSelectedProviderId: setFillProviderId, setSelectedModel: setFillModel,
+  } = useProviderModels({ filter: enabledApiProviderFilter, allowDefault: true, silent: true });
+
+  useEffect(() => {
+    getPostDrillCacheStatus().then(setCacheStatus).catch(() => setCacheStatus({}));
+  }, []);
+
   const providerId = config?.llmDrills?.providerId || null;
   const model = config?.llmDrills?.model || null;
 
@@ -61,7 +85,7 @@ export default function WordplayTrainer({ onBack, config }) {
   const totalPrompts = prompts.length;
   const currentPrompt = prompts[questionIndex];
 
-  async function startMode(modeId) {
+  async function runMode(modeId, useProviderId, useModel) {
     setSelectedMode(modeId);
     setLoading(true);
     setDrill(null);
@@ -71,13 +95,57 @@ export default function WordplayTrainer({ onBack, config }) {
     setFeedback(null);
     setResults([]);
 
-    const generated = await generatePostDrill(modeId, { count: 5 }, providerId, model).catch(() => null);
+    const generated = await generatePostDrill(modeId, { count: 5 }, useProviderId, useModel).catch(() => null);
     setLoading(false);
     if (generated) {
       setDrill(generated);
       questionStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 100);
     }
+  }
+
+  function startMode(modeId) {
+    // Default to cold when the status fetch hasn't resolved yet — never skip
+    // consent on an assumption the cache is already warm.
+    const isCold = cacheStatus?.[modeId]?.cold ?? true;
+    if (isCold && !primedModes.has(modeId)) {
+      setFillProviderId(config?.llmDrills?.providerId || '');
+      setFillModel(config?.llmDrills?.model || '');
+      setPendingMode(modeId);
+      return;
+    }
+    runMode(modeId, providerId, model);
+  }
+
+  // Both consent-modal resolutions dismiss the modal and mark the mode as
+  // primed (so it won't re-prompt this session) before diverging.
+  function closePendingMode() {
+    const modeId = pendingMode;
+    setPendingMode(null);
+    setPrimedModes(prev => new Set(prev).add(modeId));
+    return modeId;
+  }
+
+  function handleSkipFill() {
+    runMode(closePendingMode(), providerId, model);
+  }
+
+  function handleConfirmFill() {
+    const modeId = closePendingMode();
+    const chosenProviderId = fillProviderId || null;
+    const chosenModel = fillModel || null;
+    if (chosenProviderId !== providerId || chosenModel !== model) {
+      // Persist as the new default for scoring calls too, but don't gate the
+      // user-facing actions below on this round-trip — they already have the
+      // chosen provider/model as explicit params.
+      updatePostConfig({ llmDrills: { providerId: chosenProviderId, model: chosenModel } })
+        .then(updated => onConfigUpdate?.(updated))
+        .catch(() => {});
+    }
+    const providerLabel = providers.find(p => p.id === chosenProviderId)?.name || 'the default provider';
+    toast(`Filling ${modeId.replace(/-/g, ' ')} cache in the background using ${providerLabel}`);
+    fillPostDrillCache([modeId], chosenProviderId, chosenModel).catch(() => {});
+    runMode(modeId, chosenProviderId, chosenModel);
   }
 
   function handleBackToModes() {
@@ -186,6 +254,20 @@ export default function WordplayTrainer({ onBack, config }) {
             );
           })}
         </div>
+
+        <CacheFillConsentModal
+          pendingMode={pendingMode}
+          modeInfo={GAME_MODES.find(m => m.id === pendingMode)}
+          providers={providers}
+          fillProviderId={fillProviderId}
+          setFillProviderId={setFillProviderId}
+          fillModel={fillModel}
+          setFillModel={setFillModel}
+          fillModels={fillModels}
+          onCancel={() => setPendingMode(null)}
+          onSkip={handleSkipFill}
+          onConfirm={handleConfirmFill}
+        />
       </div>
     );
   }
@@ -385,6 +467,58 @@ function ModeHeader({ modeInfo, onBack }) {
       </div>
       <span className="text-white font-medium">{modeInfo?.label || 'Wordplay'}</span>
     </div>
+  );
+}
+
+// Cache for this mode is cold (never filled). PortOS never runs background
+// LLM calls without asking first — this is the ask. The user can pick a
+// provider/model and warm the cache, or skip it and just generate one drill
+// on demand (no background batch).
+function CacheFillConsentModal({
+  pendingMode, modeInfo, providers, fillProviderId, setFillProviderId,
+  fillModel, setFillModel, fillModels, onCancel, onSkip, onConfirm,
+}) {
+  return (
+    <Modal open={!!pendingMode} onClose={onCancel} size="sm" ariaLabel="Fill drill cache">
+      <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Sparkles size={18} className="text-port-accent-2" />
+          <h3 className="text-white font-medium">Warm up {modeInfo?.label || 'this'} drills?</h3>
+        </div>
+        <p className="text-sm text-gray-400">
+          This is the first time you're playing {modeInfo?.label || 'this mode'}. PortOS can use an AI
+          provider to pre-generate a batch of drills so future rounds load instantly. Pick a provider
+          and model, or skip and generate just one drill for this round.
+        </p>
+
+        <ProviderModelSelector
+          providers={providers}
+          selectedProviderId={fillProviderId}
+          selectedModel={fillModel}
+          availableModels={fillModels}
+          onProviderChange={setFillProviderId}
+          onModelChange={setFillModel}
+          emptyProviderOption="System Default"
+          emptyModelOption="Provider Default"
+          alwaysShowModel
+        />
+
+        <div className="flex gap-3 pt-1">
+          <button
+            onClick={onSkip}
+            className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Just Play Once
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 px-4 py-2 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 text-sm font-medium rounded-lg transition-colors"
+          >
+            Fill Cache &amp; Play
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

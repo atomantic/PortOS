@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
 
 // =============================================================================
 // POST (Power On Self Test) VALIDATION SCHEMAS
@@ -126,6 +127,13 @@ export const postLlmScoreRequestSchema = z.object({
   drillData: z.any(),
   responses: z.array(llmResponseSchema),
   timeLimitMs: z.number().min(1000),
+  providerId: z.string().optional(),
+  model: z.string().optional()
+});
+
+// Explicit, user-consented request to warm the wordplay drill cache
+export const postDrillCacheFillSchema = z.object({
+  types: z.array(z.enum(CACHEABLE_TYPES)).min(1).optional(),
   providerId: z.string().optional(),
   model: z.string().optional()
 });

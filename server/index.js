@@ -569,7 +569,8 @@ recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot reco
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
-// Pre-fill POST drill cache in background
+// Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
+// cache fill only happens on explicit user request (see meatspacePostRoutes.js).
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
