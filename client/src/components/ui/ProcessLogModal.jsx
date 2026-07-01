@@ -6,20 +6,16 @@
  * RunsHistoryPage). Fetches a static tail via `getProcessLogs` (not the live SSE
  * stream — a past failure's context is already written), with a process picker,
  * a tail-length selector, and a manual refresh.
+ *
+ * Fully generic: the caller passes the process to open (`processName`) — no run
+ * or domain coupling lives here.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import Modal from './Modal';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
-
-// Map an AI run's source to the PM2 process whose system log holds the full
-// context for that run. CoS-agent runs are driven by the `portos-cos` process;
-// everything else (DevTools runs) is driven by the main `portos-server`.
-export function runLogProcessName(source) {
-  return source === 'cos-agent' ? 'portos-cos' : 'portos-server';
-}
 
 const TAIL_OPTIONS = [100, 250, 500, 1000, 2000];
 
@@ -30,38 +26,47 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
   const [logs, setLogs] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Monotonic request id — a superseded (or post-close) fetch is a no-op so a
+  // slow response can't clobber the newer process's logs.
+  const reqIdRef = useRef(0);
 
-  // When the modal opens, seed the selected process from the caller's hint and
-  // load the picker options. Guard against a late response landing after close.
+  // Seed the selected process from the caller's hint whenever the modal opens.
+  useEffect(() => {
+    if (open) setSelected(processName || '');
+  }, [open, processName]);
+
+  // Load the PM2 process picker options once per open (static across a session).
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setSelected(processName || '');
-    api.getLogProcesses()
+    api.getProcessesList({ silent: true })
       .then((list) => { if (!cancelled) setProcesses(Array.isArray(list) ? list : []); })
       .catch(() => { if (!cancelled) setProcesses([]); });
     return () => { cancelled = true; };
-  }, [open, processName]);
+  }, [open]);
 
   const loadLogs = useCallback(async () => {
     if (!selected) return;
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     setError('');
     const res = await api.getProcessLogs(selected, tailLines).catch((err) => {
-      setError(err?.message || 'Failed to load logs');
+      if (reqId === reqIdRef.current) setError(err?.message || 'Failed to load logs');
       return null;
     });
+    if (reqId !== reqIdRef.current) return; // superseded by a newer request
     if (res) setLogs(res.logs || '');
     setLoading(false);
   }, [selected, tailLines]);
 
   // Fetch whenever the modal is open and the process / tail length changes.
+  // The cleanup bumps the request id so an in-flight fetch is invalidated when
+  // the deps change or the modal closes.
   useEffect(() => {
     if (!open || !selected) return;
     loadLogs();
-  }, [open, selected, tailLines, loadLogs]);
-
-  if (!open) return null;
+    return () => { reqIdRef.current++; };
+  }, [open, selected, loadLogs]);
 
   return (
     <Modal open={open} onClose={onClose} size="3xl" align="top" ariaLabel={title}>

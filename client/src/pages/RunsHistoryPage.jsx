@@ -5,8 +5,15 @@ import * as api from '../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
-import ProcessLogModal, { runLogProcessName } from '../components/ui/ProcessLogModal';
+import ProcessLogModal from '../components/ui/ProcessLogModal';
 import { writeClipboardSilently } from '../lib/clipboard';
+
+// Map an AI run's source to the PM2 process whose system log holds the full
+// context for that run. CoS-agent runs are driven by the `portos-cos` process;
+// everything else (DevTools runs) is driven by the main `portos-server`.
+export function runLogProcessName(source) {
+  return source === 'cos-agent' ? 'portos-cos' : 'portos-server';
+}
 
 export function RunsHistoryPage() {
   const navigate = useNavigate();
@@ -141,6 +148,7 @@ export function RunsHistoryPage() {
   }
 
   const failedCount = runs.filter(r => r.success === false).length;
+  const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
     const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
@@ -473,8 +481,8 @@ export function RunsHistoryPage() {
       <ProcessLogModal
         open={!!logModalRun}
         onClose={() => setLogModalRun(null)}
-        processName={logModalRun ? runLogProcessName(logModalRun.source) : ''}
-        title={logModalRun ? `System Logs — ${runLogProcessName(logModalRun.source)}` : 'System Logs'}
+        processName={logProc}
+        title={logProc ? `System Logs — ${logProc}` : 'System Logs'}
       />
     </div>
   );
