@@ -270,6 +270,23 @@ export function usePostSession() {
     }
   }, [drillResults, currentDrillIndex, drills]);
 
+  // Interactive cognitive drills (n-back / digit-span / stroop) build their own
+  // fully-formed result (questions + local score) and hand it back here. Unlike
+  // LLM drills there is no async scoring call — the server recomputes the score
+  // deterministically from drillData on submit. Mirrors completeLlmDrill's
+  // advance/complete bookkeeping.
+  const completeCognitiveDrill = useCallback((drillResult) => {
+    const newResults = [...drillResults, drillResult];
+    setDrillResults(newResults);
+
+    if (currentDrillIndex + 1 < drills.length) {
+      setState(STATES.BETWEEN_DRILLS);
+    } else {
+      setSessionScore(computeSessionScoreFromResults(newResults));
+      setState(STATES.COMPLETE);
+    }
+  }, [drillResults, currentDrillIndex, drills]);
+
   const saveSession = useCallback(async (tags = {}) => {
     setState(STATES.SAVING);
 
@@ -343,6 +360,7 @@ export function usePostSession() {
     nextDrill,
     timeExpired,
     completeLlmDrill,
+    completeCognitiveDrill,
     saveSession,
     reset
   };
