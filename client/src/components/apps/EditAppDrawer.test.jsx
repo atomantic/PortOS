@@ -115,3 +115,34 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(payload.workTracker).toBe('gitlab');
   });
 });
+
+describe('EditAppDrawer required-field validation across tabs', () => {
+  // The required Name/Repository Path inputs live on the General tab and are
+  // unmounted while another tab is active, so browser `required` validation
+  // can't block a Save from another tab. handleSubmit must validate explicitly.
+  it('blocks Save from a non-General tab when Name is empty and surfaces General', async () => {
+    renderDrawer({ app: { ...APP, name: '' } });
+    await openTab('Workflow');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Name and Repository Path are required.')).toBeInTheDocument()
+    );
+    expect(api.updateApp).not.toHaveBeenCalled();
+    // The General tab is surfaced so the offending field is visible again.
+    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
+  });
+
+  it('blocks Save when Repository Path is empty', async () => {
+    renderDrawer({ app: { ...APP, repoPath: '   ' } });
+    await openTab('Workflow');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Name and Repository Path are required.')).toBeInTheDocument()
+    );
+    expect(api.updateApp).not.toHaveBeenCalled();
+  });
+});
