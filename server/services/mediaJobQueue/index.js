@@ -42,6 +42,7 @@ import {
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
+import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
@@ -70,6 +71,13 @@ const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20
 // heartbeat thread reset it, so 30 minutes only trips on true hangs (model
 // download stalls emit tqdm lines; GIL-pinned wedges emit nothing).
 const WATCHDOG_TRAINING_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_TRAINING_MS, 30 * 60 * 1000);
+// Audio (music-bed) generation is a single short sidecar call (≤240s of
+// rendered audio across all engines) but a cold model download can still take
+// a while on a slow connection — mirrors the image-kind rationale. The
+// sidecar's STAGE: lines reset the idle clock via 'activity' (audioGen/local.js
+// threads them through), so this only trips on a genuine hang, not a slow
+// first-run download.
+const WATCHDOG_AUDIO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS, 10 * 60 * 1000);
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
@@ -106,7 +114,7 @@ async function safeUnlinkUpload(path) {
   await unlink(path).catch(() => {});
 }
 
-export const JOB_KINDS = Object.freeze(['video', 'image', 'training']);
+export const JOB_KINDS = Object.freeze(['video', 'image', 'training', 'audio']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -116,6 +124,7 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 function getGenModuleForJob(job) {
   if (job.kind === 'video') return import('../videoGen/local.js');
   if (job.kind === 'training') return import('../loraTraining/index.js');
+  if (job.kind === 'audio') return import('../audioGen/local.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
@@ -755,6 +764,7 @@ async function runJob(job) {
 
   const emitter = job.kind === 'video' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
+    : job.kind === 'audio' ? audioGenEvents
     : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
@@ -770,6 +780,7 @@ async function runJob(job) {
   const idleTimeoutMs = (() => {
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
+    if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
     if (isCodexJob(job)) return WATCHDOG_CODEX_MS;
     return WATCHDOG_IMAGE_MS;
   })();
@@ -835,6 +846,8 @@ async function runJob(job) {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'training') {
       await mod.runTraining({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'audio') {
+      await mod.generateAudio({ ...safeParams, jobId: job.id });
     } else {
       await mod.generateImage({ ...safeParams, jobId: job.id });
     }

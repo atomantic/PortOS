@@ -48,7 +48,10 @@ export const suggestCreativeDirectorAutoCast = (brief, { types, limit } = {}, op
 // `generateFirstPass: true` (#1818) additionally enqueues a catalog portrait
 // render for each newly-cast member lacking one — the response carries a
 // `firstPass: { mode, enqueued, skipped }` summary when it ran.
-export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose, generateFirstPass } = {}, options = {}) =>
+// `generateFirstPassMusicBed: true` (#1928) additionally enqueues a background
+// music-bed render for the project itself — the response carries a
+// `firstPassMusicBed: { mode, enqueued, jobId?, reason? }` summary when it ran.
+export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = {}, options = {}) =>
   request(`/creative-director/${encodeURIComponent(id)}/auto-cast`, {
     method: 'POST',
     body: JSON.stringify({
@@ -57,6 +60,7 @@ export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose
       ...(limit ? { limit } : {}),
       ...(compose ? { compose: true } : {}),
       ...(generateFirstPass ? { generateFirstPass: true } : {}),
+      ...(generateFirstPassMusicBed ? { generateFirstPassMusicBed: true } : {}),
     }),
     ...options,
   });

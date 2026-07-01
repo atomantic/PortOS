@@ -106,6 +106,12 @@ export const creativeDirectorAutoCastApplySchema = z.object({
   // Reuses the durable media-job → catalog attach hook (#1359); strictly optional
   // and only seeds queue-backed image-gen modes (local / codex).
   generateFirstPass: z.boolean().optional(),
+  // First-pass music bed (#1928, split from #1867): when true, enqueue an
+  // optional background audio render for the project so it "arrives" with a
+  // mood-setting bed. Reuses the durable media-job → project attach hook
+  // (creativeDirectorMusicBedHook); strictly optional and skips gracefully if
+  // no local audio-gen engine is provisioned.
+  generateFirstPassMusicBed: z.boolean().optional(),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /

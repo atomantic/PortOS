@@ -4,7 +4,7 @@ import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
-export default function OverviewTab({ project, onProjectUpdate }) {
+export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueued }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
   const [autoCasting, setAutoCasting] = useState(false);
@@ -17,6 +17,11 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   // on-model. Off by default — opt into the autonomy. Independent of compose:
   // portraits are useful with or without an auto-written treatment.
   const [generateFirstPass, setGenerateFirstPass] = useState(false);
+  // First-pass music bed (#1928, split from #1867): when checked, auto-cast
+  // also enqueues a background music-bed render for the project itself. Off by
+  // default — opt into the autonomy. Independent of the other toggles: there's
+  // no "newly-cast member" requirement, so it's offered even on a re-cast.
+  const [generateFirstPassMusicBed, setGenerateFirstPassMusicBed] = useState(false);
   // Track the project id this tab is currently mounted for. If the user
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
@@ -43,6 +48,8 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     setComposeAfter(false);
     // First-pass toggle is per-project intent too — reset on switch.
     setGenerateFirstPass(false);
+    // First-pass music-bed toggle is per-project intent too — reset on switch.
+    setGenerateFirstPassMusicBed(false);
   }, [project.id]);
   useEffect(() => {
     if (!savingRef.current) {
@@ -90,6 +97,7 @@ export default function OverviewTab({ project, onProjectUpdate }) {
       {
         ...(wantCompose ? { compose: true } : {}),
         ...(generateFirstPass ? { generateFirstPass: true } : {}),
+        ...(generateFirstPassMusicBed ? { generateFirstPassMusicBed: true } : {}),
       },
       { silent: true },
     )
@@ -98,6 +106,7 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         const added = result?.added?.length || 0;
         const composing = Boolean(result?.composing);
         const firstPassQueued = result?.firstPass?.enqueued?.length || 0;
+        const musicBedQueued = Boolean(result?.firstPassMusicBed?.enqueued);
         // When the director starts composing, optimistically flip the status to
         // 'planning' as well — the detail page disables polling for 'draft'
         // projects, so without this the treatment + runs the agent produces stay
@@ -106,15 +115,28 @@ export default function OverviewTab({ project, onProjectUpdate }) {
           cast: result?.project?.cast || [],
           ...(composing ? { status: 'planning' } : {}),
         });
-        // Suffix the portrait-gen count onto whichever success toast fires, so a
-        // user who opted into first-pass gen sees it kicked off in one place.
+        // Portraits land on a catalog ingredient (no project-status change to
+        // ride), and the music bed lands on `project.musicBed` directly — both
+        // attach asynchronously, well after this response. A project that
+        // hasn't been started/composed yet stays at status 'draft', which the
+        // detail page's poll gate treats as terminal (no compose flip to
+        // escape it, unlike the `composing` branch above). Tell the parent to
+        // extend polling for a bit so either result actually shows up in the
+        // open tab instead of requiring a manual Refresh / navigate-away.
+        if (firstPassQueued > 0 || musicBedQueued) onAsyncWorkQueued?.();
+        // Suffix the portrait-gen count + music-bed status onto whichever
+        // success toast fires, so a user who opted into either first-pass gen
+        // sees it kicked off in one place.
         const portraitSuffix = firstPassQueued > 0
           ? ` — rendering ${firstPassQueued} first-pass portrait${firstPassQueued === 1 ? '' : 's'}`
           : '';
+        const musicBedSuffix = musicBedQueued ? ' + a first-pass music bed' : '';
         if (composing) {
-          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…${portraitSuffix}`);
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…${portraitSuffix}${musicBedSuffix}`);
         } else if (added > 0) {
-          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}${portraitSuffix}`);
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}${portraitSuffix}${musicBedSuffix}`);
+        } else if (musicBedQueued) {
+          toast.success(`Auto-cast found no new catalog matches for this brief${musicBedSuffix}`);
         } else {
           toast.info('Auto-cast found no new catalog matches for this brief');
         }
@@ -158,6 +180,12 @@ export default function OverviewTab({ project, onProjectUpdate }) {
           </div>
         </div>
         <Field label="Collection" value={project.collectionId ? <Link to={collectionLink} className="text-port-accent">{project.collectionId}</Link> : <span className="text-port-text-muted">—</span>} />
+        {project.musicBed?.filename && (
+          <Field
+            label="Music bed"
+            value={`${project.musicBed.filename}${project.musicBed.durationSec ? ` (${Math.round(project.musicBed.durationSec)}s, ${project.musicBed.engine || 'audio-gen'})` : ''}`}
+          />
+        )}
         <Field label="Final video" value={final} />
         {project.timelineProjectId && (
           <Field label="Timeline" value={<Link to={`/media/timeline/${project.timelineProjectId}`} className="text-port-accent">{project.timelineProjectId}</Link>} />
@@ -222,6 +250,25 @@ export default function OverviewTab({ project, onProjectUpdate }) {
                 className="accent-port-accent"
               />
               <span>+ portraits</span>
+            </label>
+            {/* First-pass music bed (#1928, split from #1867): enqueue a
+                background music-bed render for the project itself. No
+                catalog ingredient to attach to, so the result lands on
+                project.musicBed via a durable server-side hook instead. */}
+            <label
+              htmlFor="cd-first-pass-music-bed"
+              className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+              title="After seeding the cast, queue a first-pass music-bed render for the project (local audio-gen only)"
+            >
+              <input
+                id="cd-first-pass-music-bed"
+                type="checkbox"
+                checked={generateFirstPassMusicBed}
+                onChange={(e) => setGenerateFirstPassMusicBed(e.target.checked)}
+                disabled={autoCasting}
+                className="accent-port-accent"
+              />
+              <span>+ music bed</span>
             </label>
             <button
               type="button"

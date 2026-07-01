@@ -31,10 +31,17 @@ vi.mock('../services/creativeDirector/firstPassGen.js', () => ({
   enqueueFirstPassPortraits: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
 }));
 
+// Mock first-pass music-bed gen (#1928) so the route test doesn't pull the
+// real mediaJobQueue/musicGen graph; the route's job is to gate + dispatch.
+vi.mock('../services/creativeDirector/firstPassMusicGen.js', () => ({
+  enqueueFirstPassMusicBed: vi.fn(async () => ({ mode: 'musicgen', enqueued: false, reason: 'no-prompt' })),
+}));
+
 import * as cdService from '../services/creativeDirector/local.js';
 import * as autoCast from '../services/creativeDirector/autoCast.js';
 import * as hook from '../services/creativeDirector/completionHook.js';
 import * as firstPass from '../services/creativeDirector/firstPassGen.js';
+import * as firstPassMusicBed from '../services/creativeDirector/firstPassMusicGen.js';
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -404,6 +411,62 @@ describe('creativeDirector routes', () => {
 
     it('400s on a non-boolean generateFirstPass', async () => {
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: 'yes' });
+      expect(r.status).toBe(400);
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/auto-cast — first-pass music bed (#1928)', () => {
+    it('enqueues a first-pass music bed and returns the summary', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', name: 'A', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      firstPassMusicBed.enqueueFirstPassMusicBed.mockResolvedValue({ mode: 'musicgen', enqueued: true, jobId: 'job-1' });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPassMusicBed: true });
+      expect(r.status).toBe(200);
+      expect(firstPassMusicBed.enqueueFirstPassMusicBed).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'cd-1', name: 'A' }),
+      );
+      expect(r.body.firstPassMusicBed).toEqual({ mode: 'musicgen', enqueued: true, jobId: 'job-1' });
+    });
+
+    it('does not enqueue when generateFirstPassMusicBed is omitted', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({});
+      expect(r.status).toBe(200);
+      expect(firstPassMusicBed.enqueueFirstPassMusicBed).not.toHaveBeenCalled();
+      expect(r.body.firstPassMusicBed).toBeUndefined();
+    });
+
+    it('does not require added members — unlike portraits, it can run on a re-cast with no new members', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [], suggestions: [],
+      });
+      firstPassMusicBed.enqueueFirstPassMusicBed.mockResolvedValue({ mode: 'musicgen', enqueued: true, jobId: 'job-1' });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPassMusicBed: true });
+      expect(r.status).toBe(200);
+      expect(firstPassMusicBed.enqueueFirstPassMusicBed).toHaveBeenCalled();
+      expect(r.body.firstPassMusicBed).toEqual({ mode: 'musicgen', enqueued: true, jobId: 'job-1' });
+    });
+
+    it('composes, generates first-pass portraits, and the music bed together', async () => {
+      autoCast.applyAutoCastToProject.mockResolvedValue({
+        project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
+      });
+      firstPass.enqueueFirstPassPortraits.mockResolvedValue({ mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'j' }], skipped: [] });
+      firstPassMusicBed.enqueueFirstPassMusicBed.mockResolvedValue({ mode: 'musicgen', enqueued: true, jobId: 'job-2' });
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast')
+        .send({ compose: true, generateFirstPass: true, generateFirstPassMusicBed: true });
+      expect(r.status).toBe(200);
+      expect(r.body.composing).toBe(true);
+      expect(r.body.firstPass).toEqual({ mode: 'local', enqueued: [{ ingredientId: 'p1', jobId: 'j' }], skipped: [] });
+      expect(r.body.firstPassMusicBed).toEqual({ mode: 'musicgen', enqueued: true, jobId: 'job-2' });
+    });
+
+    it('400s on a non-boolean generateFirstPassMusicBed', async () => {
+      const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPassMusicBed: 'yes' });
       expect(r.status).toBe(400);
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
     });

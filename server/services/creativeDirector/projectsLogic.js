@@ -116,6 +116,13 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     collectionId,
     timelineProjectId: null,
     finalVideoId: null,
+    // First-pass music bed (#1928) — populated by the durable
+    // creativeDirectorMusicBedHook once an opt-in background render completes;
+    // null on a bare project. Shape: { filename, durationSec, engine, modelId,
+    // generatedAt }. Additive — the whole record round-trips through the JSONB
+    // column verbatim (sanitizeProjectForSync / mergeProjectRecord), so this
+    // needs no schema-version bump.
+    musicBed: null,
     treatment: null,
     runs: [],
     // Soft-delete / LWW tombstone trio (#1564) — projects federate across peers

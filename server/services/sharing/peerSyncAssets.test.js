@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   return makePathsProxy(actual, {
     dataRoot: () => tempRoot,
-    extraOverrides: (root) => ({ music: join(root, 'music') }),
+    extraOverrides: (root) => ({ music: join(root, 'music'), images: join(root, 'images') }),
   });
 });
 
@@ -27,12 +27,18 @@ vi.mock('../tracks/index.js', async () => ({
 }));
 
 const { getTrack } = await import('../tracks/index.js');
-const { buildMusicVideoAssetManifest } = await import('./peerSyncAssets.js');
+const { buildMusicVideoAssetManifest, buildProjectAssetManifest } = await import('./peerSyncAssets.js');
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
 function writeMusic(filename, bytes) {
   const dir = join(tempRoot, 'music');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, filename), bytes);
+}
+
+function writeImage(filename, bytes) {
+  const dir = join(tempRoot, 'images');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, filename), bytes);
 }
@@ -93,5 +99,51 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     const audio = manifest.filter((m) => m.kind === 'music');
     expect(audio).toHaveLength(1);
     expect(audio[0]).toEqual({ filename: 'shared.mp3', kind: 'music', sha256: sha(bytes) });
+  });
+});
+
+describe('buildProjectAssetManifest — first-pass music bed (#1928)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-cd-assets-'));
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('returns an empty manifest for a bare project (no image, no music bed)', async () => {
+    const manifest = await buildProjectAssetManifest({ startingImageFile: null, musicBed: null });
+    expect(manifest).toEqual([]);
+  });
+
+  it('bundles the music bed so a subscribed peer does not get a dangling reference', async () => {
+    const bytes = Buffer.from('music-bed-bytes');
+    writeMusic('music-gen-abc.wav', bytes);
+    const manifest = await buildProjectAssetManifest({
+      startingImageFile: null,
+      musicBed: { filename: 'music-gen-abc.wav', durationSec: 12, engine: 'musicgen' },
+    });
+    expect(manifest).toEqual([{ filename: 'music-gen-abc.wav', kind: 'music', sha256: sha(bytes) }]);
+  });
+
+  it('skips a music bed whose file is absent on disk (never ships a null hash)', async () => {
+    const manifest = await buildProjectAssetManifest({
+      startingImageFile: null,
+      musicBed: { filename: 'never-written.wav' },
+    });
+    expect(manifest).toEqual([]);
+  });
+
+  it('bundles both the starting image and the music bed together', async () => {
+    const imageBytes = Buffer.from('starting-image-bytes');
+    const musicBytes = Buffer.from('music-bed-bytes-2');
+    writeImage('start.png', imageBytes);
+    writeMusic('music-gen-def.wav', musicBytes);
+    const manifest = await buildProjectAssetManifest({
+      startingImageFile: 'start.png',
+      musicBed: { filename: 'music-gen-def.wav' },
+    });
+    expect(manifest).toContainEqual({ filename: 'start.png', kind: 'image', sha256: sha(imageBytes) });
+    expect(manifest).toContainEqual(expect.objectContaining({ filename: 'music-gen-def.wav', kind: 'music', sha256: sha(musicBytes) }));
+    expect(manifest).toHaveLength(2);
   });
 });
