@@ -94,6 +94,11 @@ export default function Drawer({
           </button>
         </header>
         {hasTabs && (
+          // Element ids below assume one drawer is open at a time — true by the
+          // modal contract (backdrop + scroll-lock), and a closed drawer renders
+          // nothing (`if (!open) return null`). Two drawers on one page use
+          // distinct URL params (useDrawerTab) for their persisted tab state, but
+          // never share the DOM open simultaneously, so the ids can't collide.
           <div className="px-4 pt-3 shrink-0 border-b border-port-border">
             <TabPills
               tabs={tabList}
@@ -106,23 +111,20 @@ export default function Drawer({
             />
           </div>
         )}
-        {hasTabs ? (
-          // key on the tab id so switching tabs remounts the panel and resets its
-          // scroll position — no single accumulated page-length scroll.
-          <div
-            key={currentTab}
-            id={`drawer-tabpanel-${currentTab}`}
-            role="tabpanel"
-            aria-labelledby={`tab-${currentTab}`}
-            className={bodyClasses}
-          >
-            {children}
-          </div>
-        ) : (
-          <div className={bodyClasses}>
-            {children}
-          </div>
-        )}
+        {/* One body element for both modes. When tabbed, `key={currentTab}`
+            remounts the panel on switch so each tab's scroll resets — no single
+            accumulated page-length scroll. */}
+        <div
+          key={hasTabs ? currentTab : undefined}
+          {...(hasTabs && {
+            id: `drawer-tabpanel-${currentTab}`,
+            role: 'tabpanel',
+            'aria-labelledby': `tab-${currentTab}`,
+          })}
+          className={bodyClasses}
+        >
+          {children}
+        </div>
       </aside>
     </>
   );

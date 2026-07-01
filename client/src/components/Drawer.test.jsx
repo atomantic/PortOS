@@ -91,6 +91,16 @@ describe('Drawer', () => {
       expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'drawer-tabpanel-jira');
     });
 
+    it('renders the mobile <select> fallback for tabbed drawers', () => {
+      // The drawer uses the default underline variant; the mobile <select>
+      // collapse must still render (regression guard for the variant-agnostic
+      // mobileDropdown wiring).
+      render(<Drawer open onClose={() => {}} title="X" tabs={TABS} activeTab="ports" onTabChange={() => {}}>body</Drawer>);
+      const select = screen.getByRole('combobox');
+      expect(select).toHaveAttribute('id', 'drawer-tab-select');
+      expect(select).toHaveValue('ports');
+    });
+
     it('is controllable via activeTab + onTabChange', () => {
       const onTabChange = vi.fn();
       const { rerender } = render(
