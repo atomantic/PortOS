@@ -35,6 +35,23 @@ describe('ProcessLogModal', () => {
     await waitFor(() => expect(getProcessLogs).toHaveBeenCalledWith('portos-server', 500));
   });
 
+  it('does not keep showing the prior process logs while the next fetch is in flight', async () => {
+    let resolveSecond;
+    getProcessLogs
+      .mockResolvedValueOnce({ logs: 'server logs here' })
+      .mockImplementationOnce(() => new Promise((r) => { resolveSecond = r; }));
+    render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
+    expect(await screen.findByText('server logs here')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Process'), { target: { value: 'portos-cos' } });
+    await waitFor(() => expect(getProcessLogs).toHaveBeenLastCalledWith('portos-cos', 200));
+    // The stale portos-server logs must be gone while portos-cos is still loading.
+    expect(screen.queryByText('server logs here')).not.toBeInTheDocument();
+
+    resolveSecond({ logs: 'cos logs here' });
+    expect(await screen.findByText('cos logs here')).toBeInTheDocument();
+  });
+
   it('surfaces a fetch error instead of log text', async () => {
     getProcessLogs.mockRejectedValueOnce(new Error('daemon down'));
     render(<ProcessLogModal open onClose={() => {}} processName="portos-server" />);
