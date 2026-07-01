@@ -57,7 +57,7 @@ export default function MemoryPractice({ item, onBack }) {
 
   if (!mode) {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
@@ -67,7 +67,7 @@ export default function MemoryPractice({ item, onBack }) {
 
         <p className="text-gray-400 text-sm">Choose a practice mode:</p>
 
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {MODES.map(m => (
             <button
               key={m.id}
@@ -292,10 +292,10 @@ export default function MemoryPractice({ item, onBack }) {
     );
   }
 
-  // LEARN mode — progressive reveal
+  // LEARN mode — progressive reveal (reading view, widened for desktop)
   if (mode === 'learn') {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
@@ -509,10 +509,10 @@ export default function MemoryPractice({ item, onBack }) {
     );
   }
 
-  // SPEED RUN mode — show all lines, check how many you can recite
+  // SPEED RUN mode — show all lines, check how many you can recite (reading view, widened)
   if (mode === 'speed-run') {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
