@@ -109,8 +109,17 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     // consent on an assumption the cache is already warm.
     const isCold = cacheStatus?.[modeId]?.cold ?? true;
     if (isCold && !primedModes.has(modeId)) {
-      setFillProviderId(config?.llmDrills?.providerId || '');
-      setFillModel(config?.llmDrills?.model || '');
+      // Only pre-select the saved default if it's actually one of the modal's
+      // options. The modal's provider list is API-only (enabledApiProviderFilter
+      // excludes slow TUI/CLI providers — the whole point of the consent step),
+      // so a saved default of e.g. "claude-code-tui" would otherwise leave the
+      // <select> holding a value with no matching <option> — appearing blank
+      // while silently carrying that provider through if the user just clicks
+      // "Fill Cache & Play" without noticing.
+      const savedProviderId = config?.llmDrills?.providerId || '';
+      const savedIsSelectable = providers.some(p => p.id === savedProviderId);
+      setFillProviderId(savedIsSelectable ? savedProviderId : '');
+      setFillModel(savedIsSelectable ? (config?.llmDrills?.model || '') : '');
       setPendingMode(modeId);
       return;
     }
