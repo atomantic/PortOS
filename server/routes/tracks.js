@@ -4,6 +4,9 @@
  *   GET    /api/tracks                 → Track[]   (live, creation order)
  *   POST   /api/tracks                 → Track
  *   GET    /api/tracks/library         → { tracks } (shared music library list)
+ *   POST   /api/tracks/import/youtube  → { jobId }  (download + extract audio from a YouTube URL)
+ *   GET    /api/tracks/import/:jobId/events → SSE progress for a YouTube import job
+ *   POST   /api/tracks/import/:jobId/cancel → { ok }
  *   GET    /api/tracks/:id              → Track
  *   PATCH  /api/tracks/:id              → Track
  *   DELETE /api/tracks/:id              → { id }     (soft delete)
@@ -16,6 +19,10 @@
  * generated there. Bounds come from services/tracks/logic.js. Mirrors the
  * artists/albums routes plus the audio-attach surface from the pipeline audio
  * stage. Deleting a track does NOT delete its library audio (it may be shared).
+ *
+ * The YouTube import (#1945) is a library-level action (not per-track) — it
+ * lands a new Track in the library, same as an upload, so any project's track
+ * picker can attach it afterward without re-downloading.
  */
 
 import { Router } from 'express';
@@ -29,6 +36,9 @@ import {
   listMusicLibrary, importUploadedTrack, statMusicTrack,
   isSupportedMusicUpload, assertSafeMusicFilename, MUSIC_UPLOAD_MAX_BYTES,
 } from '../services/pipeline/musicLibrary.js';
+import {
+  startYoutubeImport, attachImportSseClient, cancelYoutubeImport, YOUTUBE_URL_RE,
+} from '../services/trackYoutubeImport.js';
 
 const router = Router();
 
@@ -83,6 +93,10 @@ const patchSchema = z.object({
 
 const attachSchema = z.object({
   filename: z.string().trim().min(1).max(tracks.AUDIO_FILENAME_MAX),
+});
+
+const youtubeImportSchema = z.object({
+  url: z.string().trim().regex(YOUTUBE_URL_RE, 'Not a recognized YouTube URL (expected youtube.com/watch, youtu.be, or m.youtube.com)'),
 });
 
 // Reuse the pipeline audio stage's multipart upload contract (50MB, audio MIME).
@@ -171,6 +185,24 @@ router.get('/', asyncHandler(async (_req, res) => {
 router.get('/library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
 }));
+
+// YouTube audio import (#1945): download + extract a track's audio via yt-dlp,
+// land it in the shared library, and create a Track pointing at it. Two-segment
+// paths ('import/...') can't collide with the single-segment GET/:id below.
+router.post('/import/youtube', asyncHandler(async (req, res) => {
+  const { url } = validateRequest(youtubeImportSchema, req.body ?? {});
+  res.status(202).json(await startYoutubeImport(url));
+}));
+
+router.get('/import/:jobId/events', (req, res) => {
+  if (!attachImportSseClient(req.params.jobId, res)) {
+    throw new ServerError('Import job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/import/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelYoutubeImport(req.params.jobId) });
+});
 
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(createSchema, req.body ?? {});

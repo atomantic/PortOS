@@ -146,3 +146,4 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useUniverseNav` | `goToWorld(id)` → navigate to `/universes/:id`, preserve `location.search`. | Any Universe Builder caller that needs to switch worlds via URL. |
 | `useVoiceUiSync` | Keeps voice server's UI index in sync with current page. | Wire once at root for voice agent support. |
 | `useMoltworldWs` | Moltworld WebSocket feed. | Moltworld surfaces only. |
+| `useYoutubeTrackImport` | One YouTube-audio-import job slot (#1945): start/cancel + SSE progress + terminal-frame handling via `POST /api/tracks/import/youtube`. Returns `{ active, percent, start(url, context), cancel }`; `onComplete(track, context)` fires with the finished Track. Call once per UI surface that can independently kick off an import — a shared slot would let one surface's kickoff orphan another's in-flight job. | Any picker that lets a user paste a YouTube URL to create a Track (Music Video's create form and track-change row). |

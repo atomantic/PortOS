@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2 } from 'lucide-react';
+import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2, Download } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import {
   listMusicVideoProjects,
   createMusicVideoProject,
+  updateMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
   planMusicVideoProject,
@@ -22,6 +23,7 @@ import { listTracks } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
+import useYoutubeTrackImport from '../hooks/useYoutubeTrackImport.js';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
 
@@ -39,6 +41,36 @@ const STATUS_COLORS = {
   failed: 'bg-port-error/30 text-port-error',
 };
 
+// The URL input + Import/Cancel button pairing for a useYoutubeTrackImport
+// slot — shared by the create form (full-size) and the detail view's
+// track-change row (compact, inline in a flex-wrap toolbar). #1945
+function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false }) {
+  const size = compact ? 12 : 13;
+  const py = compact ? 'py-1' : 'py-1.5';
+  const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[40px] sm:min-h-0';
+  return (
+    <>
+      <input
+        id={id} type="url" value={url} onChange={onUrlChange} disabled={job.active}
+        placeholder="Import audio from a YouTube URL…" aria-label="Import audio from a YouTube URL"
+        className={`${compact ? 'flex-1 min-w-[160px]' : 'flex-1 min-w-0'} bg-port-bg border border-port-border rounded px-2 ${py} text-sm disabled:opacity-50`}
+      />
+      {job.active ? (
+        <button type="button" onClick={job.cancel}
+          className={`flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 ${py} ${btnExtra}`}>
+          <Activity size={size} className="animate-spin" /> {job.percent}%
+        </button>
+      ) : (
+        <button type="button" onClick={onStart} disabled={!url.trim()}
+          title="Download and extract this video's audio as a track"
+          className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 ${py} ${btnExtra} disabled:opacity-50`}>
+          <Download size={size} /> Import
+        </button>
+      )}
+    </>
+  );
+}
+
 export default function MusicVideo() {
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
@@ -49,6 +81,30 @@ export default function MusicVideo() {
   const [planning, setPlanning] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
   const selected = projects.find((p) => p.id === selectedId) || null;
+
+  // YouTube audio import (#1945): paste a URL, PortOS downloads + extracts the
+  // track via yt-dlp and lands it in the shared library. Two independent job
+  // slots — one per surface that can kick off an import — so starting one
+  // doesn't orphan the other's in-flight job (see useYoutubeTrackImport).
+  const [ytUrlCreate, setYtUrlCreate] = useState('');
+  const [ytUrlEdit, setYtUrlEdit] = useState('');
+  const attachImportedTrack = (track) => setTracks((prev) => [...prev, track]);
+  const ytImportCreate = useYoutubeTrackImport({
+    onComplete: (track) => {
+      attachImportedTrack(track);
+      setForm((f) => ({ ...f, trackId: track.id }));
+      setYtUrlCreate('');
+    },
+  });
+  const ytImportEdit = useYoutubeTrackImport({
+    onComplete: (track, projectId) => {
+      attachImportedTrack(track);
+      updateMusicVideoProject(projectId, { trackId: track.id }, { silent: true })
+        .then((proj) => replaceProject(proj))
+        .catch((err) => toast.error(err?.message || 'Imported the track but failed to attach it to the project'));
+      setYtUrlEdit('');
+    },
+  });
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
@@ -251,6 +307,16 @@ export default function MusicVideo() {
     cancelMusicVideoRender(render.jobId, { silent: true }).catch(() => {});
   };
 
+  // Re-point the selected project at a different library track (the detail
+  // view's "Change track" picker — previously there was no way to relink a
+  // project's audio after creation at all).
+  const handleChangeTrack = (trackId) => {
+    if (!selected) return;
+    updateMusicVideoProject(selected.id, { trackId }, { silent: true })
+      .then((proj) => replaceProject(proj))
+      .catch((err) => toast.error(err?.message || 'Failed to change track'));
+  };
+
   const handleAddScene = () => {
     addMusicVideoScene(selected.id, { prompt: '' })
       .then((scene) => replaceProject({ ...selected, scenes: [...(selected.scenes || []), scene] }))
@@ -395,6 +461,16 @@ export default function MusicVideo() {
               <option value="">— no track —</option>
               {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
             </select>
+            <label htmlFor="mv-yt-create" className="block text-xs text-port-text-muted">…or import audio from YouTube</label>
+            <div className="flex gap-1">
+              <YoutubeImportControls
+                id="mv-yt-create" url={ytUrlCreate} onUrlChange={(e) => setYtUrlCreate(e.target.value)}
+                job={ytImportCreate} onStart={() => ytImportCreate.start(ytUrlCreate)}
+              />
+            </div>
+            {form.trackId && !ytImportCreate.active && (
+              <p className="text-xs text-port-text-muted">Track set: {trackName(form.trackId)}</p>
+            )}
             <button type="submit" className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
               <Plus size={16} /> Create
             </button>
@@ -464,6 +540,22 @@ export default function MusicVideo() {
                       <Trash2 size={15} />
                     </button>
                   </div>
+                </div>
+                {/* Track picker — pick an existing library track or import fresh audio
+                    from YouTube. Re-selecting either PATCHes the project's trackId. */}
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(selected.trackId)}</span>
+                  <select value={selected.trackId || ''} aria-label="Change track"
+                    onChange={(e) => e.target.value && handleChangeTrack(e.target.value)}
+                    className="bg-port-bg border border-port-border rounded px-1.5 py-1">
+                    <option value="">Change track…</option>
+                    {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
+                  </select>
+                  <YoutubeImportControls
+                    url={ytUrlEdit} onUrlChange={(e) => setYtUrlEdit(e.target.value)}
+                    job={ytImportEdit} onStart={() => ytImportEdit.start(ytUrlEdit, selected.id)}
+                    compact
+                  />
                 </div>
                 {render && (
                   <div className="mt-2">

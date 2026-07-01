@@ -30,6 +30,23 @@ export const deleteTrack = (id, requestOptions = {}) => request(`/tracks/${encod
 // attach an existing track without re-uploading.
 export const listMusicLibrary = (options = {}) => request('/tracks/library', options);
 
+// --- YouTube import (#1945) — download + extract a track's audio via yt-dlp,
+// land it in the shared library, and create a Track. Kickoff returns { jobId };
+// progress streams over SSE (subscribe with useSseProgress).
+export const importTrackFromYoutube = (url, options = {}) => request('/tracks/import/youtube', {
+  method: 'POST',
+  body: JSON.stringify({ url }),
+  ...options,
+});
+
+export const trackImportEventsUrl = (jobId) =>
+  `/api/tracks/import/${encodeURIComponent(jobId)}/events`;
+
+export const cancelTrackImport = (jobId, options = {}) => request(`/tracks/import/${encodeURIComponent(jobId)}/cancel`, {
+  method: 'POST',
+  ...options,
+});
+
 // Attach an existing library track (by stored filename) to this track.
 export const attachTrackAudio = (id, filename, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/audio/attach`, {
   method: 'POST',
