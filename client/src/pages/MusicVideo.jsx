@@ -106,6 +106,20 @@ export default function MusicVideo() {
     },
   });
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+  // `ytImportEdit` is one shared job slot for the whole detail view (not
+  // per-project) — switching the selected project while it has an import in
+  // flight would silently orphan that job's SSE subscription (the finished
+  // track would land in the library but never get attached, since the
+  // completion handler's onComplete never fires for a target nobody is
+  // listening for anymore) and misattribute its progress UI to whichever
+  // project is now selected. Block switching until that import settles.
+  const selectProject = (id) => {
+    if (ytImportEdit.active && id !== selectedId) {
+      toast.error('Finish or cancel the in-progress YouTube import before switching projects');
+      return;
+    }
+    setSelectedId(id);
+  };
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. Shared by the socket handler and the synchronous
@@ -162,7 +176,7 @@ export default function MusicVideo() {
     createMusicVideoProject({ name: form.name.trim(), mode: form.mode, trackId: form.trackId || null })
       .then((proj) => {
         setProjects((prev) => [...prev, proj]);
-        setSelectedId(proj.id);
+        selectProject(proj.id);
         setForm({ name: '', mode: 'director', trackId: '' });
         toast.success('Project created');
       })
@@ -480,7 +494,7 @@ export default function MusicVideo() {
             {loading && <p className="text-sm text-port-text-muted">Loading…</p>}
             {!loading && projects.length === 0 && <p className="text-sm text-port-text-muted">No projects yet.</p>}
             {projects.map((p) => (
-              <button key={p.id} onClick={() => setSelectedId(p.id)}
+              <button key={p.id} onClick={() => selectProject(p.id)}
                 className={`w-full text-left px-3 py-2 rounded border ${selectedId === p.id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm truncate">{p.name}</span>

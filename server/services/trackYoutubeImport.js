@@ -14,7 +14,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
@@ -71,6 +71,19 @@ const TITLE_PREFIX = 'PORTOS_TITLE:';
 const PROGRESS_PREFIX = 'PORTOS_PROGRESS:';
 const STAGE_PREFIX = 'PORTOS_STAGE:';
 
+// A cancelled/failed run may leave behind yt-dlp's PRE-extraction download
+// (native extension — .webm/.m4a/etc., only renamed to our known `.mp3`
+// AFTER a successful postprocess step), so cleanup can't just unlink one
+// known path — glob every temp file this job's prefix touched.
+async function cleanupTempFiles(jobId) {
+  const prefix = `portos-ytimport-${jobId}`;
+  const dir = tmpdir();
+  const entries = await readdir(dir).catch(() => []);
+  await Promise.all(
+    entries.filter((name) => name.startsWith(prefix)).map((name) => unlink(join(dir, name)).catch(() => {})),
+  );
+}
+
 /**
  * Kick off a YouTube audio import. Returns `{ jobId }` immediately; the
  * download+extract runs detached and streams progress over SSE. Terminal
@@ -124,7 +137,6 @@ export async function startYoutubeImport(url) {
       const proc = spawn(ytDlp, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
       job.process = proc;
 
-      let buf = '';
       const onLine = (line) => {
         if (line.startsWith(TITLE_PREFIX)) {
           title = line.slice(TITLE_PREFIX.length).trim();
@@ -139,14 +151,20 @@ export async function startYoutubeImport(url) {
           broadcastSse(job, { type: 'progress', percent: 100, stage: line.slice(STAGE_PREFIX.length) });
         }
       };
-      const onData = (chunk) => {
-        buf += chunk.toString();
-        const lines = buf.split(/\r?\n/);
-        buf = lines.pop();
-        lines.forEach(onLine);
+      // Separate buffers per stream — stdout and stderr chunks arrive
+      // independently, so a shared buffer can complete a partial line from
+      // one stream with a chunk from the other, corrupting a marker line.
+      const makeLineReader = () => {
+        let buf = '';
+        return (chunk) => {
+          buf += chunk.toString();
+          const lines = buf.split(/\r?\n/);
+          buf = lines.pop();
+          lines.forEach(onLine);
+        };
       };
-      proc.stdout.on('data', onData);
-      proc.stderr.on('data', onData); // yt-dlp writes some progress/info lines to stderr too
+      proc.stdout.on('data', makeLineReader());
+      proc.stderr.on('data', makeLineReader()); // yt-dlp writes some progress/info lines to stderr too
 
       const exit = await new Promise((resolve) => {
         proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
@@ -157,7 +175,7 @@ export async function startYoutubeImport(url) {
       if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
         console.log(`🛑 YouTube import ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
-        await unlink(outPath).catch(() => {});
+        await cleanupTempFiles(jobId);
         return;
       }
       if (exit.code !== 0 || !existsSync(outPath)) {
@@ -174,7 +192,7 @@ export async function startYoutubeImport(url) {
     } catch (err) {
       console.error(`❌ YouTube import ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });
-      await unlink(outPath).catch(() => {});
+      await cleanupTempFiles(jobId);
     } finally {
       closeJobAfterDelay(importJobs, jobId);
     }
