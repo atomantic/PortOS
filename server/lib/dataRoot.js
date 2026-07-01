@@ -23,26 +23,36 @@ export const DATA_ROOT_ENV = 'PORTOS_DATA_ROOT';
 /**
  * Resolve the PortOS install root (the parent of `data/` and `data.reference/`).
  *
- * Prefers an explicit `PORTOS_DATA_ROOT` env var (set at real process launch)
- * over the caller's `import.meta.url`-derived fallback, so a process booted
- * from inside a git worktree still resolves to the real install. Returns
- * `fallbackRoot` unchanged when the env var is unset or blank — preserving the
- * existing behavior for installs that never set it (backward compatible).
+ * Prefers an explicit `PORTOS_DATA_ROOT` env var (set at a real launch in
+ * `ecosystem.config.cjs`) over the caller's `import.meta.url`-derived fallback,
+ * pinning the primary install's root independent of the executing-file location.
+ * Returns `fallbackRoot` unchanged when the env var is unset or blank —
+ * preserving the existing behavior for installs that never set it (backward
+ * compatible).
  *
- * By design this is pinned only at a REAL launch (`ecosystem.config.cjs`). It is
- * intentionally NOT propagated into CoS agent worktree shells (`shellService`
- * rebuilds a scrubbed env): a worktree process must NOT silently run migrations
- * or data writes against the real `data/` tree using worktree-version code — a
- * version-skew data-corruption hazard, and a `:5555` collision with the real
- * server. There the env var stays unset, so resolution falls back to the
- * worktree path and `isWorktreeRoot()` makes the boot-migration pass skip
- * (no crash). An agent that genuinely wants the real data tree opts in by
- * setting `PORTOS_DATA_ROOT` explicitly.
+ * The var is set ONLY on the `portos-server` app (not the shared `BASE_ENV`), so
+ * the `portos-cos` runner — which spreads its `process.env` into agent CLI
+ * children — never carries it into worktree agents. As belt-and-suspenders, this
+ * resolver ALSO refuses the pin whenever the executing location (`fallbackRoot`)
+ * is itself a worktree checkout: even a leaked `PORTOS_DATA_ROOT` can't make
+ * worktree-version code resolve `PATHS.data` to the LIVE install and read/write
+ * real data. In that case resolution stays on the worktree path, where the
+ * migration backstop safely skips and `PATHS.data` points at the worktree's own
+ * (empty) tree — no crash, no live-data corruption.
  *
  * @param {string} fallbackRoot absolute path derived from the caller's location
  * @returns {string} the install root to use
  */
 export function resolveInstallRoot(fallbackRoot) {
+  // Leak-safety (#1947): a process whose CODE physically lives inside a worktree
+  // checkout must NEVER honor a PORTOS_DATA_ROOT pin. The var is inherited by
+  // long-lived PM2 processes and can leak into agent child envs (spread of
+  // process.env), so a worktree-launched command could otherwise resolve
+  // PATHS.data to the LIVE install and let worktree-version code read/write real
+  // data. When the fallback (the executing location) is itself a worktree, ignore
+  // the override and stay on the worktree path — where the migration backstop
+  // safely skips and PATHS.data points at the worktree's own (empty) tree.
+  if (isWorktreeRoot(fallbackRoot)) return fallbackRoot;
   const override = process.env[DATA_ROOT_ENV];
   if (typeof override === 'string' && override.trim() !== '') {
     const trimmed = override.trim();

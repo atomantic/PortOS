@@ -32,10 +32,13 @@ describe('resolveInstallRoot', () => {
     expect(out).not.toBe(REAL_ROOT);
   });
 
-  it('pins the real root even when the fallback is a worktree path', () => {
+  it('IGNORES the pin when the fallback is a worktree checkout (leak safety #1947)', () => {
+    // A worktree-executing process must never honor a (possibly-leaked) pin —
+    // resolving its data root to the live install would let worktree code
+    // read/write real data. It stays on the worktree path instead.
     process.env[DATA_ROOT_ENV] = REAL_ROOT;
     const worktreeFallback = join(REAL_ROOT, 'data', 'cos', 'worktrees', 'agent-abc');
-    expect(resolveInstallRoot(worktreeFallback)).toBe(REAL_ROOT);
+    expect(resolveInstallRoot(worktreeFallback)).toBe(worktreeFallback);
   });
 });
 

@@ -8,12 +8,7 @@ const IS_WIN = process.platform === 'win32';
 // Shared env inherited by all apps (merged into each app's env)
 const BASE_ENV = {
   NODE_ENV: 'development',
-  TZ: 'UTC',  // All log timestamps and Date operations in UTC
-  // Pin the install root explicitly so data-root resolution never derives it
-  // from the executing file's location. A server/agent booted from inside a CoS
-  // git worktree (data/cos/worktrees/agent-*) would otherwise resolve `data/`
-  // to the worktree's nonexistent tree and crash boot migrations (#1947).
-  PORTOS_DATA_ROOT: __dirname
+  TZ: 'UTC'  // All log timestamps and Date operations in UTC
 };
 
 // Read a couple of machine-local settings from .env (pm2 doesn't auto-load it
@@ -69,6 +64,15 @@ module.exports = {
       windowsHide: IS_WIN,
       env: {
         ...BASE_ENV,
+        // Pin the install root explicitly so data-root resolution never derives
+        // it from the executing file's location. A server booted from inside a
+        // CoS git worktree (data/cos/worktrees/agent-*) would otherwise resolve
+        // `data/` to the worktree's nonexistent tree and crash boot migrations
+        // (#1947). Set ONLY here (not BASE_ENV) so the portos-cos runner — which
+        // spreads its env into agent CLI children — never leaks it into worktree
+        // agents; fileUtils/resolveInstallRoot also refuse a leaked pin when the
+        // executing code is itself in a worktree, as belt-and-suspenders.
+        PORTOS_DATA_ROOT: __dirname,
         PORT: PORTS.API,
         PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
         HOST: '0.0.0.0',
