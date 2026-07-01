@@ -24,7 +24,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { loadHistory, saveHistory } from '../videoGen/local.js';
+import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
 
@@ -454,10 +454,9 @@ export async function renderProject(projectId) {
       createdAt: new Date().toISOString(),
       timelineProjectId: projectId,
     };
-    const loadedHistory = await loadHistory();
-    const history = Array.isArray(loadedHistory) ? loadedHistory : [];
-    history.unshift(meta);
-    await saveHistory(history);
+    // Serialized append through the single shared history tail so a concurrent
+    // download/render/timeline write can't clobber this entry.
+    await mutateVideoHistory((history) => { history.unshift(meta); return history; });
     console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
     broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
     projectRenders.delete(projectId);

@@ -558,6 +558,13 @@ export const legacyExportSchema = z.object({
   includePdf: z.boolean().optional()
 });
 
+// Video downloader (#1946) — paste a YouTube/x.com URL, download the full
+// video. The host allowlist is enforced in the service (assertSupportedVideoUrl)
+// so the error names the supported hosts; the schema just guards the shape.
+export const videoDownloadSchema = z.object({
+  url: z.string().url().max(2048)
+});
+
 // =============================================================================
 // TRANSITIONAL RE-EXPORTS (issue #1151 split)
 // =============================================================================
