@@ -1,7 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// Mock the migration-status reader so the migration-ledger-root test below can
+// assert which rootDir the DEFAULT wiring passes (the rest of the suite injects
+// its own `listPending`, so the mock is inert for them).
+vi.mock('../../scripts/run-migrations.js', () => ({
+  listPendingMigrations: vi.fn(async () => [])
+}));
+
 import {
   getInstallState,
   captureBootCommit,
@@ -9,6 +17,8 @@ import {
   __setBootCommitForTest,
   __internal
 } from './installState.js';
+import { listPendingMigrations } from '../../scripts/run-migrations.js';
+import { PATHS } from '../lib/fileUtils.js';
 
 // All external effects are injected, so these tests never touch real git/fs.
 
@@ -186,6 +196,23 @@ describe('getInstallState — pending migrations', () => {
     const state = await getInstallState(syncedOpts());
     expect(state.pendingMigrations.count).toBe(0);
     expect(state.outOfSync).toBe(false);
+  });
+
+  // #1947: the migration ledger lives under the DATA install root (where boot
+  // wrote it via the PORTOS_DATA_ROOT-resolved root), not the code checkout —
+  // so the status reader must not use PATHS.root when the two diverge.
+  it('reads the ledger from the data install root by default, not the code checkout', async () => {
+    listPendingMigrations.mockClear();
+    const { listPending, ...optsWithoutInjectedPending } = syncedOpts();
+    await getInstallState(optsWithoutInjectedPending);
+    expect(listPendingMigrations).toHaveBeenCalledWith({ rootDir: PATHS.installRoot });
+  });
+
+  it('honors an explicit migrationRootDir override', async () => {
+    listPendingMigrations.mockClear();
+    const { listPending, ...optsWithoutInjectedPending } = syncedOpts();
+    await getInstallState({ ...optsWithoutInjectedPending, migrationRootDir: '/pinned/install' });
+    expect(listPendingMigrations).toHaveBeenCalledWith({ rootDir: '/pinned/install' });
   });
 });
 

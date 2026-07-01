@@ -187,12 +187,17 @@ async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
  */
 export async function getInstallState({
   rootDir = PATHS.root,
+  // The migration ledger lives under the DATA install root (data/migrations.applied.json),
+  // which boot writes via the PORTOS_DATA_ROOT-resolved root — not the code checkout.
+  // Read it from the same place so a pinned-data-root worktree boot doesn't report every
+  // already-applied migration as pending (#1947). Equals rootDir for a normal install.
+  migrationRootDir = PATHS.installRoot,
   boot = bootCommit,
   getCurrentCommit = () => gitRevParseHead(rootDir),
   isAncestor = (a, b) => gitIsAncestor(a, b, rootDir),
   statMtime = statMtimeMs,
   clientSourceNewer = (buildMs) => isClientSourceNewer(rootDir, buildMs, { statMtime }),
-  listPending = () => listPendingMigrations({ rootDir }),
+  listPending = () => listPendingMigrations({ rootDir: migrationRootDir }),
 } = {}) {
   const currentCommit = await getCurrentCommit().catch(() => null);
 

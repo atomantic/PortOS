@@ -29,6 +29,16 @@ export const DATA_ROOT_ENV = 'PORTOS_DATA_ROOT';
  * `fallbackRoot` unchanged when the env var is unset or blank — preserving the
  * existing behavior for installs that never set it (backward compatible).
  *
+ * By design this is pinned only at a REAL launch (`ecosystem.config.cjs`). It is
+ * intentionally NOT propagated into CoS agent worktree shells (`shellService`
+ * rebuilds a scrubbed env): a worktree process must NOT silently run migrations
+ * or data writes against the real `data/` tree using worktree-version code — a
+ * version-skew data-corruption hazard, and a `:5555` collision with the real
+ * server. There the env var stays unset, so resolution falls back to the
+ * worktree path and `isWorktreeRoot()` makes the boot-migration pass skip
+ * (no crash). An agent that genuinely wants the real data tree opts in by
+ * setting `PORTOS_DATA_ROOT` explicitly.
+ *
  * @param {string} fallbackRoot absolute path derived from the caller's location
  * @returns {string} the install root to use
  */

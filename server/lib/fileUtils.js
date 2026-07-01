@@ -47,6 +47,12 @@ export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'applicat
  */
 export const PATHS = {
   root: CODE_ROOT,
+  // The data-bearing install root (parent of `data/`). Equals `root` for a
+  // normal install; diverges only when PORTOS_DATA_ROOT pins a different tree
+  // (worktree boot, #1947). Use this — not `root` — for anything anchored to
+  // the `data/` tree but living one level above it (e.g. the migration ledger
+  // `data/migrations.applied.json`), so its reader agrees with where boot wrote it.
+  installRoot: INSTALL_ROOT,
   data: join(INSTALL_ROOT, 'data'),
   cos: join(INSTALL_ROOT, 'data/cos'),
   brain: join(INSTALL_ROOT, 'data/brain'),
