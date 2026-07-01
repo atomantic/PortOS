@@ -179,11 +179,22 @@ const memoryChunkSchema = z.object({
   label: z.string(),
 });
 
+// Spaced-repetition schedule (SM-2 inspired). Server-managed via practice, but
+// accepted on both POST (seed an imported item's progress) and PUT (persist an
+// out-of-band reschedule). When absent the service stamps a fresh default.
+export const memoryScheduleSchema = z.object({
+  ease: z.number().min(1.3).max(5),
+  intervalDays: z.number().min(0),
+  nextReview: z.string(),
+  lastReviewed: z.string().nullable().optional(),
+});
+
 export const memoryItemCreateSchema = z.object({
   title: z.string().min(1).max(200),
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional().default('text'),
   lines: z.array(z.union([z.string(), memoryLineSchema])).min(1),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
 });
 
 export const memoryItemUpdateSchema = z.object({
@@ -191,6 +202,7 @@ export const memoryItemUpdateSchema = z.object({
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional(),
   lines: z.array(z.union([z.string(), memoryLineSchema])).optional(),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
   mastery: z.object({
     overallPct: z.number().min(0).max(100).optional(),
     chunks: z.record(z.object({

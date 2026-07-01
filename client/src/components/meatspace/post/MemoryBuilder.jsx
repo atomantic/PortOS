@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save } from 'lucide-react';
+import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save, CalendarClock } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -13,6 +13,16 @@ const ITEM_TYPES = [
   { id: 'sequence', label: 'Sequence' },
   { id: 'text', label: 'Text' },
 ];
+
+// An item is due when its spaced-repetition schedule says so. No/invalid
+// schedule = due (matches the server's `isMemoryItemDue`), so legacy items and
+// anything the migration hasn't stamped still surface for review.
+function isItemDue(item) {
+  const nr = item?.schedule?.nextReview;
+  if (typeof nr !== 'string') return true;
+  const t = Date.parse(nr);
+  return Number.isNaN(t) || t <= Date.now();
+}
 
 export default function MemoryBuilder({ onBack, onNavigateElements }) {
   const [items, setItems] = useState([]);
@@ -138,6 +148,39 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
         Train your memory with songs, poems, speeches, and sequences. Track mastery and practice weak spots.
       </p>
 
+      {/* Due Today — spaced repetition. Recomputes reactively as `items` update. */}
+      {(() => {
+        const dueItems = items.filter(isItemDue);
+        if (dueItems.length === 0) {
+          return (
+            <div className="flex items-center gap-2 text-sm text-gray-500 max-w-2xl">
+              <CalendarClock size={16} className="text-gray-600" />
+              Nothing due for review right now — all caught up.
+            </div>
+          );
+        }
+        return (
+          <div className="bg-port-card border border-emerald-500/30 rounded-lg p-4 max-w-2xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <CalendarClock size={20} className="text-emerald-400 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-white font-medium">Due Today ({dueItems.length})</div>
+                <div className="text-xs text-gray-500 truncate">
+                  {dueItems.map(i => i.title).join(', ')}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => handleSelect(dueItems[0])}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
+            >
+              <BookOpen size={14} />
+              Review Next
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Create Form */}
       {creating && (
         <div className="bg-port-card border border-port-accent/30 rounded-lg p-5 space-y-4 max-w-2xl">
@@ -234,7 +277,15 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
                   </div>
                 </div>
               </div>
-              <MasteryBadge pct={item.mastery?.overallPct || 0} />
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <MasteryBadge pct={item.mastery?.overallPct || 0} />
+                {isItemDue(item) && (
+                  <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-emerald-400">
+                    <CalendarClock size={10} />
+                    Due
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="flex items-center gap-2 mt-4">
