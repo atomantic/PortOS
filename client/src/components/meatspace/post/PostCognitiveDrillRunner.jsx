@@ -12,7 +12,7 @@ import { DRILL_LABELS } from './constants';
  * view; the server recomputes it deterministically from `drillData` on save
  * (server/services/meatspacePostCognitive.js). NO provider calls anywhere.
  */
-export default function PostCognitiveDrillRunner({ drill, timeLimitSec, drillIndex, drillCount, onComplete, isTraining }) {
+export default function PostCognitiveDrillRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) {
   if (!drill) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -114,7 +114,6 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
     };
     timeoutRef.current = setTimeout(step, 800);
     return () => { mountedRef.current = false; clearTimeout(timeoutRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const registerMatch = useCallback(() => {
@@ -248,7 +247,6 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
       recallStartRef.current = Date.now();
     }, t));
     return () => timers.forEach(clearTimeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seqIdx]);
 
   useEffect(() => { if (phase === 'recall') inputRef.current?.focus(); }, [phase]);
