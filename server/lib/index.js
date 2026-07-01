@@ -133,6 +133,7 @@ export * from './gitArgs.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
+export * from './killWithEscalation.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './pythonSetup.js';

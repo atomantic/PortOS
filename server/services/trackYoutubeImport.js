@@ -24,6 +24,7 @@ import { findFfmpeg, probeVideoDuration } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack, DURATION_MAX_SEC } from './tracks/index.js';
 
@@ -52,13 +53,7 @@ export function cancelYoutubeImport(jobId) {
   const job = importJobs.get(jobId);
   if (!job || !job.process) return false;
   const proc = job.process;
-  proc.kill('SIGTERM');
-  setTimeout(() => {
-    if (job.process === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ yt-dlp import didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  killWithEscalation(proc, { label: 'yt-dlp import', stillRunning: () => job.process === proc });
   return true;
 }
 
