@@ -24,6 +24,7 @@ import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
@@ -98,15 +99,9 @@ const STALL_TICK_MS = 30_000;
 export const cancel = (jobId) => {
   if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
   const proc = activeProcess;
-  proc.kill('SIGTERM');
   // Keep activeProcess set until 'close' clears it — the trainer may spend
   // a few seconds writing its cancel checkpoint. Escalate after 8s.
-  setTimeout(() => {
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log('⚠️ training child ignored SIGTERM — escalating to SIGKILL');
-      proc.kill('SIGKILL');
-    }
-  }, 8000).unref?.();
+  killWithEscalation(proc, { label: 'training child', stillRunning: () => activeProcess === proc });
   return true;
 };
 

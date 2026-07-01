@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2, Download } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
@@ -78,14 +79,26 @@ function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = f
 }
 
 export default function MusicVideo() {
+  // Deep-linkable project selection: the selected project lives in the URL
+  // (/media/music-video/:projectId) rather than local state, so a project's
+  // scene board is directly shareable/bookmarkable and reachable from the
+  // media job-completion hooks. selectProject() navigates; the browser URL is
+  // the single source of truth for "which project is open".
+  const { projectId: routeProjectId } = useParams();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const selectedId = routeProjectId || null;
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
+  // The project a detail-view YouTube import is bound to (captured at kickoff).
+  // The import's shared UI slot (progress button + disabled track controls)
+  // belongs to this project; it backstops the URL-nav guard below so a deep
+  // link / Back / ⌘K can't strand that slot's UI against another project.
+  const [ytEditProjectId, setYtEditProjectId] = useState(null);
   const selected = projects.find((p) => p.id === selectedId) || null;
 
   // YouTube audio import (#1945): paste a URL, PortOS downloads + extracts the
@@ -124,8 +137,26 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before switching projects');
       return;
     }
-    setSelectedId(id);
+    navigate(id ? `/media/music-video/${id}` : '/media/music-video');
   };
+  // Drop the binding once the import settles (or is cancelled) so the backstop
+  // below stops guarding a project the user is free to leave again.
+  useEffect(() => { if (!ytImportEdit.active) setYtEditProjectId(null); }, [ytImportEdit.active]);
+  // `selectProject` blocks project switches from the list buttons while an
+  // import is in flight, but URL-driven selection (deep link, browser Back/
+  // Forward, ⌘K / voice nav) changes `selectedId` without going through it. Re-
+  // assert the same invariant here: while a detail-view import runs, bounce any
+  // navigation away from its bound project back (replace, so history isn't
+  // polluted). The import itself keeps running and still attaches to its bound
+  // project (useYoutubeTrackImport captures the target at kickoff) — this only
+  // keeps the shared progress UI from misattributing to another project.
+  useEffect(() => {
+    if (!ytImportEdit.active || !ytEditProjectId) return;
+    if (routeProjectId !== ytEditProjectId) {
+      toast.error('Finish or cancel the in-progress YouTube import before switching projects');
+      navigate(`/media/music-video/${ytEditProjectId}`, { replace: true });
+    }
+  }, [routeProjectId, ytImportEdit.active, ytEditProjectId, navigate]);
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. Shared by the socket handler and the synchronous
@@ -208,7 +239,7 @@ export default function MusicVideo() {
     deleteMusicVideoProject(id)
       .then(() => {
         setProjects((prev) => prev.filter((p) => p.id !== id));
-        if (selectedId === id) setSelectedId(null);
+        if (selectedId === id) navigate('/media/music-video');
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
@@ -541,7 +572,13 @@ export default function MusicVideo() {
 
         {/* Detail / scene board */}
         <div className="md:col-span-2">
-          {!selected && <p className="text-sm text-port-text-muted">Select or create a project to open its scene board.</p>}
+          {!selected && !loading && routeProjectId && (
+            <p className="text-sm text-port-text-muted">
+              Project not found — it may have been deleted.{' '}
+              <button onClick={() => navigate('/media/music-video')} className="text-port-accent underline">Back to projects</button>
+            </p>
+          )}
+          {!selected && (loading || !routeProjectId) && <p className="text-sm text-port-text-muted">Select or create a project to open its scene board.</p>}
           {selected && (
             <div className="space-y-3">
               <div className="bg-port-card border border-port-border rounded-lg p-3">
@@ -606,6 +643,7 @@ export default function MusicVideo() {
                         toast.error('Wait for the current render to finish before changing the track');
                         return;
                       }
+                      setYtEditProjectId(selected.id);
                       ytImportEdit.start(ytUrlEdit, selected.id);
                     }}
                     compact
