@@ -63,6 +63,18 @@ export function ImageGenTab() {
   // stale/hand-edited value degrades to 'backend'.
   const [mediaTab, setMediaTab] = useDrawerTab('mediaTab', 'backend', MEDIA_TAB_IDS);
 
+  // The Local tab hosts LocalSetupPanel, which owns a long-running pip-install
+  // EventSource (`useInstallStream`) — a torch upgrade can run 10+ minutes.
+  // The other tabs unmount when inactive, but unmounting the installer mid-run
+  // closes its stream and the server treats `req.close` as cancellation,
+  // killing pip. So the Local tab is lazily mounted on first visit (to avoid a
+  // cold python-env probe before the user ever opens it) and then kept mounted,
+  // hidden via CSS when inactive, so a tab switch never aborts an install.
+  const [localMounted, setLocalMounted] = useState(false);
+  useEffect(() => {
+    if (mediaTab === 'local') setLocalMounted(true);
+  }, [mediaTab]);
+
   // Mode + per-mode config
   const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
   const [sdapiUrl, setSdapiUrl] = useState('');
@@ -479,8 +491,8 @@ export function ImageGenTab() {
         </div>
       )}
 
-      {mediaTab === 'local' && (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+      {localMounted && (
+        <div className={`bg-port-card border border-port-border rounded-xl p-6 space-y-4 ${mediaTab === 'local' ? '' : 'hidden'}`}>
           <h3 className="text-sm font-medium text-gray-300">Local Python (mflux + mlx_video)</h3>
           <p className="text-xs text-gray-500">
             Pick a Python 3.10+ interpreter — PortOS auto-detects venvs and conda installs and can install

@@ -92,6 +92,19 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByTestId('local-setup-panel')).toBeTruthy();
   });
 
+  it('keeps LocalSetupPanel mounted (hidden) after leaving the Local tab so an in-flight install stream is not torn down', async () => {
+    await renderTab();
+    // Not mounted until first visited (avoids a cold python-env probe).
+    expect(screen.queryByTestId('local-setup-panel')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+    const panel = screen.getByTestId('local-setup-panel');
+    // Switch away — the panel must stay in the DOM (its install EventSource
+    // survives), just visually hidden, rather than unmounting.
+    fireEvent.click(screen.getByRole('tab', { name: /Backend/i }));
+    expect(screen.getByTestId('local-setup-panel')).toBe(panel);
+    expect(panel.closest('div.hidden')).not.toBeNull();
+  });
+
   it('deep-links the active sub-tab from the mediaTab search param', async () => {
     await renderTab(['/media/image?mediaTab=tokens']);
     // The Tokens group renders immediately without a click.
