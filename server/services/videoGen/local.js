@@ -47,7 +47,7 @@ import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
-export { loadHistory, saveHistory };
+export { loadHistory, saveHistory, mutateVideoHistory };
 
 // LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
 // `mlx_video.generate_av` CLI has no --lora flag, but the package ships an
