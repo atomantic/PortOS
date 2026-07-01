@@ -352,6 +352,33 @@ describe('Task Parser', () => {
       expect(parsed[0].metadata.context).toBe(multiLineContext);
     });
 
+    it('should round-trip array and object metadata values (screenshots, attachments, reviewers)', () => {
+      const tasks = [
+        {
+          id: 'task-001', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Test',
+          metadata: {
+            screenshots: ['/data/screenshots/a.png', '/data/screenshots/b.png'],
+            attachments: [{ filename: 'a.png', originalName: 'photo.png', path: '/data/cos/attachments/a.png' }],
+            reviewers: ['codex', 'claude'],
+          }
+        }
+      ];
+
+      const markdown = generateTasksMarkdown(tasks);
+      // Pre-stringifying before escapeNewlines would flatten the array to a
+      // bare comma-joined string ("a.png,b.png") or "[object Object]" — assert
+      // the JSON sentinel is present so a regression here fails loudly.
+      expect(markdown).toMatch(/- screenshots: __json__:\[/);
+      expect(markdown).toMatch(/- attachments: __json__:\[/);
+
+      const parsed = parseTasksMarkdown(markdown);
+      expect(parsed[0].metadata.screenshots).toEqual(['/data/screenshots/a.png', '/data/screenshots/b.png']);
+      expect(parsed[0].metadata.attachments).toEqual([
+        { filename: 'a.png', originalName: 'photo.png', path: '/data/cos/attachments/a.png' }
+      ]);
+      expect(parsed[0].metadata.reviewers).toEqual(['codex', 'claude']);
+    });
+
     it('should sort tasks by priority within sections', () => {
       const tasks = [
         { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1, description: 'Low', metadata: {} },

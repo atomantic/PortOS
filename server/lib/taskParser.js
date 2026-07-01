@@ -301,9 +301,12 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
         : '';
       lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${task.description}`);
 
-      // Add metadata (escape newlines in values for single-line storage)
+      // Add metadata (escape newlines in values for single-line storage).
+      // Pass the raw value — escapeNewlines JSON-encodes arrays/objects itself;
+      // pre-stringifying here would flatten them to "a,b" or "[object Object]"
+      // before it ever sees the array/object shape.
       for (const [key, value] of Object.entries(task.metadata)) {
-        const escapedValue = escapeNewlines(String(value));
+        const escapedValue = escapeNewlines(value);
         lines.push(`  - ${key}: ${escapedValue}`);
       }
     }
