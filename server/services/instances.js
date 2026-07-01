@@ -17,12 +17,17 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
+import { getTailscaleStatus } from '../lib/tailscale.js';
 import { autoSubscribePeerToAllRecords } from './sharing/recordEvents.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
+// While peer probing is deferred (Tailscale not connected at boot), re-check
+// Tailscale on this cadence and start polling the moment it comes up — so the
+// user just has to connect Tailscale, no manual "sync now" required.
+const TAILSCALE_RECHECK_MS = 60_000;
 
 // Sentinel returned by getInstanceId() and stamped onto sender/peer fields when
 // the local identity hasn't been initialized yet. Every consumer that fans
@@ -45,6 +50,11 @@ const BACKOFF_TIERS_MS = [
 
 const withLock = createMutex();
 let pollTimer = null;
+// Set while we're waiting for Tailscale to connect before starting the real
+// probe loop (see startPolling). Kept separate from pollTimer so stopPolling can
+// tear down either state, and so the boot gate is idempotent under double-start.
+let tailscaleWatchTimer = null;
+let pollingStartPending = false;
 
 function classifyProbeError(err, peer) {
   const code = err?.code;
@@ -1037,12 +1047,15 @@ async function markDirection(peerId, direction) {
 
 // --- Polling ---
 
-export function startPolling() {
+// Actually create the probe schedule (backoff clear + initial probe + interval).
+// Idempotent: a no-op if the loop is already running.
+function beginPolling() {
   if (pollTimer) return;
   console.log(`🌐 Instance polling started (${POLL_INTERVAL_MS / 1000}s interval)`);
 
   // Backoff is a rate limit on the polling loop, not a durable judgment about
-  // the peer — boot may itself be the deploy that fixes connectivity, so clear it.
+  // the peer — boot (or a fresh Tailscale connect) may itself be the event that
+  // fixes connectivity, so clear it.
   withData(async (data) => {
     let cleared = 0;
     for (const peer of data.peers) {
@@ -1061,7 +1074,58 @@ export function startPolling() {
   pollTimer = setInterval(() => probeAllPeers(), POLL_INTERVAL_MS);
 }
 
+// Decide whether to start probing now or defer until Tailscale connects.
+// PortOS peers live on the tailnet, so probing their MagicDNS hostnames while
+// Tailscale is down just spams DNS-failure + backoff logs (a laptop booted
+// off-tailnet). When peers are configured but Tailscale isn't connected, defer
+// and install a slow watcher that starts polling automatically once it's up.
+async function evaluatePollingGate() {
+  if (pollTimer || tailscaleWatchTimer) return;
+
+  // No peers to probe → run the (silent, no-op) loop exactly as before and skip
+  // the Tailscale probe entirely. Keeps solo single-machine installs unchanged.
+  const data = await loadData();
+  const hasEnabledPeers = Array.isArray(data.peers) && data.peers.some(p => p.enabled);
+  if (!hasEnabledPeers) {
+    beginPolling();
+    return;
+  }
+
+  const status = await getTailscaleStatus();
+  if (status.running) {
+    beginPolling();
+    return;
+  }
+
+  console.log(`🌐 Peer sync deferred — Tailscale not connected (${status.state || status.reason}); polling starts automatically once it's up`);
+  tailscaleWatchTimer = setInterval(() => {
+    getTailscaleStatus().then((s) => {
+      if (!s.running) return;
+      clearInterval(tailscaleWatchTimer);
+      tailscaleWatchTimer = null;
+      console.log('🌐 Tailscale connected — starting peer sync polling');
+      beginPolling();
+    }).catch(() => {});
+  }, TAILSCALE_RECHECK_MS);
+  // Don't let the recheck timer keep the process alive on its own.
+  if (typeof tailscaleWatchTimer.unref === 'function') tailscaleWatchTimer.unref();
+}
+
+export function startPolling() {
+  // pollingStartPending guards the async gap in evaluatePollingGate so two
+  // synchronous startPolling() calls can't each spin up a schedule/watcher.
+  if (pollTimer || tailscaleWatchTimer || pollingStartPending) return;
+  pollingStartPending = true;
+  evaluatePollingGate()
+    .catch(err => console.error(`❌ Failed to start peer polling: ${err.message}`))
+    .finally(() => { pollingStartPending = false; });
+}
+
 export function stopPolling() {
+  if (tailscaleWatchTimer) {
+    clearInterval(tailscaleWatchTimer);
+    tailscaleWatchTimer = null;
+  }
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;

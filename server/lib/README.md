@@ -166,7 +166,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
 | `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
-| `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
+| `tailscale.js` | Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container), and read backend state (`getTailscaleStatus` / `isTailscaleUp`) to know whether we're actually connected to the tailnet. |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 
