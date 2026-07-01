@@ -65,10 +65,11 @@ export function buildPortraitPrompt(ingredient) {
  * route + universeBuilderRender do, so the cleanC2PA / denoise cleaners apply
  * to first-pass renders exactly like a manual portrait render.
  *
- * Exported so `enqueueFirstPassSceneFrames` (#1867) shares the exact same
- * queue-backed-mode gate as the portrait path rather than re-deriving it.
+ * Shared (not exported — same-file caller only) so `enqueueFirstPassSceneFrames`
+ * (#1867) uses the exact same queue-backed-mode gate as the portrait path
+ * rather than re-deriving it.
  */
-export async function resolveQueueModeParams() {
+async function resolveQueueModeParams() {
   const settings = await getSettings();
   const mode = settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
   if (mode === IMAGE_GEN_MODE.CODEX) {
