@@ -144,7 +144,7 @@ export default function PostTab({ tab = 'launcher', subtab }) {
         />
       );
     case 'wordplay':
-      return <WordplayTrainer config={config} onBack={() => navigate('/post/launcher')} />;
+      return <WordplayTrainer config={config} onConfigUpdate={setConfig} onBack={() => navigate('/post/launcher')} />;
     case 'morse':
       return <MorseTrainer onBack={() => navigate('/post/launcher')} />;
     case 'memory':

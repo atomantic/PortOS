@@ -13,6 +13,7 @@ import {
   postConfigUpdateSchema,
   postDrillRequestSchema,
   postLlmScoreRequestSchema,
+  postDrillCacheFillSchema,
   memoryItemCreateSchema,
   memoryItemUpdateSchema,
   memoryPracticeSchema,
@@ -24,7 +25,7 @@ import {
 import * as postService from '../services/meatspacePost.js';
 import * as memoryService from '../services/meatspacePostMemory.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
-import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
+import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
 
 const router = Router();
@@ -115,7 +116,9 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
     if (!drill) {
       throw new ServerError('Failed to generate LLM drill', { status: 500, code: 'LLM_DRILL_FAILED' });
     }
-    // Trigger background fill so next request is instant
+    // Top up the cache for next time — a no-op if the cache is currently cold
+    // (0 cached). Cold fill only happens via POST /post/drill-cache/fill,
+    // which requires the user to explicitly opt in and pick a provider/model.
     triggerReplenish(data.type, data.providerId, data.model);
     return res.json(drill);
   }
@@ -147,6 +150,28 @@ router.post('/post/score-llm', asyncHandler(async (req, res) => {
     data.timeLimitMs, data.providerId, data.model
   );
   res.json(result);
+}));
+
+/**
+ * GET /api/meatspace/post/drill-cache/status
+ * Per-type cache counts for the wordplay drill cache, so the client can
+ * decide whether to prompt the user for a cache-fill (0 cached = cold).
+ */
+router.get('/post/drill-cache/status', asyncHandler(async (req, res) => {
+  res.json(getCacheStats());
+}));
+
+/**
+ * POST /api/meatspace/post/drill-cache/fill
+ * Explicit, user-initiated cache warm-up. This is the ONLY path that performs
+ * a cold fill (0 -> several cached drills per type) — the client must prompt
+ * the user and let them pick a provider/model before calling this, since it
+ * can issue several sequential LLM calls in the background.
+ */
+router.post('/post/drill-cache/fill', asyncHandler(async (req, res) => {
+  const data = validateRequest(postDrillCacheFillSchema, req.body);
+  const triggered = requestCacheFill(data.types, data.providerId, data.model);
+  res.json({ triggered });
 }));
 
 // =============================================================================
