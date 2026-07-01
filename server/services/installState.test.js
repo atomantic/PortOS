@@ -214,6 +214,31 @@ describe('getInstallState — pending migrations', () => {
     await getInstallState({ ...optsWithoutInjectedPending, migrationRootDir: '/pinned/install' });
     expect(listPendingMigrations).toHaveBeenCalledWith({ rootDir: '/pinned/install' });
   });
+
+  // #1947: boot SKIPS migrations for a worktree data root (no ledger written),
+  // so the status path must not scan the ledger-less worktree and falsely report
+  // every migration pending / outOfSync on every worktree boot.
+  it('reports zero pending on a worktree data root without scanning the ledger', async () => {
+    listPendingMigrations.mockClear();
+    const { listPending, ...optsWithoutInjectedPending } = syncedOpts();
+    const worktreeRoot = join(ROOT, 'data', 'cos', 'worktrees', 'agent-abc');
+    const state = await getInstallState({ ...optsWithoutInjectedPending, migrationRootDir: worktreeRoot });
+    expect(state.pendingMigrations.count).toBe(0);
+    expect(state.outOfSync).toBe(false);
+    // short-circuited — never scanned the worktree's absent ledger
+    expect(listPendingMigrations).not.toHaveBeenCalled();
+  });
+
+  it('still reports pending migrations for a normal (non-worktree) data root', async () => {
+    listPendingMigrations.mockClear();
+    listPendingMigrations.mockResolvedValueOnce(['099-foo.js']);
+    const { listPending, ...optsWithoutInjectedPending } = syncedOpts();
+    const state = await getInstallState({ ...optsWithoutInjectedPending, migrationRootDir: ROOT });
+    expect(state.pendingMigrations.count).toBe(1);
+    expect(state.pendingMigrations.files).toEqual(['099-foo.js']);
+    expect(state.outOfSync).toBe(true);
+    expect(listPendingMigrations).toHaveBeenCalledWith({ rootDir: ROOT });
+  });
 });
 
 describe('getInstallState — resilience', () => {

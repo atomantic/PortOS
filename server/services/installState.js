@@ -31,6 +31,7 @@ import { stat, readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { listPendingMigrations } from '../../scripts/run-migrations.js';
+import { isWorktreeRoot } from '../lib/dataRoot.js';
 
 // The commit the running process was launched at. Captured once at boot (see
 // captureBootCommit, called from server/index.js). null when not yet captured
@@ -197,7 +198,14 @@ export async function getInstallState({
   isAncestor = (a, b) => gitIsAncestor(a, b, rootDir),
   statMtime = statMtimeMs,
   clientSourceNewer = (buildMs) => isClientSourceNewer(rootDir, buildMs, { statMtime }),
-  listPending = () => listPendingMigrations({ rootDir: migrationRootDir }),
+  // Mirror the boot backstop (#1947): when the data root is a CoS agent worktree
+  // checkout, boot SKIPS migrations and never writes data/migrations.applied.json
+  // there — so scanning against that ledger-less tree would report every
+  // migration as pending and flag the install outOfSync on every worktree boot.
+  // Short-circuit to zero pending instead, matching what boot actually did.
+  listPending = () => isWorktreeRoot(migrationRootDir)
+    ? Promise.resolve([])
+    : listPendingMigrations({ rootDir: migrationRootDir }),
 } = {}) {
   const currentCommit = await getCurrentCommit().catch(() => null);
 
