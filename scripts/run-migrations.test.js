@@ -165,6 +165,21 @@ export default {
     expect(ran).toBe(1);
     expect(existsSync(join(realRoot, 'data', 'fixture-marker.txt'))).toBe(true);
   });
+
+  it('skips when the data root differs from the executing checkout (mixed-root, default migrationsDir)', async () => {
+    // No migrationsDir override → the runner uses its OWN checkout's
+    // DEFAULT_MIGRATIONS_DIR. A rootDir pointing at a different install must not
+    // get this checkout's migrations applied to it (returns before any FS write
+    // to the foreign root, so this is safe to run against the real repo).
+    const foreignRoot = join(baseDir, 'some-other-install');
+    mkdirSync(join(foreignRoot, 'data'), { recursive: true });
+
+    const ran = await runMigrations({ rootDir: foreignRoot });
+
+    expect(ran).toBe(0);
+    expect(existsSync(join(foreignRoot, 'data', 'migrations.applied.json'))).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mixed-root'));
+  });
 });
 
 describe('listPendingMigrations', () => {
