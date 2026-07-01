@@ -14,7 +14,7 @@ import { enabledApiProviderFilter } from '../../utils/providers';
 
 function urgencyIndicator(urgency) {
   if (urgency == null) return null;
-  const color = urgency >= 0.7 ? 'bg-red-400' : urgency >= 0.4 ? 'bg-yellow-400' : 'bg-green-400';
+  const color = urgency >= 0.7 ? 'bg-red-400' : urgency >= 0.4 ? 'bg-yellow-400' : 'bg-port-success';
   return <div className={`w-2 h-2 rounded-full ${color}`} title={`${Math.round(urgency * 100)}% urgency`} />;
 }
 

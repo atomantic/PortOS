@@ -18,8 +18,8 @@ describe('SideBySideDiff', () => {
 
   it('highlights removed words on the left and added words on the right', () => {
     const { container } = render(<SideBySideDiff oldText="The cat sat" newText="The dog sat" />);
-    const removed = container.querySelectorAll('.bg-red-900\\/50');
-    const added = container.querySelectorAll('.bg-green-900\\/50');
+    const removed = container.querySelectorAll('.bg-port-error\\/20');
+    const added = container.querySelectorAll('.bg-port-success\\/20');
     expect(removed).toHaveLength(1);
     expect(added).toHaveLength(1);
     expect(removed[0].textContent).toBe('cat');
@@ -30,7 +30,7 @@ describe('SideBySideDiff', () => {
     const build = (p) => Array.from({ length: 2500 }, (_, i) => `${p}${i}`).join(' ');
     const { container } = render(<SideBySideDiff oldText={build('a')} newText={build('b')} />);
     expect(screen.getByText(/Diff too large/i)).toBeInTheDocument();
-    expect(container.querySelectorAll('.bg-red-900\\/50, .bg-green-900\\/50')).toHaveLength(0);
+    expect(container.querySelectorAll('.bg-port-error\\/20, .bg-port-success\\/20')).toHaveLength(0);
   });
 
   it('treats null/undefined as empty (identical → empty label)', () => {

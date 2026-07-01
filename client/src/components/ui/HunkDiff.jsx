@@ -21,11 +21,11 @@ function ChangeBlock({ oldLines, newLines }) {
   const { tooLarge, oldRuns, newRuns } = useMemo(() => diffWords(oldText, newText), [oldText, newText]);
   return (
     <div className="flex gap-4 px-3 py-2 bg-port-card/50 border-y border-port-border/60">
-      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-relaxed text-red-200">
-        {tooLarge ? <span className="text-red-400">{oldText}</span> : renderRuns(oldRuns, false)}
+      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-relaxed text-port-error">
+        {tooLarge ? <span className="text-port-error">{oldText}</span> : renderRuns(oldRuns, false)}
       </div>
-      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-relaxed text-green-200">
-        {tooLarge ? <span className="text-green-400">{newText}</span> : renderRuns(newRuns, true)}
+      <div className="min-w-0 flex-1 whitespace-pre-wrap break-words leading-relaxed text-port-success">
+        {tooLarge ? <span className="text-port-success">{newText}</span> : renderRuns(newRuns, true)}
       </div>
     </div>
   );
