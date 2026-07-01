@@ -25,7 +25,7 @@ export default function GoalTodoList({
                 onClick={() => handleToggleTodo(todo)}
                 className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                   todo.status === 'done'
-                    ? 'bg-green-500/20 border-green-500 text-green-400'
+                    ? 'bg-port-success/20 border-port-success text-port-success'
                     : todo.status === 'in-progress'
                       ? 'bg-port-accent/20 border-port-accent text-port-accent'
                       : 'border-gray-600 hover:border-port-accent'
