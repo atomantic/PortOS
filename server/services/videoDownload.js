@@ -17,7 +17,6 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
 import { readdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
@@ -27,7 +26,7 @@ import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
-import { loadHistory, saveHistory } from './videoGen/history.js';
+import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
 import { deleteHistoryItem } from './videoGen/local.js';
 import { videoGenEvents } from './videoGen/events.js';
 
@@ -114,6 +113,45 @@ async function cleanupDownloadFiles(jobId) {
   );
 }
 
+// Locate the final produced file for a job. yt-dlp writes intermediate streams
+// as `downloaded-<id>.f<code>.<ext>` and a `.part`/`.ytdl` in progress, then
+// merges/remuxes to a single `downloaded-<id>.<ext>` and deletes the rest. We do
+// NOT hardcode `.mp4`: the format fallback chain can land a single-file webm/mkv
+// (VP9/AV1) that `--merge-output-format`/`--remux-video mp4` only converts on a
+// best-effort basis, so assuming `.mp4` would miss a perfectly-good download and
+// then delete it as a "failure". Prefer an exact `.mp4`, else the lone remaining
+// non-intermediate file. Returns the basename or null when nothing was produced.
+export async function findDownloadedFile(jobId, dir = PATHS.videos) {
+  const prefix = `${FILENAME_PREFIX}${jobId}.`;
+  const entries = await readdir(dir).catch(() => []);
+  const candidates = entries.filter((n) =>
+    n.startsWith(prefix)
+    && !n.endsWith('.part')
+    && !n.endsWith('.ytdl')
+    && !/\.f\d+\.[^.]+$/.test(n), // format-fragment intermediates (.f137.mp4)
+  );
+  return candidates.find((n) => n === `${prefix}mp4`) || candidates[0] || null;
+}
+
+// Build the `source: 'download'` video-history entry. Pure + exported so the
+// load-bearing shape (the fields normalizeVideo, mediaAssetIndex videoToRow, and
+// deleteHistoryItem all depend on) is pinned by a unit test rather than only
+// implicitly exercised by the spawn path. `id === jobId` so the live media-index
+// `completed` hook loads it by generationId AND deleteHistoryItem's `${id}.jpg`
+// thumbnail + `${filename}` cleanup both resolve.
+export function buildDownloadHistoryEntry({ jobId, filename, thumbnail, durationSec, title, sourceUrl }) {
+  return {
+    id: jobId,
+    filename,
+    thumbnail,
+    createdAt: new Date().toISOString(),
+    source: 'download',
+    sourceUrl,
+    title: title || 'Downloaded video',
+    ...(durationSec != null ? { durationSec } : {}),
+  };
+}
+
 /**
  * Kick off a full-video download. Returns `{ jobId }` immediately; the download
  * runs detached and streams progress over SSE. Terminal frames:
@@ -128,10 +166,9 @@ export async function startVideoDownload(url) {
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const jobId = randomUUID();
-  const filename = `${FILENAME_PREFIX}${jobId}.mp4`;
-  const outPath = join(PATHS.videos, filename);
-  // yt-dlp writes intermediate streams as `downloaded-<uuid>.<ext>` then merges
-  // to .mp4; --merge-output-format mp4 makes the final container known up front.
+  // The final filename/extension isn't known until the download resolves (the
+  // format fallback can produce a non-mp4 single file), so it's detected from
+  // disk on success via findDownloadedFile rather than assumed here.
   const outTemplate = join(PATHS.videos, `${FILENAME_PREFIX}${jobId}.%(ext)s`);
 
   const job = { id: jobId, status: 'running', clients: [], process: null };
@@ -146,6 +183,10 @@ export async function startVideoDownload(url) {
         // broad browser playback; fall back to best single-file mp4, then best.
         '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         '--merge-output-format', 'mp4',
+        // Best-effort remux a single-file/non-mp4 result into an mp4 container so
+        // browser playback is broad; when the codec can't be remuxed losslessly
+        // yt-dlp leaves the native container, which findDownloadedFile handles.
+        '--remux-video', 'mp4',
         '--no-playlist',
         '--ffmpeg-location', dirname(ffmpeg),
         '--newline',
@@ -158,7 +199,13 @@ export async function startVideoDownload(url) {
         '--no-simulate',
         '--progress',
         '--max-filesize', String(VIDEO_DOWNLOAD_MAX_BYTES),
+        // Two --match-filters are OR'd by yt-dlp: bound KNOWN-duration videos to
+        // the cap, but let a post whose duration can't be resolved pre-download
+        // (common on x.com/Twitter) through rather than silently rejecting it —
+        // the byte cap above still bounds it. A known video longer than the cap
+        // matches neither filter and is skipped.
         '--match-filters', `duration <= ${VIDEO_DOWNLOAD_MAX_DURATION_SEC}`,
+        '--match-filters', '!duration',
         '-o', outTemplate,
         url,
       ];
@@ -205,18 +252,21 @@ export async function startVideoDownload(url) {
         await cleanupDownloadFiles(jobId);
         return;
       }
-      if (exit.code !== 0 || !existsSync(outPath)) {
+      const produced = await findDownloadedFile(jobId);
+      if (exit.code !== 0 || !produced) {
         // A --match-filters/--max-filesize rejection exits 0 with no output
         // file (yt-dlp treats a filtered-out video as "nothing to do") — and
-        // --print suppresses the specific reason, so name the two known bounds.
+        // --print suppresses the specific reason, so name the known bounds.
         // x.com/Twitter downloads also fail here on login-walled/rate-limited
         // content; surface a clear message rather than a bare exit code.
         const reason = exit.code === 0
-          ? `no video was produced — it may be longer than ${VIDEO_DOWNLOAD_MAX_DURATION_SEC / 60} minutes or larger than ${Math.round(VIDEO_DOWNLOAD_MAX_BYTES / 1024 / 1024 / 1024)}GB, or (for x.com) login-walled or rate-limited`
+          ? `no video was produced — it may be longer than ${VIDEO_DOWNLOAD_MAX_DURATION_SEC / 60} minutes or larger than ${Math.round(VIDEO_DOWNLOAD_MAX_BYTES / 1024 / 1024 / 1024)}GB, or (for x.com) login-walled, rate-limited, or otherwise unavailable`
           : (exit.reason || `yt-dlp exited ${exit.code}`);
         throw new Error(reason);
       }
 
+      const filename = produced;
+      const outPath = join(PATHS.videos, filename);
       broadcastSse(job, { type: 'progress', percent: 100, stage: 'finalizing' });
       const [thumbnail, durationSec] = await Promise.all([
         generateThumbnail(outPath, jobId),
@@ -225,22 +275,10 @@ export async function startVideoDownload(url) {
 
       // Derived, not a generation: a `source: 'download'` video-history entry so
       // the existing videoToRow / onVideoCompleted media-index path and the
-      // gallery pick it up unmodified. `id === jobId` so the shared
-      // deleteHistoryItem cleans the file + `${jobId}.jpg` thumbnail.
-      const entry = {
-        id: jobId,
-        filename,
-        thumbnail,
-        createdAt: new Date().toISOString(),
-        mode: 'download',
-        source: 'download',
-        sourceUrl: url,
-        title: title || 'Downloaded video',
-        ...(durationSec != null ? { durationSec } : {}),
-      };
-      const history = await loadHistory().catch(() => []);
-      history.unshift(entry);
-      await saveHistory(history);
+      // gallery pick it up unmodified. Serialized read-modify-write so two
+      // near-simultaneous downloads can't clobber each other's entry.
+      const entry = buildDownloadHistoryEntry({ jobId, filename, thumbnail, durationSec, title, sourceUrl: url });
+      await mutateVideoHistory((history) => { history.unshift(entry); return history; });
 
       // Let the live media-asset index hook index this immediately (it loads
       // history by generationId and upserts one row). Reconcile is the backstop.
