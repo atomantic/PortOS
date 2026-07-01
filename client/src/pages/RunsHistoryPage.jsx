@@ -1,11 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2, RotateCcw, MessageSquarePlus } from 'lucide-react';
+import { Trash2, RotateCcw, MessageSquarePlus, ScrollText } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
+import ProcessLogModal from '../components/ui/ProcessLogModal';
 import { writeClipboardSilently } from '../lib/clipboard';
+
+// Map an AI run's source to the PM2 process whose system log holds the full
+// context for that run. CoS-agent runs are driven by the `portos-cos` process;
+// everything else (DevTools runs) is driven by the main `portos-server`.
+export function runLogProcessName(source) {
+  return source === 'cos-agent' ? 'portos-cos' : 'portos-server';
+}
 
 export function RunsHistoryPage() {
   const navigate = useNavigate();
@@ -15,6 +23,8 @@ export function RunsHistoryPage() {
   const [expandedDetails, setExpandedDetails] = useState({});
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  // The failed run whose system logs are open in the log modal, or null.
+  const [logModalRun, setLogModalRun] = useState(null);
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
@@ -138,6 +148,7 @@ export function RunsHistoryPage() {
   }
 
   const failedCount = runs.filter(r => r.success === false).length;
+  const logProc = logModalRun ? runLogProcessName(logModalRun.source) : '';
 
   const handleClearFailed = async () => {
     const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
@@ -272,6 +283,17 @@ export function RunsHistoryPage() {
                     <div className="flex items-center gap-3 pl-8 sm:pl-0">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${run.success ? 'bg-port-success' : run.success === false ? 'bg-port-error' : 'bg-port-warning'}`} />
                       <span className="text-sm text-gray-500 shrink-0">{formatTime(run.startTime)}</span>
+                      {run.success === false && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
+                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                          title="View system logs"
+                          aria-label="View system logs"
+                          data-testid={`view-logs-${run.id}`}
+                        >
+                          <ScrollText size={14} />
+                        </button>
+                      )}
                       {run.success !== null && (
                         <button
                           onClick={(e) => handleResume(run, e)}
@@ -419,6 +441,18 @@ export function RunsHistoryPage() {
                                 </div>
                               </Banner>
                             )}
+                            {/* Jump straight to the system logs for the full error context,
+                                for operators who don't know where the logs live. */}
+                            <div className="mt-3">
+                              <button
+                                onClick={() => setLogModalRun(run)}
+                                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded-lg transition-colors"
+                                data-testid={`view-logs-expanded-${run.id}`}
+                              >
+                                <ScrollText size={14} />
+                                View System Logs
+                              </button>
+                            </div>
                           </div>
                         );
                       })()}
@@ -444,6 +478,13 @@ export function RunsHistoryPage() {
           </div>
         )}
       </div>
+
+      <ProcessLogModal
+        open={!!logModalRun}
+        onClose={() => setLogModalRun(null)}
+        processName={logProc}
+        title={logProc ? `System Logs — ${logProc}` : 'System Logs'}
+      />
     </div>
   );
 }
