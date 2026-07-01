@@ -49,6 +49,40 @@ describe('applyProjectPatch', () => {
   it('accepts a valid status', () => {
     expect(applyProjectPatch(baseProject(), { status: 'ready' }).status).toBe('ready');
   });
+
+  it('clears cached audioAnalysis when trackId changes to a different track (#1945)', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [{ label: 'Section 1', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    expect(analyzed.audioAnalysis).not.toBeNull();
+    const next = applyProjectPatch(analyzed, { trackId: 't2' });
+    expect(next.trackId).toBe('t2');
+    expect(next.audioAnalysis).toBeNull();
+  });
+
+  it('leaves audioAnalysis intact when trackId is patched to the SAME value', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { trackId: 't1', name: 'Renamed' });
+    expect(next.audioAnalysis).not.toBeNull();
+  });
+
+  it('leaves audioAnalysis intact for a patch that does not touch the track', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { name: 'Renamed' });
+    expect(next.audioAnalysis).not.toBeNull();
+  });
+
+  it('clears audioAnalysis when uploadedAudioFilename changes to a different file', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), uploadedAudioFilename: 'a.mp3' }, {
+      bpm: 100, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { uploadedAudioFilename: 'b.mp3' });
+    expect(next.audioAnalysis).toBeNull();
+  });
 });
 
 describe('setAudioAnalysis', () => {
