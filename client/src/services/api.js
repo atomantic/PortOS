@@ -51,6 +51,7 @@ export * from './apiAuthors.js';
 export * from './apiArtists.js';
 export * from './apiAlbums.js';
 export * from './apiTracks.js';
+export * from './apiVideoDownload.js';
 export * from './apiMusic.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
