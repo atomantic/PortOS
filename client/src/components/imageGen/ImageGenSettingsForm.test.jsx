@@ -59,4 +59,16 @@ describe('ImageGenSettingsForm layout', () => {
     expect(screen.queryByRole('heading', { name: 'Prompts & Style' })).toBeNull();
     expect(screen.queryByLabelText('Extra style (optional)')).toBeNull();
   });
+
+  it('grouped mode files the LoRA picker under Model & LoRA and the style preset under Prompts & Style', () => {
+    // Pickers only render in local mode; assert each lands in its named section
+    // (not just "somewhere on the page") so the grouping is actually pinned.
+    renderForm({ availableBackends: BACKENDS, grouped: true, showLoras: true, showStylePreset: true });
+    const modelSection = screen.getByRole('heading', { name: 'Model & LoRA' }).closest('section');
+    const promptSection = screen.getByRole('heading', { name: 'Prompts & Style' }).closest('section');
+    expect(modelSection).toContainElement(screen.getByTestId('lora-picker'));
+    expect(modelSection).toContainElement(screen.getByTestId('image-gen-controls'));
+    expect(promptSection).toContainElement(screen.getByTestId('style-preset-picker'));
+    expect(promptSection).toContainElement(screen.getByLabelText('Negative prompt (optional)'));
+  });
 });
