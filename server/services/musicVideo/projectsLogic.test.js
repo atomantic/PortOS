@@ -83,6 +83,30 @@ describe('applyProjectPatch', () => {
     const next = applyProjectPatch(analyzed, { uploadedAudioFilename: 'b.mp3' });
     expect(next.audioAnalysis).toBeNull();
   });
+
+  it('clears beatAligned on scenes when the track changes — their bounds were snapped to the OLD beat grid', () => {
+    const withScenes = {
+      ...baseProject(),
+      trackId: 't1',
+      scenes: [
+        { sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true },
+        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false },
+      ],
+    };
+    const next = applyProjectPatch(withScenes, { trackId: 't2' });
+    expect(next.scenes[0]).toMatchObject({ beatAligned: false, startSec: 1, endSec: 2 });
+    expect(next.scenes[1]).toMatchObject({ beatAligned: false, startSec: 3, endSec: 4 });
+  });
+
+  it('leaves scene beatAligned flags untouched when the track does not change', () => {
+    const withScenes = {
+      ...baseProject(),
+      trackId: 't1',
+      scenes: [{ sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true }],
+    };
+    const next = applyProjectPatch(withScenes, { name: 'Renamed' });
+    expect(next.scenes[0].beatAligned).toBe(true);
+  });
 });
 
 describe('setAudioAnalysis', () => {
