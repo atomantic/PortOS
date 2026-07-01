@@ -246,13 +246,13 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       {/* LLM Drills Section */}
       <div className="flex items-center justify-between mt-6">
         <div className="flex items-center gap-2">
-          <Brain size={16} className="text-purple-400" />
+          <Brain size={16} className="text-port-accent-2" />
           <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Wit & Memory (LLM)</h3>
         </div>
         <button
           onClick={() => setLlmEnabled(!llmEnabled)}
           className={`w-10 h-5 rounded-full transition-colors relative ${
-            llmEnabled ? 'bg-purple-500' : 'bg-port-border'
+            llmEnabled ? 'bg-port-accent-2' : 'bg-port-border'
           }`}
         >
           <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
@@ -264,7 +264,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       {llmEnabled && (
         <>
           {/* Provider & Model Selection */}
-          <div className="bg-port-card border border-purple-500/30 rounded-lg p-4">
+          <div className="bg-port-card border border-port-accent-2/30 rounded-lg p-4">
             <h4 className="text-sm font-medium text-gray-400 mb-3">AI Provider</h4>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -303,7 +303,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
             return (
               <div key={type} className={`bg-port-card border rounded-lg p-4 transition-colors ${
-                enabled ? 'border-purple-500/30' : 'border-port-border/50 opacity-60'
+                enabled ? 'border-port-accent-2/30' : 'border-port-border/50 opacity-60'
               }`}>
                 <div className="flex items-center justify-between mb-3">
                   <div>
@@ -313,7 +313,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                   <button
                     onClick={() => toggleLlmDrill(type)}
                     className={`w-10 h-5 rounded-full transition-colors relative ${
-                      enabled ? 'bg-purple-500' : 'bg-port-border'
+                      enabled ? 'bg-port-accent-2' : 'bg-port-border'
                     }`}
                   >
                     <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${

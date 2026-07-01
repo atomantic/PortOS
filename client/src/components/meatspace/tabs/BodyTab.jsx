@@ -104,7 +104,7 @@ export default function BodyTab() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Eye size={18} className="text-blue-400" />
+            <Eye size={18} className="text-port-accent" />
             <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
               Eye Prescriptions ({eyeLoading ? '...' : eyeExams.length})
             </h3>

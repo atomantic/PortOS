@@ -98,17 +98,17 @@ const CATEGORY_META = {
 const STAR_LABELS = ['No criteria', 'Single submitter', 'Multiple submitters', 'Expert panel', 'Practice guideline'];
 
 const STATUS_FILTERS = [
-  { key: 'beneficial', label: 'Beneficial', active: 'bg-green-500/20 text-green-400 border border-green-500/30', inactive: 'bg-port-card border border-port-border text-green-400/60 hover:text-green-400' },
-  { key: 'typical', label: 'Typical', active: 'bg-blue-500/20 text-blue-400 border border-blue-500/30', inactive: 'bg-port-card border border-port-border text-blue-400/60 hover:text-blue-400' },
+  { key: 'beneficial', label: 'Beneficial', active: 'bg-port-success/20 text-port-success border border-port-success/30', inactive: 'bg-port-card border border-port-border text-port-success/60 hover:text-port-success' },
+  { key: 'typical', label: 'Typical', active: 'bg-port-accent/20 text-port-accent border border-port-accent/30', inactive: 'bg-port-card border border-port-border text-port-accent/60 hover:text-port-accent' },
   { key: 'concern', label: 'Concern', active: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30', inactive: 'bg-port-card border border-port-border text-yellow-400/60 hover:text-yellow-400' },
   { key: 'major_concern', label: 'Major Concern', active: 'bg-red-500/20 text-red-400 border border-red-500/30', inactive: 'bg-port-card border border-port-border text-red-400/60 hover:text-red-400' }
 ];
 
 const SEVERITY_LABELS = {
   pathogenic: { label: 'Pathogenic', bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
-  drug_response: { label: 'Drug Response', bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30' },
+  drug_response: { label: 'Drug Response', bg: 'bg-port-accent-2/20', text: 'text-port-accent-2', border: 'border-port-accent-2/30' },
   risk_factor: { label: 'Risk Factor', bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
-  protective: { label: 'Protective', bg: 'bg-green-500/20', text: 'text-green-400', border: 'border-green-500/30' }
+  protective: { label: 'Protective', bg: 'bg-port-success/20', text: 'text-port-success', border: 'border-port-success/30' }
 };
 
 export default function GenomeTab() {
@@ -355,7 +355,7 @@ export default function GenomeTab() {
     return (
       <div className="space-y-6">
         <div className="text-center space-y-2">
-          <Dna className="w-12 h-12 text-purple-400 mx-auto" />
+          <Dna className="w-12 h-12 text-port-accent-2 mx-auto" />
           <h2 className="text-xl font-bold text-white">Genome Data</h2>
           <p className="text-gray-400">Upload your 23andMe raw data export to track health and longevity markers.</p>
         </div>
@@ -694,7 +694,7 @@ export default function GenomeTab() {
             <button
               onClick={handleClinvarSync}
               disabled={clinvarSyncing}
-              className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded hover:bg-purple-500/30 transition-colors disabled:opacity-50 text-sm"
+              className="flex items-center gap-2 px-3 py-2 bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30 rounded hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 text-sm"
             >
               {clinvarSyncing ? <BrailleSpinner /> : <Download size={14} />}
               {clinvarSyncing ? 'Syncing...' : 'Sync ClinVar Database'}
@@ -708,7 +708,7 @@ export default function GenomeTab() {
               <button
                 onClick={handleClinvarScan}
                 disabled={clinvarScanning}
-                className="flex items-center gap-2 px-3 py-2 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded hover:bg-purple-500/30 transition-colors disabled:opacity-50 text-sm"
+                className="flex items-center gap-2 px-3 py-2 bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30 rounded hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 text-sm"
               >
                 {clinvarScanning ? <BrailleSpinner /> : <Search size={14} />}
                 {clinvarScanning ? 'Scanning...' : 'Scan Against ClinVar'}
@@ -726,7 +726,7 @@ export default function GenomeTab() {
 
         {/* Sync progress */}
         {clinvarProgress && (
-          <div className="flex items-center gap-2 p-3 rounded bg-purple-500/10 border border-purple-500/20 text-sm text-purple-300">
+          <div className="flex items-center gap-2 p-3 rounded bg-port-accent-2/10 border border-port-accent-2/20 text-sm text-port-accent-2">
             <BrailleSpinner />
             {clinvarProgress}
           </div>
@@ -751,12 +751,12 @@ export default function GenomeTab() {
                 </span>
               )}
               {clinvarResults.bySeverity.drug_response > 0 && (
-                <span className="px-2 py-1 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                <span className="px-2 py-1 rounded bg-port-accent-2/10 text-port-accent-2 border border-port-accent-2/20">
                   {clinvarResults.bySeverity.drug_response} drug response
                 </span>
               )}
               {clinvarResults.bySeverity.protective > 0 && (
-                <span className="px-2 py-1 rounded bg-green-500/10 text-green-400 border border-green-500/20">
+                <span className="px-2 py-1 rounded bg-port-success/10 text-port-success border border-port-success/20">
                   {clinvarResults.bySeverity.protective} protective
                 </span>
               )}
@@ -909,7 +909,7 @@ export default function GenomeTab() {
                 <div className="text-xs text-gray-500 flex gap-4">
                   <span>Chr {searchResult.chromosome}</span>
                   <span>Pos {searchResult.position}</span>
-                  {searchResult.curated && <span className="text-purple-400">Curated marker</span>}
+                  {searchResult.curated && <span className="text-port-accent-2">Curated marker</span>}
                 </div>
                 {searchResult.description && (
                   <p className="text-sm text-gray-400">{searchResult.description}</p>
@@ -955,10 +955,10 @@ function StatCard({ label, value, statusCounts }) {
       {statusCounts && (
         <div className="flex flex-wrap gap-1.5 mt-2">
           {statusCounts.beneficial > 0 && (
-            <span className="text-[10px] text-green-400">{statusCounts.beneficial} beneficial</span>
+            <span className="text-[10px] text-port-success">{statusCounts.beneficial} beneficial</span>
           )}
           {statusCounts.typical > 0 && (
-            <span className="text-[10px] text-blue-400">{statusCounts.typical} typical</span>
+            <span className="text-[10px] text-port-accent">{statusCounts.typical} typical</span>
           )}
           {statusCounts.concern > 0 && (
             <span className="text-[10px] text-yellow-400">{statusCounts.concern} concern</span>
@@ -977,8 +977,8 @@ function StatCard({ label, value, statusCounts }) {
 
 function StatusBadgeInline({ status }) {
   const styles = {
-    beneficial: 'bg-green-500/20 text-green-400 border-green-500/30',
-    typical: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    beneficial: 'bg-port-success/20 text-port-success border-port-success/30',
+    typical: 'bg-port-accent/20 text-port-accent border-port-accent/30',
     concern: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
     major_concern: 'bg-red-500/20 text-red-400 border-red-500/30',
     not_found: 'bg-gray-500/20 text-gray-400 border-gray-500/30'

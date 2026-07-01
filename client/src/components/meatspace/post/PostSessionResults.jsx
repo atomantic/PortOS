@@ -19,11 +19,11 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
       {/* Overall Score */}
       <div className="text-center py-8">
         <div className="flex items-center justify-center gap-3 mb-2">
-          {isTraining ? <Dumbbell size={28} className="text-purple-400" /> : <CheckCircle size={28} className={scoreColor} />}
+          {isTraining ? <Dumbbell size={28} className="text-port-accent-2" /> : <CheckCircle size={28} className={scoreColor} />}
           <span className="text-sm text-gray-400">{isTraining ? 'Training Session' : 'Session Score'}</span>
         </div>
         {isTraining ? (
-          <div className="text-2xl text-purple-400 font-medium">Practice Complete</div>
+          <div className="text-2xl text-port-accent-2 font-medium">Practice Complete</div>
         ) : (
           <div className={`text-6xl font-mono font-bold ${scoreColor}`}>
             {sessionScore}
@@ -138,8 +138,8 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
         <button
           onClick={handleSave}
           className={`w-full flex items-center justify-center gap-2 px-6 py-3 ${
-            isTraining ? 'bg-purple-600 hover:bg-purple-500' : 'bg-port-success hover:bg-port-success/80'
-          } text-white font-medium rounded-lg transition-colors`}
+            isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2' : 'bg-port-success hover:bg-port-success/80 text-white'
+          } font-medium rounded-lg transition-colors`}
         >
           {isTraining ? <Dumbbell size={18} /> : <Save size={18} />}
           {isTraining ? 'Log Training' : 'Save Session'}
