@@ -88,7 +88,7 @@ function TerminalHotKeys({ sendCtrlC, handlePaste, sendNavKey, showPasteInput, s
     <>
       <button
         onClick={sendCtrlC}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 rounded text-xs font-mono transition-colors border border-red-500/30 min-h-[40px] shrink-0"
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-error/15 hover:bg-port-error/25 text-port-error hover:text-port-error/80 rounded text-xs font-mono transition-colors border border-port-error/30 min-h-[40px] shrink-0"
         title="Send Ctrl+C interrupt"
         aria-label="Send Ctrl+C interrupt"
       >
@@ -881,9 +881,9 @@ export default function Shell() {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <h1 className="text-xl font-semibold text-white">Shell</h1>
         <div className={`flex items-center gap-2 px-2 py-1 rounded text-sm ${
-          connected ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+          connected ? 'bg-port-success/20 text-port-success' : 'bg-gray-500/20 text-gray-400'
         }`}>
-          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
+          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-port-success' : 'bg-gray-500'}`} />
           {connected ? 'Connected' : 'Disconnected'}
         </div>
         {interactiveCount > 0 && (
@@ -919,7 +919,7 @@ export default function Shell() {
           {connected && (
             <button
               onClick={stopSession}
-              className="flex items-center gap-1.5 px-2.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm transition-colors min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
               title={isLiveRun ? 'Stop this TUI run' : 'Kill current session'}
             >
               <PowerOff size={16} />
@@ -968,7 +968,7 @@ export default function Shell() {
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}
                   className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
-                    isActive ? 'text-port-accent/60 hover:text-red-400' : 'text-gray-600 hover:text-red-400'
+                    isActive ? 'text-port-accent/60 hover:text-port-error' : 'text-gray-600 hover:text-port-error'
                   }`}
                   title={isRun ? 'Stop run' : 'Kill session'}
                 >

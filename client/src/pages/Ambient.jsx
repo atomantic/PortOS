@@ -10,10 +10,10 @@ const REFRESH_INTERVAL = 30000;
 const IDLE_DELAY = 3000;
 
 const goalColor = (rate) =>
-  rate >= 80 ? '#22c55e' : rate >= 50 ? '#f59e0b' : '#ef4444';
+  rate >= 80 ? 'rgb(var(--port-success))' : rate >= 50 ? 'rgb(var(--port-warning))' : 'rgb(var(--port-error))';
 
 const goalColorClass = (rate) =>
-  rate >= 80 ? 'text-emerald-500' : rate >= 50 ? 'text-amber-500' : 'text-red-400';
+  rate >= 80 ? 'text-port-success' : rate >= 50 ? 'text-port-warning' : 'text-port-error';
 
 function toggleFullscreen() {
   if (document.fullscreenElement) {
@@ -155,7 +155,7 @@ export default function Ambient() {
                   <div key={event.id || i} className="flex items-start gap-3">
                     <div
                       className="w-1 h-6 rounded-full shrink-0 mt-0.5"
-                      style={{ backgroundColor: event.color || '#3b82f6' }}
+                      style={{ backgroundColor: event.color || 'rgb(var(--port-accent))' }}
                     />
                     <div className="min-w-0">
                       <div className="text-sm text-gray-300 truncate">{event.summary || event.title}</div>
@@ -201,14 +201,14 @@ export default function Ambient() {
 
           <AmbientPanel title="Agent Activity">
             <div className="grid grid-cols-2 gap-3">
-              <AmbientStat label="Running" value={today.running || 0} color={today.running > 0 ? '#3b82f6' : null} />
-              <AmbientStat label="Completed" value={today.completed || 0} color={today.completed > 0 ? '#22c55e' : null} />
-              <AmbientStat label="Failed" value={today.failed || 0} color={today.failed > 0 ? '#ef4444' : null} />
-              <AmbientStat label="Streak" value={`${streak.current || 0}d`} color={streak.current >= 7 ? '#f59e0b' : null} />
+              <AmbientStat label="Running" value={today.running || 0} color={today.running > 0 ? 'rgb(var(--port-accent))' : null} />
+              <AmbientStat label="Completed" value={today.completed || 0} color={today.completed > 0 ? 'rgb(var(--port-success))' : null} />
+              <AmbientStat label="Failed" value={today.failed || 0} color={today.failed > 0 ? 'rgb(var(--port-error))' : null} />
+              <AmbientStat label="Streak" value={`${streak.current || 0}d`} color={streak.current >= 7 ? 'rgb(var(--port-warning))' : null} />
             </div>
             {cosSummary?.status?.running && (
               <div className="mt-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                <div className="w-2 h-2 rounded-full bg-port-accent animate-pulse" />
                 <span className="text-xs text-gray-500">CoS is active</span>
               </div>
             )}
@@ -222,7 +222,7 @@ export default function Ambient() {
       }`}>
         <span>PortOS Ambient</span>
         <span className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full ${data?.health ? 'bg-emerald-600' : 'bg-gray-700'}`} />
+          <span className={`w-1.5 h-1.5 rounded-full ${data?.health ? 'bg-port-success' : 'bg-gray-700'}`} />
           {data?.health ? 'System Online' : 'Connecting...'}
         </span>
       </div>

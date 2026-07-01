@@ -1269,7 +1269,7 @@ function RefsPanel({ refsByKind }) {
 
 const SOURCE_BADGE = {
   user:    'bg-port-accent/20 text-port-accent border-port-accent/40',
-  extract: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  extract: 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40',
   refine:  'bg-port-warning/20 text-port-warning border-port-warning/40',
   sync:    'bg-port-success/20 text-port-success border-port-success/40',
 };

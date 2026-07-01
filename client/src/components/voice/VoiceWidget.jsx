@@ -32,7 +32,7 @@ const STAGE = {
   listening: { icon: MicOff, label: 'Listening… (click to send)', tone: 'text-port-accent' },
   handsfree: { icon: MicOff, label: 'Hands-free — speak anytime', tone: 'text-port-accent' },
   capturing: { icon: MicOff, label: 'Capturing your voice…', tone: 'text-port-accent animate-pulse' },
-  thinking: { icon: Brain, label: 'Thinking…', tone: 'text-yellow-400' },
+  thinking: { icon: Brain, label: 'Thinking…', tone: 'text-port-warning' },
   speaking: { icon: Volume2, label: 'Speaking (talk to interrupt)', tone: 'text-port-success' },
 };
 
@@ -536,9 +536,9 @@ export default function VoiceWidget() {
 
   const { icon: Icon, label, tone } = STAGE[stage] || STAGE.idle;
   const capturing = ACTIVE_STAGES.has(stage) || isWebSpeechCapturing();
-  // Distinct violet ring + soft glow so the floating widget reads as
+  // Distinct secondary-accent ring + soft glow so the floating widget reads as
   // "voice agent layer" instead of blending into whatever card it's covering.
-  const fabSurface = 'border-violet-500/50 shadow-[0_0_24px_-4px_rgba(168,85,247,0.55)]';
+  const fabSurface = 'border-port-accent-2/50 shadow-[0_0_24px_-4px_rgba(168,85,247,0.55)]';
 
   return (
     // data-voice-widget marker is used by client/src/services/domIndex.js
@@ -560,7 +560,7 @@ export default function VoiceWidget() {
             onClick={() => { setExpanded(true); toggleCapture(); }}
             className={`p-3 rounded-full border transition-colors ${fabSurface} ${
               capturing
-                ? 'bg-violet-500 text-white animate-pulse'
+                ? 'bg-port-accent-2 text-white animate-pulse'
                 : 'bg-port-card text-white'
             }`}
             title="Open voice controls"
@@ -692,8 +692,8 @@ export default function VoiceWidget() {
             onClick={toggleCapture}
             className={`p-3 rounded-full transition-colors ${
               capturing
-                ? 'bg-violet-500 text-white animate-pulse'
-                : 'bg-violet-500/20 hover:bg-violet-500/40 text-violet-200'
+                ? 'bg-port-accent-2 text-white animate-pulse'
+                : 'bg-port-accent-2/20 hover:bg-port-accent-2/40 text-port-accent-2'
             }`}
             title={(() => {
               if (handsFree) {

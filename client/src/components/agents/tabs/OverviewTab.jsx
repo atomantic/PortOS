@@ -485,7 +485,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       <button
                         onClick={handleBuild}
                         disabled={!quickAccountId}
-                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50 flex items-center gap-1.5"
+                        className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <MessageSquare size={14} />
                         Build
@@ -511,7 +511,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       <button
                         onClick={handleCheckPosts}
                         disabled={checking || !quickAccountId}
-                        className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50 flex items-center gap-1.5"
+                        className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <Eye size={14} />
                         {checking ? 'Checking...' : 'Check Posts'}

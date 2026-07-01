@@ -238,7 +238,7 @@ export function RunsHistoryPage() {
                           <span className="font-medium text-white">{run.providerName}</span>
                           <span className="text-gray-500 text-sm">{run.model}</span>
                           {run.source === 'cos-agent' && (
-                            <span className="text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">
+                            <span className="text-xs text-port-accent-2 bg-port-accent-2/10 px-2 py-0.5 rounded">
                               CoS
                             </span>
                           )}
