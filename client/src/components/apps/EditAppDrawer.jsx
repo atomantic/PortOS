@@ -156,6 +156,17 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+
+    // The required Name/Repository Path inputs live on the General tab and are
+    // unmounted while any other tab is active, so the browser's `required`
+    // constraint validation can't block a Save triggered from another tab.
+    // Validate explicitly and surface the General tab so the empty field shows.
+    if (!formData.name?.trim() || !formData.repoPath?.trim()) {
+      setActiveTab('general');
+      setError('Name and Repository Path are required.');
+      return;
+    }
+
     setSaving(true);
 
     const data = {
