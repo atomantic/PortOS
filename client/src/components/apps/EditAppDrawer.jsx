@@ -141,6 +141,18 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     }
   }, [formData.jiraInstanceId, jiraInstances, formData.jiraAssignee]);
 
+  // Project-key combobox options: filter by the search box, sort by key, cap at
+  // 100. Derived once per render so the predicate isn't duplicated between the
+  // option list and the "no matching projects" empty-state check below.
+  const filteredJiraProjects = jiraProjects
+    .filter(proj => {
+      if (!projectSearch) return true;
+      const q = projectSearch.toLowerCase();
+      return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
+    })
+    .sort((a, b) => a.key.localeCompare(b.key))
+    .slice(0, 100);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
@@ -213,6 +225,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
           </div>
         )}
 
+        {/* The Drawer body remounts per active tab (key={currentTab}), so this
+            entire form/footer subtree is torn down and rebuilt on every tab
+            switch. All mutable form state (formData, error, saving, the JIRA
+            project-picker state) therefore MUST live above the Drawer body in
+            this component — never in an uncontrolled input or subcomponent
+            inside the form, or it would silently reset on tab switch. */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {activeTab === 'general' && (
             <div className="space-y-4">
@@ -531,14 +549,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                             )}
                             {projectDropdownOpen && (
                               <div className="absolute z-50 w-full mt-1 bg-port-bg border border-port-border rounded-lg max-h-48 overflow-auto shadow-lg">
-                                {jiraProjects
-                                  .filter(proj => {
-                                    if (!projectSearch) return true;
-                                    const q = projectSearch.toLowerCase();
-                                    return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
-                                  })
-                                  .sort((a, b) => a.key.localeCompare(b.key))
-                                  .slice(0, 100)
+                                {filteredJiraProjects
                                   .map(proj => (
                                     <button
                                       key={proj.key}
@@ -558,11 +569,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                                     </button>
                                   ))
                                 }
-                                {jiraProjects.filter(proj => {
-                                  if (!projectSearch) return true;
-                                  const q = projectSearch.toLowerCase();
-                                  return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
-                                }).length === 0 && (
+                                {filteredJiraProjects.length === 0 && (
                                   <div className="px-3 py-2 text-sm text-gray-500">No matching projects</div>
                                 )}
                               </div>
