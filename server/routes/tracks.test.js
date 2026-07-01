@@ -52,9 +52,16 @@ vi.mock('../services/albums/index.js', () => ({
   getAlbum: vi.fn(async () => null),
   updateAlbum: vi.fn(async (id, patch) => ({ id, ...patch })),
 }));
+vi.mock('../services/trackYoutubeImport.js', () => ({
+  YOUTUBE_URL_RE: /^https?:\/\/(www\.|m\.)?(youtube\.com\/watch\?[^\s#]*\bv=[\w-]{6,}|youtu\.be\/[\w-]{6,})/i,
+  startYoutubeImport: vi.fn(async () => ({ jobId: 'job-1' })),
+  attachImportSseClient: vi.fn(() => true),
+  cancelYoutubeImport: vi.fn(() => true),
+}));
 
 import * as musicLibrary from '../services/pipeline/musicLibrary.js';
 import * as albums from '../services/albums/index.js';
+import * as ytImport from '../services/trackYoutubeImport.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import tracksRoutes from './tracks.js';
 
@@ -81,6 +88,39 @@ describe('tracks routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.tracks[0].filename).toBe('music-1.mp3');
     expect(tracks.getTrack).not.toHaveBeenCalled();
+  });
+
+  describe('YouTube import (#1945)', () => {
+    it('POST /import/youtube starts a job for a valid URL', async () => {
+      const r = await request(app).post('/api/tracks/import/youtube').send({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+      expect(r.status).toBe(202);
+      expect(r.body).toEqual({ jobId: 'job-1' });
+      expect(ytImport.startYoutubeImport).toHaveBeenCalledWith('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    });
+
+    it('POST /import/youtube accepts a youtu.be short link', async () => {
+      const r = await request(app).post('/api/tracks/import/youtube').send({ url: 'https://youtu.be/dQw4w9WgXcQ' });
+      expect(r.status).toBe(202);
+    });
+
+    it('POST /import/youtube rejects a non-YouTube URL (never reaches the service)', async () => {
+      const r = await request(app).post('/api/tracks/import/youtube').send({ url: 'https://vimeo.com/12345' });
+      expect(r.status).toBe(400);
+      expect(ytImport.startYoutubeImport).not.toHaveBeenCalled();
+    });
+
+    it('GET /import/:jobId/events 404s when the job is unknown', async () => {
+      ytImport.attachImportSseClient.mockReturnValueOnce(false);
+      const r = await request(app).get('/api/tracks/import/missing/events');
+      expect(r.status).toBe(404);
+    });
+
+    it('POST /import/:jobId/cancel proxies to the service', async () => {
+      const r = await request(app).post('/api/tracks/import/job-1/cancel');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true });
+      expect(ytImport.cancelYoutubeImport).toHaveBeenCalledWith('job-1');
+    });
   });
 
   it('POST / creates a track', async () => {

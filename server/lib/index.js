@@ -136,6 +136,7 @@ export * from './gitRemote.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './pythonSetup.js';
+export * from './ytdlp.js';
 
 // === Networking ===
 export * from './abortTimeout.js';

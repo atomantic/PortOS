@@ -145,6 +145,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `gitRemote.js` | `getOriginInfo`, `parseGitRemoteUrl`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — classifies the local `origin` remote vs the upstream atomantic/PortOS repo. Used by the update flow to detect forks. |
 | `processEnv.js` | `stripDebugMallocEnv(env)` — drop macOS `Malloc*` debug env vars before spawning a child. Pinokio-launched PortOS exports `MallocStackLogging`/`MallocScribble`/etc. that flood Python subprocess stderr with `can't turn off malloc stack logging` lines; route every Node→Python spawn through this. No-op on Linux/Windows. |
 | `pythonSetup.js` | Python venv / runner setup helpers. |
+| `ytdlp.js` | `findYtDlp()` — cached discovery of the `yt-dlp` binary on PATH, mirrors `findFfmpeg()` in `ffmpeg.js`. Used by the track YouTube-import job. |
 
 ## Networking
 
