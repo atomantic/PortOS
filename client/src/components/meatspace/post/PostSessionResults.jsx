@@ -15,7 +15,7 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       {/* Overall Score */}
       <div className="text-center py-8">
         <div className="flex items-center justify-center gap-3 mb-2">
@@ -63,7 +63,7 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
       {/* Per-drill Breakdown */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">Drill Breakdown</h3>
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
           {drillResults.map((result, i) => {
             const isLlm = LLM_DRILL_TYPES.includes(result.type);
             const isExpanded = expandedDrill === i;
