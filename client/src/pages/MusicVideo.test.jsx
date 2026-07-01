@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 
 const PROJECT_WITH_CLIP = {
@@ -83,9 +84,24 @@ const PROJECT_ANALYZED = {
   audioAnalysis: { bpm: 120, beats: [], downbeats: [], sections: [{ label: 'Intro', startSec: 0, endSec: 10, energy: 0.5 }], durationSec: 10 },
 };
 
+// The page now selects the open project via the route param
+// (/media/music-video/:projectId), so tests render it inside a router that
+// serves the same component at both the index and the :projectId route —
+// clicking a project navigates to its id'd URL, and the component re-reads
+// useParams() to open its board (no remount: both routes render the same
+// component type, so React preserves the instance across the param change).
+const renderMV = () => render(
+  <MemoryRouter initialEntries={['/media/music-video']}>
+    <Routes>
+      <Route path="/media/music-video" element={<MusicVideo />} />
+      <Route path="/media/music-video/:projectId" element={<MusicVideo />} />
+    </Routes>
+  </MemoryRouter>,
+);
+
 const openProject = async (project) => {
   listMusicVideoProjects.mockResolvedValue([project]);
-  render(<MusicVideo />);
+  renderMV();
   // Project list button appears, then select it to open the board.
   const btn = await screen.findByRole('button', { name: new RegExp(project.name) });
   fireEvent.click(btn);
@@ -217,7 +233,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   it('blocks switching projects while the detail-view import is in flight (single shared job slot)', async () => {
     const projectB = { ...PROJECT_NO_CLIP, id: 'mv-3', name: 'Other Project' };
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
-    render(<MusicVideo />);
+    renderMV();
     const listBtnA = await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) });
     fireEvent.click(listBtnA);
 
@@ -250,7 +266,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
   it('pressing Enter in the create-form URL input starts the import instead of submitting the form', async () => {
     listMusicVideoProjects.mockResolvedValue([]);
-    render(<MusicVideo />);
+    renderMV();
     const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
     fireEvent.change(createInput, { target: { value: 'https://youtu.be/enterkey' } });
     fireEvent.keyDown(createInput, { key: 'Enter' });
@@ -262,7 +278,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     listMusicVideoProjects.mockResolvedValue([]);
     let resolveKickoff;
     importTrackFromYoutube.mockImplementation(() => new Promise((resolve) => { resolveKickoff = resolve; }));
-    render(<MusicVideo />);
+    renderMV();
     const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
     fireEvent.change(createInput, { target: { value: 'https://youtu.be/doubleclick' } });
     const importBtn = within(createInput.closest('div')).getByRole('button', { name: /Import/i });
@@ -277,7 +293,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
     let resolveKickoff;
     importTrackFromYoutube.mockImplementation(() => new Promise((resolve) => { resolveKickoff = resolve; }));
-    render(<MusicVideo />);
+    renderMV();
     const listBtnA = await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) });
     fireEvent.click(listBtnA);
 
@@ -299,7 +315,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
   it('blocks creating the project while the create-form YouTube import is in flight', async () => {
     listMusicVideoProjects.mockResolvedValue([]);
-    render(<MusicVideo />);
+    renderMV();
     const nameInput = await screen.findByPlaceholderText('Project name');
     fireEvent.change(nameInput, { target: { value: 'New MV' } });
     const createInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
