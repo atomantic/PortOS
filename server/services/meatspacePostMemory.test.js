@@ -21,6 +21,7 @@ import {
   generateMemoryDrill,
   getDueMemoryItems,
   advanceSchedule,
+  mergeScheduleAdvance,
   isMemoryItemDue,
   defaultSchedule,
   DEFAULT_EASE,
@@ -308,10 +309,45 @@ describe('advanceSchedule', () => {
     expect(schedule.ease).toBe(1.3);
   });
 
+  it('never lifts ease above the schema ceiling of 5 across many perfect reps', () => {
+    let schedule = { ease: 4.9, intervalDays: 6, nextReview: now.toISOString() };
+    for (let i = 0; i < 40; i++) schedule = advanceSchedule(schedule, 1, now);
+    expect(schedule.ease).toBeLessThanOrEqual(5); // matches memoryScheduleSchema.ease.max(5)
+  });
+
   it('tolerates a missing/garbage prior schedule', () => {
     const next = advanceSchedule(undefined, 1, now);
     expect(next.intervalDays).toBe(1);
     expect(next.ease).toBeGreaterThan(0);
+  });
+});
+
+describe('mergeScheduleAdvance', () => {
+  const now = new Date('2026-07-01T12:00:00.000Z');
+
+  it('applies a first-of-day advance (no prior same-day review)', () => {
+    const prev = { ease: 2.5, intervalDays: 0, nextReview: '2026-06-30T00:00:00.000Z', lastReviewed: '2026-06-30T00:00:00.000Z' };
+    const advanced = advanceSchedule(prev, 1, now);
+    const merged = mergeScheduleAdvance(prev, advanced, now);
+    expect(merged.intervalDays).toBe(1); // yesterday's review → today advances once
+  });
+
+  it('does not compound the interval on a same-day continuation (per-chunk submits)', () => {
+    // Chunk 1 already advanced the item today: interval 1, reviewed today.
+    const afterChunk1 = { ease: 2.6, intervalDays: 1, nextReview: '2026-07-02T12:00:00.000Z', lastReviewed: '2026-07-01T09:00:00.000Z' };
+    const advanced = advanceSchedule(afterChunk1, 1, now); // would step 1 → 6
+    const merged = mergeScheduleAdvance(afterChunk1, advanced, now);
+    expect(merged.intervalDays).toBe(1); // interval held, not compounded to 6
+    expect(merged.nextReview).toBe(afterChunk1.nextReview); // still tomorrow
+    expect(merged.lastReviewed).toBe(advanced.lastReviewed); // ease/lastReviewed refreshed
+  });
+
+  it('still resets to due-now on a same-day miss after earlier success', () => {
+    const afterChunk1 = { ease: 2.6, intervalDays: 1, nextReview: '2026-07-02T12:00:00.000Z', lastReviewed: '2026-07-01T09:00:00.000Z' };
+    const advanced = advanceSchedule(afterChunk1, 0, now); // miss → interval 0
+    const merged = mergeScheduleAdvance(afterChunk1, advanced, now);
+    expect(merged.intervalDays).toBe(0); // shrink always applies
+    expect(Date.parse(merged.nextReview)).toBe(now.getTime()); // due now again
   });
 });
 
