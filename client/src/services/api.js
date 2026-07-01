@@ -12,6 +12,7 @@ export * from './apiScaffold.js';
 export * from './apiProviders.js';
 export * from './apiRuns.js';
 export * from './apiHistory.js';
+export * from './apiLogs.js';
 export * from './apiCommands.js';
 export * from './apiGit.js';
 export * from './apiCatalog.js';
