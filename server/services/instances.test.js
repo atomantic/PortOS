@@ -48,9 +48,14 @@ vi.mock('../lib/ports.js', () => ({
   DEFAULT_PEER_PORT: 5555
 }));
 
+vi.mock('../lib/tailscale.js', () => ({
+  getTailscaleStatus: vi.fn()
+}));
+
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { getTailscaleStatus } from '../lib/tailscale.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import {
@@ -82,6 +87,7 @@ describe('instances.js', () => {
     vi.useFakeTimers();
     vi.stubGlobal('fetch', vi.fn());
     readJSONFile.mockResolvedValue({ self: null, peers: [] });
+    getTailscaleStatus.mockResolvedValue({ available: true, running: true, state: 'Running', reason: 'running' });
   });
 
   afterEach(() => {
@@ -1522,22 +1528,130 @@ describe('instances.js', () => {
   // --- Polling ---
 
   describe('startPolling / stopPolling', () => {
-    it('should start polling and not start twice', () => {
+    let logSpy;
+
+    beforeEach(() => {
+      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      logSpy.mockRestore();
+    });
+
+    // startPolling now defers to an async gate (loadData + Tailscale check);
+    // flush the resolved-promise chain so the gate reaches beginPolling().
+    const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+    const logged = (frag) => logSpy.mock.calls.some(c => String(c[0]).includes(frag));
+
+    it('starts polling immediately with no peers (solo install), without probing Tailscale', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
 
       startPolling();
-      startPolling(); // second call should be no-op
+      await flush();
 
-      // Advance past initial probe delay
-      vi.advanceTimersByTime(2000);
-
+      expect(logged('Instance polling started')).toBe(true);
+      // No peers → never even asks Tailscale.
+      expect(getTailscaleStatus).not.toHaveBeenCalled();
       stopPolling();
     });
 
-    it('should stop polling cleanly', () => {
+    it('starts polling when tailnet peers exist and Tailscale is connected', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
+      getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
+
       startPolling();
+      await flush();
+
+      expect(getTailscaleStatus).toHaveBeenCalled();
+      expect(logged('Instance polling started')).toBe(true);
+      expect(logged('Peer sync deferred')).toBe(false);
+      stopPolling();
+    });
+
+    it('probes immediately for a LAN/IP peer even when Tailscale is down (never stranded)', async () => {
+      // A peer addressed by a plain LAN IP (no MagicDNS host, not a CGNAT addr)
+      // is reachable without Tailscale, so the gate must not defer it.
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'lan', enabled: true, address: '192.168.1.50' }] });
+      getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
+
+      startPolling();
+      await flush();
+
+      expect(logged('Instance polling started')).toBe(true);
+      expect(logged('Peer sync deferred')).toBe(false);
+      // A non-tailnet peer means we don't even need to ask Tailscale.
+      expect(getTailscaleStatus).not.toHaveBeenCalled();
+      stopPolling();
+    });
+
+    it('defers polling when all peers are tailnet-only and Tailscale is down, then starts once it comes up', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
+      getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
+
+      startPolling();
+      await flush();
+
+      expect(logged('Peer sync deferred')).toBe(true);
+      expect(logged('Instance polling started')).toBe(false);
+
+      // Tailscale connects; the recheck watcher should pick it up and start polling.
+      getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await flush();
+
+      expect(logged('Tailscale connected — starting peer sync polling')).toBe(true);
+      expect(logged('Instance polling started')).toBe(true);
+      stopPolling();
+    });
+
+    it('does not start twice', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+
+      startPolling();
+      startPolling(); // second call should be a no-op
+      await flush();
+
+      const starts = logSpy.mock.calls.filter(c => String(c[0]).includes('Instance polling started')).length;
+      expect(starts).toBe(1);
+      stopPolling();
+    });
+
+    it('stop clears a pending Tailscale watch so it never starts polling later', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
+      getTailscaleStatus.mockResolvedValue({ running: false, state: 'Stopped', reason: 'tailscale-stopped' });
+
+      startPolling();
+      await flush();
+      expect(logged('Peer sync deferred')).toBe(true);
+
       stopPolling();
       stopPolling(); // double stop should be safe
+
+      // Even if Tailscale comes up after stop, the (cleared) watcher must not fire.
+      getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await flush();
+
+      expect(logged('Instance polling started')).toBe(false);
+    });
+
+    it('aborts startup if stopPolling is called during the async gate window', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{ id: 'p1', enabled: true, host: 'p1.tailnet.ts.net' }] });
+      getTailscaleStatus.mockResolvedValue({ running: true, state: 'Running', reason: 'running' });
+
+      startPolling();      // kicks off the async gate (loadData → getTailscaleStatus)
+      stopPolling();       // lands before the gate resolves — must cancel it
+      await flush();
+
+      // The generation bump makes the resolving gate bail before beginPolling().
+      expect(logged('Instance polling started')).toBe(false);
+
+      // And a fresh start afterward still works (state wasn't left wedged).
+      startPolling();
+      await flush();
+      expect(logged('Instance polling started')).toBe(true);
+      stopPolling();
     });
   });
 });
