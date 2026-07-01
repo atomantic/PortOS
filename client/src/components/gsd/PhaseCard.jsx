@@ -14,7 +14,7 @@ const STATUS_CONFIG = {
 const ACTION_CONFIG = {
   plan: { label: 'Plan', icon: FileText, style: 'bg-port-warning/20 text-port-warning border-port-warning/30 hover:bg-port-warning/30' },
   execute: { label: 'Execute', icon: Play, style: 'bg-port-accent/20 text-port-accent border-port-accent/30 hover:bg-port-accent/30' },
-  verify: { label: 'Verify', icon: ShieldCheck, style: 'bg-purple-600/20 text-purple-400 border-purple-600/30 hover:bg-purple-600/30' },
+  verify: { label: 'Verify', icon: ShieldCheck, style: 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/30 hover:bg-port-accent-2/30' },
 };
 
 function getPhaseStatus(phase, pendingAction) {

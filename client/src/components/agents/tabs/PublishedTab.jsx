@@ -200,7 +200,7 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4">
                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                             comment.isReply
-                              ? 'bg-purple-500/20 text-purple-400'
+                              ? 'bg-port-accent-2/20 text-port-accent-2'
                               : 'bg-port-accent/20 text-port-accent'
                           }`}>
                             {comment.isReply ? 'reply' : 'comment'}
