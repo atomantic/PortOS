@@ -8,7 +8,12 @@ const IS_WIN = process.platform === 'win32';
 // Shared env inherited by all apps (merged into each app's env)
 const BASE_ENV = {
   NODE_ENV: 'development',
-  TZ: 'UTC'  // All log timestamps and Date operations in UTC
+  TZ: 'UTC',  // All log timestamps and Date operations in UTC
+  // Pin the install root explicitly so data-root resolution never derives it
+  // from the executing file's location. A server/agent booted from inside a CoS
+  // git worktree (data/cos/worktrees/agent-*) would otherwise resolve `data/`
+  // to the worktree's nonexistent tree and crash boot migrations (#1947).
+  PORTOS_DATA_ROOT: __dirname
 };
 
 // Read a couple of machine-local settings from .env (pm2 doesn't auto-load it

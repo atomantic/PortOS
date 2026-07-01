@@ -13,6 +13,7 @@ import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_S
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
+import { resolveInstallRoot } from './dataRoot.js';
 
 // Promisified execFile — shared so callers (e.g. backup's pg_dump probing)
 // don't each re-wrap it. Returns { stdout, stderr }.
@@ -23,6 +24,12 @@ const IS_WIN = process.platform === 'win32';
 const __lib_filename = fileURLToPath(import.meta.url);
 const __lib_dirname = dirname(__lib_filename);
 
+// Install root (parent of data/, data.reference/). Prefer an explicit
+// PORTOS_DATA_ROOT env var over the import.meta.url-derived path so a process
+// booted from inside a CoS agent git worktree still resolves to the real
+// install (#1947). Falls back to the derived path when the env var is unset.
+const INSTALL_ROOT = resolveInstallRoot(join(__lib_dirname, '../..'));
+
 /**
  * MIME types that could execute scripts when served inline — force Content-Disposition: attachment
  */
@@ -32,67 +39,67 @@ export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'applicat
  * Base directories relative to project root
  */
 export const PATHS = {
-  root: join(__lib_dirname, '../..'),
-  data: join(__lib_dirname, '../../data'),
-  cos: join(__lib_dirname, '../../data/cos'),
-  brain: join(__lib_dirname, '../../data/brain'),
-  digitalTwin: join(__lib_dirname, '../../data/digital-twin'),
-  health: join(__lib_dirname, '../../data/health'),
-  runs: join(__lib_dirname, '../../data/runs'),
-  memory: join(__lib_dirname, '../../data/cos/memory'),
-  cosAgents: join(__lib_dirname, '../../data/cos/agents'),  // CoS sub-agents
-  scripts: join(__lib_dirname, '../../data/cos/scripts'),
-  reports: join(__lib_dirname, '../../data/cos/reports'),
+  root: INSTALL_ROOT,
+  data: join(INSTALL_ROOT, 'data'),
+  cos: join(INSTALL_ROOT, 'data/cos'),
+  brain: join(INSTALL_ROOT, 'data/brain'),
+  digitalTwin: join(INSTALL_ROOT, 'data/digital-twin'),
+  health: join(INSTALL_ROOT, 'data/health'),
+  runs: join(INSTALL_ROOT, 'data/runs'),
+  memory: join(INSTALL_ROOT, 'data/cos/memory'),
+  cosAgents: join(INSTALL_ROOT, 'data/cos/agents'),  // CoS sub-agents
+  scripts: join(INSTALL_ROOT, 'data/cos/scripts'),
+  reports: join(INSTALL_ROOT, 'data/cos/reports'),
   // AI Agent Personalities data
-  agentPersonalities: join(__lib_dirname, '../../data/agents'),
-  meatspace: join(__lib_dirname, '../../data/meatspace'),
-  calendar: join(__lib_dirname, '../../data/calendar'),
-  messages: join(__lib_dirname, '../../data/messages'),
-  screenshots: join(__lib_dirname, '../../data/screenshots'),
-  uploads: join(__lib_dirname, '../../data/uploads'),
-  cosAttachments: join(__lib_dirname, '../../data/cos/attachments'),
-  worktrees: join(__lib_dirname, '../../data/cos/worktrees'),
-  repos: join(__lib_dirname, '../../data/repos'),
-  browserProfile: join(__lib_dirname, '../../data/browser-profile'),
+  agentPersonalities: join(INSTALL_ROOT, 'data/agents'),
+  meatspace: join(INSTALL_ROOT, 'data/meatspace'),
+  calendar: join(INSTALL_ROOT, 'data/calendar'),
+  messages: join(INSTALL_ROOT, 'data/messages'),
+  screenshots: join(INSTALL_ROOT, 'data/screenshots'),
+  uploads: join(INSTALL_ROOT, 'data/uploads'),
+  cosAttachments: join(INSTALL_ROOT, 'data/cos/attachments'),
+  worktrees: join(INSTALL_ROOT, 'data/cos/worktrees'),
+  repos: join(INSTALL_ROOT, 'data/repos'),
+  browserProfile: join(INSTALL_ROOT, 'data/browser-profile'),
   browserDownloads: join(homedir(), 'Downloads'),
-  digests: join(__lib_dirname, '../../data/cos/digests'),
-  promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
-  promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),
-  decisions: join(__lib_dirname, '../../data/cos/decisions'),
-  telegram: join(__lib_dirname, '../../data/telegram'),
-  templates: join(__lib_dirname, '../../data/prompts/templates'),
+  digests: join(INSTALL_ROOT, 'data/cos/digests'),
+  promptSkills: join(INSTALL_ROOT, 'data/prompts/skills'),
+  promptSkillsJobs: join(INSTALL_ROOT, 'data/prompts/skills/jobs'),
+  decisions: join(INSTALL_ROOT, 'data/cos/decisions'),
+  telegram: join(INSTALL_ROOT, 'data/telegram'),
+  templates: join(INSTALL_ROOT, 'data/prompts/templates'),
   // Visual template assets (e.g. the character reference-sheet layout PNG used
   // as the init-image anchor by the universe-builder character sheet renderer).
   // Distinct from `templates` above, which is the legacy prompt-template dir.
   // Files here are shipped via data.reference/templates/ on first install.
-  visualTemplates: join(__lib_dirname, '../../data/templates'),
-  settings: join(__lib_dirname, '../../data/settings'),
-  missions: join(__lib_dirname, '../../data/cos/missions'),
-  tools: join(__lib_dirname, '../../data/tools'),
-  images: join(__lib_dirname, '../../data/images'),
+  visualTemplates: join(INSTALL_ROOT, 'data/templates'),
+  settings: join(INSTALL_ROOT, 'data/settings'),
+  missions: join(INSTALL_ROOT, 'data/cos/missions'),
+  tools: join(INSTALL_ROOT, 'data/tools'),
+  images: join(INSTALL_ROOT, 'data/images'),
   // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of
   // `images/` rather than a subdir so the gallery's flat `.png` enumeration
   // never surfaces them, and so a future per-render cleanup pass can drop
   // the whole dir without touching the gallery.
-  imageRefs: join(__lib_dirname, '../../data/image-refs'),
-  loras: join(__lib_dirname, '../../data/loras'),
+  imageRefs: join(INSTALL_ROOT, 'data/image-refs'),
+  loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout:
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
   // Machine-local like `loras/` — datasets never federate.
-  loraDatasets: join(__lib_dirname, '../../data/lora-datasets'),
+  loraDatasets: join(INSTALL_ROOT, 'data/lora-datasets'),
   // LoRA training run artifacts (checkpoints/samples/cache per run). Run
   // RECORDS live in Postgres (lora_training_runs); only artifacts live here.
-  trainingRuns: join(__lib_dirname, '../../data/training-runs'),
-  videos: join(__lib_dirname, '../../data/videos'),
-  videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
+  trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),
+  videos: join(INSTALL_ROOT, 'data/videos'),
+  videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
   // Persisted audio renders (voice-over lines). Kept distinct from
   // the in-memory voice-agent synthesis path in services/voice/ — that path
   // streams WAV over Socket.IO without ever touching disk.
-  audio: join(__lib_dirname, '../../data/audio'),
+  audio: join(INSTALL_ROOT, 'data/audio'),
   // Uploaded + (eventually) generated background music tracks. Separate from
   // `audio/` so the user can browse + reuse a track across issues without
   // walking through the VO-line filenames.
-  music: join(__lib_dirname, '../../data/music'),
+  music: join(INSTALL_ROOT, 'data/music'),
   // Extracted assets from third-party imports (ChatGPT export images/audio/
   // PDFs). Served read-only at `/data/brain-imports/...` so the Memory
   // conversation viewer can render inline `![](url)` images and asset links.
@@ -100,8 +107,8 @@ export const PATHS = {
   // asset referenced from multiple conversations is stored once. The transcript
   // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
   // served — only this assets subtree is.
-  brainImportAssets: join(__lib_dirname, '../../data/brain/imports/assets'),
-  slashdo: join(__lib_dirname, '../../lib/slashdo')
+  brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
+  slashdo: join(INSTALL_ROOT, 'lib/slashdo')
 };
 
 /**

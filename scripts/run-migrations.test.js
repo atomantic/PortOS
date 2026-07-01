@@ -110,6 +110,63 @@ export const md5 = (s) => s;
   });
 });
 
+describe('runMigrations worktree backstop (#1947)', () => {
+  let baseDir;
+  let migrationsDir;
+  let warnSpy;
+  let logSpy;
+
+  beforeEach(() => {
+    baseDir = mkdtempSync(join(tmpdir(), 'run-migrations-wt-'));
+    migrationsDir = join(baseDir, 'migrations');
+    mkdirSync(migrationsDir, { recursive: true });
+    // A migration that WOULD fail if it ran against a worktree checkout — it
+    // writes into data/ which doesn't exist there. The guard must skip before
+    // this runs.
+    writeFileSync(join(migrationsDir, '001-fixture.js'), `
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) {
+    writeFileSync(join(rootDir, 'data', 'fixture-marker.txt'), 'ran');
+  }
+};
+`);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(baseDir, { recursive: true, force: true });
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('skips the migration pass when rootDir is a CoS agent worktree checkout', async () => {
+    // A worktree checkout root lives under data/cos/worktrees/<agent> and has
+    // no data/ runtime tree — running migrations there crashes on ENOENT.
+    const worktreeRoot = join(baseDir, 'data', 'cos', 'worktrees', 'agent-test');
+    mkdirSync(worktreeRoot, { recursive: true });
+
+    const ran = await runMigrations({ rootDir: worktreeRoot, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(existsSync(join(worktreeRoot, 'data'))).toBe(false); // never created
+    expect(existsSync(join(worktreeRoot, 'data', 'migrations.applied.json'))).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('CoS agent worktree'));
+  });
+
+  it('still runs migrations for a normal (non-worktree) rootDir', async () => {
+    const realRoot = join(baseDir, 'install');
+    mkdirSync(join(realRoot, 'data'), { recursive: true });
+
+    const ran = await runMigrations({ rootDir: realRoot, migrationsDir });
+
+    expect(ran).toBe(1);
+    expect(existsSync(join(realRoot, 'data', 'fixture-marker.txt'))).toBe(true);
+  });
+});
+
 describe('listPendingMigrations', () => {
   let rootDir;
   let dataDir;

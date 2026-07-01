@@ -3,6 +3,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
+import { resolveInstallRoot } from './lib/dataRoot.js';
 import { PORTS } from './lib/ports.js';
 import { estimateTokens } from './lib/contextBudget.js';
 import { existsSync } from 'fs';
@@ -239,7 +240,11 @@ const DATA_REFERENCE_DIR = join(__dirname, '..', 'data.reference');
 // existing installs hit "Stage X not found" until the user manually runs
 // `npm run migrations` or `npm run update`. Idempotent and cheap when the
 // applied-list is already current.
-await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
+// Prefer PORTOS_DATA_ROOT (set at real launch in ecosystem.config.cjs) over the
+// import.meta.url-derived path so a server booted from inside a CoS agent
+// worktree still resolves to the real install; runMigrations also skips a
+// worktree-rooted path as a backstop (#1947).
+await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catch(err => {
   // Log the full stack (or stringified err for non-Error throws) so failures
   // during boot are diagnosable without rerunning under a debugger.
   console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
