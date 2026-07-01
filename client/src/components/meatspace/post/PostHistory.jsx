@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS, DOMAINS, DRILL_TO_DOMAIN } from './constants';
+import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -24,7 +24,6 @@ const DOMAIN_HEX = {
   imagination: '#22d3ee' // cyan-400
 };
 
-const domainLabel = (key) => (key === 'other' ? 'Other' : DOMAINS[key]?.label || key);
 const domainHex = (key) => DOMAIN_HEX[key] || '#a3a3a3';
 
 const scoreColorClass = (score) =>
