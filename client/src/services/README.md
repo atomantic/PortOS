@@ -47,7 +47,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |
-| `apiLogs.js` | Live PM2 system logs: list processes + fetch a process's recent log tail. |
+| `apiLogs.js` | PM2 system logs: fetch a process's recent log tail (process list comes from `apiCommands.getProcessesList`). |
 | `apiPorts.js` | Port forwarding / allocation. |
 | `apiProviders.js` | AI provider config. |
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
