@@ -52,6 +52,12 @@ function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = f
     <>
       <input
         id={id} type="url" value={url} onChange={onUrlChange} disabled={job.active}
+        // The create form's usage sits inside a <form onSubmit={handleCreate}>
+        // — without this, Enter (the natural gesture after pasting a URL)
+        // submits the form (creating a track-less project) instead of
+        // starting the import. Harmless on the detail view's usage, which
+        // isn't inside a <form>.
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (url.trim()) onStart(); } }}
         placeholder="Import audio from a YouTube URL…" aria-label="Import audio from a YouTube URL"
         className={`${compact ? 'flex-1 min-w-[160px]' : 'flex-1 min-w-0'} bg-port-bg border border-port-border rounded px-2 ${py} text-sm disabled:opacity-50`}
       />
@@ -478,7 +484,8 @@ export default function MusicVideo() {
             </select>
             <label htmlFor="mv-track" className="block text-xs text-port-text-muted">Track (optional)</label>
             <select id="mv-track" value={form.trackId} onChange={(e) => setForm((f) => ({ ...f, trackId: e.target.value }))}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm">
+              disabled={ytImportCreate.active}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50">
               <option value="">— no track —</option>
               {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
             </select>
@@ -568,7 +575,8 @@ export default function MusicVideo() {
                   <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(selected.trackId)}</span>
                   <select value={selected.trackId || ''} aria-label="Change track"
                     onChange={(e) => e.target.value && handleChangeTrack(e.target.value)}
-                    className="bg-port-bg border border-port-border rounded px-1.5 py-1">
+                    disabled={ytImportEdit.active}
+                    className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
                     <option value="">Change track…</option>
                     {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
                   </select>
