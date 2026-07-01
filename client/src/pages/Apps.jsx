@@ -252,7 +252,7 @@ export default function Apps() {
                                 : '';
                             return (
                               <span key={i}>
-                                {procName}<span className="text-cyan-500">{portDisplay}</span>
+                                {procName}<span className="text-port-accent">{portDisplay}</span>
                                 {i < (app.pm2ProcessNames?.length || 0) - 1 ? ',' : ''}
                               </span>
                             );
@@ -413,7 +413,7 @@ export default function Apps() {
                       <div>
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Editor Command</div>
                         <div className="flex items-center gap-2">
-                          <Code size={16} aria-hidden="true" className="text-blue-400 shrink-0" />
+                          <Code size={16} aria-hidden="true" className="text-port-accent shrink-0" />
                           <code className="text-sm text-gray-300 font-mono">{app.editorCommand || 'code .'}</code>
                         </div>
                       </div>
@@ -426,8 +426,8 @@ export default function Apps() {
                         <div className="bg-port-card border border-port-border rounded-lg p-3">
                           {app.startCommands.map((cmd, i) => (
                             <div key={i} className="flex items-start gap-2 py-1">
-                              <Terminal size={14} aria-hidden="true" className="text-green-400 shrink-0 mt-0.5" />
-                              <code className="text-sm text-cyan-300 font-mono break-all">{cmd}</code>
+                              <Terminal size={14} aria-hidden="true" className="text-port-success shrink-0 mt-0.5" />
+                              <code className="text-sm text-port-accent/90 font-mono break-all">{cmd}</code>
                             </div>
                           ))}
                         </div>
@@ -453,7 +453,7 @@ export default function Apps() {
                                 }`} />
                                 <span className="text-sm text-white font-mono">{proc.name}</span>
                                 {processConfig?.ports && Object.keys(processConfig.ports).length > 0 && (
-                                  <span className="text-xs text-cyan-400 font-mono">
+                                  <span className="text-xs text-port-accent font-mono">
                                     {Object.entries(processConfig.ports).length > 1
                                       ? ` (${Object.entries(processConfig.ports).map(([label, port]) => `${label}:${port}`).join(', ')})`
                                       : `:${Object.values(processConfig.ports)[0]}`}
@@ -461,10 +461,10 @@ export default function Apps() {
                                 )}
                                 <span className="text-xs text-gray-500">{proc.status}</span>
                                 {proc.cpu !== undefined && (
-                                  <span className="text-xs text-green-400">{proc.cpu}%</span>
+                                  <span className="text-xs text-port-success">{proc.cpu}%</span>
                                 )}
                                 {proc.memory !== undefined && (
-                                  <span className="text-xs text-blue-400">{formatBytes(proc.memory)}</span>
+                                  <span className="text-xs text-port-accent">{formatBytes(proc.memory)}</span>
                                 )}
                               </div>
                             );
@@ -478,16 +478,16 @@ export default function Apps() {
                       <div>
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">JIRA Integration</div>
                         <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
-                          <Ticket size={16} aria-hidden="true" className="text-blue-400 shrink-0" />
+                          <Ticket size={16} aria-hidden="true" className="text-port-accent shrink-0" />
                           <span className="text-sm text-white font-mono">{app.jira.projectKey || '—'}</span>
                           {app.jira.issueType && (
                             <span className="text-xs text-gray-400">{app.jira.issueType}</span>
                           )}
                           {app.jira.createPR !== false && (
-                            <span className="text-xs text-green-400">+ PR</span>
+                            <span className="text-xs text-port-success">+ PR</span>
                           )}
                           {app.jira.labels?.length > 0 && (
-                            <span className="text-xs text-cyan-400">{app.jira.labels.join(', ')}</span>
+                            <span className="text-xs text-port-accent">{app.jira.labels.join(', ')}</span>
                           )}
                         </div>
 

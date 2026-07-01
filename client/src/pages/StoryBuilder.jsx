@@ -488,7 +488,7 @@ function ImportPanel({ onCreated }) {
           )}
           <div className="flex items-center gap-2 pt-1">
             <button onClick={importAndBuild} disabled={committing || issueCount === 0}
-              className="inline-flex items-center gap-2 bg-port-success hover:bg-green-600 disabled:opacity-50 text-white px-4 py-2 rounded text-sm">
+              className="inline-flex items-center gap-2 bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm">
               {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               {committed ? 'Retry starting the builder' : arcAlreadyPersisted ? 'Retry issues & start building' : 'Import & start building'}
             </button>
@@ -1432,7 +1432,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               <button
                 onClick={() => lock.toggle(stepState.locked)} disabled={lock.busy}
                 className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm disabled:opacity-50 ${
-                  stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-green-600 text-white'
+                  stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-port-success/80 text-white'
                 }`}
               >
                 {lock.busy ? <Loader2 className="w-4 h-4 animate-spin" /> : (stepState.locked ? <Unlock className="w-4 h-4" /> : <Check className="w-4 h-4" />)}
