@@ -91,7 +91,7 @@ function GsdSetupGuide({ gsd, appId, repoPath, onRefresh }) {
                 </button>
                 <button
                   onClick={handleOpenClaude}
-                  className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-lg text-xs flex items-center gap-1 border border-purple-600/30"
+                  className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 rounded-lg text-xs flex items-center gap-1 border border-port-accent-2/30"
                 >
                   <Terminal size={14} /> Open Claude Code
                 </button>
@@ -182,7 +182,7 @@ function NextActionBanner({ pendingActions, appId }) {
   const actionLabels = {
     plan: { label: 'Plan', desc: 'Create a detailed execution plan', style: 'border-port-warning/30 bg-port-warning/5' },
     execute: { label: 'Execute', desc: 'Execute the plan for this phase', style: 'border-port-accent/30 bg-port-accent/5' },
-    verify: { label: 'Verify', desc: 'Verify the implementation', style: 'border-purple-600/30 bg-purple-600/5' },
+    verify: { label: 'Verify', desc: 'Verify the implementation', style: 'border-port-accent-2/30 bg-port-accent-2/5' },
   };
   const cfg = actionLabels[action.nextAction] || actionLabels.plan;
 
