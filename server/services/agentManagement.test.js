@@ -172,6 +172,27 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     );
     expect(addTask).not.toHaveBeenCalled();
   });
+
+  it('requires approval on the investigation task once orphan retries are exhausted', async () => {
+    // orphanRetryCount: 2 -> retryCount 3 hits MAX_ORPHAN_RETRIES, tripping the
+    // "else" branch that blocks the task and spawns an investigation task.
+    const exhaustedTask = {
+      id: 'task-foo',
+      status: 'in_progress',
+      taskType: 'user',
+      description: 'Original work',
+      metadata: { orphanRetryCount: 2, totalSpawnCount: 2 }
+    };
+    const getTaskById = vi.fn().mockResolvedValue(exhaustedTask);
+
+    await handleOrphanedTask('task-foo', 'agent-orphaned', getTaskById);
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(addTask.mock.calls[0][0]).toMatchObject({
+      description: expect.stringContaining('[Auto-Fix] Investigate repeated agent orphaning'),
+      approvalRequired: true,
+    });
+  });
 });
 
 describe('pauseAgent', () => {
