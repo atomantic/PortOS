@@ -43,6 +43,9 @@ export default function UpdateTab() {
   const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
+  // Mirrors `updating` for the socket 'disconnect' listener below, which is
+  // registered once on mount and would otherwise close over a stale `false`.
+  const updatingRef = useRef(false);
   // Tracks whether the health endpoint went down during a restart poll. A
   // reconcile (issue #1779) often lands the SAME version (new commits, no
   // release bump), so version-change detection alone can't confirm completion —
@@ -65,8 +68,21 @@ export default function UpdateTab() {
     fetchStatus();
   }, [fetchStatus]);
 
+  useEffect(() => {
+    updatingRef.current = updating;
+  }, [updating]);
+
   // Socket event listeners for update progress
   useEffect(() => {
+    // Shared by the 'restart' step, 'portos:update:complete', and the
+    // 'disconnect' fallback below — all three mean "the server is (or is
+    // about to be) restarting, stop trusting the socket and start polling."
+    const armRestartPolling = () => {
+      setUpdating(false);
+      setPolling(true);
+      toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+    };
+
     const handleStep = ({ step, status: stepStatus, message }) => {
       setSteps(prev => {
         const existing = prev.findIndex(s => s.step === step);
@@ -81,22 +97,20 @@ export default function UpdateTab() {
       // When the server signals it's restarting, begin health polling immediately.
       // The PM2 restart may kill the server before portos:update:complete fires.
       if ((step === 'restarting' || step === 'restart') && stepStatus !== 'error' && targetVersionRef.current) {
-        setUpdating(false);
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+        armRestartPolling();
       }
     };
 
     const handleComplete = ({ success, newVersion, versionKnown }) => {
-      setUpdating(false);
-      if (success) {
-        // Use server-reported actual version when available; fall back to target
-        if (versionKnown && newVersion) {
-          targetVersionRef.current = newVersion;
-        }
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+      if (!success) {
+        setUpdating(false);
+        return;
       }
+      // Use server-reported actual version when available; fall back to target
+      if (versionKnown && newVersion) {
+        targetVersionRef.current = newVersion;
+      }
+      armRestartPolling();
     };
 
     const handleError = ({ message }) => {
@@ -106,14 +120,30 @@ export default function UpdateTab() {
       setUpdateError(message);
     };
 
+    // `pm2 delete ecosystem.config.cjs` (the update's own "pm2-stop" step) kills
+    // this server process — and its socket — well before update.sh reaches its
+    // 'restart' step. That step event, and 'portos:update:complete', are then
+    // never emitted, and the UI hangs on "Reconciling..."/"Stopping apps"
+    // forever even though update.sh finishes fine in the background. The
+    // socket disconnecting IS the server dying, so treat it as the same
+    // signal 'restart' would have been — it's a strictly more reliable proxy
+    // for "the update just tore down this process" than waiting on a step
+    // event from the process being torn down.
+    const handleDisconnect = () => {
+      if (!updatingRef.current) return;
+      armRestartPolling();
+    };
+
     socket.on('portos:update:step', handleStep);
     socket.on('portos:update:complete', handleComplete);
     socket.on('portos:update:error', handleError);
+    socket.on('disconnect', handleDisconnect);
 
     return () => {
       socket.off('portos:update:step', handleStep);
       socket.off('portos:update:complete', handleComplete);
       socket.off('portos:update:error', handleError);
+      socket.off('disconnect', handleDisconnect);
     };
   }, []);
 
