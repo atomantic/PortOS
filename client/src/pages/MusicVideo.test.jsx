@@ -71,7 +71,8 @@ vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title
 
 import MusicVideo from './MusicVideo.jsx';
 import {
-  listMusicVideoProjects, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject,
+  listMusicVideoProjects, createMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
+  deleteMusicVideoProject,
 } from '../services/apiMusicVideo.js';
 import { importTrackFromYoutube, trackImportEventsUrl } from '../services/apiTracks.js';
 
@@ -245,5 +246,29 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(screen.getByTitle('Delete project'));
     expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before deleting this project/i));
     expect(deleteMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('pressing Enter in the create-form URL input starts the import instead of submitting the form', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    render(<MusicVideo />);
+    const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
+    fireEvent.change(createInput, { target: { value: 'https://youtu.be/enterkey' } });
+    fireEvent.keyDown(createInput, { key: 'Enter' });
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalledWith('https://youtu.be/enterkey', { silent: true }));
+    expect(createMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('ignores a second Import click while the first kickoff request is still in flight', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    let resolveKickoff;
+    importTrackFromYoutube.mockImplementation(() => new Promise((resolve) => { resolveKickoff = resolve; }));
+    render(<MusicVideo />);
+    const createInput = await screen.findByPlaceholderText(/Import audio from a YouTube URL/i);
+    fireEvent.change(createInput, { target: { value: 'https://youtu.be/doubleclick' } });
+    const importBtn = within(createInput.closest('div')).getByRole('button', { name: /Import/i });
+    fireEvent.click(importBtn);
+    fireEvent.click(importBtn); // fires before the first request resolves
+    resolveKickoff({ jobId: 'yt-job-1' });
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalledTimes(1));
   });
 });

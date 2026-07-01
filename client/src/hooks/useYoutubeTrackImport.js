@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { importTrackFromYoutube, cancelTrackImport, trackImportEventsUrl } from '../services/apiTracks.js';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
@@ -20,6 +20,11 @@ export default function useYoutubeTrackImport({ onComplete } = {}) {
   const [job, setJob] = useState(null); // { jobId, context }
   const sse = useSseProgress(job ? trackImportEventsUrl(job.jobId) : null);
   const percent = Math.round(sse.latest?.percent ?? 0);
+  // Synchronous re-entrancy guard for the gap between clicking Import and the
+  // kickoff request resolving — `job` (state) doesn't flip true until then,
+  // so a fast double-click would otherwise fire two requests and the second
+  // response's setJob would silently orphan the first job.
+  const startingRef = useRef(false);
 
   useEffect(() => {
     const frame = sse.latest;
@@ -48,10 +53,12 @@ export default function useYoutubeTrackImport({ onComplete } = {}) {
 
   const start = (url, context) => {
     const trimmed = url.trim();
-    if (!trimmed) return;
+    if (!trimmed || job || startingRef.current) return;
+    startingRef.current = true;
     importTrackFromYoutube(trimmed, { silent: true })
       .then(({ jobId }) => setJob({ jobId, context }))
-      .catch((err) => toast.error(err?.message || 'Failed to start YouTube import'));
+      .catch((err) => toast.error(err?.message || 'Failed to start YouTube import'))
+      .finally(() => { startingRef.current = false; });
   };
 
   const cancel = () => {
