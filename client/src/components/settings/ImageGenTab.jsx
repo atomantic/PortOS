@@ -12,8 +12,10 @@ import {
   Sparkles, Terminal, Key, Check, Trash2
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import TabPills from '../ui/TabPills';
 import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
+import useDrawerTab from '../../hooks/useDrawerTab';
 import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
@@ -36,9 +38,42 @@ const PARALLEL_FALLBACK = { min: 1, max: 10, default: 1 };
 const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
   Math.max(bounds.min, Math.min(bounds.max, Math.floor(Number(n) || bounds.default)));
 
+// Sub-navigation for this settings surface. Rendered as internal TabPills
+// (pills variant + mobile <select>) rather than a tabbed <Drawer>, so the same
+// grouping works whether ImageGenTab is hosted in a plain Drawer (ImageGen /
+// VideoGen / StoryboardPanel) or elsewhere — no tabs-within-tabs. The active
+// tab deep-links via the `mediaTab` search param (useDrawerTab).
+const MEDIA_TABS = [
+  { id: 'backend', label: 'Backend', icon: ImageIcon },
+  { id: 'external', label: 'External', icon: Cloud },
+  { id: 'local', label: 'Local', icon: Cpu },
+  { id: 'codex', label: 'Codex CLI', icon: Terminal },
+  { id: 'tokens', label: 'Tokens', icon: Key },
+  { id: 'expose', label: 'Expose', icon: Globe },
+  { id: 'test', label: 'Test', icon: Sparkles },
+];
+const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
+
 export function ImageGenTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Deep-linkable active sub-tab, backed by the `mediaTab` search param so the
+  // open section survives reload/share and is reachable from a bookmark. A
+  // stale/hand-edited value degrades to 'backend'.
+  const [mediaTab, setMediaTab] = useDrawerTab('mediaTab', 'backend', MEDIA_TAB_IDS);
+
+  // The Local tab hosts LocalSetupPanel, which owns a long-running pip-install
+  // EventSource (`useInstallStream`) — a torch upgrade can run 10+ minutes.
+  // The other tabs unmount when inactive, but unmounting the installer mid-run
+  // closes its stream and the server treats `req.close` as cancellation,
+  // killing pip. So the Local tab is lazily mounted on first visit (to avoid a
+  // cold python-env probe before the user ever opens it) and then kept mounted,
+  // hidden via CSS when inactive, so a tab switch never aborts an install.
+  const [localMounted, setLocalMounted] = useState(false);
+  useEffect(() => {
+    if (mediaTab === 'local') setLocalMounted(true);
+  }, [mediaTab]);
 
   // Mode + per-mode config
   const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
@@ -363,8 +398,29 @@ export function ImageGenTab() {
   })();
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {/* Sub-navigation — groups this long settings surface into tabs so no
+          single scroll is page-length. Internal to the component so it renders
+          identically inside a plain Drawer or the Settings page. */}
+      <TabPills
+        tabs={MEDIA_TABS}
+        activeTab={mediaTab}
+        onChange={setMediaTab}
+        variant="pills"
+        mobileDropdown
+        mobileSelectId="media-settings-tab-select"
+        ariaLabel="Media generation settings sections"
+        controlsIdPrefix="media-settings-tabpanel"
+      />
+
+      <div
+        id={`media-settings-tabpanel-${mediaTab}`}
+        role="tabpanel"
+        aria-labelledby={`tab-${mediaTab}`}
+        className="space-y-5"
+      >
       {/* Mode picker */}
+      {mediaTab === 'backend' && (
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <ImageIcon size={18} />
@@ -413,9 +469,9 @@ export function ImageGenTab() {
           )}
         </div>
       </div>
+      )}
 
-      {/* External-mode config */}
-      {mode === IMAGE_GEN_MODE.EXTERNAL && (
+      {mediaTab === 'external' && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
           <h3 className="text-sm font-medium text-gray-300">External AUTOMATIC1111 / Forge URL</h3>
           <input
@@ -435,9 +491,8 @@ export function ImageGenTab() {
         </div>
       )}
 
-      {/* Local-mode config */}
-      {mode === IMAGE_GEN_MODE.LOCAL && (
-        <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+      {localMounted && (
+        <div className={`bg-port-card border border-port-border rounded-xl p-6 space-y-4 ${mediaTab === 'local' ? '' : 'hidden'}`}>
           <h3 className="text-sm font-medium text-gray-300">Local Python (mflux + mlx_video)</h3>
           <p className="text-xs text-gray-500">
             Pick a Python 3.10+ interpreter — PortOS auto-detects venvs and conda installs and can install
@@ -454,9 +509,9 @@ export function ImageGenTab() {
         </div>
       )}
 
-      {/* Codex CLI config — always visible (the toggle that enables the
-          option lives here). Codex appears as a backend tile only after
-          the user flips this on. */}
+      {/* Codex CLI config — the toggle that enables the option lives here.
+          Codex appears as a backend tile only after the user flips this on. */}
+      {mediaTab === 'codex' && (
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Terminal size={18} />
@@ -554,10 +609,12 @@ export function ImageGenTab() {
           </div>
         )}
       </div>
+      )}
 
       {/* HuggingFace token — used by local Flux models (FLUX.1-dev, FLUX.2-klein).
           Independent of the mode picker because the token persists in settings
           and applies whenever local image gen runs. */}
+      {mediaTab === 'tokens' && (
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Key size={18} />
@@ -632,38 +689,9 @@ export function ImageGenTab() {
           </button>
         )}
       </div>
+      )}
 
-      {/* Save + status */}
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={saving || !isDirty}
-          className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
-        >
-          {saving ? <BrailleSpinner /> : <Save size={14} />}
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={checkStatus}
-          disabled={checking || isDirty}
-          className="flex items-center gap-2 px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
-          title={isDirty ? 'Save settings first to test' : 'Probe the active backend'}
-        >
-          {checking ? <BrailleSpinner /> : <Zap size={14} />}
-          Test Connection
-        </button>
-        {status && (
-          <span className={`text-sm ${status.connected ? 'text-port-success' : 'text-port-error'}`}>
-            {status.connected
-              ? `${status.mode} — ${status.model || status.pythonPath}`
-              : status.reason || 'Not connected'}
-          </span>
-        )}
-      </div>
-
-      {/* Tailnet expose */}
+      {mediaTab === 'expose' && (
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Globe size={18} />
@@ -697,8 +725,9 @@ export function ImageGenTab() {
           </div>
         )}
       </div>
+      )}
 
-      {/* Test render */}
+      {mediaTab === 'test' && (
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Sparkles size={18} />
@@ -738,6 +767,41 @@ export function ImageGenTab() {
               <a href={renderResult.path} download className="text-port-accent hover:underline ml-2 shrink-0">Download</a>
             </div>
           </div>
+        )}
+      </div>
+      )}
+      </div>
+
+      {/* Persistent global save + status bar — applies across every tab since
+          Save persists the whole imageGen config and Test Connection probes the
+          active backend. Kept outside the tab panel so it's reachable no matter
+          which section is open. */}
+      <div className="flex items-center gap-3 pt-3 border-t border-port-border">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || !isDirty}
+          className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
+        >
+          {saving ? <BrailleSpinner /> : <Save size={14} />}
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={checkStatus}
+          disabled={checking || isDirty}
+          className="flex items-center gap-2 px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50 min-h-[40px]"
+          title={isDirty ? 'Save settings first to test' : 'Probe the active backend'}
+        >
+          {checking ? <BrailleSpinner /> : <Zap size={14} />}
+          Test Connection
+        </button>
+        {status && (
+          <span className={`text-sm ${status.connected ? 'text-port-success' : 'text-port-error'}`}>
+            {status.connected
+              ? `${status.mode} — ${status.model || status.pythonPath}`
+              : status.reason || 'Not connected'}
+          </span>
         )}
       </div>
 
