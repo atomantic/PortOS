@@ -137,6 +137,62 @@ function seedLlmDrillTypes(saved) {
   return out;
 }
 
+// Deterministic cognitive drills (no LLM). Field ranges mirror the server
+// clamps in server/services/meatspacePostCognitive.js and the Zod bounds in
+// server/lib/postValidation.js. `defaults` mirror the server DEFAULT_CONFIG so
+// the launcher and generators agree.
+const COGNITIVE_DRILL_META = {
+  'n-back': {
+    label: 'N-Back',
+    desc: 'Signal when a letter matches the one N steps back — working memory',
+    fields: [
+      { key: 'n', label: 'N (steps back)', type: 'number', min: 1, max: 3 },
+      { key: 'length', label: 'Sequence Length', type: 'number', min: 6, max: 60 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
+  },
+  'digit-span': {
+    label: 'Digit Span',
+    desc: 'Recall a shown digit sequence forward or backward',
+    fields: [
+      { key: 'direction', label: 'Direction', type: 'select', options: [
+        { value: 'forward', label: 'Forward' },
+        { value: 'backward', label: 'Backward' },
+      ] },
+      { key: 'startLength', label: 'Start Length', type: 'number', min: 2, max: 12 },
+      { key: 'maxLength', label: 'Max Length', type: 'number', min: 2, max: 14 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
+  },
+  'stroop': {
+    label: 'Stroop',
+    desc: 'Name the ink color of a color-word — attention & inhibition',
+    fields: [
+      { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, count: 15, timeLimitSec: 60 },
+  },
+};
+
+// String-valued cognitive config keys must NOT be coerced to Number on edit.
+const COGNITIVE_STRING_FIELDS = new Set(['direction']);
+
+// Seed every cognitive drill type so a card's toggle reflects real, persistable
+// state — same enabled-by-presence convention as seedLlmDrillTypes.
+function seedCognitiveDrillTypes(saved) {
+  const out = {};
+  for (const [type, meta] of Object.entries(COGNITIVE_DRILL_META)) {
+    const savedEntry = saved?.[type];
+    out[type] = savedEntry
+      ? { ...meta.defaults, ...savedEntry, enabled: savedEntry.enabled !== false }
+      : { ...meta.defaults };
+  }
+  return out;
+}
+
 // LLM drills grouped by their DOMAINS key for section-headered rendering.
 const LLM_DRILL_GROUPS = [
   { key: 'wordplay', label: 'Wordplay', types: ['pun-wordplay', 'word-association', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'] },
@@ -192,14 +248,26 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
           {meta.fields.map(field => (
             <div key={field.key}>
               <label className="text-xs text-gray-500 mb-1 block">{field.label}</label>
-              <input
-                type="number"
-                min={field.min}
-                max={field.max}
-                value={drillConfig[field.key] ?? ''}
-                onChange={e => onUpdateField(field.key, e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
-              />
+              {field.type === 'select' ? (
+                <select
+                  value={drillConfig[field.key] ?? field.options?.[0]?.value ?? ''}
+                  onChange={e => onUpdateField(field.key, e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
+                >
+                  {(field.options || []).map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="number"
+                  min={field.min}
+                  max={field.max}
+                  value={drillConfig[field.key] ?? ''}
+                  onChange={e => onUpdateField(field.key, e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
+                />
+              )}
             </div>
           ))}
         </div>
@@ -225,6 +293,12 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   );
   const [llmModel, setLlmModel] = useState(
     () => config?.llmDrills?.model || ''
+  );
+  const [cognitiveDrillTypes, setCognitiveDrillTypes] = useState(
+    () => seedCognitiveDrillTypes(config?.cognitive?.drillTypes)
+  );
+  const [cognitiveEnabled, setCognitiveEnabled] = useState(
+    () => config?.cognitive?.enabled !== false
   );
   const [adaptiveEnabled, setAdaptiveEnabled] = useState(
     () => config?.adaptive?.enabled === true
@@ -284,6 +358,26 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     }));
   }
 
+  function toggleCognitiveDrill(type) {
+    setCognitiveDrillTypes(prev => ({
+      ...prev,
+      [type]: { ...prev[type], enabled: !(prev[type]?.enabled !== false) }
+    }));
+  }
+
+  function updateCognitiveField(type, key, value) {
+    let coerced;
+    if (COGNITIVE_STRING_FIELDS.has(key)) {
+      coerced = value || undefined;
+    } else {
+      coerced = value === '' || value === null || value === undefined ? undefined : Number(value);
+    }
+    setCognitiveDrillTypes(prev => ({
+      ...prev,
+      [type]: { ...prev[type], [key]: coerced }
+    }));
+  }
+
   const selectedProvider = providers.find(p => p.id === llmProviderId);
   const availableModels = filterSelectableModels(selectedProvider?.models);
 
@@ -292,6 +386,10 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     const updated = await updatePostConfig({
       mentalMath: { drillTypes },
       adaptive: { enabled: adaptiveEnabled },
+      cognitive: {
+        enabled: cognitiveEnabled,
+        drillTypes: cognitiveDrillTypes
+      },
       llmDrills: {
         enabled: llmEnabled,
         providerId: llmProviderId || null,
@@ -373,6 +471,47 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           })}
         </div>
       </div>
+
+      {/* Cognitive Drills Section (deterministic — no provider) */}
+      <div className="flex items-center justify-between pt-2">
+        <div className="flex items-center gap-2">
+          <Brain size={16} className="text-rose-400" />
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cognitive (deterministic)</h3>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={cognitiveEnabled}
+          aria-label="Cognitive drills"
+          onClick={() => setCognitiveEnabled(!cognitiveEnabled)}
+          className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
+            cognitiveEnabled ? 'bg-rose-400' : 'bg-port-border'
+          }`}
+        >
+          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+            cognitiveEnabled ? 'translate-x-5' : 'translate-x-0.5'
+          }`} />
+        </button>
+      </div>
+
+      {cognitiveEnabled && (
+        <div className={CARD_GRID}>
+          {Object.entries(COGNITIVE_DRILL_META).map(([type, meta]) => {
+            const drillConfig = cognitiveDrillTypes[type] || {};
+            return (
+              <DrillCard
+                key={type}
+                meta={meta}
+                drillConfig={drillConfig}
+                enabled={drillConfig.enabled !== false}
+                accent="accent"
+                onToggle={() => toggleCognitiveDrill(type)}
+                onUpdateField={(key, value) => updateCognitiveField(type, key, value)}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {/* LLM Drills Section */}
       <div className="flex items-center justify-between pt-2">

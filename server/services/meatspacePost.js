@@ -11,6 +11,7 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
+import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -39,8 +40,18 @@ const DEFAULT_CONFIG = {
       'pun-wordplay': { enabled: true, count: 5, timeLimitSec: 120 }
     }
   },
+  // Deterministic cognitive drills (working-memory / attention / inhibition).
+  // No provider calls — enabled by default since they're free to run.
+  cognitive: {
+    enabled: true,
+    drillTypes: {
+      'n-back': { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
+      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
+      'stroop': { enabled: true, count: 15, timeLimitSec: 60 }
+    }
+  },
   sessionModules: ['mental-math'],
-  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0 } },
+  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0, 'cognitive': 1.0 } },
   // Opt-in adaptive difficulty (default OFF). When enabled, math drills are
   // nudged harder/easier at generation time from recent scored performance.
   adaptive: { enabled: false }
@@ -122,6 +133,13 @@ export async function submitPostSession(sessionData) {
     // Unsupported memory drills (e.g. memory-fill-blank): preserve data, zero score
     if (MEMORY_DRILL_TYPES.includes(rest.type)) {
       return { ...rest, score: 0 };
+    }
+
+    // Cognitive drills: deterministic — recompute the answer key from the
+    // generated drillData (never trust client `correct`/`score`).
+    if (COGNITIVE_DRILL_TYPES.includes(rest.type)) {
+      const { score, questions } = scoreCognitiveDrill(rest.type, rest.drillData, rest.questions || []);
+      return { ...rest, questions, score };
     }
 
     // Math drills: strip correct from individual questions and rescore
@@ -346,6 +364,10 @@ export function generateDrill(type, config = {}) {
       return generatePowers(config.bases, config.maxExponent, config.count);
     case 'estimation':
       return generateEstimation(config.count, config.tolerancePct);
+    case 'n-back':
+    case 'digit-span':
+    case 'stroop':
+      return generateCognitiveDrill(type, config);
     default:
       return null;
   }
