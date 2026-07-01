@@ -231,9 +231,9 @@ export default function QuickSummary() {
         {/* Queue Estimate */}
         {queue.estimate?.taskCount > 0 && (
           <div className="flex items-center gap-1.5" title={`Based on ${queue.estimate.confidence}% historical data`}>
-            <Hourglass size={14} className="text-purple-400" />
+            <Hourglass size={14} className="text-port-accent-2" />
             <span className="text-gray-400">ETA:</span>
-            <span className="font-medium text-purple-300">
+            <span className="font-medium text-port-accent-2">
               {queue.estimate.formatted}
             </span>
             {queue.estimate.runningCount > 0 && (

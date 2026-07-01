@@ -67,7 +67,7 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
               onClick={() => setActiveTab(i)}
               className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
                 activeTab === i
-                  ? 'text-purple-400 bg-purple-500/10 border-b-2 border-purple-400'
+                  ? 'text-port-accent-2 bg-port-accent-2/10 border-b-2 border-port-accent-2'
                   : 'text-gray-400 hover:text-gray-300 hover:bg-port-border/30'
               }`}
             >

@@ -183,10 +183,10 @@ export default function ProductivityTab() {
                 {/* Weekly Streak */}
                 <div className="bg-port-card border border-port-border rounded-lg p-4">
                   <div className="flex items-center gap-2 mb-1">
-                    <Calendar size={14} className="text-cyan-400" />
+                    <Calendar size={14} className="text-port-accent" />
                     <span className="text-xs text-gray-400">Weekly Streak</span>
                   </div>
-                  <div className="text-3xl font-bold text-cyan-400">
+                  <div className="text-3xl font-bold text-port-accent">
                     {data.streaks?.currentWeekly || 0}
                   </div>
                   <div className="text-xs text-gray-500">weeks</div>
@@ -230,14 +230,14 @@ export default function ProductivityTab() {
                       className={`border rounded-lg p-3 ${
                         insight.type === 'success' ? 'bg-port-success/10 border-port-success/30' :
                         insight.type === 'warning' ? 'bg-port-warning/10 border-port-warning/30' :
-                        insight.type === 'optimization' ? 'bg-green-500/10 border-green-500/30' :
+                        insight.type === 'optimization' ? 'bg-port-success/10 border-port-success/30' :
                         'bg-port-accent/10 border-port-accent/30'
                       }`}
                     >
                       <div className="flex items-start gap-2">
                         {insight.type === 'success' && <CheckCircle size={14} className="text-port-success mt-0.5" />}
                         {insight.type === 'warning' && <AlertTriangle size={14} className="text-port-warning mt-0.5" />}
-                        {insight.type === 'optimization' && <TrendingUp size={14} className="text-green-400 mt-0.5" />}
+                        {insight.type === 'optimization' && <TrendingUp size={14} className="text-port-success mt-0.5" />}
                         {insight.type === 'info' && <Target size={14} className="text-port-accent mt-0.5" />}
                         <div>
                           <div className="font-medium text-sm text-white">{insight.title}</div>
@@ -258,7 +258,7 @@ export default function ProductivityTab() {
               className="flex items-center gap-2 w-full text-left mb-3"
             >
               {expandedSections.patterns ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              <BarChart2 size={16} className="text-purple-400" />
+              <BarChart2 size={16} className="text-port-accent-2" />
               <span className="font-medium text-white">Work Patterns</span>
             </button>
             {expandedSections.patterns && (
@@ -266,7 +266,7 @@ export default function ProductivityTab() {
                 {/* Best Hours */}
                 <div className="bg-port-card border border-port-border rounded-lg p-4">
                   <h4 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-                    <Clock size={14} className="text-cyan-400" />
+                    <Clock size={14} className="text-port-accent" />
                     Hourly Performance
                   </h4>
                   {sortedHourlyPatterns.length > 0 ? (
@@ -299,7 +299,7 @@ export default function ProductivityTab() {
                 {/* Best Days */}
                 <div className="bg-port-card border border-port-border rounded-lg p-4">
                   <h4 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-                    <Calendar size={14} className="text-purple-400" />
+                    <Calendar size={14} className="text-port-accent-2" />
                     Daily Performance
                   </h4>
                   {sortedDailyPatterns.length > 0 ? (
@@ -331,7 +331,7 @@ export default function ProductivityTab() {
 
                 {/* Best Hour/Day Highlight */}
                 {(data.bestHour || data.bestDay) && (
-                  <div className="lg:col-span-2 bg-gradient-to-r from-purple-500/10 to-cyan-500/10 border border-purple-500/30 rounded-lg p-4">
+                  <div className="lg:col-span-2 bg-gradient-to-r from-port-accent-2/10 to-port-accent/10 border border-port-accent-2/30 rounded-lg p-4">
                     <h4 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
                       <Award size={14} className="text-yellow-400" />
                       Optimal Work Times
@@ -340,7 +340,7 @@ export default function ProductivityTab() {
                       {data.bestHour && (
                         <div>
                           <div className="text-xs text-gray-500">Best Hour</div>
-                          <div className="text-lg font-semibold text-cyan-400">
+                          <div className="text-lg font-semibold text-port-accent">
                             {formatHour(data.bestHour.hour)}
                           </div>
                           <div className="text-xs text-gray-400">
@@ -351,7 +351,7 @@ export default function ProductivityTab() {
                       {data.bestDay && (
                         <div>
                           <div className="text-xs text-gray-500">Best Day</div>
-                          <div className="text-lg font-semibold text-purple-400">
+                          <div className="text-lg font-semibold text-port-accent-2">
                             {FULL_DAY_NAMES[data.bestDay.day]}
                           </div>
                           <div className="text-xs text-gray-400">

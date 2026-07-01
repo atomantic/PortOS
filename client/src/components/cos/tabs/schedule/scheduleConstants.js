@@ -23,9 +23,15 @@ export const INTERVAL_DESCRIPTIONS = {
   perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence'
 };
 
+// `cyan` is kept as a raw Tailwind hue (not a port-* token) on purpose: this is
+// a fixed 7-tone badge palette differentiating mutually-exclusive interval
+// variants (INTERVAL_BADGE_VARIANT below); every other tone here already maps
+// onto a port-* token ('accent' covers the blue/info role), so collapsing
+// cyan onto 'accent' too would make 'cron' badges visually indistinguishable
+// from 'daily' badges. See the #1909/#1924 category-color-enum caution.
 const BADGE_COLORS = {
   accent: 'bg-port-accent/15 text-port-accent border-port-accent/30',
-  purple: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  purple: 'bg-port-accent-2/15 text-port-accent-2 border-port-accent-2/30',
   warning: 'bg-port-warning/15 text-port-warning border-port-warning/30',
   gray: 'bg-gray-600/30 text-gray-400 border-gray-500/30',
   cyan: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
