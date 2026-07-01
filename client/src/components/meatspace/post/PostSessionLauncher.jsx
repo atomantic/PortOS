@@ -37,6 +37,23 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const llmProviderId = config.llmDrills?.providerId || null;
   const llmModel = config.llmDrills?.model || null;
 
+  // Deterministic cognitive drills (n-back / digit-span / stroop). No provider.
+  const enabledCognitiveDrills = config.cognitive?.enabled !== false
+    ? Object.entries(config.cognitive?.drillTypes || {}).filter(([, cfg]) => cfg.enabled !== false)
+    : [];
+
+  // Only the fields each cognitive generator reads; extras are harmless.
+  const cognitiveDrillConfig = (cfg) => ({
+    n: cfg.n,
+    length: cfg.length,
+    stimulusMs: cfg.stimulusMs,
+    direction: cfg.direction,
+    startLength: cfg.startLength,
+    maxLength: cfg.maxLength,
+    showMs: cfg.showMs,
+    count: cfg.count,
+  });
+
   function buildCleanTags() {
     const cleanTags = {};
     for (const [k, v] of Object.entries(tags)) {
@@ -69,7 +86,13 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       model: cfg.model || llmModel
     }));
 
-    const drillConfigs = [...mathConfigs, ...llmConfigs];
+    const cognitiveConfigs = enabledCognitiveDrills.map(([type, cfg]) => ({
+      type,
+      config: cognitiveDrillConfig(cfg),
+      timeLimitSec: cfg.timeLimitSec || 90
+    }));
+
+    const drillConfigs = [...mathConfigs, ...llmConfigs, ...cognitiveConfigs];
     onStart(drillConfigs, buildCleanTags(), mode === 'train');
   }
 
@@ -77,6 +100,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const allEnabledDrills = [
     ...enabledMathDrills.map(([type, cfg]) => ({ type, cfg, source: 'math' })),
     ...enabledLlmDrills.map(([type, cfg]) => ({ type, cfg, source: 'llm' })),
+    ...enabledCognitiveDrills.map(([type, cfg]) => ({ type, cfg, source: 'cognitive' })),
   ];
 
   const enabledDomains = {};
@@ -95,21 +119,29 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       const pick = drills[Math.floor(Math.random() * drills.length)];
       const cfg = pick.cfg;
 
+      let quickConfig;
+      if (pick.source === 'math') {
+        quickConfig = {
+          steps: cfg.steps,
+          count: cfg.count ? Math.min(cfg.count, 5) : undefined,
+          maxDigits: cfg.maxDigits,
+          subtrahend: cfg.subtrahend,
+          startRange: cfg.startRange,
+          bases: cfg.bases,
+          maxExponent: cfg.maxExponent,
+          tolerancePct: cfg.tolerancePct,
+        };
+      } else if (pick.source === 'cognitive') {
+        // Keep the drill short for a balanced 5-minute session.
+        quickConfig = { ...cognitiveDrillConfig(cfg), count: cfg.count ? Math.min(cfg.count, 10) : undefined };
+      } else {
+        quickConfig = { count: Math.min(cfg.count || 5, 3) }; // Fewer prompts for quick session
+      }
+
       const drillConfig = {
         type: pick.type,
         domain: domainKey,
-        config: pick.source === 'math'
-          ? {
-              steps: cfg.steps,
-              count: cfg.count ? Math.min(cfg.count, 5) : undefined,
-              maxDigits: cfg.maxDigits,
-              subtrahend: cfg.subtrahend,
-              startRange: cfg.startRange,
-              bases: cfg.bases,
-              maxExponent: cfg.maxExponent,
-              tolerancePct: cfg.tolerancePct,
-            }
-          : { count: Math.min(cfg.count || 5, 3) }, // Fewer prompts for quick session
+        config: quickConfig,
         timeLimitSec: domain.timeBudgetSec,
       };
 
@@ -132,21 +164,27 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     if (!drills || drills.length === 0) return;
     const domain = DOMAINS[domainKey];
     const drillConfigs = drills.map(({ type, cfg, source }) => {
+      let focusConfig;
+      if (source === 'math') {
+        focusConfig = {
+          steps: cfg.steps,
+          count: cfg.count,
+          maxDigits: cfg.maxDigits,
+          subtrahend: cfg.subtrahend,
+          startRange: cfg.startRange,
+          bases: cfg.bases,
+          maxExponent: cfg.maxExponent,
+          tolerancePct: cfg.tolerancePct,
+        };
+      } else if (source === 'cognitive') {
+        focusConfig = cognitiveDrillConfig(cfg);
+      } else {
+        focusConfig = { count: cfg.count || 5 };
+      }
       const drillConfig = {
         type,
         domain: domainKey,
-        config: source === 'math'
-          ? {
-              steps: cfg.steps,
-              count: cfg.count,
-              maxDigits: cfg.maxDigits,
-              subtrahend: cfg.subtrahend,
-              startRange: cfg.startRange,
-              bases: cfg.bases,
-              maxExponent: cfg.maxExponent,
-              tolerancePct: cfg.tolerancePct,
-            }
-          : { count: cfg.count || 5 },
+        config: focusConfig,
         timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
       };
       if (source === 'llm') {
@@ -158,7 +196,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     onStart(drillConfigs, buildCleanTags(), mode === 'train');
   }
 
-  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0;
+  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
   const domainCount = Object.keys(enabledDomains).length;
 
   // Analytics derived from the 30-day stats window. Streaks span all history.
@@ -426,6 +464,27 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                     <span className="text-white">{DRILL_LABELS[type] || type}</span>
                     <span className="text-gray-500">
                       {cfg.count ? `${cfg.count} prompts` : ''}
+                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Cognitive Drills (deterministic — no provider) */}
+          {enabledCognitiveDrills.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Brain size={14} className="text-rose-400" />
+                <h3 className="text-sm font-medium text-gray-400">Cognitive</h3>
+              </div>
+              <div className="space-y-2">
+                {enabledCognitiveDrills.map(([type, cfg]) => (
+                  <div key={type} className="flex items-center justify-between text-sm">
+                    <span className="text-white">{DRILL_LABELS[type] || type}</span>
+                    <span className="text-gray-500">
+                      {type === 'n-back' ? `${cfg.n ?? 2}-back` : type === 'digit-span' ? `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}` : cfg.count ? `${cfg.count} trials` : ''}
                       {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
                     </span>
                   </div>

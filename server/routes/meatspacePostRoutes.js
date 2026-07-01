@@ -238,6 +238,16 @@ router.get('/post/memory-items', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/meatspace/post/memory-items/due
+ * List memory items currently due for spaced-repetition review (nextReview <= now),
+ * most-overdue first. Declared before /:id so "due" isn't captured as an id.
+ */
+router.get('/post/memory-items/due', asyncHandler(async (req, res) => {
+  const items = await memoryService.getDueMemoryItems();
+  res.json(items);
+}));
+
+/**
  * GET /api/meatspace/post/memory-items/:id
  * Get a single memory item
  */

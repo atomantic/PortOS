@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
+import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
 
 // =============================================================================
 // POST (Power On Self Test) VALIDATION SCHEMAS
@@ -13,6 +14,10 @@ export const postTagsSchema = z.record(z.string().max(200));
 // Memory: client scores with string comparison (text values)
 const questionResultSchema = z.object({
   prompt: z.string(),
+  // Cognitive drills key each trial back to its position in the generated
+  // drillData (n-back sequence index, digit-span/stroop trial index) so the
+  // server can recompute the answer key. Absent for math/memory drills.
+  index: z.number().int().min(0).optional(),
   expected: z.union([z.number(), z.string()]).optional(),
   answered: z.union([z.number(), z.string()]).nullable(),
   correct: z.boolean().optional(),
@@ -41,7 +46,9 @@ const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', '
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // Memory drills supported by the POST runner (client-side scoring with string comparison)
 const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
-const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES];
+// Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
+// Sourced from meatspacePostCognitive.js so the type list has one owner.
+const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
 
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
@@ -54,7 +61,15 @@ const drillTypeConfigSchema = z.object({
   maxDigits: z.number().int().min(1).max(4).optional(),
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
-  tolerancePct: z.number().min(1).max(50).optional()
+  tolerancePct: z.number().min(1).max(50).optional(),
+  // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
+  n: z.number().int().min(1).max(3).optional(),
+  length: z.number().int().min(6).max(60).optional(),
+  stimulusMs: z.number().int().min(500).max(5000).optional(),
+  direction: z.enum(['forward', 'backward']).optional(),
+  startLength: z.number().int().min(2).max(12).optional(),
+  maxLength: z.number().int().min(2).max(14).optional(),
+  showMs: z.number().int().min(200).max(5000).optional()
 });
 
 // Task result within a session
@@ -106,6 +121,11 @@ export const postConfigUpdateSchema = z.object({
     providerId: z.string().nullable().optional(),
     model: z.string().nullable().optional(),
     drillTypes: z.record(z.enum(LLM_DRILL_TYPES), llmDrillTypeConfigSchema).optional()
+  }).optional(),
+  // Deterministic cognitive drills — no provider, so no provider/model fields.
+  cognitive: z.object({
+    enabled: z.boolean().optional(),
+    drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
   sessionModules: z.array(z.string()).optional(),
   scoring: z.object({
@@ -159,11 +179,22 @@ const memoryChunkSchema = z.object({
   label: z.string(),
 });
 
+// Spaced-repetition schedule (SM-2 inspired). Server-managed via practice, but
+// accepted on both POST (seed an imported item's progress) and PUT (persist an
+// out-of-band reschedule). When absent the service stamps a fresh default.
+export const memoryScheduleSchema = z.object({
+  ease: z.number().min(1.3).max(5),
+  intervalDays: z.number().min(0),
+  nextReview: z.string(),
+  lastReviewed: z.string().nullable().optional(),
+});
+
 export const memoryItemCreateSchema = z.object({
   title: z.string().min(1).max(200),
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional().default('text'),
   lines: z.array(z.union([z.string(), memoryLineSchema])).min(1),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
 });
 
 export const memoryItemUpdateSchema = z.object({
@@ -171,6 +202,7 @@ export const memoryItemUpdateSchema = z.object({
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional(),
   lines: z.array(z.union([z.string(), memoryLineSchema])).optional(),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
   mastery: z.object({
     overallPct: z.number().min(0).max(100).optional(),
     chunks: z.record(z.object({
@@ -215,4 +247,4 @@ export const trainingEntrySchema = z.object({
   totalMs: z.number().min(0),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES };

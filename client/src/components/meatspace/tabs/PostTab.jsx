@@ -6,6 +6,7 @@ import { usePostSession } from '../../../hooks/usePostSession';
 import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
 import PostLlmDrillRunner from '../post/PostLlmDrillRunner';
+import PostCognitiveDrillRunner from '../post/PostCognitiveDrillRunner';
 import PostSessionResults from '../post/PostSessionResults';
 import PostHistory from '../post/PostHistory';
 import PostDrillConfig from '../post/PostDrillConfig';
@@ -14,7 +15,7 @@ import ElementsSong from '../post/ElementsSong';
 import DrillTransition from '../post/DrillTransition';
 import WordplayTrainer from '../post/WordplayTrainer';
 import MorseTrainer, { MORSE_MODE_IDS } from '../post/MorseTrainer';
-import { LLM_DRILL_TYPES } from '../post/constants';
+import { LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES } from '../post/constants';
 
 export default function PostTab({ tab = 'launcher', subtab }) {
   const navigate = useNavigate();
@@ -79,9 +80,9 @@ export default function PostTab({ tab = 'launcher', subtab }) {
   }, [session.state, sessionView]);
 
   const currentDrillConfig = session.drills[session.currentDrillIndex];
-  const isLlmDrill = currentDrillConfig
-    ? LLM_DRILL_TYPES.includes(currentDrillConfig.type)
-    : session.currentDrill && LLM_DRILL_TYPES.includes(session.currentDrill.type);
+  const activeType = currentDrillConfig?.type || session.currentDrill?.type;
+  const isLlmDrill = activeType ? LLM_DRILL_TYPES.includes(activeType) : false;
+  const isCognitiveDrill = activeType ? COGNITIVE_DRILL_TYPES.includes(activeType) : false;
 
   // Ephemeral session views overlay the launcher tab
   if (tab === 'launcher' && sessionView) {
@@ -102,7 +103,7 @@ export default function PostTab({ tab = 'launcher', subtab }) {
     }
 
     if (sessionView === 'running') {
-      if (session.state === 'loading' && isLlmDrill) {
+      if (session.state === 'loading' && (isLlmDrill || isCognitiveDrill)) {
         return (
           <div className="flex flex-col items-center justify-center h-64 gap-3">
             <Loader size={32} className="text-port-accent-2 animate-spin" />
@@ -121,6 +122,18 @@ export default function PostTab({ tab = 'launcher', subtab }) {
             isTraining={session.isTraining}
             providerId={currentDrillConfig?.providerId}
             model={currentDrillConfig?.model}
+          />
+        );
+      }
+      if (isCognitiveDrill) {
+        return (
+          <PostCognitiveDrillRunner
+            drill={session.currentDrill}
+            timeLimitSec={session.currentDrill?.timeLimitSec}
+            drillIndex={session.currentDrillIndex}
+            drillCount={session.drillCount}
+            onComplete={session.completeCognitiveDrill}
+            isTraining={session.isTraining}
           />
         );
       }
