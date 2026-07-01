@@ -77,7 +77,12 @@ export default function UpdateTab() {
     // Shared by the 'restart' step, 'portos:update:complete', and the
     // 'disconnect' fallback below — all three mean "the server is (or is
     // about to be) restarting, stop trusting the socket and start polling."
+    // Sets `updatingRef` synchronously (not just via the syncing effect,
+    // which only runs after the next commit) so a 'disconnect' arriving in
+    // the same tick right after an error/complete can't read a stale `true`
+    // and spuriously re-arm polling for an update that already ended.
     const armRestartPolling = () => {
+      updatingRef.current = false;
       setUpdating(false);
       setPolling(true);
       toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
@@ -103,6 +108,7 @@ export default function UpdateTab() {
 
     const handleComplete = ({ success, newVersion, versionKnown }) => {
       if (!success) {
+        updatingRef.current = false;
         setUpdating(false);
         return;
       }
@@ -114,6 +120,7 @@ export default function UpdateTab() {
     };
 
     const handleError = ({ message }) => {
+      updatingRef.current = false;
       setUpdating(false);
       setPolling(false);
       toast.dismiss('portos-update-restart');
@@ -230,6 +237,7 @@ export default function UpdateTab() {
     setUpdateError(null);
     const result = await api.executePortosUpdate(opts).catch(err => {
       setUpdateError(err.message);
+      updatingRef.current = false;
       setUpdating(false);
       return null;
     });
