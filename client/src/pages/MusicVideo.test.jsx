@@ -70,7 +70,9 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title}</div> }));
 
 import MusicVideo from './MusicVideo.jsx';
-import { listMusicVideoProjects, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject } from '../services/apiMusicVideo.js';
+import {
+  listMusicVideoProjects, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject,
+} from '../services/apiMusicVideo.js';
 import { importTrackFromYoutube, trackImportEventsUrl } from '../services/apiTracks.js';
 
 const PROJECT_ANALYZED = {
@@ -230,5 +232,18 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(screen.getByRole('button', { name: new RegExp(projectB.name) }));
     expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i));
     expect(listBtnA).toHaveClass('border-port-accent');
+  });
+
+  it('blocks deleting the selected project while its import is in flight', async () => {
+    await openProject(PROJECT_NO_CLIP);
+    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id !== 'mv-yt-create');
+    fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
+    fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTitle('Delete project'));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before deleting this project/i));
+    expect(deleteMusicVideoProject).not.toHaveBeenCalled();
   });
 });

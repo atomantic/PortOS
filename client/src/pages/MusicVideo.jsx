@@ -184,6 +184,13 @@ export default function MusicVideo() {
   };
 
   const handleDelete = (id) => {
+    // Same hazard selectProject guards against: deleting the project an
+    // in-flight edit-surface import targets would still finish server-side
+    // and try to PATCH a now-deleted project.
+    if (ytImportEdit.active && id === selectedId) {
+      toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
+      return;
+    }
     deleteMusicVideoProject(id)
       .then(() => {
         setProjects((prev) => prev.filter((p) => p.id !== id));
