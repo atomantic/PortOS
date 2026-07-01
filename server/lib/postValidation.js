@@ -110,6 +110,12 @@ export const postConfigUpdateSchema = z.object({
   sessionModules: z.array(z.string()).optional(),
   scoring: z.object({
     weights: z.record(z.number().min(0).max(1)).optional()
+  }).optional(),
+  // Opt-in adaptive difficulty: when enabled, math drill params are nudged at
+  // generation time from recent scored performance (server/lib/postAdaptive.js).
+  // Default OFF so existing installs are unchanged — additive, no migration.
+  adaptive: z.object({
+    enabled: z.boolean().optional()
   }).optional()
 }).partial();
 

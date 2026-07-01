@@ -184,6 +184,7 @@ export const submitPostSession = (data) => request('/meatspace/post/sessions', {
   body: JSON.stringify(data)
 });
 export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
+export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
 export const generatePostDrill = (type, config = {}, providerId, model) => request('/meatspace/post/drill', {
   method: 'POST',
   body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) })
