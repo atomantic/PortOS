@@ -98,6 +98,24 @@ describe('PostDrillConfig', () => {
     expect(saved['reframe'].enabled).toBe(false);
   });
 
+  it('preserves a saved new-type entry that is active by presence (no enabled field)', async () => {
+    // A config where a newly-exposed drill is present but omits `enabled` —
+    // the launcher treats this as active (enabled !== false). Seeding must not
+    // silently disable it via the opt-in default.
+    const withPresentNewType = {
+      ...config,
+      llmDrills: {
+        ...config.llmDrills,
+        drillTypes: { ...config.llmDrills.drillTypes, 'what-if': { count: 3 } },
+      },
+    };
+    render(<PostDrillConfig config={withPresentNewType} onSaved={vi.fn()} onBack={vi.fn()} />);
+    expect(screen.getByRole('switch', { name: 'What If?' }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].llmDrills.drillTypes['what-if'].enabled).toBe(true);
+  });
+
   it('exposes toggles as accessible switches reflecting on/off state', () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     // Legacy enabled drill → switch checked; newly-exposed drill → unchecked.
