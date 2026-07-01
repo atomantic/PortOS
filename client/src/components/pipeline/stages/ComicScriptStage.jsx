@@ -751,12 +751,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         </details>
       ) : null}
 
-      <Drawer open={settingsOpen} onClose={closeImageSettings} title="Comic page image gen">
+      <Drawer open={settingsOpen} onClose={closeImageSettings} title="Comic page image gen" size="md">
         <ImageGenSettingsForm
           value={imageCfg}
           onChange={persistImageCfg}
           models={imageModels}
           availableBackends={availableBackends}
+          grouped
         />
       </Drawer>
     </div>
