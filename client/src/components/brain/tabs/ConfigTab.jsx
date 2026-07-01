@@ -512,7 +512,7 @@ export default function ConfigTab({ onRefresh }) {
               <span>Daily digest at {dailyDigestTime}</span>
             </div>
             <div className="flex items-center gap-2">
-              <CheckCircle size={14} className="text-purple-400" />
+              <CheckCircle size={14} className="text-port-accent-2" />
               <span>Weekly review on {weeklyReviewDay.charAt(0).toUpperCase() + weeklyReviewDay.slice(1)}s at {weeklyReviewTime}</span>
             </div>
             {settings.lastDailyDigest && (
