@@ -64,7 +64,7 @@ export default function CityPlaybackOverlay({
         )}
 
         {!loading && error && (
-          <div className="font-pixel text-[10px] text-amber-400/80 tracking-wider text-center pb-2">
+          <div className="font-pixel text-[10px] text-port-warning/80 tracking-wider text-center pb-2">
             COULDN'T LOAD HISTORY — the snapshot service didn't respond. Try again later.
           </div>
         )}
@@ -80,7 +80,7 @@ export default function CityPlaybackOverlay({
             {/* Timestamp + live-data note */}
             <div className="flex items-center justify-between font-pixel text-[10px] text-cyan-300/90 tracking-wider">
               <span title={ts ? formatDateTime(ts) : ''}>{ts ? formatDateTime(ts) : '—'}</span>
-              <span className="text-amber-400/80" title="Buildings, agents, health, backup, tasks & counts are historical. Memory, goals, Jira & activity show current live data.">
+              <span className="text-port-warning/80" title="Buildings, agents, health, backup, tasks & counts are historical. Memory, goals, Jira & activity show current live data.">
                 ⚠ some districts show LIVE data
               </span>
               <span className="text-cyan-500/60">{ts ? timeAgo(ts) : ''}</span>
