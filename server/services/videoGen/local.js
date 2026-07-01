@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { spawnDetached } from '../../lib/detachedSpawn.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -111,20 +112,12 @@ export const cancel = () => {
   if (activeChain) activeChain.stopped = true;
   if (!activeProcess) return !!activeChain;
   const proc = activeProcess;
-  proc.kill('SIGTERM');
   // KEEP activeProcess set until proc.on('close') clears it. Without this,
   // the BUSY guard immediately allows a new generation while the SIGTERM'd
   // child is still running (mlx_video can ignore SIGTERM mid-tensor-op),
-  // and we'd lose the handle for a follow-up SIGKILL. Escalate after 8s.
-  setTimeout(() => {
-    // proc.killed is set the moment proc.kill() is called; it does NOT mean
-    // the child has exited. Check exitCode (null until 'close' fires) so the
-    // SIGKILL escalation actually triggers when mlx_video ignores SIGTERM.
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ video child didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  // and we'd lose the handle for a follow-up SIGKILL. The `activeProcess ===
+  // proc` guard escalates only when this is still the tracked child.
+  killWithEscalation(proc, { label: 'video child', stillRunning: () => activeProcess === proc });
   return true;
 };
 

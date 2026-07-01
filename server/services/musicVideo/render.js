@@ -30,6 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { loadHistory, saveHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, updateProject } from './projects.js';
@@ -75,13 +76,7 @@ export function cancelRender(jobId) {
   const job = jobs.get(jobId);
   if (!job || !job.process) return false;
   const proc = job.process;
-  proc.kill('SIGTERM');
-  setTimeout(() => {
-    if (job.process === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ music-video render didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  killWithEscalation(proc, { label: 'music-video render', stillRunning: () => job.process === proc });
   return true;
 }
 

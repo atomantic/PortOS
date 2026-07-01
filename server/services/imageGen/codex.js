@@ -31,6 +31,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
@@ -68,15 +69,8 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-const sigtermWithEscalation = (id, proc) => {
-  proc.kill('SIGTERM');
-  setTimeout(() => {
-    if (activeProcs.get(id) === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ codex child didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 5000);
-};
+const sigtermWithEscalation = (id, proc) =>
+  killWithEscalation(proc, { label: 'codex child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
 
 // Cancel one specific codex render. jobId is required — with parallel codex
 // renders an "anonymous cancel" is genuinely destructive (would nuke every
