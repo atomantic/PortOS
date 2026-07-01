@@ -19,6 +19,11 @@ import {
   submitPractice,
   getMastery,
   generateMemoryDrill,
+  getDueMemoryItems,
+  advanceSchedule,
+  isMemoryItemDue,
+  defaultSchedule,
+  DEFAULT_EASE,
   ELEMENTS_SONG,
 } from './meatspacePostMemory.js';
 
@@ -264,5 +269,120 @@ describe('submitPractice', () => {
     expect(result.mastery.chunks['verse-1'].correct).toBe(2);
     expect(result.mastery.chunks['verse-1'].attempts).toBe(3);
     expect(result.mastery.chunks['verse-1'].lastPracticed).toBeTruthy();
+  });
+});
+
+// =============================================================================
+// SPACED-REPETITION SCHEDULER
+// =============================================================================
+
+describe('advanceSchedule', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  it('a fully-correct session steps a fresh item to a 1-day interval', () => {
+    const next = advanceSchedule(defaultSchedule(now.toISOString()), 1, now);
+    expect(next.intervalDays).toBe(1);
+    expect(next.ease).toBeGreaterThanOrEqual(DEFAULT_EASE);
+    expect(next.lastReviewed).toBe(now.toISOString());
+    expect(Date.parse(next.nextReview)).toBe(now.getTime() + 24 * 60 * 60 * 1000);
+  });
+
+  it('steps 1-day → 6-day → interval*ease on repeated success', () => {
+    const one = advanceSchedule({ ease: DEFAULT_EASE, intervalDays: 1, nextReview: now.toISOString() }, 1, now);
+    expect(one.intervalDays).toBe(6);
+    const two = advanceSchedule({ ease: 2.5, intervalDays: 6, nextReview: now.toISOString() }, 1, now);
+    expect(two.intervalDays).toBe(Math.round(6 * two.ease));
+    expect(two.intervalDays).toBeGreaterThan(6);
+  });
+
+  it('a miss-heavy session resets the interval to 0 (due now) and lowers ease', () => {
+    const next = advanceSchedule({ ease: 2.5, intervalDays: 20, nextReview: now.toISOString() }, 0, now);
+    expect(next.intervalDays).toBe(0);
+    expect(next.ease).toBeLessThan(2.5);
+    expect(Date.parse(next.nextReview)).toBe(now.getTime()); // due now
+  });
+
+  it('never drops ease below the SM-2 floor of 1.3', () => {
+    let schedule = { ease: 1.3, intervalDays: 0, nextReview: now.toISOString() };
+    for (let i = 0; i < 10; i++) schedule = advanceSchedule(schedule, 0, now);
+    expect(schedule.ease).toBe(1.3);
+  });
+
+  it('tolerates a missing/garbage prior schedule', () => {
+    const next = advanceSchedule(undefined, 1, now);
+    expect(next.intervalDays).toBe(1);
+    expect(next.ease).toBeGreaterThan(0);
+  });
+});
+
+describe('isMemoryItemDue', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  it('treats a missing schedule as due', () => {
+    expect(isMemoryItemDue({}, now)).toBe(true);
+    expect(isMemoryItemDue({ schedule: {} }, now)).toBe(true);
+  });
+
+  it('is due when nextReview is in the past', () => {
+    expect(isMemoryItemDue({ schedule: { nextReview: '2026-06-01T00:00:00.000Z' } }, now)).toBe(true);
+  });
+
+  it('is not due when nextReview is in the future', () => {
+    expect(isMemoryItemDue({ schedule: { nextReview: '2026-08-01T00:00:00.000Z' } }, now)).toBe(false);
+  });
+});
+
+describe('getDueMemoryItems', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns only items whose schedule is due, most-overdue first', async () => {
+    readJSONFile.mockResolvedValue({
+      items: [
+        { id: 'future', title: 'F', schedule: { nextReview: '2999-01-01T00:00:00.000Z' } },
+        { id: 'due-recent', title: 'R', schedule: { nextReview: '2026-06-30T00:00:00.000Z' } },
+        { id: 'due-old', title: 'O', schedule: { nextReview: '2020-01-01T00:00:00.000Z' } },
+      ],
+    });
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const due = await getDueMemoryItems(now);
+    const ids = due.map(i => i.id);
+    // elements-song is re-seeded on load and has no persisted schedule → due now.
+    expect(ids).toContain('due-old');
+    expect(ids).toContain('due-recent');
+    expect(ids).not.toContain('future');
+    // Most overdue (oldest nextReview) sorts before the recent one.
+    expect(ids.indexOf('due-old')).toBeLessThan(ids.indexOf('due-recent'));
+  });
+});
+
+describe('submitPractice — schedule advancement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile
+      .mockResolvedValueOnce({ items: [{ ...structuredClone(ELEMENTS_SONG) }] })
+      .mockResolvedValueOnce({ entries: [] }); // training log
+  });
+
+  it('advances and returns the schedule after a correct session', async () => {
+    const result = await submitPractice('elements-song', {
+      mode: 'fill-blank',
+      results: [{ correct: true }, { correct: true }, { correct: true }],
+      totalMs: 5000,
+    });
+    expect(result.schedule).toBeTruthy();
+    expect(result.schedule.intervalDays).toBeGreaterThanOrEqual(1);
+    expect(result.schedule.lastReviewed).toBeTruthy();
+    expect(Date.parse(result.schedule.nextReview)).toBeGreaterThan(Date.now());
+  });
+
+  it('keeps a miss-heavy session due now (interval 0)', async () => {
+    const result = await submitPractice('elements-song', {
+      mode: 'fill-blank',
+      results: [{ correct: false }, { correct: false }, { correct: true }],
+      totalMs: 5000,
+    });
+    expect(result.schedule.intervalDays).toBe(0);
   });
 });
