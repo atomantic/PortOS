@@ -296,4 +296,36 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
     resolveKickoff({ jobId: 'yt-job-pending' });
   });
+
+  it('blocks creating the project while the create-form YouTube import is in flight', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    render(<MusicVideo />);
+    const nameInput = await screen.findByPlaceholderText('Project name');
+    fireEvent.change(nameInput, { target: { value: 'New MV' } });
+    const createInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id === 'mv-yt-create');
+    fireEvent.change(createInput, { target: { value: 'https://youtu.be/xyz' } });
+    fireEvent.click(within(createInput.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+
+    const createBtn = screen.getByRole('button', { name: /^Create$/ });
+    expect(createBtn).toHaveProperty('disabled', true);
+    fireEvent.click(createBtn);
+    expect(createMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('blocks relinking the track while a render is in progress for the selected project', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.click(await screen.findByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(renderMusicVideoProject).toHaveBeenCalled());
+
+    const trackSelect = screen.getByLabelText('Change track');
+    expect(trackSelect).toHaveProperty('disabled', true);
+    fireEvent.change(trackSelect, { target: { value: 'other-track' } });
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+
+    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id !== 'mv-yt-create');
+    expect(editInput).toHaveProperty('disabled', true);
+  });
 });
