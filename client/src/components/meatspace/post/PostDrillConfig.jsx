@@ -52,9 +52,14 @@ const DRILL_META = {
 };
 
 // LLM drill config meta for all 14 generatable types.
-// `count` defaults mirror the server (`server/services/meatspacePostLlm.js`,
-// `config.count || N`); `timeLimitSec` defaults follow the DEFAULT_CONFIG
+// `defaults.count` mirrors the server (`server/services/meatspacePostLlm.js`,
+// `config.count || N`); `defaults.timeLimitSec` follows the DEFAULT_CONFIG
 // pattern in `server/services/meatspacePost.js`.
+// `defaults.enabled` is `true` only for the 5 drills the server's DEFAULT_CONFIG
+// already ships enabled — the 9 newly-exposed drills default to `false` so they
+// are opt-in (enabling one and saving is what pulls it into POST sessions),
+// matching the pre-existing session behavior rather than silently activating 9
+// extra LLM drills on first save.
 const llmFields = () => [
   { key: 'count', label: 'Prompts', type: 'number', min: 1, max: 10 },
   { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 30, max: 300 }
@@ -62,23 +67,37 @@ const llmFields = () => [
 
 const LLM_DRILL_META = {
   // --- Wordplay ---
-  'pun-wordplay': { label: 'Pun & Wordplay', desc: 'Create puns and wordplay on given topics', fields: llmFields() },
-  'word-association': { label: 'Word Association', desc: 'Associate freely with given words — trains lateral thinking', fields: llmFields() },
-  'compound-chain': { label: 'Compound Chain', desc: 'Chain compound words/phrases from a seed word', fields: llmFields() },
-  'bridge-word': { label: 'Bridge Word', desc: 'Find a word that links two others', fields: llmFields() },
-  'double-meaning': { label: 'Double Meaning', desc: 'Exploit words with two meanings', fields: llmFields() },
-  'idiom-twist': { label: 'Idiom Twist', desc: 'Twist familiar idioms into new phrases', fields: llmFields() },
+  'pun-wordplay': { label: 'Pun & Wordplay', desc: 'Create puns and wordplay on given topics', fields: llmFields(), defaults: { enabled: true, count: 5, timeLimitSec: 120 } },
+  'word-association': { label: 'Word Association', desc: 'Associate freely with given words — trains lateral thinking', fields: llmFields(), defaults: { enabled: true, count: 5, timeLimitSec: 120 } },
+  'compound-chain': { label: 'Compound Chain', desc: 'Chain compound words/phrases from a seed word', fields: llmFields(), defaults: { enabled: false, count: 5, timeLimitSec: 120 } },
+  'bridge-word': { label: 'Bridge Word', desc: 'Find a word that links two others', fields: llmFields(), defaults: { enabled: false, count: 5, timeLimitSec: 120 } },
+  'double-meaning': { label: 'Double Meaning', desc: 'Exploit words with two meanings', fields: llmFields(), defaults: { enabled: false, count: 5, timeLimitSec: 120 } },
+  'idiom-twist': { label: 'Idiom Twist', desc: 'Twist familiar idioms into new phrases', fields: llmFields(), defaults: { enabled: false, count: 5, timeLimitSec: 120 } },
   // --- Verbal Agility ---
-  'story-recall': { label: 'Story Recall', desc: 'Read a paragraph, then answer questions from memory', fields: llmFields() },
-  'verbal-fluency': { label: 'Verbal Fluency', desc: 'Name as many items in a category as possible', fields: llmFields() },
-  'wit-comeback': { label: 'Wit & Comeback', desc: 'Craft witty responses to scenarios — trains verbal agility', fields: llmFields() },
+  'story-recall': { label: 'Story Recall', desc: 'Read a paragraph, then answer questions from memory', fields: llmFields(), defaults: { enabled: true, count: 3, timeLimitSec: 180 } },
+  'verbal-fluency': { label: 'Verbal Fluency', desc: 'Name as many items in a category as possible', fields: llmFields(), defaults: { enabled: true, count: 3, timeLimitSec: 60 } },
+  'wit-comeback': { label: 'Wit & Comeback', desc: 'Craft witty responses to scenarios — trains verbal agility', fields: llmFields(), defaults: { enabled: true, count: 5, timeLimitSec: 120 } },
   // --- Imagination ---
-  'what-if': { label: 'What If?', desc: 'Explore creative hypothetical scenarios', fields: llmFields() },
-  'alternative-uses': { label: 'Alternative Uses', desc: 'List unconventional uses for everyday objects', fields: llmFields() },
-  'story-prompt': { label: 'Story Prompt', desc: 'Spin a short story from a creative prompt', fields: llmFields() },
-  'invention-pitch': { label: 'Invention Pitch', desc: 'Pitch inventions that solve quirky problems', fields: llmFields() },
-  'reframe': { label: 'Reframe', desc: 'Reframe a frustrating situation positively or humorously', fields: llmFields() }
+  'what-if': { label: 'What If?', desc: 'Explore creative hypothetical scenarios', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } },
+  'alternative-uses': { label: 'Alternative Uses', desc: 'List unconventional uses for everyday objects', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } },
+  'story-prompt': { label: 'Story Prompt', desc: 'Spin a short story from a creative prompt', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } },
+  'invention-pitch': { label: 'Invention Pitch', desc: 'Pitch inventions that solve quirky problems', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } },
+  'reframe': { label: 'Reframe', desc: 'Reframe a frustrating situation positively or humorously', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } }
 };
+
+// Seed state for every LLM drill type so a card's toggle reflects real,
+// persistable state. Without this, a type absent from the saved config renders
+// as enabled (via the `enabled !== false` convention) but never enters
+// `llmDrillTypes`, so Save would omit it and the launcher — which only
+// enumerates persisted keys — would never surface it in a session. Each type
+// starts from its `defaults` and is overlaid with any saved config value.
+function seedLlmDrillTypes(saved) {
+  const out = {};
+  for (const [type, meta] of Object.entries(LLM_DRILL_META)) {
+    out[type] = { ...meta.defaults, ...(saved?.[type] || {}) };
+  }
+  return out;
+}
 
 // LLM drills grouped by their DOMAINS key for section-headered rendering.
 const LLM_DRILL_GROUPS = [
@@ -139,7 +158,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     () => config?.mentalMath?.drillTypes || {}
   );
   const [llmDrillTypes, setLlmDrillTypes] = useState(
-    () => config?.llmDrills?.drillTypes || {}
+    () => seedLlmDrillTypes(config?.llmDrills?.drillTypes)
   );
   const [llmEnabled, setLlmEnabled] = useState(
     () => config?.llmDrills?.enabled !== false
