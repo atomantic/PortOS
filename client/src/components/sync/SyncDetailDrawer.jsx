@@ -14,8 +14,9 @@
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2 } from 'lucide-react';
+import { RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import Drawer from '../Drawer';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { getMediaCollection, getUniverse, getPipelineSeries, syncRecordToPeer, pullRecordFromPeer, pullMissingMetadata } from '../../services/api';
@@ -352,168 +353,134 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     loadRecord(); // refresh the preview thumbnails post-pull
   }, { errorMessage: 'Failed to pull missing metadata' });
 
-  // Esc key support
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape') onClose();
-  }, [onClose]);
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-
-  // Lock the body scroll while the drawer is open (matches Drawer.jsx).
-  useEffect(() => {
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prevOverflow; };
-  }, []);
-
   return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-black/60"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+    // Migrated onto the shared Drawer primitive (backdrop, scroll-lock, Esc,
+    // and role="dialog"/aria-modal all come from there). `size="sm"` (520px)
+    // adopts the shared width bracket instead of the old hand-rolled 480px, so
+    // future drawer UX changes land here too. The record-name subtitle moves
+    // from the old two-line header into the top of the body since the primitive
+    // header is a single title.
+    <Drawer
+      open
+      onClose={onClose}
+      title="Sync Details"
+      size="sm"
+      bodyClassName="space-y-5"
+      closeLabel="Close sync details"
+    >
+      {/* Record-name subtitle (was the header's second line) */}
+      {recordName && (
+        <p className="text-xs text-gray-400 truncate -mt-1">{recordName}</p>
+      )}
+      {!recordName && recordLoading && (
+        <p className="text-xs text-gray-500 -mt-1">Loading…</p>
+      )}
 
-      {/* Drawer panel */}
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label="Sync details"
-        className="fixed inset-y-0 right-0 z-50 w-full sm:w-[480px] bg-port-card border-l border-port-border shadow-2xl flex flex-col"
-      >
-        {/* Header */}
-        <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <div className="min-w-0">
-            <h2 className="text-base font-medium text-white">Sync Details</h2>
-            {recordName && (
-              <p className="text-xs text-gray-400 truncate">{recordName}</p>
-            )}
-            {!recordName && recordLoading && (
-              <p className="text-xs text-gray-500">Loading…</p>
-            )}
-          </div>
+      {/* Collection preview */}
+      {kind === 'mediaCollection' && (
+        <section>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Collection</h3>
+          <CollectionPreview collection={collection} loading={collectionLoading} error={collectionError} />
+        </section>
+      )}
+
+      {/* Per-peer breakdown */}
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Peer Status</h3>
           <button
             type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-            aria-label="Close sync details"
+            onClick={() => { refresh(); loadRecord(); }}
+            title="Refresh sync status + reload record"
+            className="p-1 text-gray-500 hover:text-gray-300 rounded"
           >
-            <X className="w-5 h-5" />
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
-        </header>
-
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
-          {/* Collection preview */}
-          {kind === 'mediaCollection' && (
-            <section>
-              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Collection</h3>
-              <CollectionPreview collection={collection} loading={collectionLoading} error={collectionError} />
-            </section>
-          )}
-
-          {/* Per-peer breakdown */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Peer Status</h3>
-              <button
-                type="button"
-                onClick={() => { refresh(); loadRecord(); }}
-                title="Refresh sync status + reload record"
-                className="p-1 text-gray-500 hover:text-gray-300 rounded"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {loading && (
-              <div className="flex items-center gap-2 text-gray-500 text-sm">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Checking peers…
-              </div>
-            )}
-
-            {!loading && error && (
-              <p className="text-port-error text-sm">Failed to load sync status.</p>
-            )}
-
-            {/* noSyncingPeers is also true when peers EXIST but this category's
-                toggle is off — so the copy must not imply "no peers at all"
-                (mirrors the SyncBadge 'not-syncing' tooltip). */}
-            {!loading && !error && noSyncingPeers && (
-              <div className="flex items-center gap-2 text-gray-500 text-sm">
-                <WifiOff className="w-4 h-4" />
-                No peers are syncing this category — enable it for a peer to sync this record.
-              </div>
-            )}
-
-            {/* Eligible peers exist but none returned integrity data (all
-                offline / unreachable / on an older PortOS). Distinct from the
-                "record not present anywhere" case below — otherwise this would
-                read as a misleading "No peer data for this record." */}
-            {!loading && !error && !noSyncingPeers && integrityUnavailable && (
-              <div className="flex items-center gap-2 text-gray-500 text-sm">
-                <WifiOff className="w-4 h-4" />
-                Sync status unavailable — every peer was offline, unreachable, or on an older PortOS.
-              </div>
-            )}
-
-            {!loading && !error && !noSyncingPeers && integrityUnavailable && unavailablePeers?.length > 0 && (
-              <div className="mt-2 rounded border border-port-border/70 divide-y divide-port-border/60">
-                {unavailablePeers.map((peer) => (
-                  <div key={peer.peerId} className="flex items-center justify-between gap-3 px-2 py-1.5">
-                    <span className="min-w-0 truncate text-sm text-white">{peer.peerName}</span>
-                    <span className="shrink-0 text-xs text-gray-400">
-                      {UNAVAILABLE_REASON_LABELS[peer.reason] ?? peer.reason ?? 'Unavailable'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {!loading && !error && !noSyncingPeers && !integrityUnavailable && peerEntries.length === 0 && (
-              <p className="text-gray-500 text-sm">No peer data for this record.</p>
-            )}
-
-            {!loading && !error && peerEntries.length > 0 && (
-              <div>
-                {peerEntries.map((entry) => (
-                  <PeerRow
-                    key={entry.peerId}
-                    entry={entry}
-                    kind={kind}
-                    recordId={recordId}
-                    onRefresh={() => { refresh(); loadRecord(); }}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Actions — only mediaCollection has pull-metadata right now */}
-          {kind === 'mediaCollection' && (
-            <section>
-              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Actions</h3>
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={() => pullMissing()}
-                  disabled={pulling}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
-                >
-                  {pulling
-                    ? <Loader2 className="w-4 h-4 animate-spin" />
-                    : <Download className="w-4 h-4" />}
-                  Pull missing metadata
-                </button>
-              </div>
-            </section>
-          )}
         </div>
-      </aside>
-    </>
+
+        {loading && (
+          <div className="flex items-center gap-2 text-gray-500 text-sm">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking peers…
+          </div>
+        )}
+
+        {!loading && error && (
+          <p className="text-port-error text-sm">Failed to load sync status.</p>
+        )}
+
+        {/* noSyncingPeers is also true when peers EXIST but this category's
+            toggle is off — so the copy must not imply "no peers at all"
+            (mirrors the SyncBadge 'not-syncing' tooltip). */}
+        {!loading && !error && noSyncingPeers && (
+          <div className="flex items-center gap-2 text-gray-500 text-sm">
+            <WifiOff className="w-4 h-4" />
+            No peers are syncing this category — enable it for a peer to sync this record.
+          </div>
+        )}
+
+        {/* Eligible peers exist but none returned integrity data (all
+            offline / unreachable / on an older PortOS). Distinct from the
+            "record not present anywhere" case below — otherwise this would
+            read as a misleading "No peer data for this record." */}
+        {!loading && !error && !noSyncingPeers && integrityUnavailable && (
+          <div className="flex items-center gap-2 text-gray-500 text-sm">
+            <WifiOff className="w-4 h-4" />
+            Sync status unavailable — every peer was offline, unreachable, or on an older PortOS.
+          </div>
+        )}
+
+        {!loading && !error && !noSyncingPeers && integrityUnavailable && unavailablePeers?.length > 0 && (
+          <div className="mt-2 rounded border border-port-border/70 divide-y divide-port-border/60">
+            {unavailablePeers.map((peer) => (
+              <div key={peer.peerId} className="flex items-center justify-between gap-3 px-2 py-1.5">
+                <span className="min-w-0 truncate text-sm text-white">{peer.peerName}</span>
+                <span className="shrink-0 text-xs text-gray-400">
+                  {UNAVAILABLE_REASON_LABELS[peer.reason] ?? peer.reason ?? 'Unavailable'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && !error && !noSyncingPeers && !integrityUnavailable && peerEntries.length === 0 && (
+          <p className="text-gray-500 text-sm">No peer data for this record.</p>
+        )}
+
+        {!loading && !error && peerEntries.length > 0 && (
+          <div>
+            {peerEntries.map((entry) => (
+              <PeerRow
+                key={entry.peerId}
+                entry={entry}
+                kind={kind}
+                recordId={recordId}
+                onRefresh={() => { refresh(); loadRecord(); }}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Actions — only mediaCollection has pull-metadata right now */}
+      {kind === 'mediaCollection' && (
+        <section>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Actions</h3>
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => pullMissing()}
+              disabled={pulling}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm bg-port-accent/20 hover:bg-port-accent/40 text-port-accent disabled:opacity-40"
+            >
+              {pulling
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Download className="w-4 h-4" />}
+              Pull missing metadata
+            </button>
+          </div>
+        </section>
+      )}
+    </Drawer>
   );
 }
