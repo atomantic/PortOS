@@ -78,6 +78,21 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     getPostDrillCacheStatus().then(setCacheStatus).catch(() => setCacheStatus({}));
   }, []);
 
+  // providers loads asynchronously (useProviderModels' mount-time fetch). If
+  // the user opens the consent modal before it resolves, startMode's one-shot
+  // seed below falls back to "System Default" even when the saved provider
+  // would have been selectable. Re-seed reactively once providers arrives
+  // while the modal is still open, so a fast click doesn't permanently miss
+  // pre-filling a valid saved default.
+  useEffect(() => {
+    if (!pendingMode || !providers.length) return;
+    const savedProviderId = config?.llmDrills?.providerId || '';
+    if (providers.some(p => p.id === savedProviderId)) {
+      setFillProviderId(savedProviderId);
+      setFillModel(config?.llmDrills?.model || '');
+    }
+  }, [providers, pendingMode]);
+
   const providerId = config?.llmDrills?.providerId || null;
   const model = config?.llmDrills?.model || null;
 
