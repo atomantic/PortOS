@@ -122,14 +122,14 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
   const domainCount = Object.keys(enabledDomains).length;
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Zap size={24} className="text-port-accent" />
           <h2 className="text-xl font-bold text-white">Power On Self Test</h2>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={onViewMemory}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors"
@@ -161,173 +161,182 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
         </div>
       </div>
 
-      {/* Today's Status */}
-      <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex items-center justify-between">
-          <span className="text-gray-400 text-sm">Today's Status</span>
-          {todaySession ? (
-            <span className="text-port-success text-sm font-medium">
-              Completed — Score: {todaySession.score}
-            </span>
-          ) : (
-            <span className="text-port-warning text-sm font-medium">Not yet completed</span>
+      {/* Main + sidebar: primary session flow on the left, drill summaries + history on the right */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
+        {/* Primary flow — kept above the fold */}
+        <div className="space-y-6 min-w-0">
+          {/* Today's Status */}
+          <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400 text-sm">Today's Status</span>
+              {todaySession ? (
+                <span className="text-port-success text-sm font-medium">
+                  Completed — Score: {todaySession.score}
+                </span>
+              ) : (
+                <span className="text-port-warning text-sm font-medium">Not yet completed</span>
+              )}
+            </div>
+          </div>
+
+          {/* Mode Toggle */}
+          <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Session Mode</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setMode('test')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'test'
+                    ? 'bg-port-accent text-white'
+                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
+                }`}
+              >
+                <Zap size={14} />
+                Test
+              </button>
+              <button
+                onClick={() => setMode('train')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'train'
+                    ? 'bg-port-accent-2 text-port-on-accent-2'
+                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
+                }`}
+              >
+                <Dumbbell size={14} />
+                Train
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              {mode === 'train'
+                ? 'Training mode: immediate feedback, hints on wrong answers. Not scored.'
+                : 'Test mode: timed drills with scoring. Saved to history.'}
+            </p>
+          </div>
+
+          {/* Condition Tags */}
+          {mode === 'test' && <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Conditions (optional)</h3>
+            <div className="grid grid-cols-3 gap-3">
+              {Object.entries(tags).map(([key, value]) => (
+                <div key={key}>
+                  <label className="text-xs text-gray-500 mb-1 block capitalize">{key}</label>
+                  <input
+                    type="text"
+                    value={value}
+                    onChange={e => setTags(prev => ({ ...prev, [key]: e.target.value }))}
+                    placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>}
+
+          {/* Start Buttons */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            {domainCount >= 2 && (
+              <button
+                onClick={handleQuickSession}
+                disabled={!hasAnyDrills}
+                className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+                  mode === 'train'
+                    ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
+                    : 'bg-port-success hover:bg-port-success/80 text-white'
+                } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
+              >
+                <Timer size={18} />
+                Quick 5 Min ({domainCount} domains)
+              </button>
+            )}
+            <button
+              onClick={handleStart}
+              disabled={!hasAnyDrills}
+              className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+                mode === 'train'
+                  ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
+                  : 'bg-port-accent hover:bg-port-accent/80 text-white'
+              } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
+            >
+              {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
+              {mode === 'train' ? 'Full Training' : 'Full POST'}
+            </button>
+          </div>
+        </div>
+
+        {/* Sidebar — drill summaries + recent sessions flow alongside on desktop */}
+        <div className="space-y-6 min-w-0">
+          {/* Mental Math Drills */}
+          {enabledMathDrills.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Mental Math</h3>
+              <div className="space-y-2">
+                {enabledMathDrills.map(([type, cfg]) => (
+                  <div key={type} className="flex items-center justify-between text-sm">
+                    <span className="text-white">{DRILL_LABELS[type] || type}</span>
+                    <span className="text-gray-500">
+                      {cfg.steps ? `${cfg.steps} steps` : cfg.count ? `${cfg.count} questions` : ''}
+                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* LLM Drills */}
+          {enabledLlmDrills.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Brain size={14} className="text-port-accent-2" />
+                <h3 className="text-sm font-medium text-gray-400">Wit & Memory</h3>
+                {(llmProviderId || providers.length > 0) && (
+                  <span className="text-xs text-gray-600 ml-auto">
+                    {llmProviderId || 'system default'}
+                  </span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {enabledLlmDrills.map(([type, cfg]) => (
+                  <div key={type} className="flex items-center justify-between text-sm">
+                    <span className="text-white">{DRILL_LABELS[type] || type}</span>
+                    <span className="text-gray-500">
+                      {cfg.count ? `${cfg.count} prompts` : ''}
+                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!hasAnyDrills && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <p className="text-gray-500 text-sm">No drills enabled. Configure drills to get started.</p>
+            </div>
+          )}
+
+          {/* Recent Scores */}
+          {lastThree.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Sessions</h3>
+              <div className="space-y-2">
+                {lastThree.map(s => (
+                  <div key={s.id} className="flex items-center justify-between text-sm">
+                    <span className="text-gray-400">{s.date}</span>
+                    <span className={`font-mono font-medium ${
+                      s.score >= 80 ? 'text-port-success' :
+                      s.score >= 50 ? 'text-port-warning' :
+                      'text-port-error'
+                    }`}>
+                      {s.score}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       </div>
-
-      {/* Mental Math Drills */}
-      {enabledMathDrills.length > 0 && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Mental Math</h3>
-          <div className="space-y-2">
-            {enabledMathDrills.map(([type, cfg]) => (
-              <div key={type} className="flex items-center justify-between text-sm">
-                <span className="text-white">{DRILL_LABELS[type] || type}</span>
-                <span className="text-gray-500">
-                  {cfg.steps ? `${cfg.steps} steps` : cfg.count ? `${cfg.count} questions` : ''}
-                  {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* LLM Drills */}
-      {enabledLlmDrills.length > 0 && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Brain size={14} className="text-port-accent-2" />
-            <h3 className="text-sm font-medium text-gray-400">Wit & Memory</h3>
-            {(llmProviderId || providers.length > 0) && (
-              <span className="text-xs text-gray-600 ml-auto">
-                {llmProviderId || 'system default'}
-              </span>
-            )}
-          </div>
-          <div className="space-y-2">
-            {enabledLlmDrills.map(([type, cfg]) => (
-              <div key={type} className="flex items-center justify-between text-sm">
-                <span className="text-white">{DRILL_LABELS[type] || type}</span>
-                <span className="text-gray-500">
-                  {cfg.count ? `${cfg.count} prompts` : ''}
-                  {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!hasAnyDrills && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <p className="text-gray-500 text-sm">No drills enabled. Configure drills to get started.</p>
-        </div>
-      )}
-
-      {/* Mode Toggle */}
-      <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <h3 className="text-sm font-medium text-gray-400 mb-3">Session Mode</h3>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setMode('test')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              mode === 'test'
-                ? 'bg-port-accent text-white'
-                : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-            }`}
-          >
-            <Zap size={14} />
-            Test
-          </button>
-          <button
-            onClick={() => setMode('train')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              mode === 'train'
-                ? 'bg-port-accent-2 text-port-on-accent-2'
-                : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-            }`}
-          >
-            <Dumbbell size={14} />
-            Train
-          </button>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          {mode === 'train'
-            ? 'Training mode: immediate feedback, hints on wrong answers. Not scored.'
-            : 'Test mode: timed drills with scoring. Saved to history.'}
-        </p>
-      </div>
-
-      {/* Condition Tags */}
-      {mode === 'test' && <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <h3 className="text-sm font-medium text-gray-400 mb-3">Conditions (optional)</h3>
-        <div className="grid grid-cols-3 gap-3">
-          {Object.entries(tags).map(([key, value]) => (
-            <div key={key}>
-              <label className="text-xs text-gray-500 mb-1 block capitalize">{key}</label>
-              <input
-                type="text"
-                value={value}
-                onChange={e => setTags(prev => ({ ...prev, [key]: e.target.value }))}
-                placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
-              />
-            </div>
-          ))}
-        </div>
-      </div>}
-
-      {/* Start Buttons */}
-      <div className="flex gap-3">
-        {domainCount >= 2 && (
-          <button
-            onClick={handleQuickSession}
-            disabled={!hasAnyDrills}
-            className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-              mode === 'train'
-                ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
-                : 'bg-port-success hover:bg-port-success/80 text-white'
-            } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-          >
-            <Timer size={18} />
-            Quick 5 Min ({domainCount} domains)
-          </button>
-        )}
-        <button
-          onClick={handleStart}
-          disabled={!hasAnyDrills}
-          className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-            mode === 'train'
-              ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
-              : 'bg-port-accent hover:bg-port-accent/80 text-white'
-          } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-        >
-          {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
-          {mode === 'train' ? 'Full Training' : 'Full POST'}
-        </button>
-      </div>
-
-      {/* Recent Scores */}
-      {lastThree.length > 0 && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Recent Sessions</h3>
-          <div className="space-y-2">
-            {lastThree.map(s => (
-              <div key={s.id} className="flex items-center justify-between text-sm">
-                <span className="text-gray-400">{s.date}</span>
-                <span className={`font-mono font-medium ${
-                  s.score >= 80 ? 'text-port-success' :
-                  s.score >= 50 ? 'text-port-warning' :
-                  'text-port-error'
-                }`}>
-                  {s.score}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

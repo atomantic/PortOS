@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { postLlmScoreRequestSchema } from './postValidation.js';
+import { postLlmScoreRequestSchema, postConfigUpdateSchema, LLM_DRILL_TYPES } from './postValidation.js';
+
+describe('postConfigUpdateSchema llmDrills', () => {
+  // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
+  // LLM drill types. All 14 are generatable server-side and must be persistable
+  // via PUT /post/config, so the schema must accept a per-type config for each.
+  it('accepts a config entry for every LLM drill type', () => {
+    const drillTypes = Object.fromEntries(
+      LLM_DRILL_TYPES.map(type => [type, { enabled: true, count: 3, timeLimitSec: 120 }])
+    );
+    const parsed = postConfigUpdateSchema.parse({
+      llmDrills: { enabled: true, providerId: null, model: null, drillTypes }
+    });
+    expect(Object.keys(parsed.llmDrills.drillTypes)).toHaveLength(14);
+    expect(Object.keys(parsed.llmDrills.drillTypes).sort()).toEqual([...LLM_DRILL_TYPES].sort());
+  });
+
+  it('rejects an unknown LLM drill type key', () => {
+    expect(() => postConfigUpdateSchema.parse({
+      llmDrills: { drillTypes: { 'not-a-drill': { enabled: true } } }
+    })).toThrow();
+  });
+});
 
 describe('postLlmScoreRequestSchema', () => {
   // Regression: Zod's default strip mode dropped `questionIndex` from each
