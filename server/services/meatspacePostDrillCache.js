@@ -27,12 +27,20 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 let cache = {}; // { type: [drill, drill, ...] }
 let replenishing = new Map(); // type -> Promise (in-flight replenishment)
 let saveQueued = false;
+// Tracks which types have ever been successfully filled. "Cold" must be
+// derived from this, NOT from the live cache count — a type that drains to
+// 0 between consumption and replenishment (e.g. the user consumes faster
+// than the background top-up produces new items) would otherwise look
+// "never primed" again and permanently stop replenishing (see
+// meatspacePostDrillCache.test.js "stays warm after draining to zero").
+const primedTypes = new Set();
 
 async function loadCache() {
   const raw = await readFile(CACHE_FILE, 'utf-8').catch(() => '{}');
   cache = safeJSONParse(raw, {});
   for (const type of CACHEABLE_TYPES) {
     if (!Array.isArray(cache[type])) cache[type] = [];
+    if (cache[type].length > 0) primedTypes.add(type);
   }
 }
 
@@ -68,6 +76,7 @@ function replenishType(type, providerId, model) {
         });
         if (drill) {
           cache[type].push(drill);
+          primedTypes.add(type);
           generated++;
           consecutiveFailures = 0;
         } else {
@@ -103,12 +112,13 @@ export function getCachedDrill(type) {
   return result;
 }
 
-// A type is "cold" when it has never been filled (0 cached). This is the one
-// place that defines cold vs. warm — triggerReplenish and getCacheStats both
-// read it, so a future change to the threshold (e.g. < MIN_PER_TYPE) can't
+// A type is "cold" until it has been successfully filled at least once —
+// tracked via primedTypes, not the live cache count (see the primedTypes
+// comment above for why). This is the one place that defines cold vs. warm —
+// triggerReplenish and getCacheStats both read it, so a future change can't
 // drift between the background-replenish guard and what the client is told.
 function isCacheCold(type) {
-  return !cache[type]?.length;
+  return !primedTypes.has(type);
 }
 
 /**
