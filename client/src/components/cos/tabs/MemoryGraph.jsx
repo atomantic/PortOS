@@ -248,7 +248,7 @@ export default function MemoryGraph() {
           ))}
           <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
             <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-0 border-t border-blue-400" />
+              <span className="inline-block w-4 h-0 border-t border-port-accent" />
               <span className="text-gray-500">linked</span>
             </div>
             <div className="flex items-center gap-2">

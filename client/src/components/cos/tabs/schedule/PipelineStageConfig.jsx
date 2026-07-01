@@ -37,7 +37,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
-                <span className="text-xs font-medium text-purple-400">Stage {i + 1}</span>
+                <span className="text-xs font-medium text-port-accent-2">Stage {i + 1}</span>
                 {stage.readOnly && (
                   <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">read-only</span>
                 )}

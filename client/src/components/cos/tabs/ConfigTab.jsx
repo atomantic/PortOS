@@ -10,12 +10,12 @@ import useProviderModels from '../../../hooks/useProviderModels';
 // Color classes for autonomy level buttons
 const LEVEL_COLORS = {
   green: {
-    base: 'border-green-500/40 bg-green-500/5 text-green-600 hover:bg-green-500/10',
-    active: 'ring-2 ring-green-600 border-green-600 bg-green-500 text-white shadow-sm'
+    base: 'border-port-success/40 bg-port-success/5 text-port-success hover:bg-port-success/10',
+    active: 'ring-2 ring-port-success border-port-success bg-port-success text-white shadow-sm'
   },
   blue: {
-    base: 'border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20',
-    active: 'ring-2 ring-blue-600 border-blue-600 bg-blue-500 text-white shadow-sm'
+    base: 'border-port-accent/30 bg-port-accent/10 text-port-accent hover:bg-port-accent/20',
+    active: 'ring-2 ring-port-accent border-port-accent bg-port-accent text-white shadow-sm'
   },
   yellow: {
     base: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20',
@@ -140,8 +140,8 @@ const DOMAIN_MODE_COLORS = {
     active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-400 text-yellow-950'
   },
   execute: {
-    base: 'border-green-500/30 bg-green-500/10 text-green-500 hover:bg-green-500/20',
-    active: 'ring-2 ring-green-600 border-green-600 bg-green-500 text-white'
+    base: 'border-port-success/30 bg-port-success/10 text-port-success hover:bg-port-success/20',
+    active: 'ring-2 ring-port-success border-port-success bg-port-success text-white'
   }
 };
 

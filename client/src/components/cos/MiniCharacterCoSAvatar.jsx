@@ -142,13 +142,13 @@ function MissingModelHint({ background = false, bundled = false }) {
       <div className="text-3xl mb-2">🧍</div>
       {bundled ? (
         <>
-          <div className="text-xs font-semibold text-slate-200 mb-1">Model not yet seeded</div>
-          <div className="text-[10px] text-slate-400 mb-1.5">Run</div>
+          <div className="text-xs font-semibold text-gray-200 mb-1">Model not yet seeded</div>
+          <div className="text-[10px] text-gray-400 mb-1.5">Run</div>
           <code className="text-[9px] text-port-accent break-all leading-tight">npm run setup:data</code>
         </>
       ) : (
         <>
-          <div className="text-xs font-semibold text-slate-200 mb-1">No mini-character model</div>
+          <div className="text-xs font-semibold text-gray-200 mb-1">No mini-character model</div>
           <code className="text-[9px] text-port-accent break-all leading-tight">data/avatar/&lt;variant&gt;.glb</code>
         </>
       )}
@@ -178,7 +178,7 @@ class AvatarErrorBoundary extends Component {
 function LoadingPlaceholder({ background = false }) {
   return (
     <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex items-center justify-center`}>
-      <div className="text-xs text-slate-500 animate-pulse">loading…</div>
+      <div className="text-xs text-gray-500 animate-pulse">loading…</div>
     </div>
   );
 }

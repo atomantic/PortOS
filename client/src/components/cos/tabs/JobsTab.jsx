@@ -348,7 +348,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
             )}
             <span className={`px-1.5 py-0.5 text-xs rounded ${
               isShell ? 'bg-emerald-500/20 text-emerald-400' :
-              isScript ? 'bg-purple-500/20 text-purple-400' :
+              isScript ? 'bg-port-accent-2/20 text-port-accent-2' :
               'bg-port-bg text-gray-400'
             }`}>
               {getJobTypeLabel(job)}

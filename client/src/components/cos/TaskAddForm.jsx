@@ -468,7 +468,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
             />
             <span className={`flex items-center gap-1.5 text-sm ${useWorktree ? 'text-gray-400' : 'text-gray-600'}`} title="Open a pull request to the default branch. If unchecked with worktree enabled, auto-merges on completion.">
-              <GitPullRequest size={14} className={useWorktree ? 'text-blue-400' : 'text-gray-600'} />
+              <GitPullRequest size={14} className={useWorktree ? 'text-port-accent' : 'text-gray-600'} />
               Open PR
             </span>
           </label>
@@ -480,7 +480,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
             />
             <span className="flex items-center gap-1.5 text-sm text-gray-400">
-              <Wand2 size={14} className="text-purple-400" />
+              <Wand2 size={14} className="text-port-accent-2" />
               Simplify
             </span>
           </label>
@@ -519,7 +519,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
               />
               <span className="flex items-center gap-1.5 text-sm text-gray-400">
-                <Ticket size={14} className="text-blue-400" />
+                <Ticket size={14} className="text-port-accent" />
                 JIRA ticket
               </span>
             </label>

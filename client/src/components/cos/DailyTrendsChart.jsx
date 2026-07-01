@@ -113,7 +113,7 @@ export default function DailyTrendsChart({ days = 30, initialExpanded = true }) 
               <div className="text-xs text-gray-500">Active Days</div>
             </div>
             <div className="text-center">
-              <div className="text-lg font-bold text-cyan-400">{summary.avgTasksPerActiveDay}</div>
+              <div className="text-lg font-bold text-port-accent">{summary.avgTasksPerActiveDay}</div>
               <div className="text-xs text-gray-500">Avg/Day</div>
             </div>
             <div className="text-center">

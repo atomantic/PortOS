@@ -4,7 +4,11 @@ import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import { describeCron } from '../../../utils/cronHelpers';
 
-// Stage palette — matches port-* tokens used elsewhere.
+// Intentional category-color enum (#1909/#1924 caution), left as raw Tailwind
+// hues on purpose: 7 mutually-exclusive workflow stages need to stay visually
+// distinct in the graph view, and the app's ~4-5 semantic tokens
+// (accent/accent-2/success/warning/error) aren't enough to differentiate all 7
+// without at least two stages rendering identically.
 // Keys are stage ids from the server's WORKFLOW_STAGES; ordering is server-driven (graph.stages).
 const STAGE_COLORS = {
   hygiene:  { ring: 'border-cyan-500/40',    bg: 'bg-cyan-500/5',    text: 'text-cyan-300',     dot: 'bg-cyan-500' },
