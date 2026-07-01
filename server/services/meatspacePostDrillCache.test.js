@@ -86,6 +86,21 @@ describe('meatspacePostDrillCache', () => {
     expect(triggered).toEqual([]);
   });
 
+  it('requestCacheFill fills multiple types sequentially, not concurrently — avoids spamming the provider with parallel batches', async () => {
+    requestCacheFill(['compound-chain', 'bridge-word'], null, null);
+
+    // Only the first type's initial (no-delay) call should have fired yet —
+    // a second type's batch must not start until the first type's full
+    // MAX_PER_TYPE batch (up to 10 sequential calls, 2s apart) completes.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(generateLlmDrill).toHaveBeenCalledWith('compound-chain', expect.anything(), null, null);
+    expect(generateLlmDrill).not.toHaveBeenCalledWith('bridge-word', expect.anything(), null, null);
+
+    await vi.advanceTimersByTimeAsync(40000);
+    expect(getCacheStats()['compound-chain'].cold).toBe(false);
+    expect(getCacheStats()['bridge-word'].cold).toBe(false);
+  });
+
   it('saveCache persists primedTypes alongside the drills so a restart mid-drain stays warm', async () => {
     const { atomicWrite } = await import('../lib/fileUtils.js');
     requestCacheFill(['compound-chain'], null, null);
