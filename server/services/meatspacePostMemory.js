@@ -27,6 +27,16 @@ const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 
 export const DEFAULT_EASE = 2.5;
 const MIN_EASE = 1.3;
+// Ceiling mirrors `memoryScheduleSchema.ease.max(5)` in postValidation.js — the
+// per-session +0.1 bumps are unbounded otherwise, so ~26 perfect reps would push
+// ease past 5 and a later round-trip through POST/PUT (import / out-of-band
+// reschedule) would 400 on the server's own value. Keep the two in sync.
+const MAX_EASE = 5;
+// Cap the interval at a year so a long run of perfect reviews can't grow it
+// without bound — an astronomically large `intervalDays` would overflow
+// `new Date(now + intervalDays*DAY_MS)` into an Invalid Date and throw. A yearly
+// review floor is a conventional SRS ceiling and keeps items resurfacing.
+const MAX_INTERVAL_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Fresh schedule — due at `nowIso` (i.e. immediately). */
@@ -63,7 +73,7 @@ export function advanceSchedule(schedule, ratio, now = new Date()) {
 
   const prevEase = typeof prev.ease === 'number' ? prev.ease : DEFAULT_EASE;
   let ease = prevEase + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-  ease = Math.max(MIN_EASE, Math.round(ease * 100) / 100);
+  ease = Math.min(MAX_EASE, Math.max(MIN_EASE, Math.round(ease * 100) / 100));
 
   let intervalDays;
   if (quality < 3) {
@@ -73,10 +83,37 @@ export function advanceSchedule(schedule, ratio, now = new Date()) {
     if (prevInterval <= 0) intervalDays = 1;
     else if (prevInterval < 6) intervalDays = 6;
     else intervalDays = Math.max(1, Math.round(prevInterval * ease));
+    intervalDays = Math.min(MAX_INTERVAL_DAYS, intervalDays);
   }
 
   const nextReview = new Date(now.getTime() + intervalDays * DAY_MS).toISOString();
   return { ease, intervalDays, nextReview, lastReviewed: nowIso };
+}
+
+/**
+ * Merge a freshly-advanced schedule against the item's prior schedule, gating
+ * interval GROWTH to once per review day.
+ *
+ * Why: a "review" of a memory item is one pass through it, but the existing
+ * spaced-practice flow (`MemoryPractice.advanceSpaced`) submits once PER CHUNK.
+ * Advancing on every submission would compound a multi-chunk item's interval in
+ * a single sitting (0→1→6→16d) and drop it off the due list far longer than one
+ * completed review warrants. So a same-day continuation only refreshes ease and
+ * `lastReviewed` — it keeps the interval/nextReview already set earlier today.
+ * A miss (interval shrinks to 0) always applies, so a fumbled chunk still
+ * resurfaces the item immediately regardless of earlier same-day success.
+ */
+export function mergeScheduleAdvance(prev, advanced, now = new Date()) {
+  const prevInterval = typeof prev?.intervalDays === 'number' ? prev.intervalDays : 0;
+  const lastReviewedMs = Date.parse(prev?.lastReviewed ?? '');
+  const sameReviewDay = Number.isFinite(lastReviewedMs)
+    && new Date(lastReviewedMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+  // Suppress compounding only when this is a same-day continuation AND the
+  // interval would grow. Any shrink (a miss reset) always applies.
+  if (sameReviewDay && advanced.intervalDays > prevInterval) {
+    return { ...prev, ease: advanced.ease, lastReviewed: advanced.lastReviewed };
+  }
+  return advanced;
 }
 
 /** True when an item is due for review (no schedule / invalid date = due). */
@@ -391,10 +428,16 @@ export async function submitPractice(id, practiceData) {
   // Recompute overall mastery percentage
   item.mastery.overallPct = computeOverallMastery(item);
 
-  // Advance the spaced-repetition schedule from this session's accuracy.
+  // Advance the spaced-repetition schedule from this session's accuracy. The
+  // schedule is per-ITEM (mastery is per-chunk); practicing any part of an item
+  // counts as reviewing it, so it resurfaces on the next review day rather than
+  // staying due today. `mergeScheduleAdvance` gates interval growth to once per
+  // day so the per-chunk submits of a spaced session don't compound the interval,
+  // while a miss anywhere still resets the item to due-now.
   const correctCount = results.filter(r => r.correct).length;
   const ratio = results.length ? correctCount / results.length : 0;
-  item.schedule = advanceSchedule(item.schedule, ratio, new Date(now));
+  const advanced = advanceSchedule(item.schedule, ratio, new Date(now));
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, new Date(now));
 
   item.updatedAt = now;
   await saveMemoryItems(items);
