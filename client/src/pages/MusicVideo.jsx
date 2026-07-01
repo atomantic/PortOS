@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2, Download } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
@@ -78,9 +79,16 @@ function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = f
 }
 
 export default function MusicVideo() {
+  // Deep-linkable project selection: the selected project lives in the URL
+  // (/media/music-video/:projectId) rather than local state, so a project's
+  // scene board is directly shareable/bookmarkable and reachable from the
+  // media job-completion hooks. selectProject() navigates; the browser URL is
+  // the single source of truth for "which project is open".
+  const { projectId: routeProjectId } = useParams();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const selectedId = routeProjectId || null;
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [arranging, setArranging] = useState(false);
@@ -124,7 +132,7 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before switching projects');
       return;
     }
-    setSelectedId(id);
+    navigate(id ? `/media/music-video/${id}` : '/media/music-video');
   };
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
@@ -208,7 +216,7 @@ export default function MusicVideo() {
     deleteMusicVideoProject(id)
       .then(() => {
         setProjects((prev) => prev.filter((p) => p.id !== id));
-        if (selectedId === id) setSelectedId(null);
+        if (selectedId === id) navigate('/media/music-video');
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
@@ -541,7 +549,13 @@ export default function MusicVideo() {
 
         {/* Detail / scene board */}
         <div className="md:col-span-2">
-          {!selected && <p className="text-sm text-port-text-muted">Select or create a project to open its scene board.</p>}
+          {!selected && !loading && routeProjectId && (
+            <p className="text-sm text-port-text-muted">
+              Project not found — it may have been deleted.{' '}
+              <button onClick={() => navigate('/media/music-video')} className="text-port-accent underline">Back to projects</button>
+            </p>
+          )}
+          {!selected && (loading || !routeProjectId) && <p className="text-sm text-port-text-muted">Select or create a project to open its scene board.</p>}
           {selected && (
             <div className="space-y-3">
               <div className="bg-port-card border border-port-border rounded-lg p-3">

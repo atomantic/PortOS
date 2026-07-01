@@ -276,6 +276,7 @@ export default function App() {
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
             <Route path="music-video" element={<MusicVideo />} />
+            <Route path="music-video/:projectId" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
