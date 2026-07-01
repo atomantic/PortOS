@@ -18,15 +18,15 @@ describe('InlineDiff', () => {
     const { container } = render(<InlineDiff oldText="The cat sat" newText="The dog sat" />);
     expect(screen.queryByText('No changes.')).not.toBeInTheDocument();
     // Two stacked diff rows — the red (removed) and green (added) divs.
-    expect(container.querySelectorAll('.text-red-400')).toHaveLength(1);
-    expect(container.querySelectorAll('.text-green-400')).toHaveLength(1);
+    expect(container.querySelectorAll('.text-port-error.leading-relaxed')).toHaveLength(1);
+    expect(container.querySelectorAll('.text-port-success.leading-relaxed')).toHaveLength(1);
   });
 
   it('highlights only the changed words inside each row, not the unchanged ones', () => {
     const { container } = render(<InlineDiff oldText="The cat sat" newText="The dog sat" />);
     // Removed-word span lives inside the red row.
-    const removedSpans = container.querySelectorAll('.text-red-400 .bg-red-900\\/50');
-    const addedSpans = container.querySelectorAll('.text-green-400 .bg-green-900\\/50');
+    const removedSpans = container.querySelectorAll('.text-port-error .bg-port-error\\/50');
+    const addedSpans = container.querySelectorAll('.text-port-success .bg-port-success\\/50');
     expect(removedSpans).toHaveLength(1);
     expect(addedSpans).toHaveLength(1);
     expect(removedSpans[0].textContent).toBe('cat');
@@ -45,7 +45,7 @@ describe('InlineDiff', () => {
     const { container } = render(<InlineDiff oldText={buildHuge('a')} newText={buildHuge('b')} />);
     expect(screen.getByText(/Diff too large/i)).toBeInTheDocument();
     // No per-word highlight spans — just the two flat color blocks.
-    expect(container.querySelectorAll('.bg-red-900\\/50, .bg-green-900\\/50')).toHaveLength(0);
+    expect(container.querySelectorAll('.bg-port-error\\/50, .bg-port-success\\/50')).toHaveLength(0);
   });
 
   it('stays within the LCS path when one side is short, even if the other is long', () => {

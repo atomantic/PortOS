@@ -43,8 +43,8 @@ const SideBySideDiff = memo(function SideBySideDiff({
           Diff too large for word highlighting — both versions shown in full
         </div>
         <div className="flex gap-4">
-          <Column label={oldLabel}><span className="text-red-400">{oldStr}</span></Column>
-          <Column label={newLabel}><span className="text-green-400">{newStr}</span></Column>
+          <Column label={oldLabel}><span className="text-port-error">{oldStr}</span></Column>
+          <Column label={newLabel}><span className="text-port-success">{newStr}</span></Column>
         </div>
       </div>
     );
@@ -53,8 +53,8 @@ const SideBySideDiff = memo(function SideBySideDiff({
   return (
     <div className="font-mono text-xs p-4 bg-port-bg">
       <div className="flex gap-4">
-        <Column label={oldLabel}><span className="text-red-200">{renderRuns(oldRuns, false)}</span></Column>
-        <Column label={newLabel}><span className="text-green-200">{renderRuns(newRuns, true)}</span></Column>
+        <Column label={oldLabel}><span className="text-port-error">{renderRuns(oldRuns, false)}</span></Column>
+        <Column label={newLabel}><span className="text-port-success">{renderRuns(newRuns, true)}</span></Column>
       </div>
     </div>
   );
