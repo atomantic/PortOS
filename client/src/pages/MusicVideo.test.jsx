@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import toast from '../components/ui/Toast';
 
 const PROJECT_WITH_CLIP = {
   id: 'mv-1', name: 'Neon Run', mode: 'director', status: 'ready',
@@ -208,5 +209,26 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     };
     fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'y' } });
     await waitFor(() => expect(screen.getByText(/Track set: Create Track/i)).toBeTruthy());
+  });
+
+  it('blocks switching projects while the detail-view import is in flight (single shared job slot)', async () => {
+    const projectB = { ...PROJECT_NO_CLIP, id: 'mv-3', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
+    render(<MusicVideo />);
+    const listBtnA = await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) });
+    fireEvent.click(listBtnA);
+
+    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id !== 'mv-yt-create');
+    fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
+    fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+
+    // Switching to the OTHER project while this one's import is in flight
+    // must be blocked — it would silently orphan the in-flight job's SSE
+    // subscription and misattribute its progress UI to the new selection.
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(projectB.name) }));
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i));
+    expect(listBtnA).toHaveClass('border-port-accent');
   });
 });
