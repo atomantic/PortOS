@@ -288,6 +288,7 @@ export function RunsHistoryPage() {
                           onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
                           className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100"
                           title="View system logs"
+                          aria-label="View system logs"
                           data-testid={`view-logs-${run.id}`}
                         >
                           <ScrollText size={14} />
