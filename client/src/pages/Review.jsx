@@ -52,10 +52,10 @@ const QUEUE_INVALIDATION_EVENTS = [
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
-  brain: { icon: BrainIcon, color: 'text-purple-400' },
+  brain: { icon: BrainIcon, color: 'text-port-accent-2' },
   ask: { icon: MessageCircle, color: 'text-port-accent' },
   cos: { icon: Crown, color: 'text-port-accent' },
-  drafts: { icon: Mail, color: 'text-blue-400' },
+  drafts: { icon: Mail, color: 'text-port-accent' },
   health: { icon: Activity, color: 'text-port-warning' },
   backup: { icon: DatabaseBackup, color: 'text-port-error' }
 };

@@ -22,12 +22,12 @@ const INTERVAL_PRESETS = [
 
 function StatusBadge({ loop }) {
   if (loop.isExecuting) return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent">
       <BrailleSpinner /> Running
     </span>
   );
   if (loop.isRunning) return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-port-success/20 text-port-success">
       <Clock size={12} /> Active
     </span>
   );

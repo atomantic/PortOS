@@ -40,7 +40,7 @@ export function AgentsPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 sm:gap-3">
-          <Activity size={24} className="sm:w-7 sm:h-7 text-purple-400" />
+          <Activity size={24} className="sm:w-7 sm:h-7 text-port-accent-2" />
           <h1 className="text-lg sm:text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
           <span className="hidden sm:inline text-gray-500 text-sm">({REFRESH_INTERVAL}s)</span>
         </div>
@@ -60,21 +60,21 @@ export function AgentsPage() {
             <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">Processes</div>
             <div className="text-lg sm:text-3xl font-bold text-white font-mono">{agents.length}</div>
           </div>
-          <Terminal size={20} className="sm:w-8 sm:h-8 text-purple-400" />
+          <Terminal size={20} className="sm:w-8 sm:h-8 text-port-accent-2" />
         </div>
         <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
             <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">CPU</div>
             <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalCpu.toFixed(1)}%</div>
           </div>
-          <Cpu size={20} className="sm:w-8 sm:h-8 text-blue-400" />
+          <Cpu size={20} className="sm:w-8 sm:h-8 text-port-accent" />
         </div>
         <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
           <div>
             <div className="text-gray-400 text-[10px] sm:text-sm mb-0.5 sm:mb-1">Memory</div>
             <div className="text-lg sm:text-3xl font-bold text-white font-mono">{totalMemory.toFixed(1)}%</div>
           </div>
-          <MemoryStick size={20} className="sm:w-8 sm:h-8 text-green-400" />
+          <MemoryStick size={20} className="sm:w-8 sm:h-8 text-port-success" />
         </div>
       </div>
 
@@ -93,15 +93,15 @@ export function AgentsPage() {
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <span className="font-mono text-white text-sm truncate">{agent.agentName.toLowerCase()}</span>
                   {agent.source === 'cos' && (
-                    <span className="px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded shrink-0">CoS</span>
+                    <span className="px-1.5 py-0.5 text-[10px] bg-port-accent-2/20 text-port-accent-2 rounded shrink-0">CoS</span>
                   )}
                   <span className="text-gray-500 text-xs shrink-0">#{agent.pid}</span>
-                  <span className="font-mono text-cyan-400 text-xs shrink-0 whitespace-nowrap">{agent.runtimeFormatted}</span>
+                  <span className="font-mono text-port-accent text-xs shrink-0 whitespace-nowrap">{agent.runtimeFormatted}</span>
                 </div>
                 <button
                   onClick={() => handleKill(agent.pid)}
                   disabled={killing[agent.pid]}
-                  className="shrink-0 px-2 py-1 bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
+                  className="shrink-0 px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
                 >
                   <XCircle size={14} className={killing[agent.pid] ? 'animate-pulse' : ''} />
                   Kill
@@ -111,11 +111,11 @@ export function AgentsPage() {
               <div className="flex items-center gap-4 text-xs">
                 <div className="flex items-center gap-1">
                   <span className="text-gray-500">CPU</span>
-                  <span className="font-mono text-green-400">{agent.cpu?.toFixed(1)}%</span>
+                  <span className="font-mono text-port-success">{agent.cpu?.toFixed(1)}%</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-gray-500">Mem</span>
-                  <span className="font-mono text-blue-400">{agent.memory?.toFixed(1)}%</span>
+                  <span className="font-mono text-port-accent">{agent.memory?.toFixed(1)}%</span>
                 </div>
               </div>
               <button
@@ -130,7 +130,7 @@ export function AgentsPage() {
                   <div className="grid grid-cols-2 gap-3 text-xs">
                     <div>
                       <div className="text-gray-500 uppercase tracking-wide mb-0.5">Agent Type</div>
-                      <div className="text-purple-400">{agent.agentName}</div>
+                      <div className="text-port-accent-2">{agent.agentName}</div>
                     </div>
                     <div>
                       <div className="text-gray-500 uppercase tracking-wide mb-0.5">Parent PID</div>
@@ -195,20 +195,20 @@ export function AgentsPage() {
                     </button>
                   </td>
                   <td className="px-4 py-4 font-mono text-white">{agent.pid}</td>
-                  <td className="px-4 py-4 font-mono text-cyan-400">{agent.runtimeFormatted}</td>
-                  <td className="px-4 py-4 font-mono text-green-400">{agent.cpu?.toFixed(1)}%</td>
-                  <td className="px-4 py-4 font-mono text-blue-400">{agent.memory?.toFixed(1)}%</td>
+                  <td className="px-4 py-4 font-mono text-port-accent">{agent.runtimeFormatted}</td>
+                  <td className="px-4 py-4 font-mono text-port-success">{agent.cpu?.toFixed(1)}%</td>
+                  <td className="px-4 py-4 font-mono text-port-accent">{agent.memory?.toFixed(1)}%</td>
                   <td className="px-4 py-4 font-mono text-gray-300">
                     {agent.agentName.toLowerCase()}
                     {agent.source === 'cos' && (
-                      <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-purple-500/20 text-purple-400 rounded">CoS</span>
+                      <span className="ml-2 px-1.5 py-0.5 text-[10px] bg-port-accent-2/20 text-port-accent-2 rounded">CoS</span>
                     )}
                   </td>
                   <td className="px-4 py-4 text-center">
                     <button
                       onClick={() => handleKill(agent.pid)}
                       disabled={killing[agent.pid]}
-                      className="px-3 py-1.5 bg-red-500/20 text-red-400 hover:bg-red-500/30 hover:text-red-300 disabled:opacity-50 rounded text-sm font-medium inline-flex items-center gap-1.5 transition-colors"
+                      className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-sm font-medium inline-flex items-center gap-1.5 transition-colors"
                       title="Kill process"
                     >
                       <XCircle size={16} className={killing[agent.pid] ? 'animate-pulse' : ''} />
@@ -225,9 +225,9 @@ export function AgentsPage() {
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Agent Type</div>
-                              <div className="text-sm text-purple-400 font-medium">
+                              <div className="text-sm text-port-accent-2 font-medium">
                                 {agent.agentName}
-                                {agent.source === 'cos' && <span className="ml-1 text-xs text-purple-300">(CoS)</span>}
+                                {agent.source === 'cos' && <span className="ml-1 text-xs text-port-accent-2/80">(CoS)</span>}
                               </div>
                             </div>
                             <div>
@@ -274,7 +274,7 @@ export function AgentsPage() {
                           <div>
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Full Command</div>
                             <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto">
-                              <code className="text-sm text-cyan-300 font-mono whitespace-pre-wrap break-all">
+                              <code className="text-sm text-port-accent/90 font-mono whitespace-pre-wrap break-all">
                                 {agent.command}
                               </code>
                             </div>
@@ -297,11 +297,11 @@ export function AgentsPage() {
                             <div>
                               <div className="flex items-center justify-between text-xs mb-1">
                                 <span className="text-gray-500 uppercase tracking-wide">CPU Usage</span>
-                                <span className="text-green-400 font-mono">{agent.cpu?.toFixed(1)}%</span>
+                                <span className="text-port-success font-mono">{agent.cpu?.toFixed(1)}%</span>
                               </div>
                               <div className="h-2 bg-port-border rounded-full overflow-hidden">
                                 <div
-                                  className="h-full bg-green-500 rounded-full transition-all"
+                                  className="h-full bg-port-success rounded-full transition-all"
                                   style={{ width: `${Math.min(agent.cpu || 0, 100)}%` }}
                                 />
                               </div>
@@ -309,11 +309,11 @@ export function AgentsPage() {
                             <div>
                               <div className="flex items-center justify-between text-xs mb-1">
                                 <span className="text-gray-500 uppercase tracking-wide">Memory Usage</span>
-                                <span className="text-blue-400 font-mono">{agent.memory?.toFixed(1)}%</span>
+                                <span className="text-port-accent font-mono">{agent.memory?.toFixed(1)}%</span>
                               </div>
                               <div className="h-2 bg-port-border rounded-full overflow-hidden">
                                 <div
-                                  className="h-full bg-blue-500 rounded-full transition-all"
+                                  className="h-full bg-port-accent rounded-full transition-all"
                                   style={{ width: `${Math.min(agent.memory || 0, 100)}%` }}
                                 />
                               </div>
