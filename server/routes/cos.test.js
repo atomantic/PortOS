@@ -318,6 +318,31 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
     });
+
+    it('should accept multiple screenshots and attachment objects', async () => {
+      const taskData = {
+        description: 'Test task with images',
+        screenshots: ['/data/screenshots/a.png', '/data/screenshots/b.png'],
+        attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/data/cos/attachments/a-123.png', size: 100, mimeType: 'image/png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/data/cos/attachments/b-456.png', size: 200, mimeType: 'image/png' },
+        ]
+      };
+      cos.addTask.mockResolvedValue({ id: 'task-002', ...taskData, status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks')
+        .send(taskData);
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          screenshots: taskData.screenshots,
+          attachments: taskData.attachments,
+        }),
+        'user'
+      );
+    });
   });
 
   describe('POST /api/cos/tasks/reorder', () => {

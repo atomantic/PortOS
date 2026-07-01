@@ -136,6 +136,18 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/tmp\/b\.png`/);
     });
 
+    it('lists multiple attached files (including images) so the agent can read them via its own tools', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/tmp/attachments/a-123.png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/tmp/attachments/b-456.png' },
+        ] } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).toMatch(/### Attachments/);
+      expect(prompt).toMatch(/`\/tmp\/attachments\/a-123\.png` \(photo-one\.png\)/);
+      expect(prompt).toMatch(/`\/tmp\/attachments\/b-456\.png` \(photo-two\.png\)/);
+    });
+
     it('renders the worktree block with branch + path when worktreeInfo is present', () => {
       const wt = {
         branchName: 'cos/test-1',
