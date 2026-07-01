@@ -136,12 +136,18 @@ export default function PostTab({ tab = 'launcher', subtab }) {
     case 'history':
       return <PostHistory onBack={() => navigate('/post/launcher')} />;
     case 'config':
-      return (
+      // Wait for the async config load before mounting the editor: its state is
+      // seeded once from the `config` prop, so mounting on a null/loading config
+      // would seed drill defaults and a subsequent Save would overwrite the
+      // user's saved settings. Mirrors PostSessionLauncher's null guard.
+      return config ? (
         <PostDrillConfig
           config={config}
           onSaved={handleConfigSaved}
           onBack={() => navigate('/post/launcher')}
         />
+      ) : (
+        <div className="text-gray-500">Loading configuration...</div>
       );
     case 'wordplay':
       return <WordplayTrainer config={config} onConfigUpdate={setConfig} onBack={() => navigate('/post/launcher')} />;
