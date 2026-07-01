@@ -81,29 +81,34 @@ export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) 
   out.to = current;
 
   if (samples < options.minSamples) {
+    // Adaptive not engaged yet — leave the manual config untouched (the manual
+    // value stays the override until there's enough signal to manage difficulty).
     out.reason = 'insufficient-samples';
     return out;
   }
 
   const direction = scoreToDirection(score, options);
   out.direction = direction;
-  if (direction === 0) {
-    out.reason = 'hold';
-    return out;
-  }
 
   const valueDelta = direction * spec.step * (spec.harderIsHigher ? 1 : -1);
   const next = clampNum(current + valueDelta, spec.min, spec.max);
   out.to = next;
 
-  if (next === current) {
+  // Once adaptive is engaged, ALWAYS write the adaptive-clamped value into the
+  // effective config — even on the hold/at-boundary paths where `next === current`.
+  // Otherwise a manual config the schema allows but the adaptive spec caps lower
+  // (e.g. steps=20 vs adaptive max 16) would be reported as clamped in the preview
+  // but still generated at the raw value, breaking the advertised bounds.
+  out.config = { ...base, [spec.field]: next };
+
+  if (direction === 0) {
+    out.reason = 'hold';
+  } else if (next === current) {
     // Already at the difficulty boundary in the requested direction.
     out.reason = direction > 0 ? 'at-hardest' : 'at-easiest';
-    return out;
+  } else {
+    out.applied = true;
+    out.reason = direction > 0 ? 'harder' : 'easier';
   }
-
-  out.config = { ...base, [spec.field]: next };
-  out.applied = true;
-  out.reason = direction > 0 ? 'harder' : 'easier';
   return out;
 }

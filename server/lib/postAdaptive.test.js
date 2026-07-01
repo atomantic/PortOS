@@ -104,6 +104,36 @@ describe('adaptDrillConfig', () => {
     expect(res.config.steps).toBe(spec.min);
   });
 
+  it('clamps an out-of-spec manual value into the effective config once engaged', () => {
+    // The schema/UI allow doubling-chain steps up to 20, but the adaptive spec
+    // caps at 16. When adaptive is engaged, the effective config must carry the
+    // clamped value (16) — not the raw 20 — so generation honors the bounds the
+    // preview advertises. (Regression: codex P2 on PR #2003.)
+    const spec = ADAPTIVE_SPECS['doubling-chain'];
+    const res = adaptDrillConfig('doubling-chain', { steps: 20 }, { score: 99, samples: 8 });
+    expect(res.reason).toBe('at-hardest');
+    expect(res.config.steps).toBe(spec.max); // 16, not 20
+    expect(res.to).toBe(spec.max);
+  });
+
+  it('enforces the clamped value even on the hold path', () => {
+    // steps=20 (out of spec) with a mid-band score → hold, but the effective
+    // config is still clamped down to the adaptive max.
+    const spec = ADAPTIVE_SPECS['doubling-chain'];
+    const res = adaptDrillConfig('doubling-chain', { steps: 20 }, { score: 70, samples: 8 });
+    expect(res.reason).toBe('hold');
+    expect(res.applied).toBe(false);
+    expect(res.config.steps).toBe(spec.max);
+  });
+
+  it('leaves an out-of-spec manual value untouched until adaptive engages', () => {
+    // Below the sample gate, adaptive is not engaged — the manual value (even
+    // out of the adaptive spec range) passes through as the override.
+    const res = adaptDrillConfig('doubling-chain', { steps: 20 }, { score: 99, samples: 1 });
+    expect(res.reason).toBe('insufficient-samples');
+    expect(res.config.steps).toBe(20);
+  });
+
   it('falls back to the spec base when the config omits the knob', () => {
     const spec = ADAPTIVE_SPECS.multiplication;
     const res = adaptDrillConfig('multiplication', {}, { score: 95, samples: 5 });
