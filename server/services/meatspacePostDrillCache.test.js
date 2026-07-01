@@ -85,4 +85,55 @@ describe('meatspacePostDrillCache', () => {
     const triggered = requestCacheFill(['not-a-real-type'], null, null);
     expect(triggered).toEqual([]);
   });
+
+  it('saveCache persists primedTypes alongside the drills so a restart mid-drain stays warm', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    requestCacheFill(['compound-chain'], null, null);
+    await vi.advanceTimersByTimeAsync(20000);
+
+    const [, written] = atomicWrite.mock.calls.at(-1);
+    expect(written.primedTypes).toContain('compound-chain');
+    expect(Array.isArray(written.drills['compound-chain'])).toBe(true);
+  });
+});
+
+// Disk-shape scenarios need an isolated module instance per test (cache/
+// primedTypes are module-level state that would otherwise leak between
+// cases), so these reset modules and re-import instead of sharing the
+// describe block above.
+describe('meatspacePostDrillCache — on-disk cache shape', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('infers primed from a legacy flat-shape file ({ [type]: [...] }, no primedTypes key)', async () => {
+    const { readFile } = await import('fs/promises');
+    readFile.mockResolvedValueOnce(JSON.stringify({
+      'compound-chain': [{ type: 'compound-chain', challenges: [] }],
+      'bridge-word': [],
+    }));
+    const { initDrillCache, getCacheStats } = await import('./meatspacePostDrillCache.js');
+    await initDrillCache();
+
+    expect(getCacheStats()['compound-chain'].cold).toBe(false);
+    expect(getCacheStats()['bridge-word'].cold).toBe(true);
+  });
+
+  it('stays warm across a restart that lands mid-drain (persisted primedTypes, 0 on-disk drills)', async () => {
+    const { readFile } = await import('fs/promises');
+    readFile.mockResolvedValueOnce(JSON.stringify({
+      drills: { 'compound-chain': [] },
+      primedTypes: ['compound-chain'],
+    }));
+    const { initDrillCache, getCacheStats } = await import('./meatspacePostDrillCache.js');
+    await initDrillCache();
+
+    // Before persisting primedTypes, a restart landing here (0 cached on
+    // disk) would re-classify this type as cold, permanently stalling future
+    // replenishment — the same bug the in-process primedTypes fix targeted,
+    // just triggered by a restart instead of a drain.
+    const stats = getCacheStats()['compound-chain'];
+    expect(stats.count).toBe(0);
+    expect(stats.cold).toBe(false);
+  });
 });

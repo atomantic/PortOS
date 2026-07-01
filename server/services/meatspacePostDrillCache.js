@@ -35,18 +35,41 @@ let saveQueued = false;
 // meatspacePostDrillCache.test.js "stays warm after draining to zero").
 const primedTypes = new Set();
 
+// Pre-existing on-disk cache files (before primedTypes existed) store the
+// per-type drill arrays directly at the top level: { [type]: [...] }. Newer
+// files nest them under `drills` alongside a persisted `primedTypes` list, so
+// "primed" survives a restart that happens to land while a type is fully
+// drained (debouncedSave fires on every consumption, so 0-length is a
+// legitimate on-disk snapshot mid-drain — without persisting the flag, that
+// restart would re-classify an already-warmed type as cold, reproducing the
+// same permanent-replenish-stall bug this file's primedTypes fix targets,
+// just gated behind a restart instead of an in-process drain).
+function isNestedCacheShape(parsed) {
+  return !!(parsed && typeof parsed === 'object' && parsed.drills && typeof parsed.drills === 'object' && !Array.isArray(parsed.drills));
+}
+
 async function loadCache() {
   const raw = await readFile(CACHE_FILE, 'utf-8').catch(() => '{}');
-  cache = safeJSONParse(raw, {});
+  const parsed = safeJSONParse(raw, {});
+  const nested = isNestedCacheShape(parsed);
+  cache = nested ? parsed.drills : parsed;
+  if (nested && Array.isArray(parsed.primedTypes)) {
+    for (const type of parsed.primedTypes) {
+      if (CACHEABLE_TYPES.includes(type)) primedTypes.add(type);
+    }
+  }
   for (const type of CACHEABLE_TYPES) {
     if (!Array.isArray(cache[type])) cache[type] = [];
+    // Also infer from non-empty arrays — covers pre-migration flat-shape
+    // files (no primedTypes key) and defensively covers any type a stale
+    // persisted primedTypes list somehow missed.
     if (cache[type].length > 0) primedTypes.add(type);
   }
 }
 
 async function saveCache() {
   await ensureDir(PATHS.meatspace);
-  await atomicWrite(CACHE_FILE, cache);
+  await atomicWrite(CACHE_FILE, { drills: cache, primedTypes: [...primedTypes] });
 }
 
 function debouncedSave() {
