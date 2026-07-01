@@ -165,7 +165,7 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     runMode(closePendingMode(), providerId, model);
   }
 
-  function handleConfirmFill() {
+  async function handleConfirmFill() {
     const modeId = closePendingMode();
     const chosenProviderId = fillProviderId || null;
     const chosenModel = fillModel || null;
@@ -178,10 +178,16 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
         .then(updated => onConfigUpdate?.(updated))
         .catch(() => {});
     }
+    // Generate the user's immediate drill FIRST, then kick off the bulk
+    // background fill. Starting both at once would fire two concurrent
+    // generateLlmDrill calls against the same provider (the cold cache
+    // guarantees the drill request also misses and generates on demand) —
+    // exactly the concurrent-LLM-calls problem this consent flow exists to
+    // prevent, and especially bad for a single-session TUI provider.
+    await runMode(modeId, chosenProviderId, chosenModel);
     const providerLabel = providers.find(p => p.id === chosenProviderId)?.name || 'the default provider';
     toast(`Filling ${modeId.replace(/-/g, ' ')} cache in the background using ${providerLabel}`);
     fillPostDrillCache([modeId], chosenProviderId, chosenModel).catch(() => {});
-    runMode(modeId, chosenProviderId, chosenModel);
   }
 
   function handleBackToModes() {
