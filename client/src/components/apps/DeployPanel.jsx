@@ -81,7 +81,7 @@ export default function DeployPanel({ appId, appName }) {
       <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
         <button
           onClick={handleDeploy}
-          className="px-2 py-1 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors flex items-center gap-1"
+          className="px-2 py-1 bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30 transition-colors flex items-center gap-1"
           title={isDeploying && dismissed ? 'Show deploy output' : undefined}
         >
           <Rocket size={14} className={isDeploying ? 'animate-pulse' : ''} />
@@ -92,7 +92,7 @@ export default function DeployPanel({ appId, appName }) {
         <button
           onClick={() => setShowOptions(prev => !prev)}
           disabled={isDeploying}
-          className="px-1 py-1 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors disabled:opacity-50 border-l border-port-border"
+          className="px-1 py-1 bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 border-l border-port-border"
         >
           <ChevronDown size={12} />
         </button>
@@ -106,7 +106,7 @@ export default function DeployPanel({ appId, appName }) {
                 type="checkbox"
                 checked={selectedFlags.includes(opt.value)}
                 onChange={() => toggleFlag(opt.value)}
-                className="accent-purple-500"
+                className="accent-port-accent-2"
               />
               <span className="text-xs text-gray-300">{opt.label}</span>
             </label>
@@ -114,7 +114,7 @@ export default function DeployPanel({ appId, appName }) {
           <div className="border-t border-port-border mt-1 pt-1">
             <button
               onClick={handleDeploy}
-              className="w-full px-2 py-1.5 text-xs bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 rounded transition-colors"
+              className="w-full px-2 py-1.5 text-xs bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30 rounded transition-colors"
             >
               Deploy{selectedFlags.length > 0 ? ` (${selectedFlags.join(' ')})` : ''}
             </button>
@@ -134,9 +134,9 @@ export default function DeployPanel({ appId, appName }) {
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
             <div className="flex items-center gap-2">
-              <Rocket size={16} className="text-purple-400" />
+              <Rocket size={16} className="text-port-accent-2" />
               <span id="deploy-panel-title" className="text-sm font-medium text-white">Deploy: {appName}</span>
-              {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
+              {isDeploying && <BrailleSpinner text="" className="text-xs text-port-accent-2" />}
             </div>
             <button
               onClick={handleClose}
@@ -157,7 +157,7 @@ export default function DeployPanel({ appId, appName }) {
                 key={i}
                 className={
                   line.stream === 'stderr' ? 'text-port-error whitespace-pre-wrap break-words' :
-                  line.stream === 'status' ? 'text-purple-400 font-bold whitespace-pre-wrap break-words' :
+                  line.stream === 'status' ? 'text-port-accent-2 font-bold whitespace-pre-wrap break-words' :
                   'text-gray-300 whitespace-pre-wrap break-words'
                 }
               >
