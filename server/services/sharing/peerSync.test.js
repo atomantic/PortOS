@@ -124,6 +124,35 @@ vi.mock('../musicVideo/projects.js', async () => ({
   mergeProjectsFromSync: vi.fn(),
 }));
 
+// #1964 — getFullSyncCoverageForPeer walks EVERY PEER_SUBSCRIBABLE_KIND and
+// calls listRecordsForKind for each. These four backends were previously left
+// unmocked, so on a developer machine with a populated `portos` Postgres the
+// coverage `total` counted REAL author / CD-project / mood-board / writers-room
+// rows instead of the fixture — the order-dependent flake tracked in #1964
+// (`expected 3 to be 1`). Partially mock them (spread the real module via
+// importOriginal so the merge/get/tombstone/asset surface other sharing modules
+// import stays intact) and override ONLY the DB-reading list functions, so
+// coverage is driven purely by the per-test fixture, hermetic regardless of
+// suite order or DB contents.
+vi.mock('../authors/index.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listAuthors: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../creativeDirector/local.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listProjects: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../moodBoard/index.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listBoards: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listWorksForSync: vi.fn().mockResolvedValue([]),
+  listFoldersForSync: vi.fn().mockResolvedValue([]),
+  listExercisesForSync: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
   peerSocketOptions: {},
@@ -198,6 +227,12 @@ import {
   listProjects as listMusicVideoProjects,
   mergeProjectsFromSync as mergeMusicVideoProjectsFromSync,
 } from '../musicVideo/projects.js';
+// #1964 — list backends the full-sync coverage path reads; imported so the
+// beforeEach can reset each to an empty fixture (see the partial mocks above).
+import { listAuthors } from '../authors/index.js';
+import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
+import { listBoards } from '../moodBoard/index.js';
+import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
@@ -298,6 +333,14 @@ beforeEach(async () => {
   vi.mocked(getMusicVideoProject).mockReset().mockResolvedValue(null);
   vi.mocked(listMusicVideoProjects).mockReset().mockResolvedValue([]);
   vi.mocked(mergeMusicVideoProjectsFromSync).mockReset().mockResolvedValue({ applied: true, count: 1 });
+  // #1964 — default the remaining coverage list backends to empty so the full-
+  // sync coverage `total` is fixture-driven, never leaking real Postgres rows.
+  vi.mocked(listAuthors).mockReset().mockResolvedValue([]);
+  vi.mocked(listCreativeDirectorProjects).mockReset().mockResolvedValue([]);
+  vi.mocked(listBoards).mockReset().mockResolvedValue([]);
+  vi.mocked(listWorksForSync).mockReset().mockResolvedValue([]);
+  vi.mocked(listFoldersForSync).mockReset().mockResolvedValue([]);
+  vi.mocked(listExercisesForSync).mockReset().mockResolvedValue([]);
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
