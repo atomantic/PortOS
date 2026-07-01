@@ -208,7 +208,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
       return (
         <div className="max-w-lg mx-auto space-y-6">
           <div className="flex items-center justify-between text-sm text-gray-400">
-            <span className="text-purple-400">{DRILL_LABELS[drillType] || drillType} — Training</span>
+            <span className="text-port-accent-2">{DRILL_LABELS[drillType] || drillType} — Training</span>
             <span>Drill {drillIndex + 1} of {drillCount}</span>
           </div>
           <AILoadingIndicator label="Evaluating your response..." />
@@ -223,7 +223,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     return (
       <div className="max-w-lg mx-auto space-y-6">
         <div className="flex items-center justify-between text-sm text-gray-400">
-          <span className="text-purple-400">{DRILL_LABELS[drillType] || drillType} — Training</span>
+          <span className="text-port-accent-2">{DRILL_LABELS[drillType] || drillType} — Training</span>
           <span>Drill {drillIndex + 1} of {drillCount}</span>
         </div>
         <div className="text-center py-6">
@@ -237,7 +237,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         <button
           onClick={acknowledgeTrainingFeedback}
           autoFocus
-          className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-white font-medium rounded-lg transition-colors"
         >
           Next
         </button>
@@ -246,7 +246,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
             <span>Prompt {questionIndex + 1} of {totalPrompts}</span>
           </div>
           <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-            <div className="h-full bg-purple-500/60 transition-all" style={{ width: `${((questionIndex + 1) / totalPrompts) * 100}%` }} />
+            <div className="h-full bg-port-accent-2/60 transition-all" style={{ width: `${((questionIndex + 1) / totalPrompts) * 100}%` }} />
           </div>
         </div>
       </div>
@@ -257,7 +257,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     <div className="max-w-lg mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between text-sm text-gray-400">
-        <span className={isTraining ? 'text-purple-400' : ''}>
+        <span className={isTraining ? 'text-port-accent-2' : ''}>
           {DRILL_LABELS[drillType] || drillType}
           {isTraining && ' — Training'}
         </span>
@@ -400,7 +400,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
           label="Imagine this scenario"
           prompt={currentPrompt?.prompt}
           badge={currentPrompt?.category}
-          badgeColor="bg-cyan-500/20 text-cyan-400"
+          badgeColor="bg-port-accent/20 text-port-accent"
           placeholder="Describe what would happen..."
           inputValue={inputValue}
           setInputValue={setInputValue}
@@ -432,7 +432,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
             <div className="text-sm text-gray-500 mb-3">Write a micro-story using all 3 words:</div>
             <div className="flex justify-center gap-3">
               {(currentPrompt?.words || []).map((w, i) => (
-                <span key={i} className="px-3 py-1.5 bg-indigo-500/20 text-indigo-400 rounded-lg text-lg font-medium">{w}</span>
+                <span key={i} className="px-3 py-1.5 bg-port-accent-2/20 text-port-accent-2 rounded-lg text-lg font-medium">{w}</span>
               ))}
             </div>
           </div>
@@ -708,7 +708,7 @@ function PunWordplayUI({ challenge, inputValue, setInputValue, onSubmit, inputRe
     <>
       <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
         <div className="text-sm text-gray-500 mb-3">
-          {challenge?.type && <span className="inline-block px-2 py-0.5 rounded text-xs mr-2 bg-purple-500/20 text-purple-400">{challenge.type}</span>}
+          {challenge?.type && <span className="inline-block px-2 py-0.5 rounded text-xs mr-2 bg-port-accent-2/20 text-port-accent-2">{challenge.type}</span>}
           Create wordplay
         </div>
         <p className="text-white text-lg leading-relaxed">{challenge?.prompt}</p>

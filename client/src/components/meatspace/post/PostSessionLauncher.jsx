@@ -197,7 +197,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
       {enabledLlmDrills.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="flex items-center gap-2 mb-3">
-            <Brain size={14} className="text-purple-400" />
+            <Brain size={14} className="text-port-accent-2" />
             <h3 className="text-sm font-medium text-gray-400">Wit & Memory</h3>
             {(llmProviderId || providers.length > 0) && (
               <span className="text-xs text-gray-600 ml-auto">
@@ -244,7 +244,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
             onClick={() => setMode('train')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               mode === 'train'
-                ? 'bg-purple-600 text-white'
+                ? 'bg-port-accent-2 text-white'
                 : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
             }`}
           >
@@ -286,7 +286,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
             disabled={!hasAnyDrills}
             className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
               mode === 'train'
-                ? 'bg-purple-600 hover:bg-purple-500'
+                ? 'bg-port-accent-2 hover:bg-port-accent-2/80'
                 : 'bg-port-success hover:bg-port-success/80'
             } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
           >
@@ -299,7 +299,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
           disabled={!hasAnyDrills}
           className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
             mode === 'train'
-              ? 'bg-purple-600/70 hover:bg-purple-500/70'
+              ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80'
               : 'bg-port-accent hover:bg-port-accent/80'
           } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
         >

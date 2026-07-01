@@ -95,7 +95,7 @@ export default function PostDrillRunner({ session }) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
         <div className="flex items-center justify-between text-sm text-gray-400">
-          <span className="text-purple-400">{DRILL_LABELS[currentDrill.type] || currentDrill.type} — Training</span>
+          <span className="text-port-accent-2">{DRILL_LABELS[currentDrill.type] || currentDrill.type} — Training</span>
           <span>Drill {currentDrillIndex + 1} of {drillCount}</span>
         </div>
 
@@ -130,7 +130,7 @@ export default function PostDrillRunner({ session }) {
         <button
           onClick={acknowledgeAnswer}
           autoFocus
-          className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-white font-medium rounded-lg transition-colors"
         >
           Next
         </button>
@@ -141,7 +141,7 @@ export default function PostDrillRunner({ session }) {
             <span>{Math.round(progressPct)}%</span>
           </div>
           <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-            <div className="h-full bg-purple-500/60 transition-all" style={{ width: `${progressPct}%` }} />
+            <div className="h-full bg-port-accent-2/60 transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
       </div>
@@ -152,7 +152,7 @@ export default function PostDrillRunner({ session }) {
     <div className="max-w-lg mx-auto space-y-6">
       {/* Drill header */}
       <div className="flex items-center justify-between text-sm text-gray-400">
-        <span className={isTraining ? 'text-purple-400' : ''}>
+        <span className={isTraining ? 'text-port-accent-2' : ''}>
           {DRILL_LABELS[currentDrill.type] || currentDrill.type}
           {isTraining && ' — Training'}
         </span>
@@ -199,7 +199,7 @@ export default function PostDrillRunner({ session }) {
         <button
           type="submit"
           disabled={inputValue.trim() === ''}
-          className={`px-6 py-3 ${isTraining ? 'bg-purple-600 hover:bg-purple-500' : 'bg-port-accent hover:bg-port-accent/80'} disabled:opacity-50 text-white font-medium rounded-lg transition-colors`}
+          className={`px-6 py-3 ${isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80' : 'bg-port-accent hover:bg-port-accent/80'} disabled:opacity-50 text-white font-medium rounded-lg transition-colors`}
         >
           Enter
         </button>
@@ -223,7 +223,7 @@ export default function PostDrillRunner({ session }) {
         </div>
         <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
           <div
-            className={`h-full ${isTraining ? 'bg-purple-500/60' : 'bg-port-accent/60'} transition-all`}
+            className={`h-full ${isTraining ? 'bg-port-accent-2/60' : 'bg-port-accent/60'} transition-all`}
             style={{ width: `${progressPct}%` }}
           />
         </div>
