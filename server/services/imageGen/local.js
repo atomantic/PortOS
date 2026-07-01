@@ -28,6 +28,7 @@ import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { extractGatedRepo } from '../../lib/hfErrors.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 import { computePixelDelta } from './regen.js';
 
@@ -57,20 +58,12 @@ export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 export const cancel = () => {
   if (!activeProcess) return false;
   const proc = activeProcess;
-  proc.kill('SIGTERM');
   // KEEP activeProcess + activeJob set until proc.on('close') clears them.
   // Otherwise BUSY immediately allows a new generation while the SIGTERM'd
   // mflux child is still running, and we lose the handle for a follow-up
-  // SIGKILL. Escalate after 8s if the child ignored SIGTERM.
-  setTimeout(() => {
-    // proc.killed is set the moment proc.kill() is called; it does NOT mean
-    // the child has exited. Check exitCode (null until 'close' fires) so the
-    // SIGKILL escalation actually triggers when mflux ignores SIGTERM.
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ image child didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  // SIGKILL. The `activeProcess === proc` guard escalates only when this is
+  // still the tracked child (mflux can ignore SIGTERM mid-tensor-op).
+  killWithEscalation(proc, { label: 'image child', stillRunning: () => activeProcess === proc });
   return true;
 };
 

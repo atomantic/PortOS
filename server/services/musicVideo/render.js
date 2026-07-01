@@ -30,7 +30,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
-import { loadHistory, saveHistory } from '../videoGen/local.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, updateProject } from './projects.js';
 
@@ -43,25 +44,18 @@ const projectRenders = new Map();
 // can't pass the 409 check during that await window and spawn a duplicate.
 const PENDING = Symbol('mv-render-pending');
 
-// Serialize the read-modify-write of the shared video-history file across renders.
-// The per-project mutex above deliberately lets two DIFFERENT projects render (and
-// finalize) in parallel, but each finalizer does loadHistory→unshift→saveHistory and
-// saveHistory is a bare atomicWrite (the normal video-gen pipeline only avoids this
-// race because mediaJobQueue serializes it to one GPU lane — this renderer bypasses
-// that queue). Two overlapping finalize windows would otherwise drop one project's
-// entry, leaving its "View rendered music video" deep link pointing at a 404. One
-// module-level tail collapses every history append onto a single lane.
-let historyWriteTail = Promise.resolve();
-function appendToVideoHistory(meta) {
-  const run = historyWriteTail.then(async () => {
-    const loaded = await loadHistory();
-    const history = Array.isArray(loaded) ? loaded : [];
-    history.unshift(meta);
-    await saveHistory(history);
-  });
-  historyWriteTail = run.catch(() => {}); // keep the lane alive even if one append throws
-  return run;
-}
+// Append a finalized render to the shared video-history file. The per-project
+// mutex above deliberately lets two DIFFERENT projects render (and finalize) in
+// parallel, and this renderer bypasses the mediaJobQueue GPU lane that serializes
+// the normal video-gen pipeline — so its append MUST share the ONE per-file
+// serialization tail (`mutateVideoHistory` in videoGen/history.js) with every
+// other writer of data/video-history.json (the video-gen finalizer, full-video
+// downloads, stitch/upscale, timeline saves). A private second tail here would
+// re-open the race against those other writers and drop an entry, leaving a
+// "View rendered music video" deep link pointing at a 404. mutateVideoHistory
+// keeps the lane alive if one append throws.
+const appendToVideoHistory = (meta) =>
+  mutateVideoHistory((history) => { history.unshift(meta); return history; });
 
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
@@ -75,13 +69,7 @@ export function cancelRender(jobId) {
   const job = jobs.get(jobId);
   if (!job || !job.process) return false;
   const proc = job.process;
-  proc.kill('SIGTERM');
-  setTimeout(() => {
-    if (job.process === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ music-video render didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  killWithEscalation(proc, { label: 'music-video render', stillRunning: () => job.process === proc });
   return true;
 }
 
