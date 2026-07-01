@@ -357,25 +357,17 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
     // Migrated onto the shared Drawer primitive (backdrop, scroll-lock, Esc,
     // and role="dialog"/aria-modal all come from there). `size="sm"` (520px)
     // adopts the shared width bracket instead of the old hand-rolled 480px, so
-    // future drawer UX changes land here too. The record-name subtitle moves
-    // from the old two-line header into the top of the body since the primitive
-    // header is a single title.
+    // future drawer UX changes land here too. The record-name subtitle keeps its
+    // header slot via the primitive's `subtitle` prop.
     <Drawer
       open
       onClose={onClose}
       title="Sync Details"
+      subtitle={recordName ?? (recordLoading ? 'Loading…' : null)}
       size="sm"
       bodyClassName="space-y-5"
       closeLabel="Close sync details"
     >
-      {/* Record-name subtitle (was the header's second line) */}
-      {recordName && (
-        <p className="text-xs text-gray-400 truncate -mt-1">{recordName}</p>
-      )}
-      {!recordName && recordLoading && (
-        <p className="text-xs text-gray-500 -mt-1">Loading…</p>
-      )}
-
       {/* Collection preview */}
       {kind === 'mediaCollection' && (
         <section>
