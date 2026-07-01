@@ -24,8 +24,8 @@ import { findFfmpeg, probeVideoDuration } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
-import { importUploadedTrack } from './pipeline/musicLibrary.js';
-import { createTrack } from './tracks/index.js';
+import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
+import { createTrack, DURATION_MAX_SEC } from './tracks/index.js';
 
 // youtube.com/watch, youtu.be, and m.youtube.com only (issue #1945 scope:
 // "start narrow" — other video hosts are explicitly out of scope). This also
@@ -131,6 +131,12 @@ export async function startYoutubeImport(url) {
         // title in one invocation.
         '--no-simulate',
         '--progress',
+        // Bound resource use to the same limits the manual upload path already
+        // enforces (MUSIC_UPLOAD_MAX_BYTES, DURATION_MAX_SEC) — without these,
+        // a long video or a livestream/archive URL downloads and transcodes
+        // unbounded, eating disk in tmpdir()/data/music and CPU with no cap.
+        '--max-filesize', String(MUSIC_UPLOAD_MAX_BYTES),
+        '--match-filters', `duration <= ${DURATION_MAX_SEC}`,
         '-o', `${tempBase}.%(ext)s`,
         url,
       ];
@@ -179,7 +185,15 @@ export async function startYoutubeImport(url) {
         return;
       }
       if (exit.code !== 0 || !existsSync(outPath)) {
-        throw new Error(exit.reason || `yt-dlp exited ${exit.code}`);
+        // A --match-filters/--max-filesize rejection exits 0 with no output
+        // file (yt-dlp treats a filtered-out video as "nothing to do", not an
+        // error) — `--print`'s suppression of normal reporting (see above)
+        // means the specific reason never reaches our stdout/stderr parsing,
+        // so name the two known bounds explicitly rather than a bare exit code.
+        const reason = exit.code === 0
+          ? `no audio was produced — the video may be longer than ${DURATION_MAX_SEC / 60} minutes or its audio larger than ${Math.round(MUSIC_UPLOAD_MAX_BYTES / 1024 / 1024)}MB, or it may be otherwise unavailable`
+          : (exit.reason || `yt-dlp exited ${exit.code}`);
+        throw new Error(reason);
       }
 
       broadcastSse(job, { type: 'progress', percent: 100, stage: 'importing' });

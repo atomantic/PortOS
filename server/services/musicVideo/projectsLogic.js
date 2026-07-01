@@ -90,10 +90,17 @@ export function applyProjectPatch(project, patch) {
   // gate on `audioAnalysis` truthiness, and the render's beat-snap step reads
   // its `beats` array; a stale analysis would silently apply the previous
   // song's beat grid to the new audio (#1945 — both the manual "Change
-  // track" picker and the YouTube-import attach PATCH through here).
+  // track" picker and the YouTube-import attach PATCH through here). Any
+  // scene already marked `beatAligned` also stops being true — its saved
+  // startSec/endSec were snapped to the OLD song's beat positions, and
+  // `beatSnapClips` honors a beat-aligned scene's saved bounds outright
+  // (skipping re-derivation against the new, absent beat grid), so leaving
+  // the flag set would render the old song's cut points against new audio.
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
-  return touch(project, trackChanged ? { ...patch, audioAnalysis: null } : patch);
+  if (!trackChanged) return touch(project, patch);
+  const scenes = (project.scenes || []).map((s) => (s.beatAligned ? { ...s, beatAligned: false } : s));
+  return touch(project, { ...patch, audioAnalysis: null, scenes });
 }
 
 /**
