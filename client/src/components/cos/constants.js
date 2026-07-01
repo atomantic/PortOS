@@ -50,7 +50,7 @@ export const TABS = [
 // `<meshStandardMaterial color={...}>` props, which cannot resolve CSS custom
 // properties (`var(--port-mood-thinking)`) — parity would need a resolved-hex
 // lookup (via `getComputedStyle`) threaded through every 3D avatar, not just a
-// CSS variable swap. See PLAN.md for the scoped follow-up.
+// CSS variable swap. See the follow-up discussion on #1909 for the scoped fix.
 export const AGENT_STATES = {
   sleeping: { label: 'Sleeping', color: '#6366f1', icon: '💤' },
   thinking: { label: 'Thinking', color: '#f59e0b', icon: '🧠' },
