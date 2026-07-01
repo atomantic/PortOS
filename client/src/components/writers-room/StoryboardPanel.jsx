@@ -402,7 +402,7 @@ export default function StoryboardPanel({
         )}
       </div>
 
-      <Drawer open={settingsOpen} onClose={closeImageGenSettings} title="Image Gen Settings">
+      <Drawer open={settingsOpen} onClose={closeImageGenSettings} title="Image Gen Settings" size="lg">
         <ImageGenTab />
       </Drawer>
     </div>
