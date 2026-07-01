@@ -43,6 +43,28 @@ export default function UpdateTab() {
   const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
+  // Mirrors `updating`, kept in sync at every transition point rather than via
+  // a separate effect — the socket-listener effect below has an empty dep
+  // array (so its closures never see fresh state) and needs a synchronous
+  // read in handleDisconnect.
+  const updatingRef = useRef(false);
+  // Guards against re-entering the restart-poll transition once it has
+  // started — "pm2-stop", "restarting"/"restart", "complete", and the
+  // disconnect fallback can each independently trigger it, and only the
+  // first should win (a later trigger firing on top of an in-progress poll
+  // would reset its attempt budget just as it's about to succeed).
+  const pollingActiveRef = useRef(false);
+  // update.sh kills THIS server process at the "pm2-stop" step — the very
+  // start of the script, long before "restarting"/"restart"/"complete" are
+  // emitted (npm install, setup, migrations, and the client build all happen
+  // in between on the detached, still-running script). Treating "pm2-stop" as
+  // a restart signal (like "restarting"/"restart" already are) catches this
+  // early death via the same wired step mechanism. `disconnect` is a last-
+  // resort backstop for the rare case that step's socket emit loses the race
+  // with the kill. True while the trigger was early (npm install/build still
+  // ahead — needs a much longer poll timeout) vs late (the classic path,
+  // where only the PM2 restart itself remains).
+  const earlyRestartRef = useRef(false);
   // Tracks whether the health endpoint went down during a restart poll. A
   // reconcile (issue #1779) often lands the SAME version (new commits, no
   // release bump), so version-change detection alone can't confirm completion —
@@ -67,6 +89,19 @@ export default function UpdateTab() {
 
   // Socket event listeners for update progress
   useEffect(() => {
+    // Transition into restart-poll mode. `early` picks the poll timeout
+    // budget (see pollHealth) and only the first call takes effect — see
+    // pollingActiveRef's comment.
+    const beginPolling = (early, message) => {
+      if (pollingActiveRef.current) return;
+      pollingActiveRef.current = true;
+      earlyRestartRef.current = early;
+      updatingRef.current = false;
+      setUpdating(false);
+      setPolling(true);
+      toast.loading(message, { id: 'portos-update-restart', duration: Infinity });
+    };
+
     const handleStep = ({ step, status: stepStatus, message }) => {
       setSteps(prev => {
         const existing = prev.findIndex(s => s.step === step);
@@ -78,52 +113,79 @@ export default function UpdateTab() {
         }
         return [...prev, entry];
       });
-      // When the server signals it's restarting, begin health polling immediately.
-      // The PM2 restart may kill the server before portos:update:complete fires.
-      if ((step === 'restarting' || step === 'restart') && stepStatus !== 'error' && targetVersionRef.current) {
-        setUpdating(false);
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+      if (stepStatus === 'error' || !targetVersionRef.current) return;
+      // update.sh deletes this app from PM2 at "pm2-stop" — killing this
+      // server process well before npm install/setup/migrations/build run
+      // and "restarting"/"restart"/"complete" are ever reached. Treat
+      // "pm2-stop" itself as the restart signal (this step's "running" log
+      // line is written just before the kill, so it's the last one with a
+      // real chance of reaching the client) so the spinner doesn't hang
+      // waiting on later events from a process that's already gone.
+      if (step === 'pm2-stop' && stepStatus === 'running') {
+        beginPolling(true, 'PortOS is updating and restarting — this can take a few minutes...');
+      } else if (step === 'restarting' || step === 'restart') {
+        beginPolling(false, 'PortOS is restarting...');
       }
     };
 
     const handleComplete = ({ success, newVersion, versionKnown }) => {
+      updatingRef.current = false;
       setUpdating(false);
       if (success) {
         // Use server-reported actual version when available; fall back to target
         if (versionKnown && newVersion) {
           targetVersionRef.current = newVersion;
         }
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+        beginPolling(false, 'PortOS is restarting...');
       }
     };
 
     const handleError = ({ message }) => {
+      updatingRef.current = false;
       setUpdating(false);
       setPolling(false);
       toast.dismiss('portos-update-restart');
       setUpdateError(message);
     };
 
+    // Last-resort backstop for the rare case where even the "pm2-stop" step
+    // above loses the race with the kill (its socket emit never reaches the
+    // client before the process dies). The socket's own disconnect fires
+    // reliably at the moment of death regardless of which step caused it.
+    // Gated on updatingRef so a disconnect unrelated to an update (or one
+    // that arrives after a step already transitioned us into polling) is a
+    // no-op — narrowing the false-positive window to the brief git-pull/
+    // submodules steps that precede "pm2-stop".
+    const handleDisconnect = () => {
+      if (!updatingRef.current) return;
+      beginPolling(true, 'PortOS is updating and restarting — this can take a few minutes...');
+    };
+
     socket.on('portos:update:step', handleStep);
     socket.on('portos:update:complete', handleComplete);
     socket.on('portos:update:error', handleError);
+    socket.on('disconnect', handleDisconnect);
 
     return () => {
       socket.off('portos:update:step', handleStep);
       socket.off('portos:update:complete', handleComplete);
       socket.off('portos:update:error', handleError);
+      socket.off('disconnect', handleDisconnect);
     };
   }, []);
 
   // Poll health endpoint after restart to detect new version. The hook's
   // `enabled: polling` gate handles teardown automatically when polling flips
-  // off; attemptsRef resets on every fresh polling cycle.
+  // off; attemptsRef resets on every fresh polling cycle. The else branch
+  // clears pollingActiveRef on every poll-ending transition (success or
+  // timeout) so a subsequent update attempt can trigger the restart-poll
+  // transition again.
   useEffect(() => {
     if (polling) {
       attemptsRef.current = 0;
       healthWentDownRef.current = false;
+    } else {
+      pollingActiveRef.current = false;
     }
   }, [polling]);
 
@@ -165,7 +227,13 @@ export default function UpdateTab() {
     if (ok && typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
       maxUptimeRef.current = ok.uptime;
     }
-    if (attemptsRef.current >= 30) {
+    // An early-triggered poll starts as soon as the server dies at "pm2-stop"
+    // — npm install, setup, migrations, and the client build all still have to
+    // run on the detached script before the restart, which can take minutes.
+    // The classic late-stage path only starts once those are already done, so
+    // its 60s window is generous by comparison.
+    const maxAttempts = earlyRestartRef.current ? 300 : 30;
+    if (attemptsRef.current >= maxAttempts) {
       setPolling(false);
       toast.error('Restart timed out — try reloading manually', { id: 'portos-update-restart' });
     }
@@ -195,11 +263,15 @@ export default function UpdateTab() {
     // uptime) is detected as a drop below this pre-update value.
     const preHealth = await api.checkHealth().catch(() => null);
     maxUptimeRef.current = typeof preHealth?.uptime === 'number' ? preHealth.uptime : 0;
+    earlyRestartRef.current = false;
+    pollingActiveRef.current = false;
+    updatingRef.current = true;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
     const result = await api.executePortosUpdate(opts).catch(err => {
       setUpdateError(err.message);
+      updatingRef.current = false;
       setUpdating(false);
       return null;
     });
