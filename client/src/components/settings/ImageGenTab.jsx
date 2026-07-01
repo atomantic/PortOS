@@ -407,8 +407,8 @@ export function ImageGenTab() {
         aria-labelledby={`tab-${mediaTab}`}
         className="space-y-5"
       >
+      {/* Mode picker */}
       {mediaTab === 'backend' && (
-      /* Mode picker */
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <ImageIcon size={18} />
@@ -497,9 +497,9 @@ export function ImageGenTab() {
         </div>
       )}
 
+      {/* Codex CLI config — the toggle that enables the option lives here.
+          Codex appears as a backend tile only after the user flips this on. */}
       {mediaTab === 'codex' && (
-      /* Codex CLI config — the toggle that enables the option lives here.
-         Codex appears as a backend tile only after the user flips this on. */
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Terminal size={18} />
@@ -599,10 +599,10 @@ export function ImageGenTab() {
       </div>
       )}
 
+      {/* HuggingFace token — used by local Flux models (FLUX.1-dev, FLUX.2-klein).
+          Independent of the mode picker because the token persists in settings
+          and applies whenever local image gen runs. */}
       {mediaTab === 'tokens' && (
-      /* HuggingFace token — used by local Flux models (FLUX.1-dev, FLUX.2-klein).
-         Independent of the mode picker because the token persists in settings
-         and applies whenever local image gen runs. */
       <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-white">
           <Key size={18} />
