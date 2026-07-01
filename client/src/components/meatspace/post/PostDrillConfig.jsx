@@ -121,6 +121,10 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
           <p className="text-gray-500 text-xs">{meta.desc}</p>
         </div>
         <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label={meta.label}
           onClick={onToggle}
           className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
             enabled ? toggleBg : 'bg-port-border'
@@ -281,6 +285,10 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Wit &amp; Memory (LLM)</h3>
         </div>
         <button
+          type="button"
+          role="switch"
+          aria-checked={llmEnabled}
+          aria-label="Wit & Memory (LLM) drills"
           onClick={() => setLlmEnabled(!llmEnabled)}
           className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
             llmEnabled ? 'bg-port-accent-2' : 'bg-port-border'

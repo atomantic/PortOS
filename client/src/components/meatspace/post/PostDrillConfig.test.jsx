@@ -84,4 +84,24 @@ describe('PostDrillConfig', () => {
       expect(saved[t].enabled).toBe(false);
     }
   });
+
+  it('enabling a newly-exposed drill persists it as enabled', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    // Toggle the "What If?" card (a previously-inaccessible imagination drill) on.
+    fireEvent.click(screen.getByRole('switch', { name: 'What If?' }));
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+
+    const saved = updatePostConfig.mock.calls[0][0].llmDrills.drillTypes;
+    expect(saved['what-if'].enabled).toBe(true);
+    // A sibling imagination drill left untouched stays disabled.
+    expect(saved['reframe'].enabled).toBe(false);
+  });
+
+  it('exposes toggles as accessible switches reflecting on/off state', () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    // Legacy enabled drill → switch checked; newly-exposed drill → unchecked.
+    expect(screen.getByRole('switch', { name: 'Pun & Wordplay' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+  });
 });
