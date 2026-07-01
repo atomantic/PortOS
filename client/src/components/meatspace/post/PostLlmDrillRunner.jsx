@@ -237,7 +237,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         <button
           onClick={acknowledgeTrainingFeedback}
           autoFocus
-          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-white font-medium rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
         >
           Next
         </button>

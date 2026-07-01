@@ -138,8 +138,8 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
         <button
           onClick={handleSave}
           className={`w-full flex items-center justify-center gap-2 px-6 py-3 ${
-            isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80' : 'bg-port-success hover:bg-port-success/80'
-          } text-white font-medium rounded-lg transition-colors`}
+            isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2' : 'bg-port-success hover:bg-port-success/80 text-white'
+          } font-medium rounded-lg transition-colors`}
         >
           {isTraining ? <Dumbbell size={18} /> : <Save size={18} />}
           {isTraining ? 'Log Training' : 'Save Session'}

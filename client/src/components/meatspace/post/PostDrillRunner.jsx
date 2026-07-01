@@ -130,7 +130,7 @@ export default function PostDrillRunner({ session }) {
         <button
           onClick={acknowledgeAnswer}
           autoFocus
-          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-white font-medium rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
         >
           Next
         </button>
@@ -199,7 +199,7 @@ export default function PostDrillRunner({ session }) {
         <button
           type="submit"
           disabled={inputValue.trim() === ''}
-          className={`px-6 py-3 ${isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80' : 'bg-port-accent hover:bg-port-accent/80'} disabled:opacity-50 text-white font-medium rounded-lg transition-colors`}
+          className={`px-6 py-3 ${isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2' : 'bg-port-accent hover:bg-port-accent/80 text-white'} disabled:opacity-50 font-medium rounded-lg transition-colors`}
         >
           Enter
         </button>

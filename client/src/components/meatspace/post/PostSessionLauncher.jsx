@@ -244,7 +244,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
             onClick={() => setMode('train')}
             className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               mode === 'train'
-                ? 'bg-port-accent-2 text-white'
+                ? 'bg-port-accent-2 text-port-on-accent-2'
                 : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
             }`}
           >
@@ -286,9 +286,9 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
             disabled={!hasAnyDrills}
             className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
               mode === 'train'
-                ? 'bg-port-accent-2 hover:bg-port-accent-2/80'
-                : 'bg-port-success hover:bg-port-success/80'
-            } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
+                ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
+                : 'bg-port-success hover:bg-port-success/80 text-white'
+            } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
           >
             <Timer size={18} />
             Quick 5 Min ({domainCount} domains)
@@ -299,9 +299,9 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
           disabled={!hasAnyDrills}
           className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
             mode === 'train'
-              ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80'
-              : 'bg-port-accent hover:bg-port-accent/80'
-          } disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors`}
+              ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
+              : 'bg-port-accent hover:bg-port-accent/80 text-white'
+          } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
         >
           {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
           {mode === 'train' ? 'Full Training' : 'Full POST'}
