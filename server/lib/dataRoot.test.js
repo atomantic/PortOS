@@ -32,6 +32,11 @@ describe('resolveInstallRoot', () => {
     expect(out).not.toBe(REAL_ROOT);
   });
 
+  it('IGNORES an override that itself points at a worktree checkout (symmetric leak safety)', () => {
+    process.env[DATA_ROOT_ENV] = join(REAL_ROOT, 'data', 'cos', 'worktrees', 'agent-xyz');
+    expect(resolveInstallRoot(REAL_ROOT)).toBe(REAL_ROOT);
+  });
+
   it('IGNORES the pin when the fallback is a worktree checkout (leak safety #1947)', () => {
     // A worktree-executing process must never honor a (possibly-leaked) pin —
     // resolving its data root to the live install would let worktree code

@@ -5,13 +5,13 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// The install this migration CODE ships with (the checkout that loaded this
-// file), independent of any env override — used to detect a mixed-root run.
-const CHECKOUT_ROOT = join(__dirname, '..');
 // Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
 // so a process booted from inside a CoS agent git worktree still resolves to
-// the real install (#1947). Falls back to the derived path when unset.
-const DEFAULT_ROOT_DIR = resolveInstallRoot(CHECKOUT_ROOT);
+// the real install (#1947). resolveInstallRoot refuses the pin when the derived
+// path is itself a worktree, so a worktree launch falls through to its own path
+// and the isWorktreeRoot backstop below skips. Falls back to the derived path
+// when the env var is unset.
+const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..'));
 const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'migrations');
 
 const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
@@ -96,20 +96,6 @@ export async function runMigrations({
   // with a clear warning instead of crashing boot.
   if (isWorktreeRoot(rootDir)) {
     console.warn(`⚠️ Skipping migrations: rootDir is a CoS agent worktree checkout (${rootDir}) — no data/ tree to migrate`);
-    return 0;
-  }
-
-  // Mixed-root backstop (#1947): the migrations being scanned ship with THIS
-  // checkout (DEFAULT_MIGRATIONS_DIR), but rootDir points at a DIFFERENT
-  // install's data tree — e.g. a worktree process with PORTOS_DATA_ROOT pinned
-  // to the real install. Applying this checkout's migrations to a foreign data
-  // tree can mark a worktree-only migration applied without ever copying its
-  // shipped data (seed migrations only warn when their data.reference sample is
-  // absent), corrupting the real install's applied-list. Only enforce when the
-  // default migrations dir is in use — an explicit migrationsDir (tests, a
-  // deliberate cross-install run) means the caller owns the code/data pairing.
-  if (migrationsDir === DEFAULT_MIGRATIONS_DIR && resolve(rootDir) !== resolve(CHECKOUT_ROOT)) {
-    console.warn(`⚠️ Skipping migrations: data root (${rootDir}) differs from the executing checkout (${CHECKOUT_ROOT}) — refusing to apply this checkout's migrations to a foreign install (mixed-root)`);
     return 0;
   }
 

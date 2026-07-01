@@ -56,7 +56,13 @@ export function resolveInstallRoot(fallbackRoot) {
   const override = process.env[DATA_ROOT_ENV];
   if (typeof override === 'string' && override.trim() !== '') {
     const trimmed = override.trim();
-    return isAbsolute(trimmed) ? trimmed : resolvePath(trimmed);
+    const resolved = isAbsolute(trimmed) ? trimmed : resolvePath(trimmed);
+    // Symmetric leak-safety: never let the data root resolve INTO a worktree,
+    // whether the worktree path came from the executing location (above) or a
+    // misconfigured override. A worktree has no runtime data/ tree, so honoring
+    // such an override would strand the real process on an empty tree.
+    if (isWorktreeRoot(resolved)) return fallbackRoot;
+    return resolved;
   }
   return fallbackRoot;
 }
