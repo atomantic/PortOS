@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader } from 'lucide-react';
-import { getPostConfig, getPostSessions } from '../../../services/api';
+import { getPostConfig, getPostSessions, getPostStats } from '../../../services/api';
 import { usePostSession } from '../../../hooks/usePostSession';
 import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
@@ -20,6 +20,8 @@ export default function PostTab({ tab = 'launcher', subtab }) {
   const navigate = useNavigate();
   const [config, setConfig] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [statsWeek, setStatsWeek] = useState(null);
   const [sessionTags, setSessionTags] = useState({});
   const [sessionView, setSessionView] = useState(null);
   const session = usePostSession();
@@ -32,12 +34,16 @@ export default function PostTab({ tab = 'launcher', subtab }) {
   }, [tab, subtab]);
 
   async function loadData() {
-    const [cfg, sessions] = await Promise.all([
+    const [cfg, sessions, st, stWeek] = await Promise.all([
       getPostConfig().catch(() => null),
-      getPostSessions().catch(() => [])
+      getPostSessions().catch(() => []),
+      getPostStats(30).catch(() => null),
+      getPostStats(7).catch(() => null)
     ]);
     setConfig(cfg);
     setRecentSessions(sessions || []);
+    setStats(st);
+    setStatsWeek(stWeek);
   }
 
   async function handleStart(drillConfigs, tags, training = false) {
@@ -174,6 +180,8 @@ export default function PostTab({ tab = 'launcher', subtab }) {
         <PostSessionLauncher
           config={config}
           recentSessions={recentSessions}
+          stats={stats}
+          statsWeek={statsWeek}
           onStart={handleStart}
           onViewHistory={() => navigate('/post/history')}
           onViewConfig={() => navigate('/post/config')}

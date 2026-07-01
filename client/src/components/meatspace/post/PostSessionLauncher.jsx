@@ -1,10 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio } from 'lucide-react';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { getProviders } from '../../../services/api';
 import { isApiProvider } from '../../../utils/providers';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
 
-export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
+// Streak glyph tiers mirror DailyPostWidget so the launcher and dashboard agree.
+const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨');
+
+const scoreColorClass = (score) =>
+  score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
+
+export default function PostSessionLauncher({ config, recentSessions, stats, statsWeek, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
@@ -31,6 +37,14 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
   const llmProviderId = config.llmDrills?.providerId || null;
   const llmModel = config.llmDrills?.model || null;
 
+  function buildCleanTags() {
+    const cleanTags = {};
+    for (const [k, v] of Object.entries(tags)) {
+      if (v.trim()) cleanTags[k] = v.trim();
+    }
+    return cleanTags;
+  }
+
   function handleStart() {
     const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
       type,
@@ -56,11 +70,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
     }));
 
     const drillConfigs = [...mathConfigs, ...llmConfigs];
-    const cleanTags = {};
-    for (const [k, v] of Object.entries(tags)) {
-      if (v.trim()) cleanTags[k] = v.trim();
-    }
-    onStart(drillConfigs, cleanTags, mode === 'train');
+    onStart(drillConfigs, buildCleanTags(), mode === 'train');
   }
 
   // Build domain → enabled drills map for quick session
@@ -111,15 +121,61 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
       drillConfigs.push(drillConfig);
     }
 
-    const cleanTags = {};
-    for (const [k, v] of Object.entries(tags)) {
-      if (v.trim()) cleanTags[k] = v.trim();
-    }
-    onStart(drillConfigs, cleanTags, mode === 'train');
+    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+  }
+
+  // Focused practice on a single domain: run every enabled drill in that domain
+  // (not one random pick, unlike the balanced quick session) so the weakest
+  // domain gets a substantive workout.
+  function handleFocusDomain(domainKey) {
+    const drills = enabledDomains[domainKey];
+    if (!drills || drills.length === 0) return;
+    const domain = DOMAINS[domainKey];
+    const drillConfigs = drills.map(({ type, cfg, source }) => {
+      const drillConfig = {
+        type,
+        domain: domainKey,
+        config: source === 'math'
+          ? {
+              steps: cfg.steps,
+              count: cfg.count,
+              maxDigits: cfg.maxDigits,
+              subtrahend: cfg.subtrahend,
+              startRange: cfg.startRange,
+              bases: cfg.bases,
+              maxExponent: cfg.maxExponent,
+              tolerancePct: cfg.tolerancePct,
+            }
+          : { count: cfg.count || 5 },
+        timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
+      };
+      if (source === 'llm') {
+        drillConfig.providerId = cfg.providerId || llmProviderId;
+        drillConfig.model = cfg.model || llmModel;
+      }
+      return drillConfig;
+    });
+    onStart(drillConfigs, buildCleanTags(), mode === 'train');
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0;
   const domainCount = Object.keys(enabledDomains).length;
+
+  // Analytics derived from the 30-day stats window. Streaks span all history.
+  const hasStats = stats && stats.sessionCount > 0;
+  const currentStreak = stats?.currentStreak ?? 0;
+  const longestStreak = stats?.longestStreak ?? 0;
+  const overall30 = stats?.overall ?? null;
+  const overall7 = statsWeek?.overall ?? null;
+  // Trend: 7-day average relative to the 30-day average. Needs both to exist.
+  const trendDelta = overall7 != null && overall30 != null ? overall7 - overall30 : null;
+
+  // Weakest domain = lowest-scoring domain that ALSO has enabled drills, so the
+  // one-click focus button always targets something the user can actually run.
+  const domainAverages = hasStats ? computeDomainAverages(stats.byDrill) : [];
+  const weakestDomain = domainAverages
+    .filter(d => enabledDomains[d.key])
+    .reduce((weakest, d) => (!weakest || d.score < weakest.score ? d : weakest), null);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -178,6 +234,75 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
               )}
             </div>
           </div>
+
+          {/* Progress analytics — streak, 7-vs-30-day trend, weakest-domain focus.
+              Degrades to nothing until there's scored history to summarize. */}
+          {hasStats && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                {/* Streak */}
+                <div className="bg-port-card border border-port-border rounded-lg p-4 flex items-center gap-3">
+                  <div className="text-2xl" aria-hidden="true">{streakGlyph(currentStreak)}</div>
+                  <div className="min-w-0">
+                    <div className="text-xl font-bold text-white leading-tight">
+                      {currentStreak} day{currentStreak !== 1 ? 's' : ''}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {currentStreak > 0 ? 'Current streak' : 'No streak yet'}
+                      {longestStreak > 0 && ` · best ${longestStreak}`}
+                    </div>
+                  </div>
+                </div>
+                {/* 7-day trend vs 30-day baseline */}
+                <div className="bg-port-card border border-port-border rounded-lg p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className={`text-xl font-bold leading-tight ${overall7 != null ? scoreColorClass(overall7) : 'text-gray-500'}`}>
+                        {overall7 != null ? overall7 : '—'}
+                      </div>
+                      <div className="text-xs text-gray-500">7-day avg</div>
+                    </div>
+                    {trendDelta != null && (
+                      <div className={`flex items-center gap-0.5 text-sm font-medium shrink-0 ${
+                        trendDelta > 0 ? 'text-port-success' : trendDelta < 0 ? 'text-port-error' : 'text-gray-400'
+                      }`}>
+                        {trendDelta > 0 ? <TrendingUp size={16} /> : trendDelta < 0 ? <TrendingDown size={16} /> : <Minus size={16} />}
+                        {trendDelta > 0 ? '+' : ''}{trendDelta}
+                      </div>
+                    )}
+                  </div>
+                  {overall30 != null && (
+                    <div className="text-xs text-gray-600 mt-1">vs {overall30} over 30 days</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Weakest-domain callout + one-click focused practice */}
+              {weakestDomain && (
+                <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <Target size={18} className={`mt-0.5 shrink-0 ${DOMAINS[weakestDomain.key]?.color || 'text-port-warning'}`} />
+                    <div className="min-w-0">
+                      <div className="text-sm text-white">
+                        Lowest domain this month:{' '}
+                        <span className={`font-semibold ${DOMAINS[weakestDomain.key]?.color || 'text-white'}`}>{weakestDomain.label}</span>
+                        {' — '}
+                        <span className={`font-mono ${scoreColorClass(weakestDomain.score)}`}>{weakestDomain.score} avg</span>
+                      </div>
+                      <div className="text-xs text-gray-500">Focus a short session here to bring it up.</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleFocusDomain(weakestDomain.key)}
+                    className="shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-port-warning/20 hover:bg-port-warning/30 text-port-warning border border-port-warning/40 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Target size={14} />
+                    Practice {weakestDomain.label}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Mode Toggle */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
