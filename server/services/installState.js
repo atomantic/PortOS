@@ -31,6 +31,7 @@ import { stat, readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { listPendingMigrations } from '../../scripts/run-migrations.js';
+import { isWorktreeRoot } from '../lib/dataRoot.js';
 
 // The commit the running process was launched at. Captured once at boot (see
 // captureBootCommit, called from server/index.js). null when not yet captured
@@ -187,12 +188,24 @@ async function detectStaleDeps(rootDir, { statMtime = statMtimeMs } = {}) {
  */
 export async function getInstallState({
   rootDir = PATHS.root,
+  // The migration ledger lives under the DATA install root (data/migrations.applied.json),
+  // which boot writes via the PORTOS_DATA_ROOT-resolved root — not the code checkout.
+  // Read it from the same place so a pinned-data-root worktree boot doesn't report every
+  // already-applied migration as pending (#1947). Equals rootDir for a normal install.
+  migrationRootDir = PATHS.installRoot,
   boot = bootCommit,
   getCurrentCommit = () => gitRevParseHead(rootDir),
   isAncestor = (a, b) => gitIsAncestor(a, b, rootDir),
   statMtime = statMtimeMs,
   clientSourceNewer = (buildMs) => isClientSourceNewer(rootDir, buildMs, { statMtime }),
-  listPending = () => listPendingMigrations({ rootDir }),
+  // Mirror the boot backstop (#1947): when the data root is a CoS agent worktree
+  // checkout, boot SKIPS migrations and never writes data/migrations.applied.json
+  // there — so scanning against that ledger-less tree would report every
+  // migration as pending and flag the install outOfSync on every worktree boot.
+  // Short-circuit to zero pending instead, matching what boot actually did.
+  listPending = () => isWorktreeRoot(migrationRootDir)
+    ? Promise.resolve([])
+    : listPendingMigrations({ rootDir: migrationRootDir }),
 } = {}) {
   const currentCommit = await getCurrentCommit().catch(() => null);
 

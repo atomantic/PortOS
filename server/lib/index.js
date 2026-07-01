@@ -108,6 +108,7 @@ export * from './collectionStore.js';
 export * from './conflictJournal.js';
 export * from './createKeyCachedQueue.js';
 export * from './createNewestWinsGuard.js';
+export * from './dataRoot.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';

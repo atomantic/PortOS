@@ -64,6 +64,15 @@ module.exports = {
       windowsHide: IS_WIN,
       env: {
         ...BASE_ENV,
+        // Pin the install root explicitly so data-root resolution never derives
+        // it from the executing file's location. A server booted from inside a
+        // CoS git worktree (data/cos/worktrees/agent-*) would otherwise resolve
+        // `data/` to the worktree's nonexistent tree and crash boot migrations
+        // (#1947). Set ONLY here (not BASE_ENV) so the portos-cos runner — which
+        // spreads its env into agent CLI children — never leaks it into worktree
+        // agents; fileUtils/resolveInstallRoot also refuse a leaked pin when the
+        // executing code is itself in a worktree, as belt-and-suspenders.
+        PORTOS_DATA_ROOT: __dirname,
         PORT: PORTS.API,
         PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
         HOST: '0.0.0.0',
