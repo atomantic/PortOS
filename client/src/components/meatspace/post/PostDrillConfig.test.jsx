@@ -149,6 +149,26 @@ describe('PostDrillConfig', () => {
     await waitFor(() => expect(screen.getByText(/max digits 2 → 3 \(harder\)/)).toBeTruthy());
   });
 
+  it('labels the estimation hardest boundary by difficulty, not numeric max', async () => {
+    // For estimation, lower tolerance is harder — so the hardest boundary carries
+    // the MINIMUM tolerance value. The badge must read "hardest", never "at max".
+    getPostAdaptivePreview.mockResolvedValue({
+      enabled: true,
+      drills: {
+        estimation: { type: 'estimation', field: 'tolerancePct', from: 3, to: 3, applied: false, score: 96, samples: 6, reason: 'at-hardest' },
+      },
+    });
+    const withAdaptive = {
+      ...config,
+      mentalMath: { drillTypes: { ...config.mentalMath.drillTypes, estimation: { enabled: true, tolerancePct: 3 } } },
+      adaptive: { enabled: true },
+    };
+    render(<PostDrillConfig config={withAdaptive} onSaved={vi.fn()} onBack={vi.fn()} />);
+    await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/hardest tolerance % 3/)).toBeTruthy());
+    expect(screen.queryByText(/at max tolerance/)).toBeNull();
+  });
+
   it('toggling Adaptive on persists enabled=true', async () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     fireEvent.click(screen.getByRole('switch', { name: 'Adaptive difficulty' }));

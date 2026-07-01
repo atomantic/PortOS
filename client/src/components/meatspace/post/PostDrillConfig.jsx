@@ -23,8 +23,11 @@ function describeAdaptive(info) {
   if (info.reason === 'insufficient-samples') {
     return { text: `Adaptive: warming up — needs more scored sessions`, tone: 'hold' };
   }
-  if (info.reason === 'at-hardest') return { text: `Adaptive: at max ${field} ${info.from}${pct}`, tone: 'up' };
-  if (info.reason === 'at-easiest') return { text: `Adaptive: at min ${field} ${info.from}${pct}`, tone: 'down' };
+  // Use difficulty-relative wording ("hardest"/"easiest"), not "max"/"min": for
+  // estimation the hardest value is the MINIMUM tolerance, so "at max" would read
+  // backwards. `from` is the effective (clamped) value at the boundary.
+  if (info.reason === 'at-hardest') return { text: `Adaptive: hardest ${field} ${info.from}${pct}`, tone: 'up' };
+  if (info.reason === 'at-easiest') return { text: `Adaptive: easiest ${field} ${info.from}${pct}`, tone: 'down' };
   return { text: `Adaptive: holding ${field} ${info.from}${pct}`, tone: 'hold' };
 }
 
