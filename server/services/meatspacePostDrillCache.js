@@ -177,12 +177,21 @@ export function getCacheStats() {
  * fill (0 -> MAX_PER_TYPE). Called from the drill-cache/fill route after the
  * user has been prompted and picked a provider/model. See PortOS's
  * no-cold-bootstrap-LLM-calls rule in CLAUDE.md.
+ *
+ * Types are filled sequentially, not in parallel — a single consented "fill
+ * all" request must not turn into several concurrent LLM batches hammering
+ * the provider at once (the old startup fill had this same rule; consent
+ * gating the request doesn't excuse spamming a slow/TUI provider once it's
+ * granted). Fire-and-forget from the caller's perspective: the requested
+ * type list is returned immediately, the fills run in the background.
  */
 export function requestCacheFill(types, providerId, model) {
   const requested = (types?.length ? types : CACHEABLE_TYPES).filter(t => CACHEABLE_TYPES.includes(t));
-  for (const type of requested) {
-    replenishType(type, providerId, model);
-  }
+  (async () => {
+    for (const type of requested) {
+      await replenishType(type, providerId, model);
+    }
+  })().catch(err => console.error(`❌ POST cache: requestCacheFill failed: ${err.message}`));
   return requested;
 }
 
