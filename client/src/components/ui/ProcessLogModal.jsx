@@ -32,9 +32,13 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
   // slow response can't clobber the newer process's logs.
   const reqIdRef = useRef(0);
 
-  // Seed the selected process from the caller's hint whenever the modal opens.
+  // Seed the selected process from the caller's hint whenever the modal opens,
+  // and drop any prior run's logs so they never flash under the new title.
   useEffect(() => {
-    if (open) setSelected(processName || '');
+    if (!open) return;
+    setSelected(processName || '');
+    setLogs('');
+    setError('');
   }, [open, processName]);
 
   // Load the PM2 process picker options once per open (static across a session).
@@ -52,6 +56,9 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
     const reqId = ++reqIdRef.current;
     setLoading(true);
     setError('');
+    // Clear the prior logs so the in-flight fetch shows the spinner instead of
+    // the previous process/tail's output (which could sit under a new title).
+    setLogs('');
     const res = await api.getProcessLogs(selected, tailLines).catch((err) => {
       if (reqId === reqIdRef.current) setError(err?.message || 'Failed to load logs');
       return null;
