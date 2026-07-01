@@ -24,11 +24,18 @@ const IS_WIN = process.platform === 'win32';
 const __lib_filename = fileURLToPath(import.meta.url);
 const __lib_dirname = dirname(__lib_filename);
 
-// Install root (parent of data/, data.reference/). Prefer an explicit
-// PORTOS_DATA_ROOT env var over the import.meta.url-derived path so a process
-// booted from inside a CoS agent git worktree still resolves to the real
-// install (#1947). Falls back to the derived path when the env var is unset.
-const INSTALL_ROOT = resolveInstallRoot(join(__lib_dirname, '../..'));
+// The executing checkout's root (where THIS file physically lives). Code/source
+// paths — the repo root for git ops, `lib/slashdo` — must stay anchored here so
+// they always point at the checkout that loaded the code.
+const CODE_ROOT = join(__lib_dirname, '../..');
+
+// The install root that holds the runtime `data/` tree. Prefer an explicit
+// PORTOS_DATA_ROOT env var over the executing-file location so a process booted
+// from inside a CoS agent git worktree resolves `data/` to the real install
+// instead of the worktree's empty checkout (#1947). Falls back to CODE_ROOT
+// when the env var is unset (the two coincide for a normal install). Only
+// `data/*` paths follow this — source/git paths stay on CODE_ROOT.
+const INSTALL_ROOT = resolveInstallRoot(CODE_ROOT);
 
 /**
  * MIME types that could execute scripts when served inline — force Content-Disposition: attachment
@@ -39,7 +46,7 @@ export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'applicat
  * Base directories relative to project root
  */
 export const PATHS = {
-  root: INSTALL_ROOT,
+  root: CODE_ROOT,
   data: join(INSTALL_ROOT, 'data'),
   cos: join(INSTALL_ROOT, 'data/cos'),
   brain: join(INSTALL_ROOT, 'data/brain'),
@@ -108,7 +115,7 @@ export const PATHS = {
   // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
   // served — only this assets subtree is.
   brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
-  slashdo: join(INSTALL_ROOT, 'lib/slashdo')
+  slashdo: join(CODE_ROOT, 'lib/slashdo')
 };
 
 /**
