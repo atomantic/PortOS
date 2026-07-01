@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Radio, Headphones, Hand, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
+import useDrawerTab from '../../../hooks/useDrawerTab';
 
 const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
@@ -46,7 +47,7 @@ const DEFAULT_PREFS = { wpm: 18, effectiveWpm: 18, hz: 700, kochLevel: 2, bestAc
 const RAMP_SEC = 0.005;
 const TONE_GAIN = 0.25;
 
-const MODES = [
+export const MODES = [
   {
     id: 'copy',
     label: 'Copy',
@@ -314,9 +315,15 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   return { pattern, decoded, pressing, beginPress, endPress, clear };
 }
 
-export default function MorseTrainer({ onBack }) {
+// Valid `:mode` subroute segments. Anything else (stale/deleted deep link)
+// falls through to the mode grid rather than a blank panel.
+export const MORSE_MODE_IDS = MODES.map((m) => m.id);
+
+// `mode` is the routed `:mode` segment (`/post/morse/:mode`), validated by the
+// caller (PostTab) to one of MORSE_MODE_IDS or null — the URL is the single
+// source of truth for which drill is open, so there is no local mode state.
+export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, onBack }) {
   const [prefs, setPrefs] = useState(loadPrefs);
-  const [mode, setMode] = useState(null);
   const ensureCtx = useAudioContext();
   const unitMs = 1.2 / prefs.wpm * 1000;
   const keying = useKeyingDecoder({ unitMs, hz: prefs.hz, ensureCtx, enabled: mode === 'send' });
@@ -354,12 +361,12 @@ export default function MorseTrainer({ onBack }) {
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_24rem] gap-6">
         <div className="space-y-6 min-w-0 max-w-2xl">
           <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} />
-          {!mode && <ModeGrid onPick={setMode} />}
+          {!mode && <ModeGrid onPick={onSelectMode} />}
           {mode === 'copy' && (
-            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={() => setMode(null)} />
+            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} />
           )}
           {mode === 'send' && (
-            <SendDrill keying={keying} onExit={() => setMode(null)} />
+            <SendDrill keying={keying} onExit={onExitMode} />
           )}
         </div>
         <ReferenceWidget keying={keying} mode={mode} />
@@ -441,8 +448,12 @@ const REFERENCE_VIEWS = [
   { id: 'list', label: 'List', icon: ListIcon },
 ];
 
+const REFERENCE_VIEW_IDS = REFERENCE_VIEWS.map((v) => v.id);
+
 function ReferenceWidget({ keying, mode }) {
-  const [view, setView] = useState('tree');
+  // Reference tab lives in the `?ref=` search param so it's deep-linkable and
+  // survives reload/share; a stale value degrades to 'tree'.
+  const [view, setView] = useDrawerTab('ref', 'tree', REFERENCE_VIEW_IDS);
   // Only show the in-progress key path in Send mode — in Copy mode the right
   // widget is a passive cheat-sheet, not live feedback for the user.
   const currentPath = mode === 'send' ? keying.pattern : '';
