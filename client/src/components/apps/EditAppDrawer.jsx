@@ -32,6 +32,14 @@ const TABS = [
 ];
 const TAB_IDS = TABS.map(t => t.id);
 
+// Port fields that must be validated on save even when their tab is unmounted.
+const PORT_FIELDS = [
+  ['uiPort', 'UI Port'],
+  ['devUiPort', 'Dev UI Port'],
+  ['apiPort', 'API Port'],
+  ['tlsPort', 'TLS Port']
+];
+
 export default function EditAppDrawer({ app, onClose, onSave }) {
   const [activeTab, setActiveTab] = useDrawerTab('appTab', 'general', TAB_IDS);
   const [formData, setFormData] = useState({
@@ -165,6 +173,21 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       setActiveTab('general');
       setError('Name and Repository Path are required.');
       return;
+    }
+
+    // The port inputs (type="number") live on the Ports & TLS tab and are also
+    // unmounted while another tab is active, so a bad value like `1e`/`1.5`
+    // would slip past browser validation and get silently truncated by
+    // parseInt below. Validate each provided port as a whole 1–65535 number.
+    for (const [key, label] of PORT_FIELDS) {
+      const raw = String(formData[key] ?? '').trim();
+      if (!raw) continue;
+      const port = Number(raw);
+      if (!/^\d+$/.test(raw) || port < 1 || port > 65535) {
+        setActiveTab('ports');
+        setError(`${label} must be a whole number between 1 and 65535.`);
+        return;
+      }
     }
 
     setSaving(true);
