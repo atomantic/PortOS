@@ -175,6 +175,17 @@ log ""
 # subsequent fork() calls crash with MODULE_NOT_FOUND) while resurrecting other
 # projects' apps instead of killing them.
 step "pm2-stop" "running" "Stopping PortOS apps..."
+# `pm2 delete` below kills portos-server itself (it's one of the apps in
+# ecosystem.config.cjs) — the very Node process that's relaying these STEP
+# lines to the browser over Socket.IO. Every step emitted AFTER this point
+# (npm-install, build, migrations, the "restart" step below) has no live
+# process left to forward it, so the client never hears about them. Emit the
+# "restarting" step HERE, before the kill, while the relay is still alive —
+# it's the client's only signal to stop waiting on further steps and start
+# polling /api/system/health instead. Emitting it only at the end (previous
+# behavior) meant the client waited forever for a message that could never
+# arrive, leaving the UI spinning indefinitely.
+step "restarting" "running" "PortOS is restarting — installing dependencies and rebuilding, this can take several minutes..."
 run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
 run node ./node_modules/pm2/bin/pm2 update || true
 step "pm2-stop" "done" "Apps stopped"

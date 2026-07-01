@@ -23,6 +23,13 @@ const STEP_LABELS = {
   complete: 'Complete'
 };
 
+// The "restarting" step now fires right before update.sh/update.ps1 kill the
+// PM2-managed server (see update.sh's pm2-stop step), so polling can begin
+// before npm install / build / migrations run — not just before the final
+// restart. Those steps can take several minutes, so the health-poll timeout
+// needs enough headroom to cover them, not just a quick restart.
+const MAX_POLL_ATTEMPTS = 600; // 20 minutes at 2s intervals
+
 function StepIndicator({ status }) {
   if (status === 'running') return <Loader size={14} className="text-port-accent animate-spin" />;
   if (status === 'done') return <Check size={14} className="text-port-success" />;
@@ -41,6 +48,7 @@ export default function UpdateTab() {
   const [syncingFork, setSyncingFork] = useState(false);
   const [forkSyncError, setForkSyncError] = useState(null);
   const attemptsRef = useRef(0);
+  const updatingRef = useRef(false);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
   // Tracks whether the health endpoint went down during a restart poll. A
@@ -65,8 +73,25 @@ export default function UpdateTab() {
     fetchStatus();
   }, [fetchStatus]);
 
+  // Keeps a ref mirror of `updating` so socket handlers registered in the
+  // mount-only effect below (empty deps — they must stay stable across
+  // reconnects) can read the current value instead of a stale closure.
+  useEffect(() => {
+    updatingRef.current = updating;
+  }, [updating]);
+
   // Socket event listeners for update progress
   useEffect(() => {
+    // Shared by the 'restarting'/'restart' step, a successful 'complete', and
+    // the disconnect fallback below — all three mean the same thing: the
+    // server process is gone, stop waiting on more steps and start polling
+    // /api/system/health instead.
+    const beginRestartPolling = () => {
+      setUpdating(false);
+      setPolling(true);
+      toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+    };
+
     const handleStep = ({ step, status: stepStatus, message }) => {
       setSteps(prev => {
         const existing = prev.findIndex(s => s.step === step);
@@ -81,22 +106,20 @@ export default function UpdateTab() {
       // When the server signals it's restarting, begin health polling immediately.
       // The PM2 restart may kill the server before portos:update:complete fires.
       if ((step === 'restarting' || step === 'restart') && stepStatus !== 'error' && targetVersionRef.current) {
-        setUpdating(false);
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+        beginRestartPolling();
       }
     };
 
     const handleComplete = ({ success, newVersion, versionKnown }) => {
-      setUpdating(false);
-      if (success) {
-        // Use server-reported actual version when available; fall back to target
-        if (versionKnown && newVersion) {
-          targetVersionRef.current = newVersion;
-        }
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+      if (!success) {
+        setUpdating(false);
+        return;
       }
+      // Use server-reported actual version when available; fall back to target
+      if (versionKnown && newVersion) {
+        targetVersionRef.current = newVersion;
+      }
+      beginRestartPolling();
     };
 
     const handleError = ({ message }) => {
@@ -106,14 +129,25 @@ export default function UpdateTab() {
       setUpdateError(message);
     };
 
+    // Defense-in-depth: if the socket drops while an update is in flight and no
+    // 'restarting'/'restart' step ever arrived (e.g. the server process died
+    // before it could emit one), fall back to health polling instead of leaving
+    // the button spinning forever with no terminal event in sight.
+    const handleDisconnect = () => {
+      if (!updatingRef.current || !targetVersionRef.current) return;
+      beginRestartPolling();
+    };
+
     socket.on('portos:update:step', handleStep);
     socket.on('portos:update:complete', handleComplete);
     socket.on('portos:update:error', handleError);
+    socket.on('disconnect', handleDisconnect);
 
     return () => {
       socket.off('portos:update:step', handleStep);
       socket.off('portos:update:complete', handleComplete);
       socket.off('portos:update:error', handleError);
+      socket.off('disconnect', handleDisconnect);
     };
   }, []);
 
@@ -129,7 +163,10 @@ export default function UpdateTab() {
 
   const pollHealth = useCallback(async () => {
     attemptsRef.current += 1;
-    const ok = await api.checkHealth().catch(() => null);
+    // silent: the "PortOS is restarting..." loading toast already owns this
+    // UI — a bare Server-unreachable error toast on every failed poll during
+    // a multi-minute install/build window would just be noise on top of it.
+    const ok = await api.checkHealth({ silent: true }).catch(() => null);
     const preUpdateVersion = preUpdateVersionRef.current;
     if (!ok) {
       // Server is mid-restart (PM2 stopped it) — record the dip so a same-version
@@ -165,7 +202,7 @@ export default function UpdateTab() {
     if (ok && typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
       maxUptimeRef.current = ok.uptime;
     }
-    if (attemptsRef.current >= 30) {
+    if (attemptsRef.current >= MAX_POLL_ATTEMPTS) {
       setPolling(false);
       toast.error('Restart timed out — try reloading manually', { id: 'portos-update-restart' });
     }
