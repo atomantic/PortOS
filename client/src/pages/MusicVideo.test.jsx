@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 
 const PROJECT_WITH_CLIP = {
@@ -106,6 +106,28 @@ const openProject = async (project) => {
   const btn = await screen.findByRole('button', { name: new RegExp(project.name) });
   fireEvent.click(btn);
 };
+
+// Probes/harness for the URL-nav backstop test: a location readout plus a
+// button that navigates via the router (standing in for a deep link / browser
+// Back / ⌘K jump, which bypass the in-app selectProject guard).
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname}</div>;
+}
+function NavTo({ to }) {
+  const navigate = useNavigate();
+  return <button onClick={() => navigate(to)}>{`go-${to}`}</button>;
+}
+const renderMVWithNav = (to) => render(
+  <MemoryRouter initialEntries={['/media/music-video']}>
+    <LocationProbe />
+    <NavTo to={to} />
+    <Routes>
+      <Route path="/media/music-video" element={<MusicVideo />} />
+      <Route path="/media/music-video/:projectId" element={<MusicVideo />} />
+    </Routes>
+  </MemoryRouter>,
+);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -249,6 +271,26 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(screen.getByRole('button', { name: new RegExp(projectB.name) }));
     expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i));
     expect(listBtnA).toHaveClass('border-port-accent');
+  });
+
+  it('bounces URL-driven navigation (deep link / Back / ⌘K) away from a project with an in-flight import back to it', async () => {
+    listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP]); // mv-2
+    renderMVWithNav('/media/music-video/mv-3');
+    // Open mv-2 and start its detail-view import.
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) }));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/media/music-video/mv-2'));
+    const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
+      .find((el) => el.id !== 'mv-yt-create');
+    fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
+    fireEvent.click(within(editInput.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+
+    // A router-driven jump to another project (not via the list buttons, so it
+    // bypasses selectProject's guard) must be bounced back to the import's
+    // project with the same guard message.
+    fireEvent.click(screen.getByRole('button', { name: 'go-/media/music-video/mv-3' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i)));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/media/music-video/mv-2'));
   });
 
   it('blocks deleting the selected project while its import is in flight', async () => {

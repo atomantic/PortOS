@@ -94,6 +94,11 @@ export default function MusicVideo() {
   const [arranging, setArranging] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
+  // The project a detail-view YouTube import is bound to (captured at kickoff).
+  // The import's shared UI slot (progress button + disabled track controls)
+  // belongs to this project; it backstops the URL-nav guard below so a deep
+  // link / Back / ⌘K can't strand that slot's UI against another project.
+  const [ytEditProjectId, setYtEditProjectId] = useState(null);
   const selected = projects.find((p) => p.id === selectedId) || null;
 
   // YouTube audio import (#1945): paste a URL, PortOS downloads + extracts the
@@ -134,6 +139,24 @@ export default function MusicVideo() {
     }
     navigate(id ? `/media/music-video/${id}` : '/media/music-video');
   };
+  // Drop the binding once the import settles (or is cancelled) so the backstop
+  // below stops guarding a project the user is free to leave again.
+  useEffect(() => { if (!ytImportEdit.active) setYtEditProjectId(null); }, [ytImportEdit.active]);
+  // `selectProject` blocks project switches from the list buttons while an
+  // import is in flight, but URL-driven selection (deep link, browser Back/
+  // Forward, ⌘K / voice nav) changes `selectedId` without going through it. Re-
+  // assert the same invariant here: while a detail-view import runs, bounce any
+  // navigation away from its bound project back (replace, so history isn't
+  // polluted). The import itself keeps running and still attaches to its bound
+  // project (useYoutubeTrackImport captures the target at kickoff) — this only
+  // keeps the shared progress UI from misattributing to another project.
+  useEffect(() => {
+    if (!ytImportEdit.active || !ytEditProjectId) return;
+    if (routeProjectId !== ytEditProjectId) {
+      toast.error('Finish or cancel the in-progress YouTube import before switching projects');
+      navigate(`/media/music-video/${ytEditProjectId}`, { replace: true });
+    }
+  }, [routeProjectId, ytImportEdit.active, ytEditProjectId, navigate]);
   // Merge ONLY a scene's referenceImageId via a functional update so a render
   // that resolves after the user edited the board can't clobber those edits with
   // a stale project snapshot. Shared by the socket handler and the synchronous
@@ -620,6 +643,7 @@ export default function MusicVideo() {
                         toast.error('Wait for the current render to finish before changing the track');
                         return;
                       }
+                      setYtEditProjectId(selected.id);
                       ytImportEdit.start(ytUrlEdit, selected.id);
                     }}
                     compact
