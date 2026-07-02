@@ -174,7 +174,7 @@
         { "from": "svc.taskSchedule", "to": "store.jsonFiles", "transport": "storage", "label": "write data/task-schedule.json", "payload": "schedule state on disk — takes effect without restart" },
         { "from": "svc.taskSchedule", "to": "svc.cosJobScheduler", "transport": "call", "label": "cron fire", "payload": "due job evaluated with spawn guard" },
         { "from": "svc.cosJobScheduler", "to": "svc.subAgentSpawner", "transport": "emitter", "label": "cosEvents 'task:ready'", "payload": "AI jobs become tasks — continues as the CoS Agent Run flow" },
-        { "from": "svc.cosJobScheduler", "to": "page.chiefOfStaff", "transport": "socket", "label": "jobs:executed / tasks:changed", "payload": "execution results surface in the schedule UI" }
+        { "from": "svc.cosJobScheduler", "to": "page.chiefOfStaff", "transport": "socket", "label": "cos:tasks:cos:changed / cos:tasks:user:changed", "payload": "scheduled-job completion is reflected via task and agent state events forwarded by the Socket.IO hub" }
       ]
     },
     {
@@ -234,7 +234,7 @@
         { "from": "lib.peerHttpClient", "to": "ext.peers", "transport": "http", "label": "POST peer /api/peer-sync/push", "payload": "push payload: record + sidecar + asset manifest (peerSyncPushSchema)" },
         { "from": "ext.peers", "to": "route.peerSync", "transport": "http", "label": "inbound push (receiving side)", "payload": "the same endpoint on the receiving install accepts pushes from peers" },
         { "from": "svc.peerSync", "to": "store.postgres", "transport": "storage", "label": "applyIncomingPush", "payload": "LWW-timestamp merge + integrity check; missing assets pulled back from the sender" },
-        { "from": "svc.peerSync", "to": "page.sharing", "transport": "socket", "label": "sync:applied / peers:updated", "payload": "sync results and peer presence updates" }
+        { "from": "svc.peerSync", "to": "page.sharing", "transport": "socket", "label": "sharing:manifest-processed / sharing:inbox-updated", "payload": "sync results and inbox updates surface on the Sharing page (peer presence separately via instances:peers:updated)" }
       ]
     },
     {
