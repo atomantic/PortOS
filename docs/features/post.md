@@ -33,7 +33,7 @@ Classic psychometric drills, scored deterministically server-side (`server/servi
 
 The launcher offers two ways to start (`DrillTransition.jsx` handles the between-drill interstitials; the session state machine is `client/src/hooks/usePostSession.js`):
 
-- **Full session** — queues every enabled math/LLM/cognitive drill, each with its own configured time limit.
+- **Full session** — queues every enabled math/LLM/cognitive drill; math and LLM drills carry their configured time limits, while cognitive drills are self-paced/stimulus-driven with no countdown.
 - **Quick session** — pulls one random drill per enabled domain against the per-domain time budgets above (~5.5 minutes total with transitions).
 
 ## Training vs Testing
