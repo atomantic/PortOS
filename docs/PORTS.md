@@ -7,7 +7,7 @@ PortOS uses a contiguous port allocation scheme to make it easy to understand wh
 ### Convention
 
 1. **Contiguous Ranges**: Each app should use a contiguous block of ports
-2. **Labeled Ports**: Define all ports in the top-level `PORTS` object in `ecosystem.config.cjs` (re-exported at `server/lib/ports.js`); the per-process label map lives in `server/services/apps.js`
+2. **Labeled Ports**: Define all ports in the top-level `PORTS` object in `ecosystem.config.cjs` (mirrored — manually kept in sync — in `server/lib/ports.js`, since the ESM server can't `require()` the CommonJS config); the per-process label map lives in `server/services/apps.js`
 3. **No Gaps**: Avoid leaving gaps between port allocations within an app
 
 ### Port Labels

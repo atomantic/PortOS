@@ -64,4 +64,4 @@ Scaffold a new project from template:
 
 - [PM2 Configuration](../PM2.md)
 - [Port Allocation](../PORTS.md)
-- [Templates System](#m7-app-templates)
+- Scaffold templates — `GET /api/scaffold/templates` (`server/routes/scaffold.js`)

@@ -299,6 +299,6 @@ A future `/claim` can pick these up in order. Each phase is independently shippa
 
 ## Related features
 
-- [Digital Twin](./digital-twin.md) — taste/identity/personality source
-- [Identity System](./identity-system.md) — goals, autobiography, the `/ask` loop
-- [Brain System](./brain-system.md) — daily digest + weekly review push channel
+- [Digital Twin](../features/digital-twin.md) — taste/identity/personality source
+- [Identity System](../features/identity-system.md) — goals, autobiography, the `/ask` loop
+- [Brain System](../features/brain-system.md) — daily digest + weekly review push channel

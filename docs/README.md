@@ -26,13 +26,13 @@ App management: [app-wizard](./features/app-wizard.md) · [autofixer](./features
 
 Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [cos-agent-runner](./features/cos-agent-runner.md) · [cos-enhancement](./features/cos-enhancement.md) · [agent-skills](./features/agent-skills.md) · [memory-system](./features/memory-system.md) · [claude-ollama](./features/claude-ollama.md) · [prompt-manager](./features/prompt-manager.md)
 
-Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [cross-domain-insights-engine](./features/cross-domain-insights-engine.md) · [post](./features/post.md)
+Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [post](./features/post.md) (insights design spike: [plans/2026-06-03](./plans/2026-06-03-cross-domain-insights-engine.md))
 
 Knowledge: [brain-system](./features/brain-system.md) · [messages-security](./features/messages-security.md)
 
 Create: [writers-room](./features/writers-room.md) · [cybercity-v2](./features/cybercity-v2.md)
 
-Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./features/openclaw-operator-chat-audit.md)) · [voice](./features/voice.md)
+Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [voice](./features/voice.md)
 
 ## Point-in-time records
 
