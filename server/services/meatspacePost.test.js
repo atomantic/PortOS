@@ -450,7 +450,7 @@ describe('computePostStreaks', () => {
 });
 
 // =============================================================================
-// SUBMIT SESSION — MEMORY DRILL SCHEDULE ADVANCE (issue #2010)
+// SUBMIT SESSION — MEMORY DRILL SCHEDULE ADVANCE + MASTERY MERGE (#2010, #2016)
 // =============================================================================
 
 describe('submitPostSession — memory drill schedule advance', () => {
@@ -506,6 +506,55 @@ describe('submitPostSession — memory drill schedule advance', () => {
     const updatedItem = memoryWrite[1].items.find(i => i.id === 'song-1');
     expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
     expect(updatedItem.schedule.lastReviewed).toBeTruthy();
+  });
+
+  it('merges chunk/element mastery from per-question attribution alongside the schedule advance (issue #2016)', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'line one', expected: 'line two', answered: 'line two', correct: true, responseMs: 500, chunkId: 'verse-1' },
+          { prompt: 'line two', expected: 'line three', answered: null, correct: false, responseMs: 500, chunkId: 'verse-1' },
+        ],
+        score: 50,
+        totalMs: 2000,
+      }],
+      tags: {},
+    });
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    // One write for the schedule advance, one for the mastery merge.
+    expect(memoryWrites.length).toBe(2);
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: expect.any(String) });
+  });
+
+  it('buckets memory-element-flash answers into element mastery via the element attribution', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-element-flash',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'Hydrogen', expected: 'H', answered: 'H', correct: true, responseMs: 400, element: 'H' },
+        ],
+        score: 100,
+        totalMs: 400,
+      }],
+      tags: {},
+    });
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.mastery.elements.H).toEqual({ correct: 1, attempts: 1 });
   });
 
   it('does not touch memory items for a session with no memory tasks', async () => {

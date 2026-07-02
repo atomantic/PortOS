@@ -87,6 +87,68 @@ describe('Morse drill types stay scoped to the training log', () => {
   });
 });
 
+describe('questionResultSchema chunkId/element (issue #2016)', () => {
+  // Regression: memory-sequence/memory-element-flash answers must carry
+  // chunkId/element through postSessionSubmitSchema so submitPostSession can
+  // merge chunk/element mastery (mergeMasteryFromSession) — Zod's default
+  // strip mode would otherwise silently drop these fields.
+  it('accepts and preserves chunkId on a memory-sequence question', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [{ prompt: 'line one', expected: 'line two', answered: 'line two', correct: true, responseMs: 500, chunkId: 'verse-1' }],
+        totalMs: 500
+      }]
+    });
+    expect(parsed.tasks[0].questions[0].chunkId).toBe('verse-1');
+  });
+
+  it('accepts and preserves element on a memory-element-flash question', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-element-flash',
+        memoryItemId: 'elements-song',
+        questions: [{ prompt: 'H', expected: 'Hydrogen', answered: 'Hydrogen', correct: true, responseMs: 300, element: 'H' }],
+        totalMs: 300
+      }]
+    });
+    expect(parsed.tasks[0].questions[0].element).toBe('H');
+  });
+
+  it('accepts a question with neither chunkId nor element (math/LLM/cognitive drills)', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 200 }],
+        totalMs: 200
+      }]
+    });
+    expect(parsed.tasks[0].questions[0].chunkId).toBeUndefined();
+    expect(parsed.tasks[0].questions[0].element).toBeUndefined();
+  });
+
+  it('accepts a null chunkId (question with no matching chunk)', () => {
+    const parsed = postSessionSubmitSchema.parse({
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [{ prompt: 'line one', expected: 'line two', answered: null, correct: false, responseMs: 500, chunkId: null }],
+        totalMs: 500
+      }]
+    });
+    expect(parsed.tasks[0].questions[0].chunkId).toBeNull();
+  });
+});
+
 describe('postLlmScoreRequestSchema', () => {
   // Regression: Zod's default strip mode dropped `questionIndex` from each
   // response, so the server scorer fell back to the response-array index

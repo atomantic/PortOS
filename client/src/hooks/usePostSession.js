@@ -27,6 +27,18 @@ function computeSessionScoreFromResults(results) {
   return Math.round(results.reduce((s, r) => s + (r.score || 0), 0) / results.length);
 }
 
+// Memory drill questions carry chunk/element attribution the server needs to
+// bucket mastery bookkeeping (item.mastery.chunks / item.mastery.elements) —
+// chunkId on memory-sequence questions (via findChunkForLine), element on
+// memory-element-flash questions. Non-memory questions never have these, so
+// this only adds fields when present rather than sending explicit nulls.
+function memoryAttribution(q) {
+  const attrs = {};
+  if (q?.chunkId != null) attrs.chunkId = q.chunkId;
+  if (q?.element != null) attrs.element = q.element;
+  return attrs;
+}
+
 // States: idle → loading → drilling → between-drills → complete → saving → saved
 const STATES = {
   IDLE: 'idle',
@@ -162,7 +174,8 @@ export function usePostSession() {
       expected: q.expected,
       answered,
       correct,
-      responseMs
+      responseMs,
+      ...memoryAttribution(q)
     };
 
     const newAnswers = [...answers, answer];
@@ -228,7 +241,8 @@ export function usePostSession() {
       expected: q.expected,
       answered: null,
       correct: false,
-      responseMs: 0
+      responseMs: 0,
+      ...memoryAttribution(q)
     }));
 
     const finalAnswers = [...answers, ...remaining];
