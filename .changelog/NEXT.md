@@ -8,6 +8,10 @@
 
 - **Config form labels now focus their field when clicked and read correctly to screen readers.** Many settings/config forms (AI Providers, DataDog, feature-agent config, message & calendar account setup, scheduled-task provider/model pickers, the agent world/schedule tabs, MeatSpace nicotine + POST drills, and more) rendered the label as a plain sibling of its input with no association, so clicking the label did nothing and assistive tech couldn't announce the pairing. These fields now flow through a shared `FormField` wrapper that generates a stable id and wires `htmlFor`/`id` automatically, keeping the exact same styling (#2027). Remaining forms are tracked for a follow-up sweep (#2051).
 
+## Layout
+
+- **The Story Builder index now uses the full desktop width instead of a single narrow column.** The create form and the "Continue a story" session list previously stacked in one `max-w-3xl` column, leaving most of a 1280px+ screen empty. Above the `lg` breakpoint they now sit side by side — form left, in-progress sessions in a fixed-width sidebar on the right — mirroring the POST launcher's two-column layout (#1986), so your existing stories are visible without scrolling. Below `lg` the columns stack exactly as before, so mobile is unchanged (#2030).
+
 ## Loading states
 
 - **The DataDog, Jira, and GitHub integration pages now show a layout-shaped skeleton on first paint instead of a centered "Loading…" line.** Each page previously rendered a bare full-screen text message sized with `h-screen`, which mis-sized under mobile browser chrome and jumped when the real content arrived. They now share a `PageSkeleton` that reserves the header + card-grid dimensions (matching the loaded layout, using the `port-*` design tokens like the dashboard's `WidgetSkeleton`), so there's no post-load layout jump and no full-height wrapper fighting Layout's scroll (#2029).
