@@ -39,6 +39,18 @@ const OUT_OF_SYNC_STATUS = {
 // Fires 'disconnect' and advances past the 1.5s unreachability-confirmation
 // delay in handleDisconnect, flushing the checkHealth() microtask through it.
 const fireDisconnectAndConfirm = async () => {
+  // Flush pending passive effects FIRST. The component mirrors `updating` into
+  // `updatingRef` via a separate effect (`useEffect(() => { updatingRef.current
+  // = updating }, [updating])`), and handleDisconnect's guard reads that ref
+  // synchronously. runUpdate() calls setUpdating(true) outside any act (after
+  // two awaits), so the "Reconciling..." button — driven directly by the
+  // `updating` state — can commit to the DOM (and satisfy the caller's waitFor)
+  // a scheduler tick before the ref-sync effect runs. Without this flush the
+  // ref can still be stale-false when we fire 'disconnect', the confirmation
+  // timer never arms, and "Restarting..." never appears: the intermittent CI
+  // failure (#2065). Draining effects here syncs the ref to the state
+  // production always reaches over real network time.
+  await act(async () => {});
   vi.useFakeTimers();
   handlers.get('disconnect')();
   await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
@@ -99,6 +111,10 @@ describe('UpdateTab reconcile flow', () => {
     // before the 1.5s confirmation delay elapsed. Nothing is left mounted to
     // ever dismiss a toast.loading({ duration: Infinity }) popped after this.
     mockCheckHealth.mockResolvedValue(null);
+    // Flush pending effects so updatingRef is true when we fire 'disconnect'
+    // (see fireDisconnectAndConfirm) — otherwise the confirmation timer never
+    // arms and this asserts "no toast" for the wrong reason.
+    await act(async () => {});
     vi.useFakeTimers();
     handlers.get('disconnect')();
     unmount();
