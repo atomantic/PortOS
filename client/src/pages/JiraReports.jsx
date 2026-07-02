@@ -148,8 +148,11 @@ export default function JiraReports() {
     if (selectedReport?.appId === reportApp && selectedReport?.date === reportDate) return;
     let cancelled = false;
     api.getJiraReport(reportApp, reportDate).then((full) => {
-      if (!cancelled && full) setSelectedReport(full);
-    }).catch(() => {});
+      // Clear the selection when the URL names a report that no longer resolves
+      // (deleted / bad deep link) so the detail pane falls back to its
+      // placeholder instead of stranding the previously-open report.
+      if (!cancelled) setSelectedReport(full?.appId ? full : null);
+    }).catch(() => { if (!cancelled) setSelectedReport(null); });
     return () => { cancelled = true; };
     // selectedReport intentionally omitted — the guard above prevents refetch loops.
   }, [reportApp, reportDate]);

@@ -267,6 +267,8 @@ function SharingBuckets({ selectedId }) {
   };
 
   const selected = buckets.find((b) => b.id === selectedId) || null;
+  // A bucketId in the URL that isn't in the loaded list (removed / bad deep link).
+  const bucketNotFound = !!selectedId && !loading && !selected;
   const displayNameDirty = sharingDisplayName !== savedDisplayName || sharingBio !== savedBio;
 
   return (
@@ -477,7 +479,14 @@ function SharingBuckets({ selectedId }) {
 
         {/* Detail panel */}
         <section>
-          {!selected ? (
+          {bucketNotFound ? (
+            <div className="p-6 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
+              That bucket could not be found — it may have been removed.{' '}
+              <button type="button" onClick={() => navigate('/sharing')} className="text-port-accent hover:underline">
+                Back to buckets
+              </button>
+            </div>
+          ) : !selected ? (
             <div className="p-6 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
               Pick a bucket on the left to see its inbox + activity.
             </div>
