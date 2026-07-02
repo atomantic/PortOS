@@ -535,7 +535,7 @@ function ReferenceWidget({ keying, mode }) {
   );
 }
 
-function isNodeOnPath(node, currentPath) {
+export function isNodeOnPath(node, currentPath) {
   // Root's placeholder char ('·') is truthy but isn't a real decoded
   // character — gate on `currentPath.length > 0` too so an idle/empty path
   // (reference-only view, or before the first key press) never lights up

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE } from './MorseTrainer';
+import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, isNodeOnPath } from './MorseTrainer';
 
 // Surfaces the live URL (path + search) so tests can assert the reference tab
 // is encoded in the query string — the "URL is the source of truth" contract.
@@ -94,5 +94,33 @@ describe('MorseTrainer Tree reference view', () => {
     const rootLeft = parseFloat(root.style.left);
     expect(rootLeft).toBeGreaterThan(totalWidth * 0.3);
     expect(rootLeft).toBeLessThan(totalWidth * 0.7);
+  });
+});
+
+describe('isNodeOnPath (live keying highlight gate)', () => {
+  // Root's placeholder char is '·' (truthy) and its code is '' — an idle/empty
+  // currentPath must not make it read as "matched", or the reference tree lights
+  // up the root before the user has keyed anything.
+  const root = { char: '·', code: '' };
+  const e = { char: 'E', code: '.' };
+  const i = { char: 'I', code: '..' };
+  const t = { char: 'T', code: '-' };
+
+  it('does not match or highlight the root when currentPath is empty', () => {
+    expect(isNodeOnPath(root, '')).toEqual({ matched: false, onPath: false });
+  });
+
+  it('matches a node whose code equals the current keyed path', () => {
+    expect(isNodeOnPath(i, '..')).toEqual({ matched: true, onPath: false });
+  });
+
+  it('marks an ancestor of the current path as onPath but not matched', () => {
+    // 'e' ('.') is a prefix of the in-progress path '..' but is not the
+    // fully-keyed node itself.
+    expect(isNodeOnPath(e, '..')).toEqual({ matched: false, onPath: true });
+  });
+
+  it('does not flag a node unrelated to the current path', () => {
+    expect(isNodeOnPath(t, '..')).toEqual({ matched: false, onPath: false });
   });
 });
