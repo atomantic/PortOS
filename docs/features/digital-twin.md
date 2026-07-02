@@ -99,7 +99,8 @@ Page: `client/src/pages/DigitalTwin.jsx`. Quantitative-layer components in `clie
 | POST /api/digital-twin/feedback | Submit "sounds like me" validation |
 | GET/POST /api/digital-twin/feedback/* | Feedback stats, recalculate weights, recent |
 | GET/POST /api/digital-twin/{values,adversarial,multi-turn}-tests[/run,/history] | Testing suites |
-| GET/POST/PUT/DELETE /api/digital-twin/personas[/:id,/active] | Persona CRUD + active selection |
+| GET/POST /api/digital-twin/personas, PUT/DELETE /api/digital-twin/personas/:id | Persona CRUD (no GET by id) |
+| GET/PUT /api/digital-twin/personas/active | Active persona selection |
 | GET/POST /api/digital-twin/import/* | External data import |
 | POST /api/digital-twin/interview/analyze | Transcript trait extraction |
 | POST /api/digital-twin/style/spoken-written | Spoken vs written comparison |

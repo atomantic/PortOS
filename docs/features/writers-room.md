@@ -2,7 +2,7 @@
 
 Writers Room is the PortOS workspace for creating, organizing, editing, analyzing, and adapting literary works: a focused writing environment with manual AI passes, a story bible, storyboarding, and bridges into the Creative Director and comic-pipeline media systems.
 
-Every AI evaluation and render action is user-initiated or explicitly opted into — nothing runs on keystrokes or draft saves without the per-work Live Director opt-in described below.
+Every AI evaluation and render action is user-initiated or explicitly opted into — nothing runs on keystrokes or draft saves without the per-work Live Director opt-in described below. One user click can fan out, though: running the Adapt flow auto-queues an image render for every missing storyboard scene once the script lands (see Storyboard & Media).
 
 ## Navigation & Layout
 
@@ -55,7 +55,7 @@ Characters, places, and objects extracted by analysis (or entered by hand) live 
 
 ## Storyboard & Media
 
-The storyboard suite (`StoryboardPanel.jsx`, `StoryboardScenesTab.jsx`, `StoryboardBoardsTab.jsx`, `StoryboardConfigTab.jsx`, `SceneCard.jsx`) turns script-analysis scenes into rendered boards through the existing image-gen pipeline and media job queue. Scene images ride the shared media-collection infrastructure — a work auto-creates its collection on first render.
+The storyboard suite (`StoryboardPanel.jsx`, `StoryboardScenesTab.jsx`, `StoryboardBoardsTab.jsx`, `StoryboardConfigTab.jsx`, `SceneCard.jsx`) turns script-analysis scenes into rendered boards through the existing image-gen pipeline and media job queue. When the Adapt flow completes, the panel auto-queues a render for every scene that doesn't have an image yet — one Adapt click implies the whole board's image cost. Scene images ride the shared media-collection infrastructure — a work auto-creates its collection on first render.
 
 There is no persisted "render plan" store (the originally planned `render-plans` endpoints were never built); scene→media mapping is derived on read (see Synchronized Review below) and Creative Director handoff goes through the CD bridge.
 
