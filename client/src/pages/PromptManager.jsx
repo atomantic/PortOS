@@ -14,6 +14,7 @@ import {
 } from '../utils/formatters';
 import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import { FormField } from '../components/ui/FormField';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -510,8 +511,7 @@ export default function PromptManager() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Template</label>
+                  <FormField label="Template">
                     <textarea
                       value={stageTemplate}
                       onChange={(e) => setStageTemplate(e.target.value)}
@@ -520,7 +520,7 @@ export default function PromptManager() {
                     <p className="text-xs text-gray-500 mt-1">
                       Use {'{{variable}}'} for substitution, {'{{#array}}...{{/array}}'} for iteration
                     </p>
-                  </div>
+                  </FormField>
                 </div>
 
                 {/* Preview Panel */}
@@ -611,8 +611,7 @@ export default function PromptManager() {
 
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Key *</label>
+                  <FormField label="Key *">
                     <input
                       type="text"
                       value={varForm.key}
@@ -621,9 +620,8 @@ export default function PromptManager() {
                       placeholder="variableKey"
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Name</label>
+                  </FormField>
+                  <FormField label="Name">
                     <input
                       type="text"
                       value={varForm.name}
@@ -631,11 +629,10 @@ export default function PromptManager() {
                       placeholder="Human Readable Name"
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
-                  </div>
+                  </FormField>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Category</label>
+                <FormField label="Category">
                   <select
                     value={varForm.category}
                     onChange={(e) => setVarForm({ ...varForm, category: e.target.value })}
@@ -647,17 +644,16 @@ export default function PromptManager() {
                     <option value="rules">Rules</option>
                     <option value="system">System</option>
                   </select>
-                </div>
+                </FormField>
 
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Content *</label>
+                <FormField label="Content *">
                   <textarea
                     value={varForm.content}
                     onChange={(e) => setVarForm({ ...varForm, content: e.target.value })}
                     className="w-full h-48 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
                     placeholder="Variable content..."
                   />
-                </div>
+                </FormField>
               </div>
             </div>
             )}
@@ -733,8 +729,7 @@ export default function PromptManager() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Skill Template (Markdown)</label>
+                  <FormField label="Skill Template (Markdown)">
                     <textarea
                       value={jobSkillContent}
                       onChange={(e) => setJobSkillContent(e.target.value)}
@@ -743,7 +738,7 @@ export default function PromptManager() {
                     <p className="text-xs text-gray-500 mt-1">
                       Sections: ## Prompt Template, ## Steps, ## Expected Outputs, ## Success Criteria
                     </p>
-                  </div>
+                  </FormField>
                 </div>
 
                 {/* Preview Panel */}
@@ -782,8 +777,7 @@ export default function PromptManager() {
 
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Stage Key *</label>
+                <FormField label="Stage Key *">
                   <input
                     type="text"
                     value={newStageForm.stageName}
@@ -792,9 +786,8 @@ export default function PromptManager() {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   />
                   <p className="text-xs text-gray-500 mt-1">Lowercase, hyphens only</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Display Name *</label>
+                </FormField>
+                <FormField label="Display Name *">
                   <input
                     type="text"
                     value={newStageForm.name}
@@ -802,11 +795,10 @@ export default function PromptManager() {
                     placeholder="My Stage"
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   />
-                </div>
+                </FormField>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Description</label>
+              <FormField label="Description">
                 <input
                   type="text"
                   value={newStageForm.description}
@@ -814,7 +806,7 @@ export default function PromptManager() {
                   placeholder="What this stage does"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
 
               <div className="space-y-4">
                 <div>
@@ -880,15 +872,14 @@ export default function PromptManager() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Template</label>
+              <FormField label="Template">
                 <textarea
                   value={newStageForm.template}
                   onChange={(e) => setNewStageForm({ ...newStageForm, template: e.target.value })}
                   className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
                   placeholder="Enter your prompt template here..."
                 />
-              </div>
+              </FormField>
 
               <div className="flex gap-2 justify-end">
                 <button
@@ -969,8 +960,7 @@ function StageTimeoutField({ timeout, providerFallback, onCommit }) {
     if (ms != null) onCommit(ms);
   });
   return (
-    <div>
-      <label className="block text-sm text-gray-400 mb-1">Timeout override (ms)</label>
+    <FormField label="Timeout override (ms)">
       <input
         type="number"
         inputMode="numeric"
@@ -989,6 +979,6 @@ function StageTimeoutField({ timeout, providerFallback, onCommit }) {
           ? `≈ ${formatDurationMs(timeout)} per run`
           : 'Leave blank to use the provider default'}
       </p>
-    </div>
+    </FormField>
   );
 }

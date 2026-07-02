@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } from 'lucide-react';
 import api from '../services/api';
 import Banner from '../components/ui/Banner';
+import { FormField } from '../components/ui/FormField';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
@@ -302,11 +303,10 @@ export default function Security() {
           <h3 className="text-lg font-semibold text-white mb-4">Device Settings</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Video device selector */}
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">
-                <Camera size={14} className="inline mr-2" />
-                Camera
-              </label>
+            <FormField
+              labelClassName="block text-sm text-gray-400 mb-2"
+              label={<><Camera size={14} className="inline mr-2" />Camera</>}
+            >
               <select
                 value={selectedVideo}
                 onChange={(e) => handleDeviceChange('video', e.target.value)}
@@ -322,14 +322,13 @@ export default function Security() {
                   ))
                 )}
               </select>
-            </div>
+            </FormField>
 
             {/* Audio device selector */}
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">
-                <Mic size={14} className="inline mr-2" />
-                Microphone
-              </label>
+            <FormField
+              labelClassName="block text-sm text-gray-400 mb-2"
+              label={<><Mic size={14} className="inline mr-2" />Microphone</>}
+            >
               <select
                 value={selectedAudio}
                 onChange={(e) => handleDeviceChange('audio', e.target.value)}
@@ -345,7 +344,7 @@ export default function Security() {
                   ))
                 )}
               </select>
-            </div>
+            </FormField>
           </div>
         </div>
       )}

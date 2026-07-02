@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
 import * as api from '../services/api';
 import FolderPicker from '../components/FolderPicker';
+import { FormField } from '../components/ui/FormField';
 
 const ICONS = {
   layers: Layers,
@@ -102,8 +103,7 @@ export default function Templates() {
           </div>
 
           <form onSubmit={handleCreate} className="space-y-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">App Name *</label>
+            <FormField label="App Name *">
               <input
                 type="text"
                 value={appName}
@@ -112,7 +112,7 @@ export default function Templates() {
                 required
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
               />
-            </div>
+            </FormField>
 
             <div>
               <label className="block text-sm text-gray-400 mb-1">Target Directory *</label>

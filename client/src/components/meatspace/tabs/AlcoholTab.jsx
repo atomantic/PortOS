@@ -4,6 +4,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import AlcoholChart from '../AlcoholChart';
 import AlcoholHrvCorrelation from '../AlcoholHrvCorrelation';
@@ -462,8 +463,7 @@ export default function AlcoholTab() {
 
         {/* Custom entry form */}
         <form onSubmit={handleCustomAdd} className="grid grid-cols-2 sm:grid-cols-[1fr_5rem_5rem_4rem_9rem_auto] items-end gap-3">
-          <div className="col-span-2 sm:col-span-1">
-            <label className="text-xs text-gray-500 block mb-1">Name (optional)</label>
+          <FormField className="col-span-2 sm:col-span-1" label="Name (optional)" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="text"
               value={name}
@@ -471,7 +471,7 @@ export default function AlcoholTab() {
               placeholder="e.g., Hazy IPA"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
-          </div>
+          </FormField>
           <div>
             <div className="flex items-center gap-1.5 mb-1">
               <label className="text-xs text-gray-500">Volume</label>
@@ -494,8 +494,7 @@ export default function AlcoholTab() {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
           </div>
-          <div>
-            <label className="text-xs text-gray-500 block mb-1">ABV %</label>
+          <FormField label="ABV %" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="number"
               step="0.1"
@@ -507,9 +506,8 @@ export default function AlcoholTab() {
               placeholder="5"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-600"
             />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 block mb-1">Count</label>
+          </FormField>
+          <FormField label="Count" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="number"
               min="1"
@@ -518,16 +516,15 @@ export default function AlcoholTab() {
               onChange={e => setCount(parseInt(e.target.value) || 1)}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white"
             />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 block mb-1">Date</label>
+          </FormField>
+          <FormField label="Date" labelClassName="text-xs text-gray-500 block mb-1">
             <input
               type="date"
               value={date}
               onChange={e => setDate(e.target.value)}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white"
             />
-          </div>
+          </FormField>
           <button
             type="submit"
             disabled={logging || !oz || !abv}

@@ -5,6 +5,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
+import { FormField } from '../../ui/FormField';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
@@ -309,8 +310,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             <form onSubmit={handleSave}>
               {/* Name + Style */}
               <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Name</label>
+                <FormField label="Name">
                   <input
                     type="text"
                     value={formData.name}
@@ -318,9 +318,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     required
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Style</label>
+                </FormField>
+                <FormField label="Style">
                   <select
                     value={formData.personality.style}
                     onChange={(e) => updatePersonality('style', e.target.value)}
@@ -330,24 +329,22 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       <option key={style.value} value={style.value}>{style.label}</option>
                     ))}
                   </select>
-                </div>
+                </FormField>
               </div>
 
               {/* Description */}
-              <div className="mb-4">
-                <label className="block text-sm text-gray-400 mb-1">Description</label>
+              <FormField label="Description" className="mb-4">
                 <textarea
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white h-20"
                   placeholder="Brief description of this agent's purpose..."
                 />
-              </div>
+              </FormField>
 
               {/* Tone + Avatar (emoji + color) */}
               <div className="flex items-end gap-4 mb-4">
-                <div className="flex-1">
-                  <label className="block text-sm text-gray-400 mb-1">Tone</label>
+                <FormField label="Tone" className="flex-1">
                   <input
                     type="text"
                     value={formData.personality.tone}
@@ -355,9 +352,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., friendly but informative"
                   />
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-sm text-gray-400">Emoji</label>
+                </FormField>
+                <FormField label="Emoji" className="flex items-center gap-2" labelClassName="text-sm text-gray-400">
                   <input
                     type="text"
                     value={formData.avatar.emoji || ''}
@@ -365,22 +361,20 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     className="w-14 px-2 py-2 bg-port-bg border border-port-border rounded text-white text-center"
                     maxLength={2}
                   />
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-sm text-gray-400">Color</label>
+                </FormField>
+                <FormField label="Color" className="flex items-center gap-2" labelClassName="text-sm text-gray-400">
                   <input
                     type="color"
                     value={formData.avatar.color || '#3b82f6'}
                     onChange={(e) => setFormData({ ...formData, avatar: { ...formData.avatar, color: e.target.value } })}
                     className="w-12 h-9 border border-port-border rounded cursor-pointer"
                   />
-                </div>
+                </FormField>
               </div>
 
               {/* Topics + Quirks */}
               <div className="grid grid-cols-2 gap-4 mb-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Topics (comma-separated)</label>
+                <FormField label="Topics (comma-separated)">
                   <input
                     type="text"
                     value={topicsText}
@@ -389,9 +383,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., technology, AI"
                   />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Quirks (comma-separated)</label>
+                </FormField>
+                <FormField label="Quirks (comma-separated)">
                   <input
                     type="text"
                     value={quirksText}
@@ -400,19 +393,18 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., uses metaphors"
                   />
-                </div>
+                </FormField>
               </div>
 
               {/* Prompt Prefix */}
-              <div className="mb-4">
-                <label className="block text-sm text-gray-400 mb-1">Prompt Prefix</label>
+              <FormField label="Prompt Prefix" className="mb-4">
                 <textarea
                   value={formData.personality.promptPrefix}
                   onChange={(e) => updatePersonality('promptPrefix', e.target.value)}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white h-24 font-mono text-sm"
                   placeholder="Custom instructions injected into AI prompts..."
                 />
-              </div>
+              </FormField>
 
               <button
                 type="submit"
@@ -435,8 +427,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             ) : (
               <>
                 {activeAccounts.length > 1 && (
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-400 mb-1">Account</label>
+                  <FormField label="Account" className="mb-3" labelClassName="block text-xs text-gray-400 mb-1">
                     <select
                       value={quickAccountId}
                       onChange={(e) => setQuickAccountId(e.target.value)}
@@ -446,7 +437,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                         <option key={a.id} value={a.id}>{a.credentials.username}</option>
                       ))}
                     </select>
-                  </div>
+                  </FormField>
                 )}
 
                 {rateLimits && (
@@ -614,8 +605,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             {showAccountForm && (
               <form onSubmit={handleAccountSubmit} className="mb-4 p-3 bg-port-bg border border-port-border rounded-lg">
                 <div className="grid grid-cols-2 gap-4 mb-3">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Platform</label>
+                  <FormField label="Platform">
                     <select
                       value={accountForm.platform}
                       onChange={(e) => setAccountForm({ ...accountForm, platform: e.target.value })}
@@ -627,9 +617,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                         </option>
                       ))}
                     </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Account Name</label>
+                  </FormField>
+                  <FormField label="Account Name">
                     <input
                       type="text"
                       value={accountForm.name}
@@ -638,17 +627,16 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       placeholder="Display name on platform"
                       required
                     />
-                  </div>
+                  </FormField>
                 </div>
-                <div className="mb-3">
-                  <label className="block text-sm text-gray-400 mb-1">Bio/Description</label>
+                <FormField label="Bio/Description" className="mb-3">
                   <textarea
                     value={accountForm.description}
                     onChange={(e) => setAccountForm({ ...accountForm, description: e.target.value })}
                     className="w-full px-3 py-2 bg-port-card border border-port-border rounded text-white h-16"
                     placeholder="Brief bio for the platform profile..."
                   />
-                </div>
+                </FormField>
                 <div className="flex gap-2">
                   <button type="submit" className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80">
                     Register Account

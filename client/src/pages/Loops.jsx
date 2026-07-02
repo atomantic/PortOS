@@ -6,6 +6,7 @@ import {
 import * as api from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
+import { FormField } from '../components/ui/FormField';
 import { timeAgo } from '../components/feature-agents/constants';
 import { formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -114,8 +115,7 @@ function CreateLoopForm({ providers, onCreated }) {
           </div>
         </div>
 
-        <div className="flex-1 min-w-[150px]">
-          <label className="block text-xs text-gray-400 mb-1">AI Provider</label>
+        <FormField className="flex-1 min-w-[150px]" label="AI Provider" labelClassName="block text-xs text-gray-400 mb-1">
           <select
             value={providerId}
             onChange={e => setProviderId(e.target.value)}
@@ -128,7 +128,7 @@ function CreateLoopForm({ providers, onCreated }) {
               </option>
             ))}
           </select>
-        </div>
+        </FormField>
 
         <button
           type="button"
@@ -141,8 +141,7 @@ function CreateLoopForm({ providers, onCreated }) {
 
       {expanded && (
         <div className="flex flex-wrap gap-3">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs text-gray-400 mb-1">Name (optional)</label>
+          <FormField className="flex-1 min-w-[200px]" label="Name (optional)" labelClassName="block text-xs text-gray-400 mb-1">
             <input
               type="text"
               value={name}
@@ -150,9 +149,8 @@ function CreateLoopForm({ providers, onCreated }) {
               placeholder="Loop name for display"
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600"
             />
-          </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs text-gray-400 mb-1">Working Directory (optional)</label>
+          </FormField>
+          <FormField className="flex-1 min-w-[200px]" label="Working Directory (optional)" labelClassName="block text-xs text-gray-400 mb-1">
             <input
               type="text"
               value={cwd}
@@ -160,7 +158,7 @@ function CreateLoopForm({ providers, onCreated }) {
               placeholder="/path/to/project"
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600"
             />
-          </div>
+          </FormField>
         </div>
       )}
 

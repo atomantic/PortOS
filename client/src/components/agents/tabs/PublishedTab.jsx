@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import { FormField } from '../../ui/FormField';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 
 export default function PublishedTab({ agentId }) {
@@ -49,8 +50,7 @@ export default function PublishedTab({ agentId }) {
     <div className="p-4">
       {/* Header */}
       <div className="flex flex-wrap items-end gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Account</label>
+        <FormField label="Account">
           <select
             value={selectedAccountId}
             onChange={(e) => setSelectedAccountId(e.target.value)}
@@ -63,7 +63,7 @@ export default function PublishedTab({ agentId }) {
               </option>
             ))}
           </select>
-        </div>
+        </FormField>
         <div className="flex items-center gap-2 ml-auto">
           <select
             value={publishedDays}

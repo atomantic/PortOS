@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import { FormField } from '../components/ui/FormField';
 import { formatDateTime } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import FolderPicker from '../components/FolderPicker';
@@ -335,8 +336,7 @@ function SharingBuckets({ selectedId }) {
       {showAdd && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Bucket name</label>
+            <FormField label="Bucket name" labelClassName="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               <input
                 type="text"
                 value={form.name}
@@ -346,9 +346,8 @@ function SharingBuckets({ selectedId }) {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 autoFocus
               />
-            </div>
-            <div>
-              <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Import mode</label>
+            </FormField>
+            <FormField label="Import mode" labelClassName="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               <select
                 value={form.mode}
                 onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value }))}
@@ -357,7 +356,7 @@ function SharingBuckets({ selectedId }) {
                 <option value="inbox">Inbox — review before importing</option>
                 <option value="auto-merge">Auto-merge — apply immediately (trusted)</option>
               </select>
-            </div>
+            </FormField>
           </div>
           <div>
             <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
@@ -381,8 +380,7 @@ function SharingBuckets({ selectedId }) {
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Display name override (optional)</label>
+            <FormField label="Display name override (optional)" labelClassName="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               <input
                 type="text"
                 value={form.displayNameOverride}
@@ -391,9 +389,8 @@ function SharingBuckets({ selectedId }) {
                 maxLength={120}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
               />
-            </div>
-            <div>
-              <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Bio override (optional)</label>
+            </FormField>
+            <FormField label="Bio override (optional)" labelClassName="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               <input
                 type="text"
                 value={form.bioOverride}
@@ -402,7 +399,7 @@ function SharingBuckets({ selectedId }) {
                 maxLength={2000}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
               />
-            </div>
+            </FormField>
           </div>
           <div className="flex gap-2">
             <button

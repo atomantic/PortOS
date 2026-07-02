@@ -13,6 +13,7 @@ import {Sparkles,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import ListEnrichment from '../ListEnrichment';
@@ -542,8 +543,7 @@ export default function EnrichTab({ onRefresh }) {
             </p>
 
             {/* Provider Selection */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <label className="text-sm text-gray-400">Analyze with:</label>
+            <FormField className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" labelClassName="text-sm text-gray-400" label="Analyze with:">
               <select
                 value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
                 onChange={(e) => {
@@ -560,7 +560,7 @@ export default function EnrichTab({ onRefresh }) {
                   ))
                 ))}
               </select>
-            </div>
+            </FormField>
 
             {/* Writing Samples */}
             <div className="space-y-3">

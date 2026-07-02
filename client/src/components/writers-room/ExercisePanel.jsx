@@ -8,6 +8,7 @@ import {
   discardWritersRoomExercise,
 } from '../../services/apiWritersRoom';
 import { countWords, formatCountdown } from '../../utils/formatters';
+import { FormField } from '../ui/FormField';
 
 const DURATION_PRESETS = [
   { label: '5 min', seconds: 300 },
@@ -145,10 +146,10 @@ export default function ExercisePanel({ activeWork, onClose }) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1">
-              Prompt {activeWork && <span className="text-gray-600">(or leave blank to free-write {activeWork.title})</span>}
-            </label>
+          <FormField
+            labelClassName="block text-[10px] uppercase tracking-wider text-gray-500 mb-1"
+            label={<>Prompt {activeWork && <span className="text-gray-600">(or leave blank to free-write {activeWork.title})</span>}</>}
+          >
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -156,7 +157,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
               rows={2}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs"
             />
-          </div>
+          </FormField>
 
           <button
             onClick={start}

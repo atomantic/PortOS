@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import { FormField } from '../ui/FormField';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
@@ -470,25 +471,26 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
 
   return (
     <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-2">
-      <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Prompt</label>
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        rows={3}
-        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
-        maxLength={8000}
-      />
-      <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Negative prompt</label>
-      <textarea
-        value={negativePrompt}
-        onChange={(e) => setNegativePrompt(e.target.value)}
-        rows={2}
-        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
-        maxLength={8000}
-      />
+      <FormField label="Prompt" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={3}
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+          maxLength={8000}
+        />
+      </FormField>
+      <FormField label="Negative prompt" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
+        <textarea
+          value={negativePrompt}
+          onChange={(e) => setNegativePrompt(e.target.value)}
+          rows={2}
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+          maxLength={8000}
+        />
+      </FormField>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <div className="col-span-2">
-          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">{isCodex ? 'Codex model' : 'Model id'}</label>
+        <FormField className="col-span-2" label={isCodex ? 'Codex model' : 'Model id'} labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
           <input
             type="text"
             value={isCodex ? model : modelId}
@@ -497,34 +499,31 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
             maxLength={200}
           />
-        </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Width</label>
+        </FormField>
+        <FormField label="Width" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
           <input
             type="number" min={64} max={4096} step={8}
             value={width}
             onChange={(e) => setWidth(e.target.value)}
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
           />
-        </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Height</label>
+        </FormField>
+        <FormField label="Height" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
           <input
             type="number" min={64} max={4096} step={8}
             value={height}
             onChange={(e) => setHeight(e.target.value)}
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
           />
-        </div>
-        <div>
-          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Steps</label>
+        </FormField>
+        <FormField label="Steps" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
           <input
             type="number" min={1} max={200} step={1}
             value={steps}
             onChange={(e) => setSteps(e.target.value)}
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
           />
-        </div>
+        </FormField>
       </div>
       <div className="flex items-center justify-end gap-2 pt-1">
         <button

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save, CalendarClock } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import MemoryPractice from './MemoryPractice';
 import ElementsSong from './ElementsSong';
@@ -202,8 +203,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
             </button>
           </div>
 
-          <div>
-            <label className="block text-gray-400 text-xs mb-1.5">Title</label>
+          <FormField label="Title" labelClassName="block text-gray-400 text-xs mb-1.5">
             <input
               type="text"
               value={newTitle}
@@ -212,7 +212,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
               maxLength={200}
               className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-white text-sm placeholder-gray-600 focus:border-port-accent focus:outline-none"
             />
-          </div>
+          </FormField>
 
           <div>
             <label className="block text-gray-400 text-xs mb-1.5">Type</label>
@@ -233,10 +233,10 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
             </div>
           </div>
 
-          <div>
-            <label className="block text-gray-400 text-xs mb-1.5">
-              Content <span className="text-gray-600">(one line per row; blank lines create chunk boundaries)</span>
-            </label>
+          <FormField
+            label={<>Content <span className="text-gray-600">(one line per row; blank lines create chunk boundaries)</span></>}
+            labelClassName="block text-gray-400 text-xs mb-1.5"
+          >
             <textarea
               value={newContent}
               onChange={e => setNewContent(e.target.value)}
@@ -247,7 +247,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
             {newContent.trim() && (
               <ContentPreview content={newContent} />
             )}
-          </div>
+          </FormField>
 
           <div className="flex justify-end gap-3">
             <button
