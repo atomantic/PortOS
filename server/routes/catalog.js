@@ -18,6 +18,8 @@ import {
   catalogRelationLinkSchema,
   catalogMediaAttachSchema,
   catalogMediaDetachSchema,
+  catalogMediaFileUploadSchema,
+  catalogMediaVoiceMemoSchema,
   catalogPortraitSetSchema,
   catalogIngredientQuerySchema,
   catalogTagQuerySchema,
@@ -45,6 +47,7 @@ import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
+import { uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -493,6 +496,24 @@ router.delete('/ingredients/:id/media', asyncHandler(async (req, res) => {
   validateRequest(catalogMediaDetachSchema, req.body);
   await catalogDB.detachMedia(req.params.id, req.body.mediaKey, req.body.kind);
   res.status(204).end();
+}));
+
+// Upload a file (drag-drop / picker) straight onto an ingredient: the service
+// stores it in the matching federating library dir (image→data/images as PNG,
+// audio→data/audio, video→data/videos) and attaches the reference. The 404 for a
+// missing ingredient is raised inside the service.
+router.post('/ingredients/:id/media/upload', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaFileUploadSchema, req.body);
+  const media = await uploadIngredientMediaFile({ ingredientId: req.params.id, ...body });
+  res.status(201).json(media);
+}));
+
+// Record a voice memo onto an ingredient: transcribe via Whisper, persist the
+// audio, and attach a kind:'audio' row with the transcript in caption.
+router.post('/ingredients/:id/media/voice', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogMediaVoiceMemoSchema, req.body);
+  const result = await recordIngredientVoiceMemo({ ingredientId: req.params.id, ...body });
+  res.status(201).json(result);
 }));
 
 // Bulk-create ingredients from a markdown / CSV / JSON dump — no LLM round

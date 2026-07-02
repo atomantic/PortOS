@@ -55,6 +55,35 @@ export default function MemoryPractice({ item, onBack }) {
     }
   }, [mode, item.id]);
 
+  // Drive terminal transitions from an effect, never during render. The render
+  // fallbacks below (chunk exhausted, line exhausted, sequence exhausted) return null
+  // for a frame while this effect saves results, advances the chunk, or marks the
+  // session done — firing setState + an async submitMemoryPractice() POST inside the
+  // render body is fragile under StrictMode/concurrent rendering. Normal per-answer
+  // flow still runs through advanceSpaced / nextSequenceQuestion.
+  useEffect(() => {
+    if (done) return;
+    if (mode === 'spaced') {
+      if (!chunkMastery || chunkMastery.length === 0) return;
+      const currentChunk = chunkMastery[spacedChunkIdx];
+      if (!currentChunk) {
+        savePractice('spaced', results);
+        setDone(true);
+        return;
+      }
+      const [chunkStart, chunkEnd] = currentChunk.lineRange;
+      const chunkLines = lines.slice(chunkStart, chunkEnd + 1).filter(l => l.text.trim());
+      if (!chunkLines[spacedLineIdx]) {
+        setSpacedChunkIdx(prev => prev + 1);
+        setSpacedLineIdx(0);
+        setAnswer('');
+        setShowResult(null);
+      }
+    } else if (mode === 'sequence' && !lines[currentIdx + 1]) {
+      finishSequence();
+    }
+  }, [mode, chunkMastery, spacedChunkIdx, spacedLineIdx, currentIdx, done]);
+
   if (!mode) {
     return (
       <div className="space-y-6 max-w-4xl">
@@ -175,9 +204,7 @@ export default function MemoryPractice({ item, onBack }) {
 
     const currentChunk = chunkMastery[spacedChunkIdx];
     if (!currentChunk) {
-      // All chunks done
-      savePractice('spaced', results);
-      setDone(true);
+      // All chunks done — the terminal-transition effect saves results and sets done.
       return null;
     }
 
@@ -186,11 +213,7 @@ export default function MemoryPractice({ item, onBack }) {
     const currentLine = chunkLines[spacedLineIdx];
 
     if (!currentLine) {
-      // Move to next chunk
-      setSpacedChunkIdx(prev => prev + 1);
-      setSpacedLineIdx(0);
-      setAnswer('');
-      setShowResult(null);
+      // Move to next chunk — handled by the terminal-transition effect.
       return null;
     }
 
@@ -357,7 +380,7 @@ export default function MemoryPractice({ item, onBack }) {
     const expectedLine = lines[currentIdx + 1];
 
     if (!expectedLine) {
-      finishSequence();
+      // Saved + marked done by the terminal-transition effect.
       return null;
     }
 

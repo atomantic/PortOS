@@ -67,6 +67,7 @@ export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-da
   body: JSON.stringify({ birthDate })
 });
 export const getDeathClock = () => request('/meatspace/death-clock');
+export const getMeatspaceLoggingStats = (options = {}) => request('/meatspace/logging-stats', options);
 export const getLEV = () => request('/meatspace/lev');
 export const getAlcoholSummary = () => request('/meatspace/alcohol');
 export const getDailyAlcohol = (from, to) => {

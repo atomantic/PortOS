@@ -12,6 +12,9 @@ import {
   MIN_WORK_COUNTER_SPAN_MS,
   extractWorkCounterSeconds,
   createWorkActivityTracker,
+  MERGE_QUEUE_IDLE_TIMEOUT_MS,
+  isMergeQueueSignal,
+  createMergeQueueTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -244,6 +247,46 @@ describe('tuiHandshake — paste timing constants', () => {
     // the callers actually keeps recent bytes instead of dropping them.
     expect(RAW_BUFFER_HEADROOM).toBeGreaterThan(RAW_BUFFER_CAP);
     expect(OUTPUT_BUFFER_HEADROOM).toBeGreaterThan(OUTPUT_BUFFER_CAP);
+  });
+});
+
+// Issue #2074 — a swarm orchestrator in its Phase C serialized merge queue goes
+// silent for minutes per PR (each rebases + re-runs CI). Detection latches so the
+// idle reaper can extend its grace and not reap a still-working orchestrator.
+describe('tuiHandshake — merge-queue idle suppression (#2074)', () => {
+  it('extends the idle timeout well past the default 3-minute window', () => {
+    expect(MERGE_QUEUE_IDLE_TIMEOUT_MS).toBe(900000);
+    expect(MERGE_QUEUE_IDLE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TUI_IDLE_TIMEOUT_MS);
+  });
+
+  it('isMergeQueueSignal matches Phase C merge-queue chrome (case-insensitive)', () => {
+    expect(isMergeQueueSignal('### Swarm Phase C — Serialized merge queue')).toBe(true);
+    expect(isMergeQueueSignal('Running: gh pr checks 2071 --required --watch --fail-fast')).toBe(true);
+    expect(isMergeQueueSignal('gh pr merge 2071 --merge --delete-branch')).toBe(true);
+    expect(isMergeQueueSignal('PHASE C: serialized MERGE QUEUE begins')).toBe(true);
+  });
+
+  it('isMergeQueueSignal ignores ordinary implementation/output chrome', () => {
+    expect(isMergeQueueSignal('Editing server/services/agentTuiSpawning.js')).toBe(false);
+    expect(isMergeQueueSignal('● high · (12s · running tests)')).toBe(false);
+    expect(isMergeQueueSignal('')).toBe(false);
+    expect(isMergeQueueSignal(null)).toBe(false);
+    expect(isMergeQueueSignal(undefined)).toBe(false);
+  });
+
+  it('createMergeQueueTracker latches on first signal and stays active through silence', () => {
+    const tracker = createMergeQueueTracker();
+    expect(tracker.active).toBe(false);
+    tracker.observe('implementing the fix, running the suite');
+    expect(tracker.active).toBe(false);
+    // Enters Phase C — latches.
+    expect(tracker.observe('gh pr merge 2071 --merge --delete-branch')).toBe(true);
+    expect(tracker.active).toBe(true);
+    // Subsequent quiet CI-wait chunks (no marker) must NOT un-latch it — the
+    // whole point is that the silent gap is when the grace is needed.
+    tracker.observe('waiting...');
+    tracker.observe('');
+    expect(tracker.active).toBe(true);
   });
 });
 

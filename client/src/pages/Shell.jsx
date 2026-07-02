@@ -480,6 +480,23 @@ export default function Shell() {
     }
   }, [socket, clearActiveSession, cancelPendingAttach]);
 
+  // Restart = kill the current session, then start a fresh one after a short delay
+  // (gives the server time to tear down the old PTY). The deferred startSession must
+  // respect both staleness and unmount: stopSession() bumps the pending generation,
+  // so capture it and abort the delayed start if the user switched sessions (which
+  // bumps the generation again) or navigated away within the 1s window. Without the
+  // generation guard, a tab click inside the window would fire startSession() and
+  // clobber the in-flight switch.
+  const restartSession = useCallback(() => {
+    stopSession();
+    const gen = pendingAttachRef.current.generation;
+    setTimeout(() => {
+      if (!mountedRef.current) return;
+      if (pendingAttachRef.current.generation !== gen) return;
+      startSession();
+    }, 1000);
+  }, [stopSession, startSession]);
+
   const switchToSession = useCallback((sessionId, { fromUrl = false } = {}) => {
     // Compare against the in-flight attach target if there is one, falling back to the
     // currently-displayed session. Without this, a back→forward race (B→A while attach
@@ -900,7 +917,7 @@ export default function Shell() {
           {/* Restart (kill + new shell) is meaningless for a TUI-run view. */}
           {connected && !isLiveRun && (
             <button
-              onClick={() => { stopSession(); setTimeout(() => { if (mountedRef.current) startSession(); }, 1000); }}
+              onClick={restartSession}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >

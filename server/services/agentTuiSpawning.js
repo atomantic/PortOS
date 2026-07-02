@@ -25,11 +25,13 @@ import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
+  MERGE_QUEUE_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createWorkActivityTracker,
+  createMergeQueueTracker,
   createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
@@ -276,6 +278,11 @@ export async function spawnTuiAgent({
   // fallback idle-complete path from finalizing a never-submitted prompt as
   // success (issue #1229).
   const workActivity = createWorkActivityTracker();
+  // Latches once the agent enters a `/do:next --swarm` Phase C serialized merge
+  // queue, whose per-PR CI re-runs produce minutes of silent output. While
+  // latched, the idle reaper uses the extended MERGE_QUEUE_IDLE_TIMEOUT_MS so a
+  // still-working orchestrator isn't reaped mid-merge (issue #2074).
+  const mergeQueue = createMergeQueueTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
@@ -625,6 +632,13 @@ export async function spawnTuiAgent({
       // across wall-clock time confirms real work (a static echo's counters all
       // arrive together and fail the time-span). Gates idle-complete (#1229).
       if (promptSubmittedAt && stripped && !workActivity.active) workActivity.observe(stripped, now);
+      // Detect entry into the swarm Phase C merge queue so the idle reaper can
+      // extend its grace window across the silent per-PR CI waits (issue #2074).
+      // Latches once — observe only until active, then announce the transition.
+      if (promptSubmittedAt && stripped && !mergeQueue.active && mergeQueue.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} entered merge queue — idle reaper extended to ${Math.round(MERGE_QUEUE_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'merge-queue' });
+        await updateAgent(agentId, { metadata: { phase: 'merge-queue' } });
+      }
       lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
@@ -881,7 +895,29 @@ export async function spawnTuiAgent({
     // counts because per-line PTY capture is intentionally disabled for TUI
     // agents — see handleData.
     if (lastOutputAt <= promptSentAt) return;
-    if (idle >= tuiConfig.idleTimeoutMs) {
+    // While the agent is in a swarm Phase C serialized merge queue, per-PR CI
+    // re-runs go silent for minutes at a time; extend the idle grace so a
+    // still-working orchestrator isn't reaped mid-merge (issue #2074). The
+    // extended window still bounds a genuinely-dead orchestrator's reap.
+    const effectiveIdleTimeoutMs = mergeQueue.active
+      ? Math.max(tuiConfig.idleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
+      : tuiConfig.idleTimeoutMs;
+    if (idle >= effectiveIdleTimeoutMs) {
+      // Reaped AFTER the extended merge-queue grace elapsed: the orchestrator
+      // almost certainly died mid-merge with PRs opened/merged-but-uncleaned.
+      // Surface it as a needs-manual-finish FAILURE rather than the silent
+      // `status: completed` that hid the half-done merge queue (issue #2074).
+      if (mergeQueue.active) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min in the merge queue — it likely died mid-merge; check for open or merged-but-uncleaned PRs and finish them manually.`,
+          reason: 'merge-queue-idle-timeout',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+        return;
+      }
       // Distinguish a real (sentinel-less) completion from a never-submitted
       // prompt that just idled out. `lastOutputAt > promptSentAt` only proves
       // the TUI repainted SOMETHING — banner/status chrome churns even with the

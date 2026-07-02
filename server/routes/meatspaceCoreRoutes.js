@@ -10,6 +10,7 @@ import { validateRequest } from '../lib/validation.js';
 import { configUpdateSchema, lifestyleUpdateSchema } from '../lib/meatspaceValidation.js';
 import { birthDateInputSchema } from '../lib/identityValidation.js';
 import * as meatspaceService from '../services/meatspace.js';
+import { getLoggingStats } from '../services/meatspaceLoggingStats.js';
 
 const router = Router();
 
@@ -24,6 +25,15 @@ const router = Router();
 router.get('/', asyncHandler(async (req, res) => {
   const overview = await meatspaceService.getOverview();
   res.json(overview);
+}));
+
+/**
+ * GET /api/meatspace/logging-stats
+ * Cross-domain health-logging streak + this-week counts for the dashboard widget.
+ */
+router.get('/logging-stats', asyncHandler(async (req, res) => {
+  const stats = await getLoggingStats();
+  res.json(stats);
 }));
 
 // =============================================================================

@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
-import { loadCache, saveCache } from './calendarSync.js';
+import { loadCache, saveCache, logCalendarTouchpoints } from './calendarSync.js';
 import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
@@ -26,6 +26,18 @@ export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
   const endDate = event.end?.date;
   const isAllDay = !startDateTime && !!startDate;
 
+  // Normalize organizer/attendees to the shared { name, email } shape used by
+  // the Outlook path so Tribe touchpoint matching (#2033) works uniformly. The
+  // "self" attendee's responseStatus is surfaced as myStatus for the
+  // declined-event filter.
+  const attendees = (event.attendees || []).map((a) => ({
+    name: a.displayName || '',
+    email: a.email || '',
+    status: a.responseStatus || '',
+  }));
+  const self = (event.attendees || []).find((a) => a.self);
+  const myStatus = self?.responseStatus === 'declined' ? 'declined' : undefined;
+
   return {
     id: uuidv4(),
     externalId: `gcal-${md5(event.id || uuidv4())}`,
@@ -37,6 +49,11 @@ export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
     endTime: endDateTime || (endDate ? `${endDate}T00:00:00` : null),
     isAllDay,
     isCancelled: event.status === 'cancelled',
+    organizer: event.organizer
+      ? { name: event.organizer.displayName || '', email: event.organizer.email || '' }
+      : null,
+    attendees,
+    myStatus,
     subcalendarId,
     subcalendarName,
     source: 'google-calendar',
@@ -84,6 +101,12 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
       existing.endTime = event.endTime;
       existing.isAllDay = event.isAllDay;
       existing.isCancelled = event.isCancelled;
+      // Refresh the identity fields too so an event already in cache gains
+      // organizer/attendees for Tribe touchpoint matching and an up-to-date
+      // declined status (#2033) — not just newly-added events.
+      existing.organizer = event.organizer;
+      existing.attendees = event.attendees;
+      existing.myStatus = event.myStatus;
       existing.syncedAt = event.syncedAt;
       updatedCount++;
     } else {
@@ -101,6 +124,11 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
 
   await saveCache(accountId, cache);
   await updateSyncStatus(accountId, 'success');
+
+  // Auto-log Tribe touchpoints from this subcalendar batch (#2033) — secondary
+  // effect, must not fail the sync; idempotent on event id.
+  await logCalendarTouchpoints(accountId, normalized).catch((err) =>
+    console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
   io?.emit('calendar:sync:completed', {
     accountId,

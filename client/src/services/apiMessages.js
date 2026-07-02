@@ -48,7 +48,7 @@ export const enableGmailApi = () => request('/messages/gmail/enable-api', { meth
 
 // Feeds - RSS/Atom Feed Ingestion
 export const getFeeds = () => request('/feeds');
-export const getFeedStats = () => request('/feeds/stats');
+export const getFeedStats = (options = {}) => request('/feeds/stats', options);
 export const getFeedItems = ({ feedId, unreadOnly } = {}) => {
   const params = new URLSearchParams();
   if (feedId) params.set('feedId', feedId);

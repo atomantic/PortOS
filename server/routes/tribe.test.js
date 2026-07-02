@@ -80,6 +80,19 @@ describe('Tribe Routes', () => {
     expect(emit).toHaveBeenCalledWith('tribe:changed', { personId: PERSON_ID });
   });
 
+  it('accepts and forwards an emails array on create', async () => {
+    tribe.createPerson.mockResolvedValue({ id: PERSON_ID, name: 'Ada' });
+
+    const response = await request(app)
+      .post('/api/tribe/people')
+      .send({ name: 'Ada', emails: ['ada@work.com', 'ada@home.com'] });
+
+    expect(response.status).toBe(201);
+    expect(tribe.createPerson).toHaveBeenCalledWith(expect.objectContaining({
+      emails: ['ada@work.com', 'ada@home.com'],
+    }));
+  });
+
   it('updates a person with partial fields', async () => {
     tribe.updatePerson.mockResolvedValue({ id: PERSON_ID, name: 'Ada', nextMove: 'Coffee' });
 

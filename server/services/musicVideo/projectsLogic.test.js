@@ -98,6 +98,29 @@ describe('applyProjectPatch', () => {
     expect(next.scenes[1]).toMatchObject({ beatAligned: false, startSec: 3, endSec: 4 });
   });
 
+  it('regresses status to draft on track change since the cleared analysis must be redone', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1', status: 'ready' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    expect(analyzed.status).toBe('ready');
+    const next = applyProjectPatch(analyzed, { trackId: 't2' });
+    expect(next.status).toBe('draft');
+    expect(next.audioAnalysis).toBeNull();
+  });
+
+  it('honors an explicit status in the same track-change patch instead of regressing', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1', status: 'ready' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { trackId: 't2', status: 'analyzed' });
+    expect(next.status).toBe('analyzed');
+  });
+
+  it('leaves status untouched on a track change when the project is still a draft', () => {
+    const next = applyProjectPatch({ ...baseProject(), trackId: 't1', status: 'draft' }, { trackId: 't2' });
+    expect(next.status).toBe('draft');
+  });
+
   it('leaves scene beatAligned flags untouched when the track does not change', () => {
     const withScenes = {
       ...baseProject(),
