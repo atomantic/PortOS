@@ -52,7 +52,7 @@ Context and attachments are explicit and user-controlled, not silently leaked: a
 
 Config resolves in two layers — environment variables override the file:
 
-- **File**: `data/openclaw/config.json` (git-ignored; reference template at `data.reference/openclaw/config.json` ships with `enabled: false`). Fields: `enabled`, `baseUrl`, `authToken`, `defaultSession`, `label`, `paths` (upstream path overrides).
+- **File**: `data/openclaw/config.json` (git-ignored; reference template at `data.reference/openclaw/config.json` ships with `enabled: false`). Fields: `enabled`, `baseUrl`, `authToken`, `authHeader`, `authScheme`, `defaultSession`, `defaultAgentId`, `timeoutMs`, `label`, `paths` (upstream path overrides) — the file accepts the same keys the env vars override.
 - **Env**: `OPENCLAW_ENABLED`, `OPENCLAW_BASE_URL`, `OPENCLAW_AUTH_TOKEN`, `OPENCLAW_AUTH_HEADER` (default `Authorization`), `OPENCLAW_AUTH_SCHEME` (default `Bearer`; empty string = token-only), `OPENCLAW_LABEL`, `OPENCLAW_DEFAULT_SESSION`, `OPENCLAW_DEFAULT_AGENT_ID` (default `main`), `OPENCLAW_TIMEOUT_MS` (default 15000).
 
 "Configured" requires `enabled` not false AND a well-formed `http:`/`https:` `baseUrl` (other schemes are rejected). There is no settings-page UI for this — it is deliberately file/env-only, keeping private topology out of synced app state.

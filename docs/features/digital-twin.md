@@ -75,7 +75,7 @@ Suite spec documents ship in `data.reference/digital-twin/`.
 
 ## Personas & Context Switching
 
-`server/services/digital-twin-personas.js` provides named personas (e.g. Professional, Casual, Family) with full CRUD, stored in `meta.personas`. One persona is active at a time (`meta.settings.activePersonaId`); its `traitAdjustments` blend over the base twin's quantitative traits to produce a per-context communication calibration. Test runs (behavioral and multi-turn) can execute *as* a selected persona, and each run-history entry records which persona it embodied.
+`server/services/digital-twin-personas.js` provides named personas (e.g. Professional, Casual, Family) with full CRUD, stored in `meta.personas`. One persona is active at a time (`meta.settings.activePersonaId`); its `traitAdjustments` blend over the base twin's quantitative traits to produce a per-context communication calibration. All four Test-tab suites (behavioral, values-alignment, adversarial-boundary, multi-turn) can execute *as* a selected persona, and each run-history entry records which persona it embodied.
 
 ## UI Components
 
