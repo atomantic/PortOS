@@ -9,7 +9,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn().mockResolvedValue({ items: [] }),
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   getMemoryItems,
   getMemoryItem,
@@ -17,6 +17,7 @@ import {
   updateMemoryItem,
   deleteMemoryItem,
   submitPractice,
+  advanceScheduleFromSession,
   getMastery,
   generateMemoryDrill,
   getDueMemoryItems,
@@ -270,6 +271,62 @@ describe('submitPractice', () => {
     expect(result.mastery.chunks['verse-1'].correct).toBe(2);
     expect(result.mastery.chunks['verse-1'].attempts).toBe(3);
     expect(result.mastery.chunks['verse-1'].lastPracticed).toBeTruthy();
+  });
+});
+
+describe('advanceScheduleFromSession', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('advances the schedule of the referenced item (a POST-session review counts like submitPractice)', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        schedule: { ease: 2.5, intervalDays: 0, nextReview: now.toISOString(), lastReviewed: null },
+      }],
+    });
+
+    const schedule = await advanceScheduleFromSession('elements-song', 1, now);
+
+    expect(schedule).toBeTruthy();
+    expect(schedule.intervalDays).toBeGreaterThan(0);
+    expect(schedule.lastReviewed).toBe(now.toISOString());
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    const [, written] = atomicWrite.mock.calls[0];
+    expect(written.items.find(i => i.id === 'elements-song').schedule).toEqual(schedule);
+  });
+
+  it('returns null and writes nothing when memoryItemId is absent', async () => {
+    const schedule = await advanceScheduleFromSession(undefined, 1, now);
+    expect(schedule).toBeNull();
+    expect(readJSONFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns null and writes nothing when the item id does not match any item', async () => {
+    readJSONFile.mockResolvedValueOnce({ items: [{ ...ELEMENTS_SONG }] });
+
+    const schedule = await advanceScheduleFromSession('does-not-exist', 1, now);
+
+    expect(schedule).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('resets the item to due-now on a miss-heavy review (ratio < 0.6)', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        schedule: { ease: 2.5, intervalDays: 6, nextReview: now.toISOString(), lastReviewed: '2026-06-20T00:00:00.000Z' },
+      }],
+    });
+
+    const schedule = await advanceScheduleFromSession('elements-song', 0, now);
+
+    expect(schedule.intervalDays).toBe(0);
+    expect(schedule.nextReview).toBe(now.toISOString());
   });
 });
 

@@ -1,4 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock file I/O so submitPostSession tests stay pure. Shared by meatspacePost.js
+// AND meatspacePostMemory.js (imported transitively for advanceScheduleFromSession) —
+// route responses by path substring so both modules' reads/writes are covered
+// without depending on call order.
+vi.mock('../lib/fileUtils.js', () => ({
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  // `data` is needed too — postValidation.js transitively imports
+  // meatspacePostDrillCache.js, which builds a path off PATHS.data at module load.
+  PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  readJSONFile: vi.fn((path, defaultValue) => Promise.resolve(defaultValue)),
+}));
+
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   generateDoublingChain,
   generateSerialSubtraction,
@@ -8,6 +23,7 @@ import {
   scoreDrill,
   computeExpectedFromPrompt,
   computePostStreaks,
+  submitPostSession,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -428,5 +444,100 @@ describe('computePostStreaks', () => {
   it('spans a month boundary without an off-by-one (UTC day math)', () => {
     const r = computePostStreaks([s('2026-05-31'), s('2026-06-01')], '2026-06-01');
     expect(r.currentStreak).toBe(2);
+  });
+});
+
+// =============================================================================
+// SUBMIT SESSION — MEMORY DRILL SCHEDULE ADVANCE (issue #2010)
+// =============================================================================
+
+describe('submitPostSession — memory drill schedule advance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Route each readJSONFile call by path so both meatspacePost.js's own
+    // reads (config/sessions) and meatspacePostMemory.js's read (memory items,
+    // called internally by advanceScheduleFromSession) resolve sensibly
+    // regardless of call order.
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-memory-items')) {
+        return Promise.resolve({
+          items: [{
+            id: 'song-1',
+            title: 'Test Song',
+            builtin: false,
+            schedule: { ease: 2.5, intervalDays: 0, nextReview: '2026-06-01T00:00:00.000Z', lastReviewed: null },
+            mastery: { overallPct: 0, chunks: {}, elements: {} },
+            content: { lines: [{ text: 'a line' }], chunks: [] },
+          }],
+        });
+      }
+      if (p.includes('post-sessions')) {
+        return Promise.resolve({ sessions: [] });
+      }
+      // post-config.json — fall through to the default (baseDefaults clone)
+      return Promise.resolve(defaultValue);
+    });
+  });
+
+  it('advances the schedule of the memory item a POST-supported memory task references', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'line one', expected: 'line two', answered: 'line two', correct: true, responseMs: 500 },
+          { prompt: 'line two', expected: 'line three', answered: 'line three', correct: true, responseMs: 500 },
+        ],
+        score: 90,
+        totalMs: 2000,
+      }],
+      tags: {},
+    });
+
+    expect(session).toBeTruthy();
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeTruthy();
+    const updatedItem = memoryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
+    expect(updatedItem.schedule.lastReviewed).toBeTruthy();
+  });
+
+  it('does not touch memory items for a session with no memory tasks', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        config: { startValue: 2, steps: 1 },
+        questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 500 }],
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeUndefined();
+  });
+
+  it('does not advance a schedule for an unsupported memory drill type with no memoryItemId', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-fill-blank',
+        questions: [{ prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500 }],
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeUndefined();
   });
 });
