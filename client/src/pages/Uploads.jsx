@@ -32,7 +32,7 @@ export default function Uploads() {
   const fileInputRef = useRef(null);
 
   const fetchUploads = useCallback(async () => {
-    const data = await api.listUploads().catch(err => {
+    const data = await api.listUploads({ silent: true }).catch(err => {
       toast.error(err.message);
       return { uploads: [], count: 0, totalSizeFormatted: '0 B' };
     });
@@ -78,7 +78,7 @@ export default function Uploads() {
         continue;
       }
 
-      const result = await api.uploadFile(base64, file.name).catch(err => {
+      const result = await api.uploadFile(base64, file.name, { silent: true }).catch(err => {
         toast.error(`Failed to upload "${file.name}": ${err.message}`);
         return null;
       });
@@ -93,7 +93,7 @@ export default function Uploads() {
   };
 
   const handleDelete = async (filename) => {
-    const result = await api.deleteUpload(filename).catch(err => {
+    const result = await api.deleteUpload(filename, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -110,7 +110,7 @@ export default function Uploads() {
       return;
     }
 
-    const result = await api.deleteAllUploads().catch(err => {
+    const result = await api.deleteAllUploads({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

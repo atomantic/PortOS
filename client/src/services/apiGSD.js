@@ -2,13 +2,14 @@ import { request } from './apiCore.js';
 
 // GSD (Get Stuff Done) Integration
 export const getGsdProjects = () => request('/cos/gsd/projects');
-export const getGsdProject = (appId) => request(`/cos/gsd/projects/${appId}`);
+export const getGsdProject = (appId, options = {}) => request(`/cos/gsd/projects/${appId}`, options);
 export const getGsdConcerns = (appId) => request(`/cos/gsd/projects/${appId}/concerns`);
 export const getGsdPhases = (appId) => request(`/cos/gsd/projects/${appId}/phases`);
 export const getGsdPhase = (appId, phaseId) => request(`/cos/gsd/projects/${appId}/phases/${phaseId}`);
-export const createGsdConcernTasks = (appId, data) => request(`/cos/gsd/projects/${appId}/concerns/tasks`, {
+export const createGsdConcernTasks = (appId, data, options = {}) => request(`/cos/gsd/projects/${appId}/concerns/tasks`, {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const triggerGsdPhaseAction = (appId, phaseId, action) => request(`/cos/gsd/projects/${appId}/phases/${phaseId}/action`, {
   method: 'POST',

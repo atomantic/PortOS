@@ -281,7 +281,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   const handleLevelChange = async (params) => {
     const updatedData = { ...formData, ...params };
     setFormData(updatedData);
-    await api.updateCosConfig(params).catch(err => toast.error(err.message));
+    await api.updateCosConfig(params, { silent: true }).catch(err => toast.error(err.message));
     onUpdate();
   };
 
@@ -322,7 +322,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   };
 
   const handleSave = async () => {
-    await api.updateCosConfig(formData).catch(err => toast.error(err.message));
+    await api.updateCosConfig(formData, { silent: true }).catch(err => toast.error(err.message));
     toast.success('Configuration updated');
     setEditing(false);
     onUpdate();

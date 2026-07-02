@@ -166,7 +166,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       provider: newTask.provider,
       model: newTask.model,
       app: newTask.app
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -184,7 +184,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Delete a user template
   const deleteTemplate = useCallback(async (templateId, e) => {
     e.stopPropagation();
-    const result = await api.deleteCosTaskTemplate(templateId).catch(err => {
+    const result = await api.deleteCosTaskTemplate(templateId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -274,7 +274,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         mimeType: a.mimeType
       })) : undefined,
       position: addToTop ? 'top' : 'bottom'
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to add task');
       return null;
     });

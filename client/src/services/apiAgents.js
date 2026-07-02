@@ -37,13 +37,13 @@ export const getAgentActivityStats = (agentId, days = 7) =>
 
 // Chief of Staff
 export const getCosStatus = () => request('/cos');
-export const startCos = () => request('/cos/start', { method: 'POST' });
-export const stopCos = () => request('/cos/stop', { method: 'POST' });
+export const startCos = (options = {}) => request('/cos/start', { method: 'POST', ...options });
+export const stopCos = (options = {}) => request('/cos/stop', { method: 'POST', ...options });
 export const pauseCos = (reason) => request('/cos/pause', {
   method: 'POST',
   body: JSON.stringify({ reason })
 });
-export const resumeCos = () => request('/cos/resume', { method: 'POST' });
+export const resumeCos = (options = {}) => request('/cos/resume', { method: 'POST', ...options });
 export const getCosConfig = () => request('/cos/config');
 export const updateCosConfig = (config, options = {}) => request('/cos/config', {
   method: 'PUT',
@@ -53,13 +53,15 @@ export const updateCosConfig = (config, options = {}) => request('/cos/config', 
 // Today's per-domain autonomy usage (#711) for the Domain Budgets panel.
 export const getCosBudgetUsage = (options = {}) => request('/cos/budget-usage', options);
 export const getCosTasks = (options) => request('/cos/tasks', options);
-export const addCosTask = (task) => request('/cos/tasks', {
+export const addCosTask = (task, options = {}) => request('/cos/tasks', {
   method: 'POST',
-  body: JSON.stringify(task)
+  body: JSON.stringify(task),
+  ...options
 });
-export const createSlashdoTask = (command, app) => request('/cos/tasks/slashdo', {
+export const createSlashdoTask = (command, app, options = {}) => request('/cos/tasks/slashdo', {
   method: 'POST',
-  body: JSON.stringify({ command, app })
+  body: JSON.stringify({ command, app }),
+  ...options
 });
 // Queue a CoS task to implement one specific JIRA ticket (sprint-board play button).
 export const createJiraTicketTask = (app, ticketKey, options = {}) => request('/cos/tasks/jira-ticket', {
@@ -71,41 +73,46 @@ export const enhanceCosTaskPrompt = (data) => request('/cos/tasks/enhance', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateCosTask = (id, updates) => request(`/cos/tasks/${id}`, {
+export const updateCosTask = (id, updates, options = {}) => request(`/cos/tasks/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(updates)
+  body: JSON.stringify(updates),
+  ...options
 });
-export const deleteCosTask = (id, taskType = 'user') => request(`/cos/tasks/${id}?type=${taskType}`, { method: 'DELETE' });
-export const reorderCosTasks = (taskIds) => request('/cos/tasks/reorder', {
+export const deleteCosTask = (id, taskType = 'user', options = {}) => request(`/cos/tasks/${id}?type=${taskType}`, { method: 'DELETE', ...options });
+export const reorderCosTasks = (taskIds, options = {}) => request('/cos/tasks/reorder', {
   method: 'POST',
-  body: JSON.stringify({ taskIds })
+  body: JSON.stringify({ taskIds }),
+  ...options
 });
-export const approveCosTask = (id) => request(`/cos/tasks/${id}/approve`, { method: 'POST' });
-export const forceCosEvaluate = () => request('/cos/evaluate', { method: 'POST' });
-export const forceSpawnTask = (taskId) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST' });
+export const approveCosTask = (id, options = {}) => request(`/cos/tasks/${id}/approve`, { method: 'POST', ...options });
+export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
+export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
 export const getCosHealth = () => request('/cos/health');
-export const forceHealthCheck = () => request('/cos/health/check', { method: 'POST' });
+export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = () => request('/cos/agents');
 export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
-export const pauseCosAgent = (id, reason) => request(`/cos/agents/${id}/pause`, {
+export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
-  body: JSON.stringify({ reason })
+  body: JSON.stringify({ reason }),
+  ...options
 });
-export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });
+export const killCosAgent = (id, options = {}) => request(`/cos/agents/${id}/kill`, { method: 'POST', ...options });
 export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stats`, options);
 export const getCosAgentPrompt = (id) => request(`/cos/agents/${id}/prompt`);
-export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
-export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
-export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${id}/feedback`, {
+export const deleteCosAgent = (id, options = {}) => request(`/cos/agents/${id}`, { method: 'DELETE', ...options });
+export const clearCompletedCosAgents = (options = {}) => request('/cos/agents/completed', { method: 'DELETE', ...options });
+export const submitCosAgentFeedback = (id, feedback, options = {}) => request(`/cos/agents/${id}/feedback`, {
   method: 'POST',
-  body: JSON.stringify(feedback)
+  body: JSON.stringify(feedback),
+  ...options
 });
-export const sendCosAgentBtw = (id, message) => request(`/cos/agents/${id}/btw`, {
+export const sendCosAgentBtw = (id, message, options = {}) => request(`/cos/agents/${id}/btw`, {
   method: 'POST',
-  body: JSON.stringify({ message })
+  body: JSON.stringify({ message }),
+  ...options
 });
 export const getCosFeedbackStats = () => request('/cos/feedback/stats');
 export const getCosReports = () => request('/cos/reports');
@@ -149,9 +156,10 @@ export const clearDismissedCosRecommendations = () => request('/cos/learning/rec
 export const getCosTaskTemplates = () => request('/cos/templates');
 export const getCosPopularTemplates = (limit = 5) => request(`/cos/templates/popular?limit=${limit}`);
 export const getCosTemplateCategories = () => request('/cos/templates/categories');
-export const createCosTaskTemplate = (data) => request('/cos/templates', {
+export const createCosTaskTemplate = (data, options = {}) => request('/cos/templates', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const createCosTemplateFromTask = (task, templateName) => request('/cos/templates/from-task', {
   method: 'POST',
@@ -162,7 +170,7 @@ export const updateCosTaskTemplate = (id, data) => request(`/cos/templates/${id}
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const deleteCosTaskTemplate = (id) => request(`/cos/templates/${id}`, { method: 'DELETE' });
+export const deleteCosTaskTemplate = (id, options = {}) => request(`/cos/templates/${id}`, { method: 'DELETE', ...options });
 
 // Weekly Digest
 export const getCosWeeklyDigest = (weekId = null) => {
@@ -210,22 +218,25 @@ export const getCosScheduleIntervalTypes = () => request('/cos/schedule/interval
 export const getCosScheduleDueTasks = () => request('/cos/schedule/due');
 export const getCosScheduleDueAppTasks = (appId) => request(`/cos/schedule/due/${appId}`);
 // Unified task interval update
-export const updateCosTaskInterval = (taskType, settings) => request(`/cos/schedule/task/${taskType}`, {
+export const updateCosTaskInterval = (taskType, settings, options = {}) => request(`/cos/schedule/task/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify(settings)
+  body: JSON.stringify(settings),
+  ...options
 });
 // Deprecated aliases — delegate to unified endpoint
 export const updateCosSelfImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
 export const updateCosAppImprovementInterval = (taskType, settings) => updateCosTaskInterval(taskType, settings);
 
-export const triggerCosOnDemandTask = (taskType, appId = null) => request('/cos/schedule/trigger', {
+export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
   method: 'POST',
-  body: JSON.stringify({ taskType, appId })
+  body: JSON.stringify({ taskType, appId }),
+  ...options
 });
 export const getCosOnDemandRequests = () => request('/cos/schedule/on-demand');
-export const resetCosTaskHistory = (taskType, appId = null) => request('/cos/schedule/reset', {
+export const resetCosTaskHistory = (taskType, appId = null, options = {}) => request('/cos/schedule/reset', {
   method: 'POST',
-  body: JSON.stringify({ taskType, appId })
+  body: JSON.stringify({ taskType, appId }),
+  ...options
 });
 export const getCosScheduleTemplates = () => request('/cos/schedule/templates');
 export const addCosScheduleTemplate = (template) => request('/cos/schedule/templates', {
@@ -235,22 +246,24 @@ export const addCosScheduleTemplate = (template) => request('/cos/schedule/templ
 export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
 
 // Autonomous Jobs
-export const getCosJobs = () => request('/cos/jobs');
+export const getCosJobs = (options = {}) => request('/cos/jobs', options);
 export const getCosJobsDue = () => request('/cos/jobs/due');
 export const getCosJobIntervals = () => request('/cos/jobs/intervals');
 export const getCosJobAllowedCommands = () => request('/cos/jobs/allowed-commands');
 export const getCosJob = (id) => request(`/cos/jobs/${id}`);
-export const createCosJob = (data) => request('/cos/jobs', {
+export const createCosJob = (data, options = {}) => request('/cos/jobs', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateCosJob = (id, data) => request(`/cos/jobs/${id}`, {
+export const updateCosJob = (id, data, options = {}) => request(`/cos/jobs/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 'POST' });
-export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
-export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
+export const toggleCosJob = (id, options = {}) => request(`/cos/jobs/${id}/toggle`, { method: 'POST', ...options });
+export const triggerCosJob = (id, options = {}) => request(`/cos/jobs/${id}/trigger`, { method: 'POST', ...options });
+export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
 export const getCosWorkflow = () => request('/cos/workflow');
@@ -266,11 +279,11 @@ export const updateFeatureAgent = (id, data) => request(`/feature-agents/${id}`,
   method: 'PUT',
   body: JSON.stringify(data)
 });
-export const deleteFeatureAgent = (id) => request(`/feature-agents/${id}`, { method: 'DELETE' });
-export const startFeatureAgent = (id) => request(`/feature-agents/${id}/start`, { method: 'POST' });
-export const pauseFeatureAgent = (id) => request(`/feature-agents/${id}/pause`, { method: 'POST' });
-export const resumeFeatureAgent = (id) => request(`/feature-agents/${id}/resume`, { method: 'POST' });
-export const triggerFeatureAgent = (id) => request(`/feature-agents/${id}/trigger`, { method: 'POST' });
-export const stopFeatureAgent = (id) => request(`/feature-agents/${id}/stop`, { method: 'POST' });
+export const deleteFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}`, { method: 'DELETE', ...options });
+export const startFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/start`, { method: 'POST', ...options });
+export const pauseFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/pause`, { method: 'POST', ...options });
+export const resumeFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/resume`, { method: 'POST', ...options });
+export const triggerFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/trigger`, { method: 'POST', ...options });
+export const stopFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/stop`, { method: 'POST', ...options });
 export const getFeatureAgentRuns = (id, limit) => request(`/feature-agents/${id}/runs${limit ? `?limit=${limit}` : ''}`);
 export const getFeatureAgentOutput = (id) => request(`/feature-agents/${id}/output`);

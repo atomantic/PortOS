@@ -21,9 +21,10 @@ export const createGoal = (data) => request('/digital-twin/identity/goals', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateGoal = (id, data) => request(`/digital-twin/identity/goals/${id}`, {
+export const updateGoal = (id, data, options = {}) => request(`/digital-twin/identity/goals/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteGoal = (id) => request(`/digital-twin/identity/goals/${id}`, { method: 'DELETE' });
 export const getGoalsTree = () => request('/digital-twin/identity/goals/tree');

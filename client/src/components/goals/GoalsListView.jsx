@@ -296,7 +296,7 @@ export default function GoalsListView({ data, onRefresh }) {
       if (!dragGoal.parentId) return; // already a root goal
     }
 
-    const result = await api.updateGoal(dragGoal.id, { parentId: newParentId }).catch(err => {
+    const result = await api.updateGoal(dragGoal.id, { parentId: newParentId }, { silent: true }).catch(err => {
       toast.error(err?.message || 'Failed to move goal');
       return null;
     });

@@ -46,7 +46,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleResume = async () => {
     setResuming(true);
-    const result = await api.resumeCos().catch(err => {
+    const result = await api.resumeCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -59,7 +59,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleToggle = async (taskType, isEnabled) => {
     const newEnabled = !isEnabled;
-    await api.updateAppTaskTypeOverride(appId, taskType, { enabled: newEnabled }).catch(err => {
+    await api.updateAppTaskTypeOverride(appId, taskType, { enabled: newEnabled }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -78,7 +78,7 @@ export default function AutomationTab({ appId, appName }) {
     }
     setCronEditing(prev => { const n = { ...prev }; delete n[taskType]; return n; });
     const value = interval === 'null' ? null : interval;
-    await api.updateAppTaskTypeOverride(appId, taskType, { interval: value }).catch(err => {
+    await api.updateAppTaskTypeOverride(appId, taskType, { interval: value }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -89,7 +89,7 @@ export default function AutomationTab({ appId, appName }) {
   };
 
   const handleCronSave = async (taskType, expr) => {
-    await api.updateAppTaskTypeOverride(appId, taskType, { interval: expr }).catch(err => {
+    await api.updateAppTaskTypeOverride(appId, taskType, { interval: expr }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -102,7 +102,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleMetaToggle = async (taskType, field, globalTaskMetadata) => {
     const taskMetadata = toggleAppMetadataOverride(overrides[taskType]?.taskMetadata, globalTaskMetadata, field);
-    await api.updateAppTaskTypeOverride(appId, taskType, { taskMetadata }).catch(err => {
+    await api.updateAppTaskTypeOverride(appId, taskType, { taskMetadata }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -114,7 +114,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleTrigger = async (taskType) => {
     setTriggering(taskType);
-    const result = await api.triggerCosOnDemandTask(taskType, appId).catch(err => {
+    const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -133,7 +133,7 @@ export default function AutomationTab({ appId, appName }) {
 
   const handleToggleAll = async () => {
     const newEnabled = !allEnabled;
-    const result = await api.toggleAllAppTaskTypes(appId, newEnabled).catch(err => {
+    const result = await api.toggleAllAppTaskTypes(appId, newEnabled, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

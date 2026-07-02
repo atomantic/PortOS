@@ -5,7 +5,7 @@ export const getMessageAccounts = () => request('/messages/accounts');
 export const createMessageAccount = (data) => request('/messages/accounts', { method: 'POST', body: JSON.stringify(data) });
 export const updateMessageAccount = (id, data) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
-export const syncMessageAccount = (accountId, mode = 'unread') => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }) });
+export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
 export const getMessageSyncStatus = (accountId) => request(`/messages/sync/${accountId}/status`);
 export const evaluateMessages = (data = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data) });
 export const getMessageInbox = (params = {}) => {
@@ -40,8 +40,8 @@ export const refreshMessage = (accountId, messageId) =>
   request(`/messages/${accountId}/${messageId}/refresh`, { method: 'POST' });
 export const fetchFullContent = (accountId, { force } = {}) =>
   request(`/messages/fetch-full/${accountId}`, { method: 'POST', body: force ? JSON.stringify({ force: true }) : undefined });
-export const executeMessageAction = (accountId, messageId, action) =>
-  request(`/messages/${accountId}/${messageId}/action`, { method: 'POST', body: JSON.stringify({ action }), silent: true });
+export const executeMessageAction = (accountId, messageId, action, options = {}) =>
+  request(`/messages/${accountId}/${messageId}/action`, { method: 'POST', body: JSON.stringify({ action }), silent: true, ...options });
 export const clearMessageCache = (accountId) =>
   request(`/messages/accounts/${accountId}/cache/clear`, { method: 'POST' });
 export const enableGmailApi = () => request('/messages/gmail/enable-api', { method: 'POST' });
