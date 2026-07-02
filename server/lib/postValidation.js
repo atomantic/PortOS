@@ -21,7 +21,10 @@ const questionResultSchema = z.object({
   expected: z.union([z.number(), z.string()]).optional(),
   answered: z.union([z.number(), z.string()]).nullable(),
   correct: z.boolean().optional(),
-  responseMs: z.number().min(0)
+  responseMs: z.number().min(0),
+  // Reaction-time drill only: player pressed before the stimulus appeared.
+  // Always scored wrong server-side regardless of any client-supplied correct.
+  falseStart: z.boolean().optional()
 });
 
 // LLM drill response (text-based)
@@ -69,7 +72,13 @@ const drillTypeConfigSchema = z.object({
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(2).max(12).optional(),
   maxLength: z.number().int().min(2).max(14).optional(),
-  showMs: z.number().int().min(200).max(5000).optional()
+  showMs: z.number().int().min(200).max(5000).optional(),
+  // --- Cognitive drill knobs (schulte-table / mental-rotation / reaction-time) ---
+  size: z.number().int().min(3).max(7).optional(),
+  mode: z.enum(['simple', 'choice']).optional(),
+  minDelayMs: z.number().int().min(300).max(5000).optional(),
+  maxDelayMs: z.number().int().min(300).max(8000).optional(),
+  choices: z.number().int().min(2).max(4).optional()
 });
 
 // Task result within a session

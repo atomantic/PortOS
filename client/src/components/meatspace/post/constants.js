@@ -2,7 +2,7 @@ export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-flue
 export const MEMORY_DRILL_TYPES = ['memory-sequence', 'memory-element-flash'];
 // Deterministic cognitive drills (no LLM). Mirror the server's
 // COGNITIVE_DRILL_TYPES in server/services/meatspacePostCognitive.js.
-export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop'];
+export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time'];
 
 // Drill types valid elsewhere but not yet supported by the POST runner.
 // These use answers[] arrays instead of expected and need dedicated runners.
@@ -56,7 +56,7 @@ export const DOMAINS = {
     color: 'text-rose-400',
     bgColor: 'bg-rose-500/20',
     timeBudgetSec: 90,
-    drillTypes: ['n-back', 'digit-span', 'stroop'],
+    drillTypes: ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time'],
   },
 };
 
@@ -95,6 +95,9 @@ export const DRILL_LABELS = {
   'n-back': 'N-Back',
   'digit-span': 'Digit Span',
   'stroop': 'Stroop',
+  'schulte-table': 'Schulte Table',
+  'mental-rotation': 'Mental Rotation',
+  'reaction-time': 'Reaction Time',
 };
 
 // Human-readable label for a domain key. `other` collects drills whose type

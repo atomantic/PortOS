@@ -175,10 +175,43 @@ const COGNITIVE_DRILL_META = {
     ],
     defaults: { enabled: true, count: 15, timeLimitSec: 60 },
   },
+  'schulte-table': {
+    label: 'Schulte Table',
+    desc: 'Scan a shuffled grid and tap 1, 2, 3... in order — visual attention & speed',
+    fields: [
+      { key: 'size', label: 'Grid Size (NxN)', type: 'number', min: 3, max: 7 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, size: 5, timeLimitSec: 120 },
+  },
+  'mental-rotation': {
+    label: 'Mental Rotation',
+    desc: 'Pick the shape that’s the same, just rotated — spatial reasoning',
+    fields: [
+      { key: 'count', label: 'Trials', type: 'number', min: 4, max: 20 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, count: 8, timeLimitSec: 120 },
+  },
+  'reaction-time': {
+    label: 'Reaction Time',
+    desc: 'React the instant a stimulus appears — processing speed baseline',
+    fields: [
+      { key: 'mode', label: 'Mode', type: 'select', options: [
+        { value: 'simple', label: 'Simple' },
+        { value: 'choice', label: 'Choice' },
+      ] },
+      { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
+      { key: 'minDelayMs', label: 'Min Delay (ms)', type: 'number', min: 300, max: 5000 },
+      { key: 'maxDelayMs', label: 'Max Delay (ms)', type: 'number', min: 300, max: 8000 },
+      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
+    ],
+    defaults: { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, timeLimitSec: 90 },
+  },
 };
 
 // String-valued cognitive config keys must NOT be coerced to Number on edit.
-const COGNITIVE_STRING_FIELDS = new Set(['direction']);
+const COGNITIVE_STRING_FIELDS = new Set(['direction', 'mode']);
 
 // Seed every cognitive drill type so a card's toggle reflects real, persistable
 // state — same enabled-by-presence convention as seedLlmDrillTypes.

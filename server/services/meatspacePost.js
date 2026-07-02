@@ -47,7 +47,10 @@ const DEFAULT_CONFIG = {
     drillTypes: {
       'n-back': { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
       'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
-      'stroop': { enabled: true, count: 15, timeLimitSec: 60 }
+      'stroop': { enabled: true, count: 15, timeLimitSec: 60 },
+      'schulte-table': { enabled: true, size: 5, timeLimitSec: 120 },
+      'mental-rotation': { enabled: true, count: 8, timeLimitSec: 120 },
+      'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, timeLimitSec: 90 }
     }
   },
   sessionModules: ['mental-math'],
@@ -367,6 +370,9 @@ export function generateDrill(type, config = {}) {
     case 'n-back':
     case 'digit-span':
     case 'stroop':
+    case 'schulte-table':
+    case 'mental-rotation':
+    case 'reaction-time':
       return generateCognitiveDrill(type, config);
     default:
       return null;
