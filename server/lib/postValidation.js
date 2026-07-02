@@ -73,13 +73,16 @@ const drillTypeConfigSchema = z.object({
   // `length`'s effective floor is `n + 5` (dynamic, up to 8) inside the
   // generator — Zod can't express a cross-field minimum here, so this schema
   // keeps a conservative fixed floor of 6 and lets the generator clamp up.
+  // (timeLimitSec above is validated but NOT enforced for these drill types —
+  // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
+  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
+  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
+  // keep their own internal defaults regardless.
   n: z.number().int().min(1).max(3).optional(),
   length: z.number().int().min(6).max(60).optional(),
-  stimulusMs: z.number().int().min(1000).max(5000).optional(),
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(3).max(9).optional(),
-  maxLength: z.number().int().min(3).max(12).optional(),
-  showMs: z.number().int().min(400).max(4000).optional()
+  maxLength: z.number().int().min(3).max(12).optional()
 });
 
 // Task result within a session

@@ -41,13 +41,15 @@ const DEFAULT_CONFIG = {
     }
   },
   // Deterministic cognitive drills (working-memory / attention / inhibition).
-  // No provider calls — enabled by default since they're free to run.
+  // No provider calls — enabled by default since they're free to run. No
+  // timeLimitSec — these drills are self-paced/stimulus-driven and never
+  // enforce a countdown (see client PostCognitiveDrillRunner.jsx / issue #2008).
   cognitive: {
     enabled: true,
     drillTypes: {
-      'n-back': { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
-      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
-      'stroop': { enabled: true, count: 15, timeLimitSec: 60 }
+      'n-back': { enabled: true, n: 2, length: 20 },
+      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
+      'stroop': { enabled: true, count: 15 }
     }
   },
   sessionModules: ['mental-math'],
