@@ -28,7 +28,7 @@ export default function SlashDoPanel({ appId, appType }) {
 
   const handleRun = async (command) => {
     setLoading(command.id);
-    const result = await api.createSlashdoTask(command.id, appId).catch(err => {
+    const result = await api.createSlashdoTask(command.id, appId, { silent: true }).catch(err => {
       toast.error(err.message || `Failed to queue ${command.label}`);
       return null;
     });

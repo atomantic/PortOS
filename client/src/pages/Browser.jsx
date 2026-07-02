@@ -85,7 +85,7 @@ export default function BrowserPage() {
 
   const handleAction = useCallback(async (action, fn) => {
     setActionLoading(action);
-    const result = await fn().catch(err => {
+    const result = await fn({ silent: true }).catch(err => {
       toast.error(`Failed to ${action}: ${err.message}`);
       return null;
     });
@@ -99,7 +99,7 @@ export default function BrowserPage() {
 
   const handleSaveConfig = useCallback(async () => {
     if (!configDraft) return;
-    const saved = await updateBrowserConfig(configDraft).catch(err => {
+    const saved = await updateBrowserConfig(configDraft, { silent: true }).catch(err => {
       toast.error(`Failed to save config: ${err.message}`);
       return null;
     });
@@ -111,7 +111,7 @@ export default function BrowserPage() {
   }, [configDraft]);
 
   const handleDeleteDownload = useCallback(async (name) => {
-    const ok = await deleteBrowserDownload(name).then(() => true).catch(err => {
+    const ok = await deleteBrowserDownload(name, { silent: true }).then(() => true).catch(err => {
       toast.error(`Failed to delete: ${err.message}`);
       return false;
     });
@@ -480,7 +480,7 @@ export default function BrowserPage() {
                     onClick={() => {
                       setNavUrl(url);
                       setActionLoading('navigate');
-                      navigateBrowser(url).then(() => {
+                      navigateBrowser(url, { silent: true }).then(() => {
                         toast.success(`Opened ${label}`);
                         setNavUrl('');
                         fetchStatus();

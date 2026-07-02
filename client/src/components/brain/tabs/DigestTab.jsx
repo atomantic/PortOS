@@ -45,7 +45,7 @@ export default function DigestTab({ onRefresh }) {
 
   const handleRunDigest = async () => {
     setRunningDigest(true);
-    const result = await api.runBrainDigest().catch(err => {
+    const result = await api.runBrainDigest(undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to generate digest');
       return null;
     });
@@ -60,7 +60,7 @@ export default function DigestTab({ onRefresh }) {
 
   const handleRunReview = async () => {
     setRunningReview(true);
-    const result = await api.runBrainReview().catch(err => {
+    const result = await api.runBrainReview(undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to generate review');
       return null;
     });

@@ -20,7 +20,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     e.preventDefault();
     const name = newName.trim();
     if (!name) return;
-    const bucket = await api.createBrainBucket({ name }).catch(err => {
+    const bucket = await api.createBrainBucket({ name }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to create bucket');
       return null;
     });
@@ -32,7 +32,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   };
 
   const handleUpdate = useCallback(async (id, patch) => {
-    const updated = await api.updateBrainBucket(id, patch).catch(err => {
+    const updated = await api.updateBrainBucket(id, patch, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update bucket');
       return null;
     });
@@ -40,7 +40,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   }, [setBuckets]);
 
   const handleDelete = useCallback(async (id) => {
-    const ok = await api.deleteBrainBucket(id).catch(err => {
+    const ok = await api.deleteBrainBucket(id, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete bucket');
       return null;
     });
@@ -77,7 +77,7 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
       const next = [...prev];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      api.reorderBrainBuckets(next.map(b => b.id)).catch(err => {
+      api.reorderBrainBuckets(next.map(b => b.id), { silent: true }).catch(err => {
         toast.error(err.message || 'Failed to reorder buckets');
       });
       return next;

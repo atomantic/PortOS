@@ -61,7 +61,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       sourceAppId: formData.sourceAppId || null,
       importance: formData.importance,
       confidence: formData.confidence
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update memory');
       return null;
     });

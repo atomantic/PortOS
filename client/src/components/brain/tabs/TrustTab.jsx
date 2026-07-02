@@ -56,7 +56,7 @@ export default function TrustTab({ onRefresh }) {
       dailyDigestTime: settingsForm.dailyDigestTime,
       weeklyReviewTime: settingsForm.weeklyReviewTime,
       weeklyReviewDay: settingsForm.weeklyReviewDay
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to save settings');
       return null;
     });

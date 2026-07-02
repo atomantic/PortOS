@@ -297,7 +297,7 @@ export default function ChiefOfStaff() {
   }, [socket, fetchData]);
 
   const handleStart = async () => {
-    const result = await api.startCos().catch(err => {
+    const result = await api.startCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -312,7 +312,7 @@ export default function ChiefOfStaff() {
   };
 
   const handleStop = async () => {
-    const result = await api.stopCos().catch(err => {
+    const result = await api.stopCos({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -325,7 +325,7 @@ export default function ChiefOfStaff() {
   };
 
   const handleForceEvaluate = async () => {
-    await api.forceCosEvaluate().catch(err => toast.error(err.message));
+    await api.forceCosEvaluate({ silent: true }).catch(err => toast.error(err.message));
     toast.success('Evaluation triggered');
     setAgentState('thinking');
     setStatusMessage("Evaluating tasks...");
@@ -366,7 +366,7 @@ export default function ChiefOfStaff() {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
     setSpeaking(true);
-    const result = await api.forceHealthCheck().catch(err => {
+    const result = await api.forceHealthCheck({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

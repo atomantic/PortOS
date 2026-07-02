@@ -307,7 +307,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
 
   const handleSave = async () => {
     const payload = normalizeJobPayload(editData);
-    const result = await api.updateCosJob(job.id, payload).catch(err => {
+    const result = await api.updateCosJob(job.id, payload, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -620,7 +620,7 @@ export default function JobsTab() {
   const [newJob, setNewJob] = useState(INITIAL_JOB);
 
   const fetchJobs = useCallback(async () => {
-    const data = await api.getCosJobs().catch(err => {
+    const data = await api.getCosJobs({ silent: true }).catch(err => {
       toast.error(`Failed to load jobs: ${err.message}`);
       return null;
     });
@@ -659,7 +659,7 @@ export default function JobsTab() {
       return;
     }
 
-    const created = await api.createCosJob(normalizeJobPayload(newJob)).catch(err => {
+    const created = await api.createCosJob(normalizeJobPayload(newJob), { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -671,7 +671,7 @@ export default function JobsTab() {
   };
 
   const handleToggle = async (jobId) => {
-    const result = await api.toggleCosJob(jobId).catch(err => {
+    const result = await api.toggleCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -683,7 +683,7 @@ export default function JobsTab() {
 
   const handleTrigger = async (jobId) => {
     toast.loading('Triggering job...', { id: 'job-trigger' });
-    const result = await api.triggerCosJob(jobId).catch(err => {
+    const result = await api.triggerCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });
@@ -699,7 +699,7 @@ export default function JobsTab() {
   };
 
   const handleDelete = async (jobId) => {
-    const result = await api.deleteCosJob(jobId).catch(err => {
+    const result = await api.deleteCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

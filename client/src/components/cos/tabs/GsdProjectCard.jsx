@@ -14,7 +14,7 @@ export default function GsdProjectCard({ project, onRefresh }) {
   const loadDetail = async () => {
     if (detail) return;
     setLoading(true);
-    const data = await api.getGsdProject(project.appId).catch(err => {
+    const data = await api.getGsdProject(project.appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

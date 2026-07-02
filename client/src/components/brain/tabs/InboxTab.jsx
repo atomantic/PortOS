@@ -106,7 +106,7 @@ export default function InboxTab({ onRefresh, settings }) {
     setInputText('');
     setEntries(prev => [optimisticEntry, ...prev]);
 
-    const result = await api.captureBrainThought(text, undefined, undefined, { creative }).catch(err => {
+    const result = await api.captureBrainThought(text, undefined, undefined, { creative }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
       setEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
@@ -121,7 +121,7 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleResolve = async (entryId, destination) => {
-    const result = await api.resolveBrainReview(entryId, destination).catch(err => {
+    const result = await api.resolveBrainReview(entryId, destination, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to resolve');
       return null;
     });
@@ -136,7 +136,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const handleRetry = async (entryId) => {
     if (retryingId) return;
     setRetryingId(entryId);
-    const result = await api.retryBrainClassification(entryId).catch(err => {
+    const result = await api.retryBrainClassification(entryId, undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to retry');
       return null;
     });
@@ -155,7 +155,7 @@ export default function InboxTab({ onRefresh, settings }) {
       return;
     }
 
-    const result = await api.fixBrainClassification(entryId, fixDestination).catch(err => {
+    const result = await api.fixBrainClassification(entryId, fixDestination, undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to fix');
       return null;
     });
@@ -180,7 +180,7 @@ export default function InboxTab({ onRefresh, settings }) {
       return;
     }
 
-    const result = await api.updateBrainInboxEntry(entryId, editText.trim()).catch(err => {
+    const result = await api.updateBrainInboxEntry(entryId, editText.trim(), { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update');
       return null;
     });
@@ -201,7 +201,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
   const handleDelete = async (entryId) => {
     let failed = false;
-    await api.deleteBrainInboxEntry(entryId).catch(err => {
+    await api.deleteBrainInboxEntry(entryId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete');
       failed = true;
     });
@@ -214,7 +214,7 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleMarkDone = async (entryId) => {
-    const result = await api.markBrainInboxDone(entryId).catch(err => {
+    const result = await api.markBrainInboxDone(entryId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to mark done');
       return null;
     });

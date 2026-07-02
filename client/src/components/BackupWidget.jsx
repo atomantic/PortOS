@@ -71,7 +71,7 @@ function RestorePanel({ snapshot, onClose }) {
       snapshotId: snapshot.id,
       dryRun: true,
       subdirFilter: filter.trim() || null
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(`Preview failed: ${err.message}`);
       return null;
     });
@@ -85,7 +85,7 @@ function RestorePanel({ snapshot, onClose }) {
       snapshotId: snapshot.id,
       dryRun: false,
       subdirFilter: filter.trim() || null
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(`Restore failed: ${err.message}`);
       return null;
     });
@@ -278,7 +278,7 @@ const BackupWidget = memo(function BackupWidget() {
 
   const handleBackupNow = useCallback(async () => {
     setTriggering(true);
-    await api.triggerBackup().catch(err => {
+    await api.triggerBackup({ silent: true }).catch(err => {
       toast.error(`Backup failed: ${err.message}`);
     }).then(result => {
       if (result) {

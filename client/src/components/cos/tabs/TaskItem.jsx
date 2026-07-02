@@ -160,7 +160,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     if (newStatus === 'blocked' && blockedReasonText) {
       updates.blockedReason = blockedReasonText;
     }
-    const result = await api.updateCosTask(task.id, updates).catch(err => { toast.error(err.message); return null; });
+    const result = await api.updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success(`Task marked as ${newStatus}`);
     onRefresh();
@@ -178,7 +178,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleSave = async () => {
-    const result = await api.updateCosTask(task.id, editData).catch(err => {
+    const result = await api.updateCosTask(task.id, editData, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -190,14 +190,14 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
 
   const handleDelete = async () => {
     const taskType = isSystem ? 'internal' : 'user';
-    const result = await api.deleteCosTask(task.id, taskType).catch(err => { toast.error(err.message); return null; });
+    const result = await api.deleteCosTask(task.id, taskType, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Task deleted');
     onRefresh();
   };
 
   const handleApprove = async () => {
-    const result = await api.approveCosTask(task.id).catch(err => {
+    const result = await api.approveCosTask(task.id, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -407,7 +407,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 {task.status === 'pending' && !task.approvalRequired && (
                   <button
                     onClick={async () => {
-                      const result = await api.forceSpawnTask(task.id).catch(err => { toast.error(err.message); return null; });
+                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
                       if (result?.success) toast.success(`Spawning ${task.id}`);
                       if (onRefresh) onRefresh();
                     }}

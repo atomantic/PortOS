@@ -179,20 +179,23 @@ export const getPostSessions = (from, to) => {
   return request(`/meatspace/post/sessions?${params}`);
 };
 export const getPostSession = (id) => request(`/meatspace/post/sessions/${id}`);
-export const submitPostSession = (data) => request('/meatspace/post/sessions', {
+export const submitPostSession = (data, options = {}) => request('/meatspace/post/sessions', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
 export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
-export const generatePostDrill = (type, config = {}, providerId, model) => request('/meatspace/post/drill', {
+export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {
   method: 'POST',
-  body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) })
+  body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) }),
+  ...options
 });
-export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, providerId, model) =>
+export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, providerId, model, options = {}) =>
   request('/meatspace/post/score-llm', {
     method: 'POST',
-    body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) })
+    body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) }),
+    ...options
   });
 export const getPostDrillCacheStatus = () => request('/meatspace/post/drill-cache/status');
 export const fillPostDrillCache = (types, providerId, model) => request('/meatspace/post/drill-cache/fill', {
