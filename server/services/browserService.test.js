@@ -192,11 +192,42 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     expect(ssrfPinRefusalReason([], allow, 'https://ex.com/a')).toMatch(/no main-frame document response/);
   });
 
-  it('refuses a hop with a missing/empty remote IP (unverifiable)', () => {
+  it('refuses a main document with a missing/empty remote IP (unverifiable)', () => {
     const reason = ssrfPinRefusalReason([
       docRequest('R1', 'https://ex.com/a'),
       docResponse('R1', 'https://ex.com/a', ''),
     ], allow, 'https://ex.com/a');
-    expect(reason).toMatch(/disallowed address \(unknown\)/);
+    expect(reason).toMatch(/unverifiable address/);
+  });
+
+  it('refuses a SUB-RESOURCE / fetch that dialed a blocked IP (rebind after page load)', () => {
+    // Main doc loads clean from public, then the page fetch()es its now-private-
+    // resolving hostname (a subresource, type XHR). Its real IP must be checked.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'XHR', response: { url: 'https://ex.com/latest/meta-data', remoteIPAddress: '169.254.169.254', status: 200 } } },
+    ], allow, 'https://ex.com/a');
+    expect(reason).toMatch(/disallowed address 169\.254\.169\.254/);
+  });
+
+  it('ignores sub-resources with an empty remote IP (data:/blob:/cache — no connection)', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'Image', response: { url: 'data:image/png;base64,AAAA', remoteIPAddress: '', status: 200 } } },
+    ], allow, 'https://ex.com/a');
+    expect(reason).toBeNull();
+  });
+
+  it('allows an RFC1918 LAN sub-resource (only loopback/link-local/metadata are blocked)', () => {
+    // isBlockedIngestHost does NOT block 192.168/10/172.16 — LAN pages stay ingestible.
+    const lanAllow = (ip) => !ip.startsWith('127.') && !ip.startsWith('169.254.');
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://wiki.lan/a'),
+      docResponse('R1', 'https://wiki.lan/a', '192.168.1.10'),
+      { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'Script', response: { url: 'https://wiki.lan/app.js', remoteIPAddress: '192.168.1.10', status: 200 } } },
+    ], lanAllow, 'https://wiki.lan/a');
+    expect(reason).toBeNull();
   });
 });

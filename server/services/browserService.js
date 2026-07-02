@@ -352,20 +352,49 @@ async function closeCdpPage(id) {
   await cdpRequest(`/json/close/${id}`, { timeout: HEALTH_TIMEOUT_MS }).catch(() => {});
 }
 
+// Every address Chrome ACTUALLY dialed across the capture window — the main
+// document, its redirects, AND every sub-resource / XHR / fetch the page issued
+// (any request type), each with a non-empty `remoteIPAddress`. Empty IPs
+// (data:/blob:/cache/service-worker responses — no network connection) are
+// omitted so legit pages aren't false-refused. Pure; exported for testing.
+export function collectConnectedIps(messages) {
+  const out = [];
+  for (const msg of messages) {
+    const p = msg?.params;
+    if (!p) continue;
+    if (msg.method === 'Network.requestWillBeSent' && p.redirectResponse?.remoteIPAddress) {
+      out.push({ url: p.redirectResponse.url || null, remoteIPAddress: p.redirectResponse.remoteIPAddress });
+    } else if (msg.method === 'Network.responseReceived' && p.response?.remoteIPAddress) {
+      out.push({ url: p.response.url || null, remoteIPAddress: p.response.remoteIPAddress });
+    }
+  }
+  return out;
+}
+
 // Pure gate over a captured CDP message stream: returns a refusal reason string,
-// or null when every main-frame hop connected to an allowed address and no
-// top-level navigation is still in flight. Exported for unit testing.
+// or null when the navigation is safe to read. Exported for unit testing.
 export function ssrfPinRefusalReason(messages, verifyRemoteIp, url) {
   const { hops, pendingMainRequestIds } = pickMainFrameHops(messages);
   if (!hops.length) return 'no main-frame document response was observed';
+  // The main document must have a verifiable (present) connection IP — an empty
+  // one can't be checked, so fail closed.
   for (const hop of hops) {
-    if (!hop.remoteIPAddress || !verifyRemoteIp(hop.remoteIPAddress)) {
-      return `Chrome connected to a disallowed address ${hop.remoteIPAddress || '(unknown)'} for ${hop.url || url}`;
-    }
+    if (!hop.remoteIPAddress) return `Chrome connected to an unverifiable address for ${hop.url || url}`;
   }
   // A top-level navigation that STARTED but produced no response was never
   // pinned — Chrome could be mid-connect to a private/metadata target.
   if (pendingMainRequestIds.length) return 'a top-level navigation was still in flight (unpinned)';
+  // EVERY connection Chrome made must dial an allowed address — not just the
+  // main document. A rebinding page can load public, then `fetch()` its
+  // now-private-resolving hostname; the browser treats it as same-origin, JS
+  // injects that private response into the DOM we ingest, and the sub-resource's
+  // real `remoteIPAddress` surfaces it here. (`isBlockedIngestHost` blocks only
+  // loopback/link-local/metadata, not RFC1918 LAN, so LAN pages aren't refused.)
+  for (const conn of collectConnectedIps(messages)) {
+    if (!verifyRemoteIp(conn.remoteIPAddress)) {
+      return `Chrome connected to a disallowed address ${conn.remoteIPAddress} for ${conn.url || url}`;
+    }
+  }
   return null;
 }
 
