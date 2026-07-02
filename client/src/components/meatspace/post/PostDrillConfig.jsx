@@ -141,6 +141,12 @@ function seedLlmDrillTypes(saved) {
 // clamps in server/services/meatspacePostCognitive.js and the Zod bounds in
 // server/lib/postValidation.js. `defaults` mirror the server DEFAULT_CONFIG so
 // the launcher and generators agree.
+//
+// No Time Limit field here (unlike the math/LLM drill meta above) — cognitive
+// drills are self-paced/stimulus-driven and never enforce a countdown (see
+// PostCognitiveDrillRunner.jsx). A `timeLimitSec` knob was previously
+// surfaced/validated for these drills without ever being consumed, which
+// promised behavior that didn't happen (issue #2008).
 const COGNITIVE_DRILL_META = {
   'n-back': {
     label: 'N-Back',
@@ -148,9 +154,8 @@ const COGNITIVE_DRILL_META = {
     fields: [
       { key: 'n', label: 'N (steps back)', type: 'number', min: 1, max: 3 },
       { key: 'length', label: 'Sequence Length', type: 'number', min: 6, max: 60 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
+    defaults: { enabled: true, n: 2, length: 20 },
   },
   'digit-span': {
     label: 'Digit Span',
@@ -162,36 +167,32 @@ const COGNITIVE_DRILL_META = {
       ] },
       { key: 'startLength', label: 'Start Length', type: 'number', min: 3, max: 9 },
       { key: 'maxLength', label: 'Max Length', type: 'number', min: 3, max: 12 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
+    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
   },
   'stroop': {
     label: 'Stroop',
     desc: 'Name the ink color of a color-word — attention & inhibition',
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, count: 15, timeLimitSec: 60 },
+    defaults: { enabled: true, count: 15 },
   },
   'schulte-table': {
     label: 'Schulte Table',
     desc: 'Scan a shuffled grid and tap 1, 2, 3... in order — visual attention & speed',
     fields: [
       { key: 'size', label: 'Grid Size (NxN)', type: 'number', min: 3, max: 7 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, size: 5, timeLimitSec: 120 },
+    defaults: { enabled: true, size: 5 },
   },
   'mental-rotation': {
     label: 'Mental Rotation',
     desc: 'Pick the shape that’s the same, just rotated — spatial reasoning',
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 4, max: 20 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, count: 8, timeLimitSec: 120 },
+    defaults: { enabled: true, count: 8 },
   },
   'reaction-time': {
     label: 'Reaction Time',
@@ -208,9 +209,8 @@ const COGNITIVE_DRILL_META = {
       // but shown unconditionally — DrillCard has no per-field conditional
       // visibility and this mirrors how other fields already behave.
       { key: 'choices', label: 'Choices (Choice mode)', type: 'number', min: 2, max: 4 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3, timeLimitSec: 90 },
+    defaults: { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 },
   },
 };
 

@@ -219,7 +219,7 @@ export function generateSchulteTable(config = {}) {
   const cells = shuffle(numbers);
   return {
     type: 'schulte-table',
-    config: { size, timeLimitSec: clampInt(config.timeLimitSec, 10, 600, 120) },
+    config: { size },
     cells,
   };
 }
