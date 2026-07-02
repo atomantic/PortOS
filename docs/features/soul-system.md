@@ -2,6 +2,8 @@
 
 Digital twin identity scaffold management for creating and testing aligned AI personas.
 
+> Three docs cover the digital-twin subsystem from different angles: this one (the **document workflow** — soul markdown files, enrichment, testing, export), [Digital Twin](./digital-twin.md) (the **quantitative modeling layer** — traits, confidence, feedback, personas), and [Unified Identity System](./identity-system.md) (the **identity architecture** — genome, chronotype, taste, goals).
+
 ## Overview
 
 LLMs can embody specific personas, but creating comprehensive identity documents and testing alignment across different models is manual and error-prone. The Soul System provides a structured approach to capturing, validating, and deploying personality models.
@@ -108,5 +110,6 @@ data/digital-twin/
 
 ## Related Features
 
-- [Digital Twin](./digital-twin.md) - Quantitative personality modeling
+- [Digital Twin](./digital-twin.md) - Quantitative personality modeling built on these documents
+- [Unified Identity System](./identity-system.md) - Genome/chronotype/taste/goals identity architecture
 - [Chief of Staff](./chief-of-staff.md) - Uses soul context in agent prompts
