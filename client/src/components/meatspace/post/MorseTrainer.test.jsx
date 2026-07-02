@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
@@ -148,33 +148,43 @@ describe('MorseTrainer training log integration', () => {
     expect(container.textContent).toContain('80% avg');
   });
 
-  it('logs a completed Head Copy round to the training log with the right payload shape', async () => {
-    window.AudioContext = MockAudioContext;
-    renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
-
-    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
-
-    // 10-question round (ROUND_SIZE): submit a deliberately wrong guess each
-    // time so correctCount is deterministic (0), then advance past feedback.
-    for (let i = 0; i < 10; i++) {
-      const input = await screen.findByPlaceholderText('????');
-      fireEvent.change(input, { target: { value: 'ZZZZZ' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-      if (i < 9) {
-        const nextButton = await screen.findByRole('button', { name: /Next/i });
-        fireEvent.click(nextButton);
-      }
-    }
-
-    await waitFor(() => {
-      expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
-        module: 'morse',
-        drillType: 'morse-head-copy',
-        questionCount: 10,
-        correctCount: 0,
-      }));
+  describe('round completion', () => {
+    // Scoped to just this test — install/teardown live in beforeEach/afterEach
+    // (not inline in the test body) so a failed assertion above the cleanup
+    // line can't leak the mock AudioContext onto `window` for later tests.
+    beforeEach(() => {
+      window.AudioContext = MockAudioContext;
     });
-    delete window.AudioContext;
+    afterEach(() => {
+      delete window.AudioContext;
+    });
+
+    it('logs a completed Head Copy round to the training log with the right payload shape', async () => {
+      renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+      fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+
+      // 10-question round (ROUND_SIZE): submit a deliberately wrong guess each
+      // time so correctCount is deterministic (0), then advance past feedback.
+      for (let i = 0; i < 10; i++) {
+        const input = await screen.findByPlaceholderText('????');
+        fireEvent.change(input, { target: { value: 'ZZZZZ' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        if (i < 9) {
+          const nextButton = await screen.findByRole('button', { name: /Next/i });
+          fireEvent.click(nextButton);
+        }
+      }
+
+      await waitFor(() => {
+        expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+          module: 'morse',
+          drillType: 'morse-head-copy',
+          questionCount: 10,
+          correctCount: 0,
+        }));
+      });
+    });
   });
 });
 
