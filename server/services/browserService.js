@@ -352,30 +352,57 @@ async function closeCdpPage(id) {
   await cdpRequest(`/json/close/${id}`, { timeout: HEALTH_TIMEOUT_MS }).catch(() => {});
 }
 
+// Pure gate over a captured CDP message stream: returns a refusal reason string,
+// or null when every main-frame hop connected to an allowed address and no
+// top-level navigation is still in flight. Exported for unit testing.
+export function ssrfPinRefusalReason(messages, verifyRemoteIp, url) {
+  const { hops, pendingMainRequestIds } = pickMainFrameHops(messages);
+  if (!hops.length) return 'no main-frame document response was observed';
+  for (const hop of hops) {
+    if (!hop.remoteIPAddress || !verifyRemoteIp(hop.remoteIPAddress)) {
+      return `Chrome connected to a disallowed address ${hop.remoteIPAddress || '(unknown)'} for ${hop.url || url}`;
+    }
+  }
+  // A top-level navigation that STARTED but produced no response was never
+  // pinned — Chrome could be mid-connect to a private/metadata target.
+  if (pendingMainRequestIds.length) return 'a top-level navigation was still in flight (unpinned)';
+  return null;
+}
+
 /**
  * Navigate to a URL in a fresh tab and verify — against Chrome's OWN reported
  * connection IP — that EVERY main-frame hop connected to an allowed address:
  * the initial `Page.navigate`, every HTTP redirect, AND any client-side
  * top-level navigation (meta-refresh / `location.replace`) that fires during the
- * post-load `settleMs` window before the DOM is read. This closes the
- * DNS-rebinding TOCTOU a pre-navigation `dns.lookup` cannot — Chrome resolves
- * DNS itself, so we open a BLANK tab, subscribe to CDP Network events, THEN
- * drive `Page.navigate`, keep the subscription open across the settle window,
- * and check the `remoteIPAddress` Chrome actually dialed for each hop.
+ * post-load `settleMs` window. This closes the DNS-rebinding TOCTOU a
+ * pre-navigation `dns.lookup` cannot — Chrome resolves DNS itself, so we open a
+ * BLANK tab, subscribe to CDP Network events, THEN drive `Page.navigate`, keep
+ * the subscription open across the settle window, and check the
+ * `remoteIPAddress` Chrome actually dialed for each hop.
  *
- * `verifyRemoteIp(ip)` returns false to refuse. On ANY refusal (or an
- * unverifiable / empty IP, or a navigation that never yields a document
- * response) we fail closed: close the tab and throw, so a rebind-to-private
- * answer never reaches the caller's DOM reader.
+ * `verifyRemoteIp(ip)` returns false to refuse. On ANY refusal (unverifiable /
+ * empty IP, a navigation that never yields a document response, or a top-level
+ * nav still in flight) we fail closed: close the tab and throw, so a
+ * rebind-to-private answer never reaches the caller.
  *
- * The caller does NOT sleep before reading — the settle wait happens HERE, so
- * the DOM has had `settleMs` to render (and every navigation in that window is
- * pinned) by the time this resolves.
+ * When `evaluateExpression` is given, the DOM read runs on the SAME CDP session
+ * (a `Runtime.evaluate` after settle), and the pin is RE-checked over events
+ * captured up to and during that read — so there is no gap between "stop
+ * monitoring" and "read the DOM" for a late client-side navigation to slip
+ * through. The evaluated value is returned as `evalResult` (or null). Without
+ * `evaluateExpression` the caller gets a page handle to read separately.
  *
- * Returns a page object shaped like a `listCdpPages` entry
- * (`{ id, url, title, webSocketDebuggerUrl }`) so callers can `evaluateOnPage` it.
+ * The caller does NOT sleep — the settle wait happens HERE, so the DOM has had
+ * `settleMs` to render (and every navigation in that window is pinned) by the
+ * time this resolves. Returns `{ id, url, title, webSocketDebuggerUrl, evalResult }`.
  */
-export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, navigateTimeoutMs = NAVIGATE_TIMEOUT_MS } = {}) {
+export async function navigateToUrlPinned(url, {
+  verifyRemoteIp,
+  settleMs = 0,
+  navigateTimeoutMs = NAVIGATE_TIMEOUT_MS,
+  evaluateExpression = null,
+  evaluateTimeoutMs = CDP_EVALUATE_TIMEOUT_MS,
+} = {}) {
   if (typeof verifyRemoteIp !== 'function') {
     throw new Error('navigateToUrlPinned requires a verifyRemoteIp(ip) predicate');
   }
@@ -393,18 +420,22 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, n
     throw new Error(`CDP open-blank returned a malformed response for ${url}`);
   }
 
+  const READ_ID = 3;
   const { default: WebSocket } = await import('ws');
   const messages = [];
   const result = await new Promise((resolve) => {
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     let settled = false;
+    let phase = 'nav';
     let overallTimer;
     let settleTimer = null;
+    let evalTimer = null;
     const finish = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(overallTimer);
       clearTimeout(settleTimer);
+      clearTimeout(evalTimer);
       try { ws.close(); } catch {}
       resolve(value);
     };
@@ -414,6 +445,24 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, n
       navigateTimeoutMs,
     );
 
+    // Settle expired: verify everything captured so far, then either read the DOM
+    // on THIS same session (so no monitoring gap) or resolve for a separate read.
+    const onSettleEnd = () => {
+      const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url);
+      if (bad) return finish({ ok: false, reason: bad });
+      if (!evaluateExpression) {
+        const { finalUrl } = pickMainFrameHops(messages);
+        return finish({ ok: true, finalUrl, evalResult: null });
+      }
+      phase = 'read';
+      evalTimer = setTimeout(() => finish({ ok: false, reason: 'DOM read timed out' }), evaluateTimeoutMs);
+      ws.send(JSON.stringify({
+        id: READ_ID,
+        method: 'Runtime.evaluate',
+        params: { expression: evaluateExpression, returnByValue: true, awaitPromise: true },
+      }));
+    };
+
     ws.on('open', () => {
       ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
       ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
@@ -421,45 +470,43 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, n
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-pin' });
       if (!msg) return;
-      // A Page.navigate Chrome rejects outright (bad scheme, etc.) returns an
-      // error on id 2 — fail closed rather than hang to the timeout.
+      // A Page.navigate Chrome rejects outright (bad scheme, etc.) errors on id 2.
       if (msg.id === 2 && msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
+      if (msg.id === READ_ID) {
+        // DOM read returned. RE-verify over ALL events captured up to now: any
+        // top-level navigation that committed during the read is in `messages`,
+        // so a late rebind that changed the page under us fails closed here.
+        const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url);
+        if (bad) return finish({ ok: false, reason: bad });
+        const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : (msg.result?.result?.value ?? null);
+        const { finalUrl } = pickMainFrameHops(messages);
+        return finish({ ok: true, finalUrl, evalResult });
+      }
       if (!msg.method) return;
       messages.push(msg);
-      // The main document RESPONSE headers arriving (type 'Document', which the
-      // main frame's doc emits before any sub-frame doc) starts the settle
-      // window: keep capturing for settleMs so a client-side navigation during
-      // settle is also pinned, THEN resolve. All hops are verified below.
-      if (msg.method === 'Network.responseReceived' && msg.params?.type === 'Document' && !settleTimer) {
+      // First main-frame document RESPONSE (type 'Document', emitted before any
+      // sub-frame doc) starts the settle window; keep capturing across it so a
+      // client-side navigation during settle is pinned too.
+      if (phase === 'nav' && msg.method === 'Network.responseReceived' && msg.params?.type === 'Document' && !settleTimer) {
         clearTimeout(overallTimer);
-        settleTimer = setTimeout(() => finish({ ok: true }), settleMs);
+        settleTimer = setTimeout(onSettleEnd, settleMs);
       }
     });
     ws.on('error', () => finish({ ok: false, reason: 'CDP websocket error during navigation' }));
   });
 
-  const { hops, finalUrl, pendingMainRequestIds } = pickMainFrameHops(messages);
-
-  const fail = async (reason) => {
+  if (!result.ok) {
     await closeCdpPage(target.id);
-    throw new Error(reason);
+    throw new Error(`refusing to ingest: ${result.reason}`);
+  }
+
+  return {
+    id: target.id,
+    url: result.finalUrl || url,
+    title: '',
+    webSocketDebuggerUrl: target.webSocketDebuggerUrl,
+    evalResult: result.evalResult,
   };
-
-  if (!result.ok) await fail(`refusing to ingest: ${result.reason}`);
-  if (!hops.length) await fail('refusing to ingest: no main-frame document response was observed');
-  for (const hop of hops) {
-    if (!hop.remoteIPAddress || !verifyRemoteIp(hop.remoteIPAddress)) {
-      await fail(`refusing to ingest: Chrome connected to a disallowed address ${hop.remoteIPAddress || '(unknown)'} for ${hop.url || url}`);
-    }
-  }
-  // Fail closed if a top-level navigation was still in flight when the settle
-  // window ended: its final connection IP was never observed, so Chrome could be
-  // mid-connect to a private/metadata target the DOM reader would then see.
-  if (pendingMainRequestIds.length) {
-    await fail('refusing to ingest: a top-level navigation was still in flight at read time (unpinned)');
-  }
-
-  return { id: target.id, url: finalUrl || url, title: '', webSocketDebuggerUrl: target.webSocketDebuggerUrl };
 }
 
 // ---------- CDP page listing (UI-shaped subset) ----------

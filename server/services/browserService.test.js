@@ -145,3 +145,58 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     expect(finalUrl).toBeNull();
   });
 });
+
+describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
+  let ssrfPinRefusalReason;
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ ssrfPinRefusalReason } = await import('./browserService.js'));
+  });
+
+  const allow = (ip) => !ip.startsWith('127.') && !ip.startsWith('169.254.');
+  const docRequest = (requestId, url, redirectResponse) => ({
+    method: 'Network.requestWillBeSent',
+    params: { requestId, loaderId: requestId, type: 'Document', request: { url }, ...(redirectResponse ? { redirectResponse } : {}) },
+  });
+  const docResponse = (requestId, url, remoteIPAddress) => ({
+    method: 'Network.responseReceived',
+    params: { requestId, type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+  });
+
+  it('passes (null) when every main-frame hop dialed an allowed IP', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toBeNull();
+  });
+
+  it('refuses a hop that dialed a disallowed IP', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'http://127.0.0.1/x'),
+      docResponse('R1', 'http://127.0.0.1/x', '127.0.0.1'),
+    ], allow, 'http://127.0.0.1/x');
+    expect(reason).toMatch(/disallowed address 127\.0\.0\.1/);
+  });
+
+  it('refuses an in-flight top-level navigation (started, no response)', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      docRequest('R2', 'https://evil.example/x'),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toMatch(/still in flight/);
+  });
+
+  it('refuses when no main-frame document response was observed', () => {
+    expect(ssrfPinRefusalReason([], allow, 'https://ex.com/a')).toMatch(/no main-frame document response/);
+  });
+
+  it('refuses a hop with a missing/empty remote IP (unverifiable)', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', ''),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toMatch(/disallowed address \(unknown\)/);
+  });
+});

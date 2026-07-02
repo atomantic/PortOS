@@ -33,7 +33,6 @@ vi.mock('./voice/stt.js', () => ({
 }));
 vi.mock('./browserService.js', () => ({
   navigateToUrlPinned: vi.fn(),
-  evaluateOnPage: vi.fn(),
 }));
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn(),
@@ -77,8 +76,13 @@ beforeEach(() => {
   catalogDB.createChunkedScrap.mockImplementation(async (args) => ({ id: 'cat-scrap-1', ...args }));
   // Hostnames resolve to a safe public address by default (the DNS SSRF guard).
   dnsp.lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
-  // Default: Chrome dials a single public IP for the document (no rebind).
-  browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'] }));
+  // Default: Chrome dials a single public IP for the document (no rebind), and
+  // the pinned DOM read returns a simple article.
+  browserService.navigateToUrlPinned.mockImplementation(pinnedNav({
+    finalUrl: 'https://ex.com/a',
+    hops: ['93.184.216.34'],
+    evalResult: JSON.stringify({ title: 'Article A', text: 'Body text here.' }),
+  }));
 });
 
 /**
@@ -88,35 +92,37 @@ beforeEach(() => {
  * window) via the caller's `verifyRemoteIp` predicate, and throws (tearing the
  * tab down) if any hop is refused. `hops` are the IPs Chrome actually dialed — a
  * rebinding DNS answer surfaces here as a private IP the pre-nav dns.lookup never
- * saw. The pin owns the settle wait, so it also ignores a `settleMs` option.
+ * saw. On success it returns the DOM-read result (`evalResult`) it performed on
+ * the SAME pinned session — the real function reads the DOM itself, so no
+ * separate read is mocked. It owns the settle wait, so it ignores `settleMs`.
  */
-function pinnedNav({ finalUrl, hops }) {
+function pinnedNav({ finalUrl, hops, evalResult = null }) {
   return async (url, { verifyRemoteIp } = {}) => {
     for (const ip of hops) {
       if (!verifyRemoteIp(ip)) {
         throw new Error(`refusing to ingest: Chrome connected to a disallowed address ${ip} for ${url}`);
       }
     }
-    return { id: 'p1', url: finalUrl || url, title: '', webSocketDebuggerUrl: 'ws://x' };
+    return { id: 'p1', url: finalUrl || url, title: '', webSocketDebuggerUrl: 'ws://x', evalResult };
   };
 }
 
 describe('fetchUrlMainText', () => {
   it('navigates + reads main text, returning title + text + finalUrl', async () => {
-    browserService.evaluateOnPage.mockResolvedValue(JSON.stringify({ title: 'Article A', text: 'Body text here.' }));
-
     const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
     expect(out).toEqual({ text: 'Body text here.', title: 'Article A', finalUrl: 'https://ex.com/a' });
-    // Navigated through the PINNED path with a remote-IP verifier predicate.
+    // Navigated through the PINNED path with a remote-IP verifier predicate AND
+    // the DOM-read expression (the read happens on the same pinned session).
     expect(browserService.navigateToUrlPinned).toHaveBeenCalledWith(
       'https://ex.com/a',
-      expect.objectContaining({ verifyRemoteIp: expect.any(Function) }),
+      expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String) }),
     );
   });
 
   it('throws when the page extracts no readable text', async () => {
-    browserService.evaluateOnPage.mockResolvedValue(JSON.stringify({ title: '', text: '   ' }));
-
+    browserService.navigateToUrlPinned.mockImplementation(pinnedNav({
+      finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'], evalResult: JSON.stringify({ title: '', text: '   ' }),
+    }));
     await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/no readable text/);
     expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
@@ -131,11 +137,11 @@ describe('fetchUrlMainText', () => {
   it('refuses when Chrome connects to a private IP AFTER DNS validation passed (rebinding TOCTOU)', async () => {
     // Pre-nav dns.lookup answers a public IP so assertIngestUrlSafe passes — but
     // Chrome re-resolves and actually dials cloud metadata. The remote-IP pin
-    // must catch Chrome's real connection and refuse before any DOM read.
+    // catches Chrome's real connection and refuses (throws) before any text is read.
     dnsp.lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
     browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://evil.example/x', hops: ['169.254.169.254'] }));
     await expect(fetchUrlMainText('https://evil.example/x', { settleMs: 0 })).rejects.toThrow(/disallowed address 169\.254\.169\.254/);
-    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
+    expect(catalogDB.createChunkedScrap).not.toHaveBeenCalled();
   });
 
   it('refuses when a REDIRECT hop connects to a loopback address (per-hop pin)', async () => {
@@ -143,7 +149,6 @@ describe('fetchUrlMainText', () => {
     // loopback address — the pin verifies EVERY main-frame hop, not just the last.
     browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'http://127.0.0.1:5555/secret', hops: ['93.184.216.34', '127.0.0.1'] }));
     await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/disallowed address 127\.0\.0\.1/);
-    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 
   it('refuses a CLIENT-SIDE navigation during the settle window that dials metadata', async () => {
@@ -153,12 +158,13 @@ describe('fetchUrlMainText', () => {
     // IP is verified too — no stale-DNS re-vet that a rebind could slip past.
     browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://evil.example/x', hops: ['93.184.216.34', '169.254.169.254'] }));
     await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/disallowed address 169\.254\.169\.254/);
-    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 
   it('clamps an oversized page body to the raw-text cap (2M chars)', async () => {
     const huge = 'x'.repeat(2_500_000);
-    browserService.evaluateOnPage.mockResolvedValue(JSON.stringify({ title: 'Big', text: huge }));
+    browserService.navigateToUrlPinned.mockImplementation(pinnedNav({
+      finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'], evalResult: JSON.stringify({ title: 'Big', text: huge }),
+    }));
     const out = await fetchUrlMainText('https://ex.com/a', { settleMs: 0 });
     expect(out.text.length).toBe(2_000_000);
   });
@@ -166,7 +172,9 @@ describe('fetchUrlMainText', () => {
 
 describe('ingestFromUrl', () => {
   it('creates a url scrap with url metadata and runs extraction', async () => {
-    browserService.evaluateOnPage.mockResolvedValue(JSON.stringify({ title: 'Article A', text: 'Body.' }));
+    browserService.navigateToUrlPinned.mockImplementation(pinnedNav({
+      finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'], evalResult: JSON.stringify({ title: 'Article A', text: 'Body.' }),
+    }));
 
     const { scrap, draft } = await ingestFromUrl({ url: 'https://ex.com/a', settleMs: 0 });
     expect(draft).toBe(DRAFT);
