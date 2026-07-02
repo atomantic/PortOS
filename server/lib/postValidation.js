@@ -103,6 +103,11 @@ const taskResultSchema = z.object({
   questions: z.array(questionResultSchema).optional().default([]),
   responses: z.array(llmResponseSchema).optional().default([]),
   drillData: z.any().optional(),
+  // Memory drills: which memory item this task drilled, so the session-submit
+  // path can map the result back and advance that item's spaced-repetition
+  // schedule (mirrors the dedicated MemoryBuilder practice flow). Absent for
+  // every other drill type.
+  memoryItemId: z.string().optional(),
   score: z.number().min(0).max(100).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(100).optional(),

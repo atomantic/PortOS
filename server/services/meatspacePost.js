@@ -12,6 +12,7 @@ import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
+import { advanceScheduleFromSession } from './meatspacePostMemory.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -181,6 +182,28 @@ export async function submitPostSession(sessionData) {
   await ensureMeatspaceDir();
   await atomicWrite(SESSIONS_FILE, data);
   console.log(`🧪 POST session saved: score=${session.score} modules=${session.modules.join(',')}`);
+
+  // A memory drill completed inside this session IS a review — mirror the
+  // dedicated MemoryBuilder practice flow (submitPractice) and advance each
+  // drilled item's spaced-repetition schedule, so it reschedules and clears
+  // from "Due Today" just like a direct MemoryBuilder practice session would.
+  // Ratio comes from raw correctness (not `score`, which also folds in a speed
+  // bonus) to match the accuracy signal `advanceSchedule` expects. (Chunk/element
+  // MASTERY is not updated here — POST-session answers don't carry that
+  // granularity yet; tracked as a follow-up in #2016.)
+  // Sequential, not Promise.all: advanceScheduleFromSession does a full
+  // read-modify-write of the shared memory-items file with no write queue, so
+  // two tasks referencing items resolved concurrently could race and drop an
+  // update (last write wins). A session rarely has more than 1-2 memory tasks,
+  // so the latency cost of awaiting each is negligible.
+  for (const task of rescoredTasks) {
+    if (!POST_SUPPORTED_MEMORY_TYPES.includes(task.type) || !task.memoryItemId) continue;
+    const total = task.questions?.length || 0;
+    const correct = task.questions?.filter(q => q.correct).length || 0;
+    const ratio = total ? correct / total : 0;
+    await advanceScheduleFromSession(task.memoryItemId, ratio, new Date(now));
+  }
+
   return session;
 }
 
