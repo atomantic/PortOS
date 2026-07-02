@@ -33,6 +33,7 @@ vi.mock('./voice/stt.js', () => ({
 }));
 vi.mock('./browserService.js', () => ({
   navigateToUrlPinned: vi.fn(),
+  listCdpPages: vi.fn(),
   evaluateOnPage: vi.fn(),
 }));
 vi.mock('fs/promises', () => ({
@@ -79,6 +80,8 @@ beforeEach(() => {
   dnsp.lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
   // Default: Chrome dials a single public IP for the document (no rebind).
   browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'] }));
+  // Default: the live tab (re-queried after settle) is the same safe url.
+  browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://ex.com/a', title: 'A', webSocketDebuggerUrl: 'ws://x' }]);
 });
 
 /**
@@ -145,14 +148,23 @@ describe('fetchUrlMainText', () => {
   });
 
   it('refuses a landed HOSTNAME that resolves to a blocked address (defense-in-depth re-check)', async () => {
-    // All network hops dialed public IPs (pin passes), but the FINAL landed url
-    // is a hostname that itself resolves to metadata — the landed-url re-vet
-    // still catches an in-page/JS redirect the network-hop pin didn't cover.
+    // All network hops dialed public IPs (pin passes), but the LIVE tab url after
+    // settle is a hostname that itself resolves to metadata — the landed-url
+    // re-vet still catches an in-page/JS redirect the network-hop pin didn't cover.
     dnsp.lookup
       .mockResolvedValueOnce({ address: '93.184.216.34', family: 4 })
       .mockResolvedValueOnce({ address: '169.254.169.254', family: 4 });
-    browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://evil.example/x', hops: ['93.184.216.34'] }));
+    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://evil.example/x', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
     await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/resolves to a blocked/);
+    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the LIVE tab url after the settle window (client-side nav to loopback)', async () => {
+    // Pin passes (public hops), but the page client-side navigates (meta refresh /
+    // location.replace) during the settle to a loopback address. We must re-read
+    // the CURRENT tab url — not the pre-settle url the pin captured — and refuse.
+    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'http://127.0.0.1:5555/secret', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
+    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/loopback|link-local/);
     expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 

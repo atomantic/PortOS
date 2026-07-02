@@ -32,6 +32,7 @@ import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
   navigateToUrlPinned,
+  listCdpPages,
   evaluateOnPage,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
@@ -121,13 +122,19 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   });
   await sleep(settleMs);
 
-  // Defense in depth: re-run the scheme+DNS gate against the FINAL landed url.
-  // The remoteIP pin above already proved Chrome dialed an allowed address for
-  // every hop; this additionally rejects a landed hostname that is itself a
-  // blocked literal (e.g. an in-page/JS redirect after load that the network-hop
-  // pin didn't cover).
-  const landedUrl = page.url || url;
+  // Defense in depth: re-query the tab's LIVE url AFTER the settle window and
+  // re-vet it (scheme + DNS blocklist) before reading the DOM. The network-hop
+  // pin above covers HTTP-level hops, but the page can client-side navigate
+  // (meta refresh / location.replace) during the settle to a blocked host — so
+  // read the CURRENT url from CDP, not the pre-settle url the pin captured, or
+  // that redirect goes unchecked. Match strictly by the target id navigate
+  // returned (never an arbitrary tab). Fall back to the pinned page's own
+  // webSocketDebuggerUrl for the read if the re-list misses.
+  const pages = await listCdpPages();
+  const live = pages.find((p) => p.id === page.id);
+  const landedUrl = live?.url || page.url || url;
   await assertIngestUrlSafe(landedUrl);
+  const readTarget = live?.webSocketDebuggerUrl ? live : page;
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer
   // chrome), falling back to document body text. Runs in the page; returns a
@@ -138,11 +145,11 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
     const text = (pick && pick.innerText ? pick.innerText : '').trim();
     return JSON.stringify({ title, text });
   })()`;
-  const raw = await evaluateOnPage(page, expression);
+  const raw = await evaluateOnPage(readTarget, expression);
   const parsed = raw ? safeJSONParse(raw, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
-  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };
+  return { text, title: parsed?.title || live?.title || page.title || '', finalUrl: landedUrl };
 }
 
 /**
