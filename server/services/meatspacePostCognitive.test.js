@@ -45,6 +45,14 @@ describe('cognitive drill generators', () => {
     }
   });
 
+  it('digit-span never yields an empty drill when maxLength is unset and startLength is at its ceiling', () => {
+    // Regression: clampInt used to return maxLength's fallback (8) un-clamped, so
+    // startLength=9 + no maxLength gave maxLength 8 < 9 → zero sequences → instant score 0.
+    const drill = generateDigitSpan({ startLength: 9 });
+    expect(drill.sequences.length).toBeGreaterThanOrEqual(1);
+    expect(drill.sequences[0].length).toBe(9);
+  });
+
   it('stroop produces the requested trial count with a valid ink answer', () => {
     const drill = generateStroop({ count: 12 });
     expect(drill.type).toBe('stroop');

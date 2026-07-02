@@ -24,6 +24,17 @@ function isItemDue(item) {
   return Number.isNaN(t) || t <= Date.now();
 }
 
+// Most-overdue first: earliest (or missing/invalid) nextReview leads, so
+// "Review Next" picks the item that's waited longest — matching the server's
+// `getDueMemoryItems` ordering rather than raw list order.
+function mostOverdueFirst(a, b) {
+  const ka = Date.parse(a?.schedule?.nextReview ?? '');
+  const kb = Date.parse(b?.schedule?.nextReview ?? '');
+  const va = Number.isNaN(ka) ? -Infinity : ka;
+  const vb = Number.isNaN(kb) ? -Infinity : kb;
+  return va === vb ? 0 : va < vb ? -1 : 1;
+}
+
 export default function MemoryBuilder({ onBack, onNavigateElements }) {
   const [items, setItems] = useState([]);
   const [selectedItem, setSelectedItem] = useState(null);
@@ -150,7 +161,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
 
       {/* Due Today — spaced repetition. Recomputes reactively as `items` update. */}
       {(() => {
-        const dueItems = items.filter(isItemDue);
+        const dueItems = items.filter(isItemDue).sort(mostOverdueFirst);
         if (dueItems.length === 0) {
           return (
             <div className="flex items-center gap-2 text-sm text-gray-500 max-w-2xl">
