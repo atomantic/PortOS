@@ -783,10 +783,23 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   const goStartRef = useRef(0);
   const startedAtRef = useRef(Date.now());
   const mountedRef = useRef(true);
-  const timeoutRef = useRef(null);
+  // Separate refs: the "reveal the stimulus" timer (armed per trial) and the
+  // "advance to the next trial" timer (armed on response) must never share one
+  // ref — overwriting a shared ref on response leaves the reveal timer's
+  // callback un-cancelled, so a false start can leak a stale setPhase('go')
+  // into a later trial once the ref no longer points at it.
+  const armTimeoutRef = useRef(null);
+  const advanceTimeoutRef = useRef(null);
   const advancingRef = useRef(false);
 
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; clearTimeout(timeoutRef.current); }; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(armTimeoutRef.current);
+      clearTimeout(advanceTimeoutRef.current);
+    };
+  }, []);
 
   const finish = useCallback(() => {
     const questions = answersRef.current.filter(Boolean);
@@ -805,7 +818,9 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   finishRef.current = finish;
 
   // Arm each trial: wait `delayMs` (randomized server-side so onset can't be
-  // anticipated), then reveal the stimulus.
+  // anticipated), then reveal the stimulus. Capture the timer in a local
+  // variable so this effect's cleanup always cancels ITS OWN timer, even if
+  // `armTimeoutRef.current` was reassigned in the meantime.
   useEffect(() => {
     if (trialIdx >= trials.length) { finishRef.current(); return; }
     advancingRef.current = false;
@@ -813,18 +828,22 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
     setPhase('waiting');
     setLastResult(null);
     const delay = trials[trialIdx]?.delayMs || 1000;
-    timeoutRef.current = setTimeout(() => {
+    const revealTimer = setTimeout(() => {
       if (!mountedRef.current) return;
       stimulusShownRef.current = true;
       goStartRef.current = Date.now();
       setPhase('go');
     }, delay);
-    return () => clearTimeout(timeoutRef.current);
+    armTimeoutRef.current = revealTimer;
+    return () => clearTimeout(revealTimer);
   }, [trialIdx]);
 
   const recordAndAdvance = useCallback((result) => {
     if (advancingRef.current) return;
     advancingRef.current = true;
+    // A false start fires this before the reveal timer elapses — cancel it so
+    // it can't flip `phase`/`stimulusShownRef` on a later trial.
+    clearTimeout(armTimeoutRef.current);
     answersRef.current[trialIdx] = {
       prompt: mode === 'choice' ? `target ${trials[trialIdx]?.target ?? ''}` : 'react',
       index: trialIdx,
@@ -833,7 +852,7 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
     setLastResult(result);
     setPhase('result');
     const isLast = trialIdx + 1 >= trials.length;
-    timeoutRef.current = setTimeout(() => {
+    advanceTimeoutRef.current = setTimeout(() => {
       if (!mountedRef.current) return;
       if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
     }, isTraining ? 900 : 500);
