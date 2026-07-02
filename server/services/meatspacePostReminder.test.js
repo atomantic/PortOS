@@ -162,18 +162,37 @@ describe('registerPostReminderSchedule', () => {
       getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
       getPostSessions.mockResolvedValue([]);
       todayInTimezone.mockReturnValue('2026-07-01');
-      const missedSlot = new Date('2026-07-01T09:00:00.000Z');
-      const dayBefore = new Date('2026-06-30T09:00:00.000Z');
-      parseCronToPrevRun.mockReturnValueOnce(missedSlot).mockReturnValueOnce(dayBefore);
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 }); // prevRun falls on today
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
 
       await registerPostReminderSchedule({ catchUpMissedSlot: true });
 
       expect(addNotification).toHaveBeenCalledTimes(1);
     });
 
-    it('does not fire when there is no elapsed occurrence within the lookback bound', async () => {
+    it('does not fire when there is no prior cron occurrence at all', async () => {
       getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
       parseCronToPrevRun.mockReturnValue(null);
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+      expect(getPostSessions).not.toHaveBeenCalled();
+    });
+
+    // Regression: parseCronToPrevRun always returns SOME past occurrence
+    // whenever `now` is earlier in the day than the configured time — e.g. a
+    // 09:00 reminder restarted at 07:00 resolves "the most recent past
+    // occurrence" to YESTERDAY's 09:00, which already fired normally last
+    // night. Without gating on the local calendar day, catchUpMissedSlot
+    // would wrongly treat that as a missed slot and fire a spurious reminder
+    // on every boot before the scheduled hour — not just on genuine downtime
+    // spanning the scheduled minute.
+    it('does not fire when the most recent past occurrence is from a prior day', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 6, day: 30 }); // yesterday, not today
+      parseCronToPrevRun.mockReturnValue(new Date('2026-06-30T09:00:00.000Z'));
 
       await registerPostReminderSchedule({ catchUpMissedSlot: true });
 
@@ -186,9 +205,7 @@ describe('registerPostReminderSchedule', () => {
       todayInTimezone.mockReturnValue('2026-07-01');
       getPostSessions.mockResolvedValue([{ startedAt: '2026-07-01T15:00:00.000Z' }]);
       getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
-      const missedSlot = new Date('2026-07-01T09:00:00.000Z');
-      const dayBefore = new Date('2026-06-30T09:00:00.000Z');
-      parseCronToPrevRun.mockReturnValueOnce(missedSlot).mockReturnValueOnce(dayBefore);
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
 
       await registerPostReminderSchedule({ catchUpMissedSlot: true });
 

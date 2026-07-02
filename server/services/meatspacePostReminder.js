@@ -121,25 +121,29 @@ export async function firePostReminderIfIncomplete() {
  * If today's cron slot has already elapsed (the server was down or just
  * booted after the scheduled minute), fire the reminder immediately instead
  * of waiting for tomorrow's tick. Mirrors taskSchedule.js's
- * `parseCronToPrevRun`-based catch-up: bound the lookback to ONE cron period
- * (the occurrence before the most recent one) so this only ever replays
- * "today's" missed slot, never a backlog. `firePostReminderIfIncomplete`
+ * `parseCronToPrevRun`-based catch-up, but — unlike a repeating task with no
+ * fixed time-of-day — a daily HH:MM reminder's "was a slot missed" question
+ * has an exact answer: is the most recent past occurrence ON TODAY'S LOCAL
+ * CALENDAR DAY? `parseCronToPrevRun` always returns SOME past occurrence
+ * (typically "last night's", which already fired normally) whenever `now` is
+ * earlier in the day than the configured time — a bound expressed only in
+ * elapsed time (e.g. "within one cron period") can't distinguish "yesterday's
+ * slot, already handled" from "today's slot, genuinely missed," and would
+ * wrongly fire on every boot before the scheduled hour. Gating on the local
+ * calendar day removes that ambiguity outright. `firePostReminderIfIncomplete`
  * itself is idempotent (completedToday + already-notified-today guards), so
- * calling it here is safe even when nothing was actually missed.
+ * calling it here is safe even on a rare false-positive gate.
  */
 async function catchUpMissedSlot(cron, timezone) {
   const now = Date.now();
   const prevRun = parseCronToPrevRun(cron, new Date(now), timezone);
   if (!prevRun) return;
 
-  const prevRunMs = prevRun.getTime();
-  const beforePrev = parseCronToPrevRun(cron, new Date(prevRunMs - 60_000), timezone);
-  const lookbackBound = beforePrev ? beforePrev.getTime() : 0;
+  const todayStr = todayInTimezone(timezone);
+  if (!isOnLocalDay(prevRun.getTime(), timezone, todayStr)) return;
 
-  if (prevRunMs > lookbackBound && prevRunMs <= now) {
-    console.log(`🔔 POST reminder: missed slot detected (${prevRun.toISOString()}) — catching up now`);
-    await firePostReminderIfIncomplete();
-  }
+  console.log(`🔔 POST reminder: missed slot detected (${prevRun.toISOString()}) — catching up now`);
+  await firePostReminderIfIncomplete();
 }
 
 /**
