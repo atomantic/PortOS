@@ -307,13 +307,21 @@
     const idx = pairCount.get(pairKey) || 0;
     pairCount.set(pairKey, idx + 1);
     const a = pos.get(s.from), b = pos.get(s.to);
-    const forward = a.x < b.x;
-    const x1 = forward ? a.x + a.w : a.x;
-    const x2 = forward ? b.x : b.x + b.w;
     const y1 = a.y + a.h / 2, y2 = b.y + b.h / 2;
-    const bend = Math.max(36, Math.abs(x2 - x1) * 0.35) * (forward ? 1 : -1);
-    const lift = idx * 14 * (idx % 2 ? 1 : -1); // spread parallel edges
-    const d = `M ${x1} ${y1} C ${x1 + bend} ${y1 + lift}, ${x2 - bend} ${y2 + lift}, ${x2} ${y2}`;
+    let d;
+    if (a.x === b.x) {
+      // same-column hop: loop out the right side instead of sweeping across the column
+      const x1 = a.x + a.w, x2 = b.x + b.w;
+      const bend = 48 + idx * 14;
+      d = `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 + bend} ${y2}, ${x2} ${y2}`;
+    } else {
+      const forward = a.x < b.x;
+      const x1 = forward ? a.x + a.w : a.x;
+      const x2 = forward ? b.x : b.x + b.w;
+      const bend = Math.max(36, Math.abs(x2 - x1) * 0.35) * (forward ? 1 : -1);
+      const lift = idx * 14 * (idx % 2 ? 1 : -1); // spread parallel edges
+      d = `M ${x1} ${y1} C ${x1 + bend} ${y1 + lift}, ${x2 - bend} ${y2 + lift}, ${x2} ${y2}`;
+    }
     const t = transportsById.get(s.transport);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', d);
