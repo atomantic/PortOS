@@ -16,6 +16,33 @@ vi.mock('../../../services/api', () => ({
 import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, isNodeOnPath } from './MorseTrainer';
 import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
 
+// Minimal Web Audio mock so CopyDrill's round flow (which calls ensureCtx →
+// playMorse) can run in jsdom without a real AudioContext. No existing shared
+// mock exists for this in the repo (each audio-consuming test file rolls its
+// own) — mirrors that convention. `stop()` resolves playMorse's promise on
+// the next tick, matching the real oscillator's `onended` callback shape.
+class MockOscillator {
+  constructor() { this.onended = null; this.frequency = { value: 0 }; }
+  connect() { return this; }
+  start() {}
+  stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
+  disconnect() {}
+}
+class MockGainNode {
+  constructor() {
+    this.gain = { value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {} };
+  }
+  connect() { return this; }
+  disconnect() {}
+}
+class MockAudioContext {
+  constructor() { this.currentTime = 0; this.destination = {}; this.state = 'running'; }
+  createOscillator() { return new MockOscillator(); }
+  createGain() { return new MockGainNode(); }
+  resume() {}
+  close() {}
+}
+
 // Surfaces the live URL (path + search) so tests can assert the reference tab
 // is encoded in the query string — the "URL is the source of truth" contract.
 function LocationProbe() {
@@ -119,6 +146,35 @@ describe('MorseTrainer training log integration', () => {
     });
     expect(container.textContent).toContain('Morse logged: 4');
     expect(container.textContent).toContain('80% avg');
+  });
+
+  it('logs a completed Head Copy round to the training log with the right payload shape', async () => {
+    window.AudioContext = MockAudioContext;
+    renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+
+    // 10-question round (ROUND_SIZE): submit a deliberately wrong guess each
+    // time so correctCount is deterministic (0), then advance past feedback.
+    for (let i = 0; i < 10; i++) {
+      const input = await screen.findByPlaceholderText('????');
+      fireEvent.change(input, { target: { value: 'ZZZZZ' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      if (i < 9) {
+        const nextButton = await screen.findByRole('button', { name: /Next/i });
+        fireEvent.click(nextButton);
+      }
+    }
+
+    await waitFor(() => {
+      expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+        module: 'morse',
+        drillType: 'morse-head-copy',
+        questionCount: 10,
+        correctCount: 0,
+      }));
+    });
+    delete window.AudioContext;
   });
 });
 
