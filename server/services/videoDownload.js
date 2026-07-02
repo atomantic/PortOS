@@ -21,7 +21,7 @@ import { readdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { shortId, PATHS } from '../lib/fileUtils.js';
+import { shortId, PATHS, ensureDir } from '../lib/fileUtils.js';
 import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
@@ -178,6 +178,11 @@ export async function startVideoDownload(url) {
   (async () => {
     let title = '';
     try {
+      // On a fresh install data/videos may not exist yet (setup-data.js doesn't
+      // create it, and no prior render/import may have). Every other video
+      // writer ensures it first; without this the first download points yt-dlp
+      // at a missing directory and fails before producing a file.
+      await ensureDir(PATHS.videos);
       const args = [
         // Prefer an mp4 (h264/aac) video+audio pair that merges cleanly for
         // broad browser playback; fall back to best single-file mp4, then best.
