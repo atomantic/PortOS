@@ -9,6 +9,9 @@ import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
 // Tags for session conditions (sleep, caffeine, stress, etc.)
 export const postTagsSchema = z.record(z.string().max(200));
 
+// 24h "HH:MM" time-of-day, matches the pattern identityValidation.js uses.
+const hhmmRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 // Individual question result (math + memory drills)
 // Math: server recomputes expected/correct via scoreDrill (numeric values)
 // Memory: client scores with string comparison (text values)
@@ -136,6 +139,12 @@ export const postConfigUpdateSchema = z.object({
   // Default OFF so existing installs are unchanged — additive, no migration.
   adaptive: z.object({
     enabled: z.boolean().optional()
+  }).optional(),
+  // Opt-in daily reminder (default OFF, off by default). `time` is a 24h
+  // "HH:MM" string interpreted in the user's configured timezone.
+  reminder: z.object({
+    enabled: z.boolean().optional(),
+    time: z.string().regex(hhmmRegex, 'Must be HH:MM format').optional()
   }).optional()
 }).partial();
 

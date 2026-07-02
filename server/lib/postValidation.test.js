@@ -28,6 +28,19 @@ describe('postConfigUpdateSchema llmDrills', () => {
     // Additive + optional — a config with no adaptive key stays valid.
     expect(postConfigUpdateSchema.parse({}).adaptive).toBeUndefined();
   });
+
+  it('accepts the opt-in daily reminder block with a well-formed HH:MM time', () => {
+    const parsed = postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '09:30' } });
+    expect(parsed.reminder).toEqual({ enabled: true, time: '09:30' });
+    // Additive + optional — a config with no reminder key stays valid.
+    expect(postConfigUpdateSchema.parse({}).reminder).toBeUndefined();
+  });
+
+  it('rejects a malformed reminder time', () => {
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '9:30' } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '25:00' } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: 'nine am' } })).toThrow();
+  });
 });
 
 describe('postLlmScoreRequestSchema', () => {
