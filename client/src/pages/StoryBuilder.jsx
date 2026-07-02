@@ -222,7 +222,12 @@ function StoryBuilderIndex() {
   }`;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    // Wide two-column shell above lg: create form left, "Continue a story" list
+    // right (mirrors the POST launcher redesign, #1986). Below lg the grid
+    // collapses to a single stacked column so mobile is unchanged. The 22rem
+    // sidebar track is reserved even with no sessions so the form keeps a
+    // comfortable ~48rem width instead of stretching the full shell.
+    <div className="max-w-6xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Sparkles className="w-6 h-6 text-port-accent" /> Story Builder
@@ -233,6 +238,7 @@ function StoryBuilderIndex() {
         </p>
       </header>
 
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
       <section className="bg-port-card border border-port-border rounded-lg">
         <div className="flex gap-1 border-b border-port-border px-2 pt-2">
           <button onClick={() => setMode('seed')} className={tabClass('seed')}>Start from an idea</button>
@@ -294,14 +300,15 @@ function StoryBuilderIndex() {
           {sessions.map((s) => (
             <Link
               key={s.id} to={`/story-builder/${s.id}/${s.currentStep || 'idea'}`}
-              className="flex items-center justify-between bg-port-card border border-port-border rounded-lg px-4 py-3 hover:border-port-accent"
+              className="flex items-center justify-between gap-2 bg-port-card border border-port-border rounded-lg px-4 py-3 hover:border-port-accent"
             >
-              <span className="font-medium">{s.title}</span>
-              <span className="text-xs text-gray-500">at “{s.currentStep}” <ChevronRight className="w-4 h-4 inline" /></span>
+              <span className="font-medium truncate">{s.title}</span>
+              <span className="text-xs text-gray-500 whitespace-nowrap">at “{s.currentStep}” <ChevronRight className="w-4 h-4 inline" /></span>
             </Link>
           ))}
         </section>
       )}
+      </div>
     </div>
   );
 }
