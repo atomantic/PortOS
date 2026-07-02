@@ -461,6 +461,34 @@ export async function submitPractice(id, practiceData) {
 }
 
 /**
+ * Advance a memory item's spaced-repetition schedule from a POST-session
+ * memory drill's accuracy ratio (0..1). Mirrors the schedule half of
+ * `submitPractice` — a POST-session memory drill IS a review, so it should
+ * reschedule the item and clear it from "Due Today" just like MemoryBuilder's
+ * dedicated practice flow. Unlike `submitPractice`, this does NOT touch
+ * chunk/element mastery — POST sessions don't carry the chunk/element-level
+ * result data `submitPractice` uses for that.
+ *
+ * Returns the updated schedule, or `null` when `memoryItemId` is absent or
+ * doesn't match a known item (unsupported memory drills like
+ * `memory-fill-blank` carry no memoryItemId — see POST_SUPPORTED_MEMORY_TYPES).
+ */
+export async function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
+  if (!memoryItemId) return null;
+  const items = await loadMemoryItems();
+  const item = items.find(i => i.id === memoryItemId);
+  if (!item) return null;
+
+  const advanced = advanceSchedule(item.schedule, ratio, now);
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
+  item.updatedAt = now.toISOString();
+  await saveMemoryItems(items);
+
+  console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+  return item.schedule;
+}
+
+/**
  * List memory items currently due for review (`nextReview <= now`), sorted by
  * how overdue they are (most overdue first).
  */
