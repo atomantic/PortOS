@@ -371,6 +371,23 @@ export function collectConnectedIps(messages) {
   return out;
 }
 
+// Hosts of every WebSocket the page opened during the capture window. CDP routes
+// WS through dedicated `Network.webSocket*` events whose payloads carry NO
+// `remoteIPAddress`, so we can only gate the WS by its URL host, not by Chrome's
+// actual connect IP (the resolver-level pin HTTP gets). Pure; exported for tests.
+export function collectWebSocketHosts(messages) {
+  const out = [];
+  for (const msg of messages) {
+    if (msg?.method !== 'Network.webSocketCreated') continue;
+    const raw = msg.params?.url;
+    if (typeof raw !== 'string') continue;
+    let host = null;
+    try { host = new URL(raw).hostname; } catch { host = null; }
+    out.push({ url: raw, host });
+  }
+  return out;
+}
+
 // Pure gate over a captured CDP message stream: returns a refusal reason string,
 // or null when the navigation is safe to read. Exported for unit testing.
 export function ssrfPinRefusalReason(messages, verifyRemoteIp, url) {
@@ -393,6 +410,18 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url) {
   for (const conn of collectConnectedIps(messages)) {
     if (!verifyRemoteIp(conn.remoteIPAddress)) {
       return `Chrome connected to a disallowed address ${conn.remoteIPAddress} for ${conn.url || url}`;
+    }
+  }
+  // WebSockets: CDP exposes no remoteIPAddress for WS, so we can only refuse a WS
+  // opened to a blocked HOST (a direct ws://127.0.0.1 / ws://localhost / metadata
+  // literal). A WS to a hostname that DNS-rebinds to a private IP is a residual
+  // this interception approach can't see — closing it fully needs Chrome-launch
+  // `--host-resolver-rules` (a per-navigation relaunch of the shared browser,
+  // out of scope here). Bounded by the single-user trust model; cloud metadata,
+  // the primary target, is HTTP-only and fully covered above.
+  for (const ws of collectWebSocketHosts(messages)) {
+    if (!ws.host || !verifyRemoteIp(ws.host)) {
+      return `page opened a WebSocket to a disallowed host ${ws.host || '(unparseable)'} (${ws.url})`;
     }
   }
   return null;

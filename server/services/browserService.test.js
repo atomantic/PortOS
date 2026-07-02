@@ -230,4 +230,26 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     ], lanAllow, 'https://wiki.lan/a');
     expect(reason).toBeNull();
   });
+
+  it('refuses a WebSocket opened to a blocked host literal (ws:// to loopback/localhost)', () => {
+    // CDP gives WS no remoteIPAddress, so we gate on the WS host — this catches a
+    // direct ws://localhost / ws://127.0.0.1 (host-level, not IP-level, check).
+    const hostAllow = (h) => h !== 'localhost' && !h.startsWith('127.') && h !== '::1';
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      { method: 'Network.webSocketCreated', params: { requestId: 'W1', url: 'ws://localhost:9222/devtools' } },
+    ], hostAllow, 'https://ex.com/a');
+    expect(reason).toMatch(/WebSocket to a disallowed host localhost/);
+  });
+
+  it('allows a WebSocket to a normal public host', () => {
+    const hostAllow = (h) => h !== 'localhost' && !h.startsWith('127.');
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      { method: 'Network.webSocketCreated', params: { requestId: 'W1', url: 'wss://realtime.example.com/socket' } },
+    ], hostAllow, 'https://ex.com/a');
+    expect(reason).toBeNull();
+  });
 });
