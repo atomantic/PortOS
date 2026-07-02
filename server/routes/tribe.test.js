@@ -11,6 +11,7 @@ errorEvents.on('error', () => {});
 
 vi.mock('../services/tribe.js', () => ({
   listPeople: vi.fn(),
+  getCareSummary: vi.fn(),
   getPerson: vi.fn(),
   createPerson: vi.fn(),
   updatePerson: vi.fn(),
@@ -50,6 +51,16 @@ describe('Tribe Routes', () => {
     expect(response.status).toBe(200);
     expect(response.body.people).toEqual([{ id: PERSON_ID, name: 'Ada' }]);
     expect(tribe.listPeople).toHaveBeenCalledWith({ search: 'ada', ring: 'core' });
+  });
+
+  it('returns the care summary with a clamped limit', async () => {
+    tribe.getCareSummary.mockResolvedValue({ hasPeople: true, peopleCount: 2, overdueCount: 1, overdue: [] });
+
+    const response = await request(app).get('/api/tribe/care?limit=999');
+
+    expect(response.status).toBe(200);
+    expect(response.body.overdueCount).toBe(1);
+    expect(tribe.getCareSummary).toHaveBeenCalledWith(50); // clamped from 999
   });
 
   it('creates a person and emits tribe changes', async () => {

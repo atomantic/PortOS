@@ -76,6 +76,14 @@ router.get('/people', asyncHandler(async (req, res) => {
   res.json({ people });
 }));
 
+// Care summary — overdue-contact status computed server-side (single source of
+// truth) for the dashboard widget and proactive-alerts check.
+router.get('/care', asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50);
+  const summary = await tribe.getCareSummary(limit);
+  res.json(summary);
+}));
+
 router.post('/people', asyncHandler(async (req, res) => {
   const data = validateRequest(personSchema, req.body);
   const person = await tribe.createPerson(data);

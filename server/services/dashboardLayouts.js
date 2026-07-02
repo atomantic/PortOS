@@ -86,7 +86,7 @@ const DEFAULT_LAYOUTS = [
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'while-away', 'system-health', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
-      'activity-streak', 'hourly-activity',
+      'activity-streak', 'hourly-activity', 'tribe-care',
     ],
     // Above-the-fold capture row stretches to h=5 so the Quick Task card
     // can show its expanded options (worktree/PR/simplify/etc.) without
@@ -122,6 +122,8 @@ const DEFAULT_LAYOUTS = [
       // doesn't collide with the tightly-packed above-the-fold rows.
       // Reorderable via the Arrange button on the dashboard.
       { id: 'quick-idea',       x: 0,  y: 29, w: 4,  h: 4 },
+      // Gated on the Tribe having people — hidden on installs that don't use it.
+      { id: 'tribe-care',       x: 4,  y: 29, w: 4,  h: 4 },
     ],
   },
   {
