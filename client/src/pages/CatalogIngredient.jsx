@@ -1183,7 +1183,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
         className={`mb-3 rounded-lg border border-dashed p-3 text-center text-xs transition-colors ${dragOver ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-500'}`}
       >
         {busy
-          ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Uploading…</span>)
+          ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Working…</span>)
           : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
       </div>
 
