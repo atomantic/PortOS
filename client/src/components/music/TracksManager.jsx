@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Loader2, Trash2, Save, Upload, Music2, Library } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatTimecode } from '../../utils/formatters';
@@ -55,9 +56,12 @@ function Field({ label, hint, children }) {
 }
 
 export default function TracksManager() {
+  const navigate = useNavigate();
+  // Selection lives in the URL (`/music/tracks/:id`, `/music/tracks/new`) so it's
+  // deep-linkable and reload-safe. `id === 'new'` = create; a real id = edit.
+  const { id } = useParams();
   const [tracks, setTracks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState(null); // 'new' | id | null
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -90,11 +94,12 @@ export default function TracksManager() {
       .finally(() => setLoading(false));
   }, []);
 
-  const isCreate = selectedId === 'new';
+  const isCreate = id === 'new';
   const selected = useMemo(
-    () => (isCreate || !selectedId ? null : tracks.find((t) => t.id === selectedId) || null),
-    [tracks, selectedId, isCreate],
+    () => (isCreate || !id ? null : tracks.find((t) => t.id === id) || null),
+    [tracks, id, isCreate],
   );
+  const notFound = !isCreate && !!id && !loading && !selected;
   // The persisted track (for gen metadata + the audio player, which need a saved id).
   const persisted = selected;
 
@@ -110,19 +115,31 @@ export default function TracksManager() {
     setRemix(null);
   };
 
-  const selectTrack = (t) => {
-    setSelectedId(t.id);
-    selectedIdRef.current = t.id;
-    setForm(formFromTrack(t));
-    resetTrackViewState();
-  };
+  const selectTrack = (t) => navigate(`/music/tracks/${encodeURIComponent(t.id)}`);
+  const startCreate = () => navigate('/music/tracks/new');
 
-  const startCreate = () => {
-    setSelectedId('new');
-    selectedIdRef.current = 'new';
-    setForm(emptyForm());
+  // Hydrate the editor form from the URL-selected track. Keyed on the id so a
+  // list refresh (audio upload, generate, upsertLocal) doesn't clobber the open
+  // form; `selectedIdRef` is kept in sync so async handlers can still detect a
+  // selection change that happened mid-round-trip (see Authors.jsx for the base
+  // pattern).
+  const hydratedRef = useRef(null);
+  useEffect(() => {
+    if (loading) return;
+    if (hydratedRef.current === id) return;
+    if (isCreate) {
+      setForm(emptyForm());
+    } else if (selected) {
+      setForm(formFromTrack(selected));
+    } else {
+      hydratedRef.current = id || null;
+      selectedIdRef.current = id || null;
+      return;
+    }
+    hydratedRef.current = id;
+    selectedIdRef.current = id;
     resetTrackViewState();
-  };
+  }, [id, isCreate, selected, loading]);
 
   const upsertLocal = (track) => {
     setTracks((prev) => {
@@ -140,8 +157,10 @@ export default function TracksManager() {
       setSaving(false);
       if (!created) return;
       upsertLocal(created);
-      setSelectedId(created.id);
+      // Point the async-handler ref at the new id immediately (the hydration
+      // effect also sets it, but not until after navigation re-renders).
       selectedIdRef.current = created.id;
+      navigate(`/music/tracks/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.title}"`);
     } else {
       // Drop `albumId` from a metadata-only update unless the user actually
@@ -151,7 +170,7 @@ export default function TracksManager() {
       // remains the primary place to (re)order an album's tracks.
       const payload = { ...form, title };
       if ((selected?.albumId || '') === form.albumId) delete payload.albumId;
-      const updated = await updateTrack(selectedId, payload).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
+      const updated = await updateTrack(id, payload).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
       setSaving(false);
       if (!updated) return;
       upsertLocal(updated);
@@ -163,8 +182,8 @@ export default function TracksManager() {
     if (!selected) return;
     const prior = tracks;
     setTracks((prev) => prev.filter((t) => t.id !== selected.id));
-    setSelectedId(null);
     resetTrackViewState();
+    navigate('/music/tracks');
     await deleteTrack(selected.id).catch((err) => { toast.error(err.message || 'Delete failed'); setTracks(prior); });
   };
 
@@ -298,7 +317,7 @@ export default function TracksManager() {
                     type="button"
                     onClick={() => selectTrack(t)}
                     className={`w-full text-left px-3 py-2 rounded text-sm truncate flex items-center gap-2 ${
-                      t.id === selectedId ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
+                      t.id === id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
                     }`}
                   >
                     <Music2 size={13} className={t.audioFilename ? 'text-port-success shrink-0' : 'text-gray-600 shrink-0'} aria-hidden="true" />
@@ -312,7 +331,14 @@ export default function TracksManager() {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-lg p-4">
-          {!isCreate && !selected ? (
+          {notFound ? (
+            <div className="text-gray-500 text-sm">
+              That track could not be found — it may have been deleted.{' '}
+              <button type="button" onClick={() => navigate('/music/tracks')} className="text-port-accent hover:underline">
+                Back to tracks
+              </button>
+            </div>
+          ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">Select a track to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">

@@ -27,6 +27,19 @@ export default function PromptManager() {
     else p.set('tab', next);
     setSearchParams(p, { replace: true });
   };
+  // Selected stage / variable live in the URL (`?stage=` / `?var=`) so the open
+  // record is deep-linkable and reload-safe — the same search-param convention as
+  // the tab above (see useDrawerTab.js).
+  const setParam = (key, val) => {
+    const p = new URLSearchParams(searchParams);
+    if (val == null || val === '') p.delete(key);
+    else p.set(key, val);
+    setSearchParams(p, { replace: true });
+  };
+  const selectedStage = searchParams.get('stage');
+  const selectedVar = searchParams.get('var');
+  const setSelectedStage = (name) => setParam('stage', name);
+  const setSelectedVar = (key) => setParam('var', key);
   const [stages, setStages] = useState({});
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);
@@ -38,14 +51,12 @@ export default function PromptManager() {
     'memory-evaluate', 'app-detection'
   ];
 
-  // Stage editing
-  const [selectedStage, setSelectedStage] = useState(null);
+  // Stage editing (selection is URL-driven — see selectedStage above)
   const [stageTemplate, setStageTemplate] = useState('');
   const [stageConfig, setStageConfig] = useState({});
   const [preview, setPreview] = useState('');
 
-  // Variable editing
-  const [selectedVar, setSelectedVar] = useState(null);
+  // Variable editing (selection is URL-driven — see selectedVar above)
   const [varForm, setVarForm] = useState({ key: '', name: '', category: '', content: '' });
 
   // Stage creation
@@ -92,25 +103,34 @@ export default function PromptManager() {
     setLoading(false);
   };
 
-  const loadStage = async (name) => {
-    setSelectedStage(name);
-    const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
-    setStageTemplate(res.template || '');
-    // Normalize a server-returned timeout via parseTimeoutMs so the editor
-    // shares the validator's accept set: integers OR digit-only strings
-    // (e.g. legacy `'900000'` from pre-validation installs) round-trip
-    // through the UI, while non-positive / non-integer / garbage values
-    // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
-    // surface them as touched. Only set the key when the server actually
-    // shipped a value — otherwise the next save would write `timeout: null`
-    // (the server's explicit-clear sentinel) for stages the user never
-    // touched, conflating "key absent" with "user cleared the override".
-    const cfg = { name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] };
-    const timeout = parseTimeoutMs(res.timeout);
-    if (timeout !== null) cfg.timeout = timeout;
-    setStageConfig(cfg);
-    setPreview('');
-  };
+  // Fetch the URL-selected stage's template + config. Keyed on selectedStage so
+  // a deep link / reload restores the open editor; a cleared param resets it.
+  useEffect(() => {
+    if (!selectedStage) { setStageTemplate(''); setStageConfig({}); setPreview(''); return; }
+    let cancelled = false;
+    fetch(`/api/prompts/${selectedStage}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(res => {
+        if (cancelled || !res) return;
+        setStageTemplate(res.template || '');
+        // Normalize a server-returned timeout via parseTimeoutMs so the editor
+        // shares the validator's accept set: integers OR digit-only strings
+        // (e.g. legacy `'900000'` from pre-validation installs) round-trip
+        // through the UI, while non-positive / non-integer / garbage values
+        // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
+        // surface them as touched. Only set the key when the server actually
+        // shipped a value — otherwise the next save would write `timeout: null`
+        // (the server's explicit-clear sentinel) for stages the user never
+        // touched, conflating "key absent" with "user cleared the override".
+        const cfg = { name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] };
+        const timeout = parseTimeoutMs(res.timeout);
+        if (timeout !== null) cfg.timeout = timeout;
+        setStageConfig(cfg);
+        setPreview('');
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedStage]);
 
   const saveStage = async () => {
     setSaving(true);
@@ -138,11 +158,16 @@ export default function PromptManager() {
     setPreview(data.preview);
   };
 
-  const loadVariable = (key) => {
-    setSelectedVar(key);
-    const v = variables[key];
-    setVarForm({ key, name: v.name || '', category: v.category || '', content: v.content || '' });
-  };
+  // Hydrate the variable editor from the URL-selected key. Keyed on selectedVar
+  // (+ variables so it fills in once the list loads) — no param means create mode.
+  useEffect(() => {
+    if (selectedVar && variables[selectedVar]) {
+      const v = variables[selectedVar];
+      setVarForm({ key: selectedVar, name: v.name || '', category: v.category || '', content: v.content || '' });
+    } else if (!selectedVar) {
+      setVarForm({ key: '', name: '', category: '', content: '' });
+    }
+  }, [selectedVar, variables]);
 
   const saveVariable = async () => {
     setSaving(true);
@@ -163,6 +188,7 @@ export default function PromptManager() {
   const deleteVariable = async (key) => {
     const res = await fetch(`/api/prompts/variables/${key}`, { method: 'DELETE' });
     if (!res.ok) { toast.error('Failed to delete variable: ' + await res.text()); return; }
+    if (selectedVar === key) setSelectedVar(null);
     await loadData();
   };
 
@@ -365,7 +391,7 @@ export default function PromptManager() {
                   }`}
                 >
                   <button
-                    onClick={() => loadStage(name)}
+                    onClick={() => setSelectedStage(name)}
                     className="flex-1 min-w-0 text-left"
                   >
                     <div className="flex items-center gap-1">
@@ -392,7 +418,14 @@ export default function PromptManager() {
 
           {/* Stage Editor */}
           <div className="lg:col-span-2 space-y-4">
-            {selectedStage ? (
+            {selectedStage && !stages[selectedStage] ? (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                That stage could not be found — it may have been deleted or renamed.{' '}
+                <button onClick={() => setSelectedStage(null)} className="text-port-accent hover:underline">
+                  Clear selection
+                </button>
+              </div>
+            ) : selectedStage ? (
               <>
                 <div className="bg-port-card border border-port-border rounded-xl p-4">
                   <div className="flex items-center justify-between mb-4">
@@ -534,7 +567,7 @@ export default function PromptManager() {
                   }`}
                 >
                   <button
-                    onClick={() => loadVariable(key)}
+                    onClick={() => setSelectedVar(key)}
                     className="flex-1 text-left"
                   >
                     <div className="font-medium">{v.name || key}</div>
@@ -553,6 +586,14 @@ export default function PromptManager() {
 
           {/* Variable Editor */}
           <div className="lg:col-span-2">
+            {selectedVar && !variables[selectedVar] ? (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                That variable could not be found — it may have been deleted.{' '}
+                <button onClick={() => setSelectedVar(null)} className="text-port-accent hover:underline">
+                  New variable
+                </button>
+              </div>
+            ) : (
             <div className="bg-port-card border border-port-border rounded-xl p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-white">
@@ -618,6 +659,7 @@ export default function PromptManager() {
                 </div>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}

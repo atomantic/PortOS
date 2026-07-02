@@ -129,11 +129,37 @@ export default function JiraReports() {
   const [apps, setApps] = useState([]);
 
   const filterAppId = searchParams.get('app') || '';
+  // The open report lives in the URL (`?reportApp=&reportDate=`) so it's
+  // deep-linkable and reload-safe. appId + date is the report's stable id.
+  const reportApp = searchParams.get('reportApp') || '';
+  const reportDate = searchParams.get('reportDate') || '';
 
   useEffect(() => {
     loadReports();
     loadApps();
   }, []);
+
+  // Restore the URL-selected report: fetch the full record when the params name
+  // one that isn't already loaded, and clear the selection when they're absent.
+  // A stale id that no longer resolves leaves selectedReport null → the detail
+  // pane falls back to its "Select a report" placeholder.
+  useEffect(() => {
+    if (!reportApp || !reportDate) { setSelectedReport(null); return; }
+    if (selectedReport?.appId === reportApp && selectedReport?.date === reportDate) return;
+    let cancelled = false;
+    api.getJiraReport(reportApp, reportDate).then((full) => {
+      if (!cancelled && full) setSelectedReport(full);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // selectedReport intentionally omitted — the guard above prevents refetch loops.
+  }, [reportApp, reportDate]);
+
+  const selectReport = (appId, date) => {
+    const p = new URLSearchParams(searchParams);
+    p.set('reportApp', appId);
+    p.set('reportDate', date);
+    setSearchParams(p, { replace: true });
+  };
 
   const loadApps = async () => {
     const allApps = await api.getApps();
@@ -155,24 +181,21 @@ export default function JiraReports() {
       toast.success(appId ? 'Report generated' : `Generated ${Array.isArray(result) ? result.length : 1} report(s)`);
       await loadReports();
       if (!Array.isArray(result) && result.appId) {
+        // Set the full record directly (avoids a redundant re-fetch — the effect's
+        // guard sees the params already match) and reflect it in the URL.
         setSelectedReport(result);
+        selectReport(result.appId, result.date);
       }
     }
     setGenerating(false);
   };
 
-  const handleSelectReport = async (reportMeta) => {
-    const full = await api.getJiraReport(reportMeta.appId, reportMeta.date);
-    if (full) setSelectedReport(full);
-  };
+  const handleSelectReport = (reportMeta) => selectReport(reportMeta.appId, reportMeta.date);
 
   const handleFilterApp = (appId) => {
-    if (appId) {
-      setSearchParams({ app: appId });
-    } else {
-      setSearchParams({});
-    }
-    setSelectedReport(null);
+    // Changing the project filter drops the open report (its params too) so a
+    // filtered-out selection can't linger.
+    setSearchParams(appId ? { app: appId } : {});
   };
 
   const filteredReports = filterAppId
