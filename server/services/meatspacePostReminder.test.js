@@ -14,7 +14,8 @@ vi.mock('./eventScheduler.js', () => ({
 }));
 
 vi.mock('../lib/timezone.js', () => ({
-  getUserTimezone: vi.fn().mockResolvedValue('UTC')
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+  getLocalParts: vi.fn()
 }));
 
 vi.mock('./meatspacePost.js', () => ({
@@ -30,7 +31,7 @@ vi.mock('./notifications.js', () => ({
 }));
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions, computePostStreaks } from './meatspacePost.js';
 import { addNotification } from './notifications.js';
 import {
@@ -117,6 +118,8 @@ describe('firePostReminderIfIncomplete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPostSessions.mockResolvedValue([]);
+    getUserTimezone.mockResolvedValue('UTC');
+    getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
   });
 
   it('sends a notification when the reminder is enabled and today is incomplete', async () => {
@@ -148,5 +151,37 @@ describe('firePostReminderIfIncomplete', () => {
     await firePostReminderIfIncomplete();
 
     expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  // Regression: the reminder cron fires on the user's LOCAL wall-clock time
+  // (registerPostReminderSchedule schedules it with the user's timezone), so
+  // the "is today done" check must use that same local calendar day — not the
+  // raw UTC date. For a negative-UTC-offset timezone (e.g. America/Los_Angeles,
+  // UTC-8), the UTC calendar date rolls over mid-local-evening: a user who
+  // completed their session that morning could otherwise get a false nag once
+  // the UTC date ticks over to "tomorrow" while it's still "today" for them.
+  it("computes 'today' from the reminder's own local timezone, not the raw UTC date", async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '20:00' } });
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    // Local calendar day is still "2026-07-01" even though the underlying UTC
+    // clock may already read "2026-07-02" at this fire time (8pm PDT = 3am UTC).
+    getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+    computePostStreaks.mockReturnValue({ completedToday: true });
+
+    await firePostReminderIfIncomplete();
+
+    expect(computePostStreaks).toHaveBeenCalledWith(expect.any(Array), '2026-07-01');
+    // Local day already has a completed session — must not nag.
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('zero-pads single-digit month/day into the YYYY-MM-DD string', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    getLocalParts.mockReturnValue({ year: 2026, month: 3, day: 5 });
+    computePostStreaks.mockReturnValue({ completedToday: false });
+
+    await firePostReminderIfIncomplete();
+
+    expect(computePostStreaks).toHaveBeenCalledWith(expect.any(Array), '2026-03-05');
   });
 });

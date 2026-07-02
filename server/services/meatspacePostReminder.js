@@ -19,7 +19,7 @@
  */
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getUserTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions, computePostStreaks } from './meatspacePost.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
@@ -52,7 +52,16 @@ export async function firePostReminderIfIncomplete() {
   }
 
   const sessions = await getPostSessions();
-  const todayStr = new Date().toISOString().split('T')[0];
+  // The cron itself fires on the user's LOCAL wall-clock time (registerPostReminderSchedule
+  // schedules it with `timezone` from getUserTimezone()), so "today" for the completeness
+  // check must use that same local calendar day — not the raw UTC date. For any negative-UTC-
+  // offset timezone (the Americas), the UTC calendar date rolls over mid-local-evening, so a
+  // bare `new Date().toISOString()` here would compare against a UTC "tomorrow" that doesn't
+  // match the local day the reminder time represents, producing a false nag hours after a
+  // session the user already completed earlier that same local day.
+  const timezone = await getUserTimezone();
+  const { year, month, day } = getLocalParts(new Date(), timezone);
+  const todayStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
   const { completedToday } = computePostStreaks(sessions, todayStr);
   if (completedToday) {
     console.log(`🔔 POST reminder: today's session already complete — no nudge`);
