@@ -428,6 +428,11 @@ export default function Ask() {
     requestDelete(id);
   }, [activeConv?.id, requestDelete, streaming]);
   const handleDelete = useCallback((id) => confirmDelete(async () => {
+    // Re-check the streaming guard at confirm time too: the row could have been
+    // armed while idle and then a stream started on this same conversation
+    // before the user clicked confirm — deleting the active stream mid-flight
+    // would race the assistant turn into a deleted record.
+    if (streaming && id === activeConv?.id) return;
     // Only mutate local state if the server confirms the delete — otherwise
     // a transient failure would hide a row that's still on disk and would
     // pop back on the next list refresh.
@@ -438,7 +443,7 @@ export default function Ask() {
     if (!ok) return;
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (id === conversationId) navigate('/ask');
-  }), [conversationId, confirmDelete, navigate]);
+  }), [activeConv?.id, conversationId, confirmDelete, navigate, streaming]);
 
   const handlePromote = useCallback(async () => {
     if (!activeConv) return;
