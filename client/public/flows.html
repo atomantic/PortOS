@@ -158,7 +158,7 @@
     white-space: nowrap;
     transition: opacity 0.15s, border-color 0.15s;
   }
-  .node:hover { border-color: var(--muted); }
+  .node:hover, .node:focus-visible { border-color: var(--muted); outline: none; }
   .node.dim { opacity: 0.22; }
   .node.hl { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .node.selected { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
@@ -280,11 +280,16 @@
     el.className = 'node';
     el.textContent = n.label;
     el.title = n.file ? `${n.label} — ${n.file}` : n.label;
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
     el.style.left = p.x + 'px';
     el.style.top = p.y + 'px';
     el.style.width = p.w + 'px';
     el.style.height = p.h + 'px';
     el.addEventListener('click', () => showNode(n.id));
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showNode(n.id); }
+    });
     diagram.appendChild(el);
     nodeEls.set(n.id, el);
   }
@@ -455,8 +460,11 @@
         fromEl.classList.toggle('selected', on);
         toEl.classList.toggle('selected', on);
       };
+      el.tabIndex = 0;
       el.addEventListener('mouseenter', () => focusEdge(true));
       el.addEventListener('mouseleave', () => focusEdge(false));
+      el.addEventListener('focus', () => focusEdge(true));
+      el.addEventListener('blur', () => focusEdge(false));
       el.addEventListener('click', () => {
         fromEl.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
       });
