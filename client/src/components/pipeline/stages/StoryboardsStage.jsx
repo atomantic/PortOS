@@ -16,9 +16,10 @@
  * extractor against the corresponding text stage and replace the list.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
 import { sceneShotWarnings } from '../../../lib/shotContinuity';
 import {
@@ -61,13 +62,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   // would race when the user starts a second render before the first settles.
   const [renderingShots, setRenderingShots] = useState(() => new Set());
   const [extractingFrom, setExtractingFrom] = useState(null);
-  // Holds the active arm-timer id so an unmount or a fresh arm clears the
-  // pending disarm — otherwise the 5s callback fires setExtractingFrom on
-  // an unmounted component (React warning + small leak).
-  const armTimerRef = useRef(null);
-  useEffect(() => () => {
-    if (armTimerRef.current) clearTimeout(armTimerRef.current);
-  }, []);
+  // Which source ('teleplay' | 'prose') has a pending replace-confirm showing.
+  // Separate from `extractingFrom` (which is purely the in-flight source) so the
+  // inline confirm never gets conflated with an in-progress extract.
+  const [confirmingFrom, setConfirmingFrom] = useState(null);
 
   // Canon characters (with wardrobes) live on the linked universe — load it
   // and derive the pickable set so each scene can offer a per-character
@@ -80,10 +78,10 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
 
   const teleplayReady = !!(issue.stages?.teleplay?.output || '').trim();
   const proseReady = !!(issue.stages?.prose?.output || '').trim();
-  // Any non-null, non-arm value means an extract POST is in flight — both
-  // buttons must lock out concurrent submits so racing requests can't
-  // overwrite each other's results (last-write-wins).
-  const extractInFlight = !!extractingFrom && !extractingFrom.startsWith('arm:');
+  // A non-null value means an extract POST is in flight — both buttons must lock
+  // out concurrent submits so racing requests can't overwrite each other's
+  // results (last-write-wins).
+  const extractInFlight = !!extractingFrom;
 
   const persist = async (nextScenes) => {
     setScenes(nextScenes);
@@ -220,31 +218,19 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     toast.success(`Queued shot ${shotIdx + 1} render (${result.jobId.slice(0, 8)})`);
   };
 
-  // Replace-existing confirm uses a two-click arm pattern (no window.confirm
-  // per CLAUDE.md, no shared confirm-modal primitive in the pipeline yet).
-  // First click on a button when scenes is non-empty arms it (label flips to
-  // "Click again to replace"). Second click within 5s fires the extract.
-  const onExtractClick = async (from) => {
-    const armKey = `arm:${from}`;
-    const needsConfirm = scenes.length > 0;
-
-    if (needsConfirm && extractingFrom !== armKey) {
-      setExtractingFrom(armKey);
-      toast.warning(`This will replace ${scenes.length} existing scene${scenes.length === 1 ? '' : 's'}. Click again to confirm.`);
-      if (armTimerRef.current) clearTimeout(armTimerRef.current);
-      armTimerRef.current = setTimeout(() => {
-        armTimerRef.current = null;
-        setExtractingFrom((cur) => (cur === armKey ? null : cur));
-      }, 5000);
+  // Replacing existing scenes shows an inline confirm near the buttons (no
+  // window.confirm per CLAUDE.md, no two-click-arm — the user disliked it). A
+  // fresh stage (no scenes yet) extracts immediately.
+  const onExtractClick = (from) => {
+    if (scenes.length > 0) {
+      setConfirmingFrom(from);
       return;
     }
-    // Second click landed within the arm window — cancel the pending disarm
-    // so the post-await `setExtractingFrom(null)` is the only state flip.
-    if (armTimerRef.current) {
-      clearTimeout(armTimerRef.current);
-      armTimerRef.current = null;
-    }
+    runExtract(from);
+  };
 
+  const runExtract = async (from) => {
+    setConfirmingFrom(null);
     setExtractingFrom(from);
     const result = await extractPipelineStoryboardScenes(issue.id, {
       from,
@@ -419,7 +405,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
             {extractingFrom === 'teleplay'
               ? <Loader2 size={14} className="animate-spin" />
               : <Wand2 size={14} />}
-            {extractingFrom === 'arm:teleplay' ? 'Click again to replace' : 'From Teleplay'}
+            From Teleplay
           </button>
           <button
             type="button"
@@ -431,7 +417,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
             {extractingFrom === 'prose'
               ? <Loader2 size={14} className="animate-spin" />
               : <Wand2 size={14} />}
-            {extractingFrom === 'arm:prose' ? 'Click again to replace' : 'From prose'}
+            From prose
           </button>
           <PromptCountInput id="storyboard-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
@@ -443,6 +429,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
           </button>
         </div>
       </div>
+
+      {confirmingFrom && (
+        <InlineConfirmRow
+          tone="warning"
+          question={`Replace ${scenes.length} existing scene${scenes.length === 1 ? '' : 's'} with a fresh extract from the ${confirmingFrom === 'teleplay' ? 'Teleplay' : 'prose'}?`}
+          confirmText="Replace"
+          onConfirm={() => runExtract(confirmingFrom)}
+          onCancel={() => setConfirmingFrom(null)}
+        />
+      )}
 
       {scenes.length === 0 ? (
         <p className="text-xs text-gray-600 italic">No scenes yet.</p>
