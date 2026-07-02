@@ -282,36 +282,40 @@ export async function navigateToUrl(url) {
 // ---------- CDP pinned navigation (SSRF: verify Chrome's ACTUAL connect IP) ----------
 
 /**
- * Extract the main-frame document's network hops (initial request + every HTTP
- * redirect + final response) from a captured stream of CDP Network events, each
- * annotated with the *actual* IP Chrome connected to (`remoteIPAddress`).
+ * Extract EVERY main-frame document network hop (each top-level navigation's
+ * initial request + every HTTP redirect + final response) from a captured stream
+ * of CDP Network events, each annotated with the *actual* IP Chrome connected to
+ * (`remoteIPAddress`).
  *
- * CDP marks the main document load with `requestId === loaderId`; redirects
- * reuse that requestId and arrive as a `redirectResponse` on the following
+ * CDP marks a main-document load with `requestId === loaderId`; redirects reuse
+ * that requestId and arrive as a `redirectResponse` on the following
  * `Network.requestWillBeSent`, and the final hop lands as a
- * `Network.responseReceived` with the same requestId. So walking these in order
- * reconstructs every address Chrome dialed for the top document — the thing a
- * pre-navigation `dns.lookup` can't know, because Chrome resolves DNS itself
- * (the rebinding TOCTOU).
+ * `Network.responseReceived` with the same requestId. A page can start MORE than
+ * one top-level navigation (a client-side `location.replace` / meta-refresh
+ * during the settle window is a fresh `requestId === loaderId`), so we track a
+ * SET of main requestIds — not just the first — and collect the hops of each.
+ * Walking these reconstructs every address Chrome dialed for the top document
+ * over the whole capture window — the thing a pre-navigation `dns.lookup` can't
+ * know, because Chrome resolves DNS itself (the rebinding TOCTOU).
  *
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
  * browser. Returns `{ hops: [{ url, remoteIPAddress, status }], finalUrl,
- * mainRequestId }`.
+ * mainRequestIds: string[] }`.
  */
 export function pickMainFrameHops(messages) {
-  let mainRequestId = null;
+  const mainRequestIds = new Set();
   const hops = [];
   let finalUrl = null;
   for (const msg of messages) {
     const p = msg?.params;
     if (!p) continue;
     if (msg.method === 'Network.requestWillBeSent') {
-      // The first Document request whose requestId equals its loaderId is the
-      // top-level navigation; ignore sub-resource / sub-frame requests.
-      if (mainRequestId === null && p.type === 'Document' && p.requestId && p.requestId === p.loaderId) {
-        mainRequestId = p.requestId;
+      // A Document request whose requestId equals its loaderId is a top-level
+      // navigation; ignore sub-resource / sub-frame requests.
+      if (p.type === 'Document' && p.requestId && p.requestId === p.loaderId) {
+        mainRequestIds.add(p.requestId);
       }
-      if (p.requestId === mainRequestId && p.redirectResponse) {
+      if (mainRequestIds.has(p.requestId) && p.redirectResponse) {
         hops.push({
           url: p.redirectResponse.url || null,
           remoteIPAddress: p.redirectResponse.remoteIPAddress || '',
@@ -319,7 +323,7 @@ export function pickMainFrameHops(messages) {
         });
       }
     } else if (msg.method === 'Network.responseReceived') {
-      if (mainRequestId !== null && p.requestId === mainRequestId && p.response) {
+      if (mainRequestIds.has(p.requestId) && p.response) {
         hops.push({
           url: p.response.url || null,
           remoteIPAddress: p.response.remoteIPAddress || '',
@@ -329,7 +333,7 @@ export function pickMainFrameHops(messages) {
       }
     }
   }
-  return { hops, finalUrl, mainRequestId };
+  return { hops, finalUrl, mainRequestIds: [...mainRequestIds] };
 }
 
 // Close a CDP tab by target id (best-effort). Used to fail closed after an
@@ -342,21 +346,28 @@ async function closeCdpPage(id) {
 
 /**
  * Navigate to a URL in a fresh tab and verify — against Chrome's OWN reported
- * connection IP — that every main-frame hop (initial request + each redirect)
- * connected to an allowed address. This closes the DNS-rebinding TOCTOU that a
- * pre-navigation `dns.lookup` cannot: we open a BLANK tab, subscribe to CDP
- * Network events, THEN drive `Page.navigate`, so we capture the
- * `remoteIPAddress` Chrome actually dialed for the document and every redirect.
+ * connection IP — that EVERY main-frame hop connected to an allowed address:
+ * the initial `Page.navigate`, every HTTP redirect, AND any client-side
+ * top-level navigation (meta-refresh / `location.replace`) that fires during the
+ * post-load `settleMs` window before the DOM is read. This closes the
+ * DNS-rebinding TOCTOU a pre-navigation `dns.lookup` cannot — Chrome resolves
+ * DNS itself, so we open a BLANK tab, subscribe to CDP Network events, THEN
+ * drive `Page.navigate`, keep the subscription open across the settle window,
+ * and check the `remoteIPAddress` Chrome actually dialed for each hop.
  *
  * `verifyRemoteIp(ip)` returns false to refuse. On ANY refusal (or an
  * unverifiable / empty IP, or a navigation that never yields a document
  * response) we fail closed: close the tab and throw, so a rebind-to-private
  * answer never reaches the caller's DOM reader.
  *
+ * The caller does NOT sleep before reading — the settle wait happens HERE, so
+ * the DOM has had `settleMs` to render (and every navigation in that window is
+ * pinned) by the time this resolves.
+ *
  * Returns a page object shaped like a `listCdpPages` entry
  * (`{ id, url, title, webSocketDebuggerUrl }`) so callers can `evaluateOnPage` it.
  */
-export async function navigateToUrlPinned(url, { verifyRemoteIp, navigateTimeoutMs = NAVIGATE_TIMEOUT_MS } = {}) {
+export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, navigateTimeoutMs = NAVIGATE_TIMEOUT_MS } = {}) {
   if (typeof verifyRemoteIp !== 'function') {
     throw new Error('navigateToUrlPinned requires a verifyRemoteIp(ip) predicate');
   }
@@ -379,15 +390,18 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, navigateTimeout
   const result = await new Promise((resolve) => {
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     let settled = false;
-    let timer;
+    let overallTimer;
+    let settleTimer = null;
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(overallTimer);
+      clearTimeout(settleTimer);
       try { ws.close(); } catch {}
       resolve(value);
     };
-    timer = setTimeout(
+    // Overall cap: fail closed if the FIRST document response never arrives.
+    overallTimer = setTimeout(
       () => finish({ ok: false, reason: 'navigation timed out before the document response' }),
       navigateTimeoutMs,
     );
@@ -404,11 +418,13 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, navigateTimeout
       if (msg.id === 2 && msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
       if (!msg.method) return;
       messages.push(msg);
-      // Terminal signal: the main-frame document RESPONSE headers arrived (all
-      // redirect hops precede it as redirectResponses). We have every hop's IP.
-      if (msg.method === 'Network.responseReceived') {
-        const { mainRequestId } = pickMainFrameHops(messages);
-        if (mainRequestId !== null && msg.params?.requestId === mainRequestId) finish({ ok: true });
+      // The main document RESPONSE headers arriving (type 'Document', which the
+      // main frame's doc emits before any sub-frame doc) starts the settle
+      // window: keep capturing for settleMs so a client-side navigation during
+      // settle is also pinned, THEN resolve. All hops are verified below.
+      if (msg.method === 'Network.responseReceived' && msg.params?.type === 'Document' && !settleTimer) {
+        clearTimeout(overallTimer);
+        settleTimer = setTimeout(() => finish({ ok: true }), settleMs);
       }
     });
     ws.on('error', () => finish({ ok: false, reason: 'CDP websocket error during navigation' }));

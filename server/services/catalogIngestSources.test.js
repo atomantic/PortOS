@@ -33,7 +33,6 @@ vi.mock('./voice/stt.js', () => ({
 }));
 vi.mock('./browserService.js', () => ({
   navigateToUrlPinned: vi.fn(),
-  listCdpPages: vi.fn(),
   evaluateOnPage: vi.fn(),
 }));
 vi.mock('fs/promises', () => ({
@@ -80,16 +79,16 @@ beforeEach(() => {
   dnsp.lookup.mockResolvedValue({ address: '93.184.216.34', family: 4 });
   // Default: Chrome dials a single public IP for the document (no rebind).
   browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://ex.com/a', hops: ['93.184.216.34'] }));
-  // Default: the live tab (re-queried after settle) is the same safe url.
-  browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://ex.com/a', title: 'A', webSocketDebuggerUrl: 'ws://x' }]);
 });
 
 /**
  * Faithfully mimic the real `navigateToUrlPinned` fail-closed contract: it
- * verifies each main-frame hop's ACTUAL Chrome-reported connection IP via the
- * caller's `verifyRemoteIp` predicate and throws (tearing the tab down) if any
- * hop is refused. `hops` are the IPs Chrome actually dialed — a rebinding DNS
- * answer surfaces here as a private IP the pre-nav dns.lookup never saw.
+ * verifies EVERY main-frame hop's ACTUAL Chrome-reported connection IP (the
+ * initial nav, each redirect, and any client-side navigation during the settle
+ * window) via the caller's `verifyRemoteIp` predicate, and throws (tearing the
+ * tab down) if any hop is refused. `hops` are the IPs Chrome actually dialed — a
+ * rebinding DNS answer surfaces here as a private IP the pre-nav dns.lookup never
+ * saw. The pin owns the settle wait, so it also ignores a `settleMs` option.
  */
 function pinnedNav({ finalUrl, hops }) {
   return async (url, { verifyRemoteIp } = {}) => {
@@ -147,24 +146,13 @@ describe('fetchUrlMainText', () => {
     expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 
-  it('refuses a landed HOSTNAME that resolves to a blocked address (defense-in-depth re-check)', async () => {
-    // All network hops dialed public IPs (pin passes), but the LIVE tab url after
-    // settle is a hostname that itself resolves to metadata — the landed-url
-    // re-vet still catches an in-page/JS redirect the network-hop pin didn't cover.
-    dnsp.lookup
-      .mockResolvedValueOnce({ address: '93.184.216.34', family: 4 })
-      .mockResolvedValueOnce({ address: '169.254.169.254', family: 4 });
-    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'https://evil.example/x', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
-    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/resolves to a blocked/);
-    expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
-  });
-
-  it('re-checks the LIVE tab url after the settle window (client-side nav to loopback)', async () => {
-    // Pin passes (public hops), but the page client-side navigates (meta refresh /
-    // location.replace) during the settle to a loopback address. We must re-read
-    // the CURRENT tab url — not the pre-settle url the pin captured — and refuse.
-    browserService.listCdpPages.mockResolvedValue([{ id: 'p1', url: 'http://127.0.0.1:5555/secret', title: 'x', webSocketDebuggerUrl: 'ws://x' }]);
-    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/loopback|link-local/);
+  it('refuses a CLIENT-SIDE navigation during the settle window that dials metadata', async () => {
+    // Pin passes the initial public hop, but the page meta-refreshes /
+    // location.replaces during the settle window to a host Chrome dials at cloud
+    // metadata. Because the pin stays active through settle, that later hop's real
+    // IP is verified too — no stale-DNS re-vet that a rebind could slip past.
+    browserService.navigateToUrlPinned.mockImplementation(pinnedNav({ finalUrl: 'https://evil.example/x', hops: ['93.184.216.34', '169.254.169.254'] }));
+    await expect(fetchUrlMainText('https://ex.com/a', { settleMs: 0 })).rejects.toThrow(/disallowed address 169\.254\.169\.254/);
     expect(browserService.evaluateOnPage).not.toHaveBeenCalled();
   });
 

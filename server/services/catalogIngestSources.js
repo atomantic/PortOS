@@ -32,11 +32,10 @@ import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
   navigateToUrlPinned,
-  listCdpPages,
   evaluateOnPage,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
-import { PATHS, ensureDir, sleep, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
@@ -102,10 +101,13 @@ async function assertIngestUrlSafe(target) {
  * DNS answer could steer Chrome's connection to a blocked address after
  * `assertIngestUrlSafe` vetted the hostname (a TOCTOU). `navigateToUrlPinned`
  * closes that window by verifying, against Chrome's OWN reported
- * `remoteIPAddress`, that every main-frame hop (initial + each redirect)
- * connected to an allowed address — refusing (and tearing the tab down) before
- * the DOM is read otherwise. The `isBlockedIngestHost` blocklist is the SAME
- * criterion `assertIngestUrlSafe` vets with, so the pin and the pre-check agree.
+ * `remoteIPAddress`, that EVERY main-frame hop — the initial navigation, each
+ * HTTP redirect, AND any client-side navigation during the `settleMs` window
+ * before the DOM is read — connected to an allowed address, refusing (and
+ * tearing the tab down) otherwise. The `isBlockedIngestHost` blocklist is the
+ * SAME criterion `assertIngestUrlSafe` vets with, so the pin and the pre-check
+ * agree. The pin owns the settle wait, so there is no separate stale-DNS re-vet
+ * (which would itself be rebindable) after it returns.
  *
  * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
@@ -114,27 +116,16 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   await assertIngestUrlSafe(url);
 
   // Navigate in a fresh tab and PIN: verify Chrome's actual per-hop connection
-  // IP is not a blocked (loopback / link-local / metadata) address — closing the
-  // rebinding gap between our dns.lookup above and Chrome's own resolution. Fails
-  // closed (tab torn down, throws) if any hop dialed a disallowed address.
+  // IP is not a blocked (loopback / link-local / metadata) address for the
+  // initial nav, every redirect, and any client-side nav during the settle
+  // window — closing the rebinding gap between our dns.lookup above and Chrome's
+  // own resolution. Fails closed (tab torn down, throws) on any disallowed hop.
+  // The pin waits out settleMs internally, so the DOM is ready + fully pinned
+  // by the time it returns and we read.
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+    settleMs,
   });
-  await sleep(settleMs);
-
-  // Defense in depth: re-query the tab's LIVE url AFTER the settle window and
-  // re-vet it (scheme + DNS blocklist) before reading the DOM. The network-hop
-  // pin above covers HTTP-level hops, but the page can client-side navigate
-  // (meta refresh / location.replace) during the settle to a blocked host — so
-  // read the CURRENT url from CDP, not the pre-settle url the pin captured, or
-  // that redirect goes unchecked. Match strictly by the target id navigate
-  // returned (never an arbitrary tab). Fall back to the pinned page's own
-  // webSocketDebuggerUrl for the read if the re-list misses.
-  const pages = await listCdpPages();
-  const live = pages.find((p) => p.id === page.id);
-  const landedUrl = live?.url || page.url || url;
-  await assertIngestUrlSafe(landedUrl);
-  const readTarget = live?.webSocketDebuggerUrl ? live : page;
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer
   // chrome), falling back to document body text. Runs in the page; returns a
@@ -145,11 +136,11 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
     const text = (pick && pick.innerText ? pick.innerText : '').trim();
     return JSON.stringify({ title, text });
   })()`;
-  const raw = await evaluateOnPage(readTarget, expression);
+  const raw = await evaluateOnPage(page, expression);
   const parsed = raw ? safeJSONParse(raw, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
-  return { text, title: parsed?.title || live?.title || page.title || '', finalUrl: landedUrl };
+  return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };
 }
 
 /**

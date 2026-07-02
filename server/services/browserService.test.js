@@ -75,11 +75,11 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
   });
 
   it('captures the single-hop main document response IP', () => {
-    const { hops, finalUrl, mainRequestId } = pickMainFrameHops([
+    const { hops, finalUrl, mainRequestIds } = pickMainFrameHops([
       docRequest('R1', 'https://ex.com/a', ''),
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
     ]);
-    expect(mainRequestId).toBe('R1');
+    expect(mainRequestIds).toEqual(['R1']);
     expect(finalUrl).toBe('https://ex.com/a');
     expect(hops).toEqual([{ url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 200 }]);
   });
@@ -94,23 +94,38 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34', '127.0.0.1']);
   });
 
+  it('captures a SECOND top-level navigation (client-side nav during settle)', () => {
+    // A page that loads clean (R1 → public), then location.replace()s to a new
+    // top-level document (R2, a fresh requestId===loaderId) Chrome dials at
+    // metadata during the settle window. Both main-frame loads must be captured.
+    const { hops, finalUrl, mainRequestIds } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      docRequest('R2', 'https://evil.example/x', ''),
+      docResponse('R2', 'https://evil.example/x', '169.254.169.254'),
+    ]);
+    expect(mainRequestIds).toEqual(['R1', 'R2']);
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34', '169.254.169.254']);
+    expect(finalUrl).toBe('https://evil.example/x');
+  });
+
   it('ignores sub-resource requests (requestId !== loaderId)', () => {
-    const { hops, mainRequestId } = pickMainFrameHops([
+    const { hops, mainRequestIds } = pickMainFrameHops([
       docRequest('R1', 'https://ex.com/a', ''),
       // A sub-resource: different requestId/loaderId, type Image — must be excluded.
       { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R1', type: 'Image', request: { url: 'http://169.254.169.254/latest' } } },
       { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'Image', response: { url: 'http://169.254.169.254/latest', remoteIPAddress: '169.254.169.254', status: 200 } } },
       docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
     ]);
-    expect(mainRequestId).toBe('R1');
+    expect(mainRequestIds).toEqual(['R1']);
     expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
   });
 
   it('returns no hops when no main-frame document load is present', () => {
-    const { hops, mainRequestId, finalUrl } = pickMainFrameHops([
+    const { hops, mainRequestIds, finalUrl } = pickMainFrameHops([
       { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R1', type: 'Image', request: { url: 'https://cdn/x.png' } } },
     ]);
-    expect(mainRequestId).toBeNull();
+    expect(mainRequestIds).toEqual([]);
     expect(hops).toEqual([]);
     expect(finalUrl).toBeNull();
   });
