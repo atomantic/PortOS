@@ -190,6 +190,7 @@ export async function syncAccount(accountId, io, options = {}) {
         if (event.endTime !== undefined) existing.endTime = event.endTime;
         if (event.isAllDay !== undefined) existing.isAllDay = event.isAllDay;
         if (event.isCancelled !== undefined) existing.isCancelled = event.isCancelled;
+        if (event.organizer !== undefined) existing.organizer = event.organizer;
         if (event.attendees !== undefined) existing.attendees = event.attendees;
         if (event.myStatus !== undefined) existing.myStatus = event.myStatus;
         if (event.categories !== undefined) existing.categories = event.categories;
@@ -210,6 +211,11 @@ export async function syncAccount(accountId, io, options = {}) {
 
     await saveCache(accountId, cache);
     await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
+
+    // Auto-log Tribe touchpoints from this batch (secondary effect — must not
+    // fail the sync). Idempotent on event id, so re-processing fetched events is safe.
+    await logCalendarTouchpoints(accountId, newEvents).catch((err) =>
+      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
     io?.emit('calendar:sync:completed', { accountId, newEvents: uniqueNew.length, pruned, status: providerStatus });
     console.log(`📅 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
@@ -237,4 +243,53 @@ export async function getSyncStatus(accountId) {
     lastSyncAt: account.lastSyncAt,
     lastSyncStatus: account.lastSyncStatus
   };
+}
+
+// Auto-log Tribe touchpoints for synced calendar events (#2033). Deterministic:
+// an event's organizer/attendees are matched to tracked people by email/handle
+// (or unique exact name) and one touchpoint per person is logged, idempotent on
+// the event id so re-syncs never double-log. Only events that have already
+// happened (start/end <= now) and weren't declined/cancelled count as contact.
+// Called from both the Outlook (syncAccount) and Google (pushSyncEvents) paths;
+// a no-op when nothing is tracked. Tribe is imported dynamically to avoid a
+// static import cycle (tribe.js → calendarSync.js).
+export async function logCalendarTouchpoints(accountId, events = []) {
+  const now = Date.now();
+  const candidates = [];
+  for (const event of events) {
+    if (event.isCancelled || event.myStatus === 'declined') continue;
+    const startedAt = event.startTime || event.endTime;
+    if (!startedAt) continue;
+    // Gate on the event's END (completion), not its start: an in-progress or
+    // all-day event isn't a finished contact until it ends.
+    const completedAt = event.endTime || event.startTime;
+    if (safeDate(completedAt) > now) continue; // not finished yet
+    const identities = [event.organizer, ...(event.attendees || [])].filter(Boolean);
+    if (identities.length === 0) continue;
+    const eventKey = event.externalId || event.id;
+    if (!eventKey) continue;
+    candidates.push({
+      identities,
+      source: 'calendar',
+      happenedAt: startedAt,
+      channel: event.location || 'Calendar',
+      summary: event.title || 'Calendar touchpoint',
+      dedupeKey: `cal:${accountId}:${eventKey}`,
+      calendarAccountId: accountId,
+      calendarEventId: eventKey,
+      metadata: {
+        title: event.title,
+        location: event.location,
+        startTime: event.startTime,
+        endTime: event.endTime,
+      },
+    });
+  }
+  if (candidates.length === 0) return { created: 0, matched: 0 };
+  const tribe = await import('./tribe.js');
+  const result = await tribe.autoLogTouchpoints(candidates);
+  if (result.created > 0) {
+    console.log(`🤝 Auto-logged ${result.created} calendar touchpoint(s) for account ${accountId}`);
+  }
+  return result;
 }
