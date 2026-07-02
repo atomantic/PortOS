@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
-import MorseTrainer, { MODES, MORSE_MODE_IDS } from './MorseTrainer';
+import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE } from './MorseTrainer';
 
 // Surfaces the live URL (path + search) so tests can assert the reference tab
 // is encoded in the query string — the "URL is the source of truth" contract.
@@ -62,5 +62,37 @@ describe('MorseTrainer deep-linking', () => {
     renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=list' });
     fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
     expect(screen.getByTestId('loc').textContent).toBe('/post/morse');
+  });
+});
+
+describe('MorseTrainer Tree reference view', () => {
+  it('renders a labeled, reachable node for all 41 characters', () => {
+    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+    // Every node (including the root) carries its own morse code (or 'start'
+    // for the root) as its `title` — the most reliable way to pick each tree
+    // node out individually, since letter text alone can collide with other
+    // on-screen content (e.g. mode-card labels).
+    const chars = Object.keys(MORSE_TABLE);
+    for (const ch of chars) {
+      const code = MORSE_TABLE[ch];
+      const node = container.querySelector(`[title="${code}"]`);
+      expect(node, `expected a tree node for "${ch}" (${code})`).toBeTruthy();
+      expect(node.textContent).toBe(ch);
+    }
+  });
+
+  it('centers the start node roughly under "start", not pinned to one edge', () => {
+    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+    const root = container.querySelector('[title="start"]');
+    expect(root).toBeTruthy();
+    expect(root.textContent).toBe('·');
+    // Regression guard for the reported bug: the root previously rendered
+    // displaced toward the DIT side. Its computed x-slot should sit near the
+    // horizontal middle of the tree's total width, not near either edge.
+    const treeContainer = root.closest('.relative.mx-auto');
+    const totalWidth = parseFloat(treeContainer.style.width);
+    const rootLeft = parseFloat(root.style.left);
+    expect(rootLeft).toBeGreaterThan(totalWidth * 0.3);
+    expect(rootLeft).toBeLessThan(totalWidth * 0.7);
   });
 });
