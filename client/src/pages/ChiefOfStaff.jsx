@@ -165,11 +165,13 @@ export default function ChiefOfStaff() {
       socket.emit('cos:subscribe');
     };
 
-    if (socket.connected) {
-      subscribe();
-    } else {
-      socket.on('connect', subscribe);
-    }
+    // Subscribe now if already connected, AND always re-subscribe on every
+    // (re)connect — the server rebuilds an empty per-socket subscriber Set on
+    // reconnect, so registering the listener only in the else branch left
+    // cos:* events dead after a reconnect when the socket was already connected
+    // at mount. Cleanup below offs this listener.
+    if (socket.connected) subscribe();
+    socket.on('connect', subscribe);
 
     const handleCosStatus = (data) => {
       setStatus(prev => ({ ...prev, running: data.running }));
