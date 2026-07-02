@@ -52,9 +52,12 @@ router.put('/post/config', asyncHandler(async (req, res) => {
   const data = validateRequest(postConfigUpdateSchema, req.body);
   const config = await postService.updatePostConfig(data);
   // Reschedule the daily reminder immediately (no restart needed) whenever
-  // its enabled/time fields change — see meatspacePostReminder.js.
+  // its enabled/time fields change — see meatspacePostReminder.js. The config
+  // write above already succeeded, so a rescheduling failure (e.g. timezone
+  // settings unreadable) must not surface as a save error to the client —
+  // log and swallow it, mirroring the boot-time registration's own handling.
   if (data.reminder) {
-    await registerPostReminderSchedule();
+    await registerPostReminderSchedule().catch(err => console.error(`❌ POST reminder reschedule failed: ${err.message}`));
   }
   res.json(config);
 }));

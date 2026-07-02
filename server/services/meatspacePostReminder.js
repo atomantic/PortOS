@@ -19,8 +19,8 @@
  */
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
-import { getPostConfig, getPostSessions, computePostStreaks } from './meatspacePost.js';
+import { getUserTimezone, getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getPostConfig, getPostSessions } from './meatspacePost.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 export const POST_REMINDER_EVENT_ID = 'post-daily-reminder';
@@ -51,18 +51,27 @@ export async function firePostReminderIfIncomplete() {
     return;
   }
 
-  const sessions = await getPostSessions();
   // The cron itself fires on the user's LOCAL wall-clock time (registerPostReminderSchedule
   // schedules it with `timezone` from getUserTimezone()), so "today" for the completeness
-  // check must use that same local calendar day — not the raw UTC date. For any negative-UTC-
-  // offset timezone (the Americas), the UTC calendar date rolls over mid-local-evening, so a
-  // bare `new Date().toISOString()` here would compare against a UTC "tomorrow" that doesn't
-  // match the local day the reminder time represents, producing a false nag hours after a
-  // session the user already completed earlier that same local day.
+  // check must be the user's local calendar day. Sessions are day-bucketed server-side via
+  // `session.date`, stamped from the raw UTC date (see submitPostSession in meatspacePost.js)
+  // — that bucket does NOT line up with local calendar days for any non-UTC timezone, and for
+  // negative-UTC-offset zones (the Americas) the UTC date can roll over several hours before
+  // local midnight. Comparing against that bucket (even after converting only the "now" side
+  // to local time) would still mismatch for a session completed in the gap between the UTC
+  // rollover and local midnight. So this derives each session's local day directly from its
+  // precise `startedAt` timestamp instead of trusting the coarse UTC-dated bucket at all —
+  // correct regardless of what time of day, relative to either boundary, a session actually
+  // completed.
   const timezone = await getUserTimezone();
-  const { year, month, day } = getLocalParts(new Date(), timezone);
-  const todayStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const { completedToday } = computePostStreaks(sessions, todayStr);
+  const todayStr = todayInTimezone(timezone);
+  const sessions = await getPostSessions();
+  const completedToday = sessions.some(s => {
+    if (!s?.startedAt) return false;
+    const parts = getLocalParts(new Date(s.startedAt), timezone);
+    const localDate = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+    return localDate === todayStr;
+  });
   if (completedToday) {
     console.log(`🔔 POST reminder: today's session already complete — no nudge`);
     return;

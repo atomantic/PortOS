@@ -15,13 +15,13 @@ vi.mock('./eventScheduler.js', () => ({
 
 vi.mock('../lib/timezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
-  getLocalParts: vi.fn()
+  getLocalParts: vi.fn(),
+  todayInTimezone: vi.fn()
 }));
 
 vi.mock('./meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
-  getPostSessions: vi.fn(),
-  computePostStreaks: vi.fn()
+  getPostSessions: vi.fn()
 }));
 
 vi.mock('./notifications.js', () => ({
@@ -31,8 +31,8 @@ vi.mock('./notifications.js', () => ({
 }));
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
-import { getPostConfig, getPostSessions, computePostStreaks } from './meatspacePost.js';
+import { getUserTimezone, getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getPostConfig, getPostSessions } from './meatspacePost.js';
 import { addNotification } from './notifications.js';
 import {
   reminderTimeToCron,
@@ -119,12 +119,15 @@ describe('firePostReminderIfIncomplete', () => {
     vi.clearAllMocks();
     getPostSessions.mockResolvedValue([]);
     getUserTimezone.mockResolvedValue('UTC');
+    todayInTimezone.mockReturnValue('2026-07-01');
+    // Default: getLocalParts on any session's startedAt resolves to "today" —
+    // individual tests override to simulate a specific local day per session.
     getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
   });
 
-  it('sends a notification when the reminder is enabled and today is incomplete', async () => {
+  it('sends a notification when the reminder is enabled and there are no sessions at all', async () => {
     getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
-    computePostStreaks.mockReturnValue({ completedToday: false });
+    getPostSessions.mockResolvedValue([]);
 
     await firePostReminderIfIncomplete();
 
@@ -135,53 +138,78 @@ describe('firePostReminderIfIncomplete', () => {
     });
   });
 
-  it('does not nag once the session is already done today', async () => {
+  it('does not nag once a session has been completed today (by local calendar day)', async () => {
     getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
-    computePostStreaks.mockReturnValue({ completedToday: true });
+    getPostSessions.mockResolvedValue([{ startedAt: '2026-07-01T15:00:00.000Z' }]);
+    getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
 
     await firePostReminderIfIncomplete();
 
     expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('nags when every session on record is from a different local day', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    getPostSessions.mockResolvedValue([{ startedAt: '2026-06-30T15:00:00.000Z' }]);
+    getLocalParts.mockReturnValue({ year: 2026, month: 6, day: 30 }); // yesterday, not today
+
+    await firePostReminderIfIncomplete();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a session missing startedAt rather than crashing', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    getPostSessions.mockResolvedValue([{ date: '2026-07-01' }]); // no startedAt
+
+    await firePostReminderIfIncomplete();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
   });
 
   it('skips entirely if disabled since registration', async () => {
     getPostConfig.mockResolvedValue({ reminder: { enabled: false, time: '09:00' } });
-    computePostStreaks.mockReturnValue({ completedToday: false });
 
     await firePostReminderIfIncomplete();
 
     expect(addNotification).not.toHaveBeenCalled();
+    expect(getPostSessions).not.toHaveBeenCalled();
   });
 
-  // Regression: the reminder cron fires on the user's LOCAL wall-clock time
-  // (registerPostReminderSchedule schedules it with the user's timezone), so
-  // the "is today done" check must use that same local calendar day — not the
-  // raw UTC date. For a negative-UTC-offset timezone (e.g. America/Los_Angeles,
-  // UTC-8), the UTC calendar date rolls over mid-local-evening: a user who
-  // completed their session that morning could otherwise get a false nag once
-  // the UTC date ticks over to "tomorrow" while it's still "today" for them.
-  it("computes 'today' from the reminder's own local timezone, not the raw UTC date", async () => {
+  // Regression (finding 1 + its follow-up): the reminder cron fires on the
+  // user's LOCAL wall-clock time, so "is today done" must be evaluated in
+  // that same local calendar day. Sessions are day-bucketed server-side via
+  // a raw-UTC `session.date` string that does not line up with local
+  // calendar days for non-UTC timezones — so this must NOT compare against
+  // that bucket at all. Instead it derives each session's local day directly
+  // from its precise `startedAt` timestamp, which is correct regardless of
+  // what time of day (relative to either the UTC or local day boundary) the
+  // session actually completed.
+  it("derives 'today' and each session's day from the local timezone, not the raw UTC date/bucket", async () => {
     getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '20:00' } });
     getUserTimezone.mockResolvedValue('America/Los_Angeles');
-    // Local calendar day is still "2026-07-01" even though the underlying UTC
-    // clock may already read "2026-07-02" at this fire time (8pm PDT = 3am UTC).
+    todayInTimezone.mockReturnValue('2026-07-01');
+    // A session with a raw UTC session.date of "2026-07-02" (recorded late in the
+    // local evening, after the UTC date had already rolled over) still resolves to
+    // local day "2026-07-01" via its precise startedAt timestamp + getLocalParts —
+    // proving the check no longer trusts the UTC-dated bucket.
+    getPostSessions.mockResolvedValue([{ date: '2026-07-02', startedAt: '2026-07-02T03:30:00.000Z' }]);
     getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
-    computePostStreaks.mockReturnValue({ completedToday: true });
 
     await firePostReminderIfIncomplete();
 
-    expect(computePostStreaks).toHaveBeenCalledWith(expect.any(Array), '2026-07-01');
-    // Local day already has a completed session — must not nag.
+    expect(getLocalParts).toHaveBeenCalledWith(new Date('2026-07-02T03:30:00.000Z'), 'America/Los_Angeles');
     expect(addNotification).not.toHaveBeenCalled();
   });
 
-  it('zero-pads single-digit month/day into the YYYY-MM-DD string', async () => {
+  it("zero-pads single-digit month/day when comparing a session's local day", async () => {
     getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    todayInTimezone.mockReturnValue('2026-03-05');
+    getPostSessions.mockResolvedValue([{ startedAt: '2026-03-05T12:00:00.000Z' }]);
     getLocalParts.mockReturnValue({ year: 2026, month: 3, day: 5 });
-    computePostStreaks.mockReturnValue({ completedToday: false });
 
     await firePostReminderIfIncomplete();
 
-    expect(computePostStreaks).toHaveBeenCalledWith(expect.any(Array), '2026-03-05');
+    expect(addNotification).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,11 @@ vi.mock('../services/meatspacePost.js', () => ({
 }));
 
 vi.mock('../services/meatspacePostReminder.js', () => ({
-  registerPostReminderSchedule: vi.fn(),
+  // Real implementation is async (always returns a Promise) — the route
+  // chains `.catch()` onto the call, so the mock must resolve rather than
+  // return `undefined` synchronously (clearAllMocks in beforeEach clears call
+  // history, not the configured resolution, so this default is safe to set once).
+  registerPostReminderSchedule: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as postService from '../services/meatspacePost.js';
@@ -50,5 +54,17 @@ describe('PUT /api/meatspace/post/config — reminder rescheduling', () => {
       .send({ adaptive: { enabled: true } });
     expect(r.status).toBe(200);
     expect(registerPostReminderSchedule).not.toHaveBeenCalled();
+  });
+
+  // Regression: a rescheduling failure must not mask a config write that
+  // already succeeded — the client shouldn't be told "save failed" when the
+  // new value was in fact persisted.
+  it('still returns the saved config with a 200 when rescheduling itself throws', async () => {
+    registerPostReminderSchedule.mockRejectedValueOnce(new Error('timezone settings unreadable'));
+    const r = await request(app)
+      .put('/api/meatspace/post/config')
+      .send({ reminder: { enabled: true, time: '09:00' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ reminder: { enabled: true, time: '09:00' } });
   });
 });
