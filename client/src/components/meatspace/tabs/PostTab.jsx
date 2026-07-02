@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader } from 'lucide-react';
 import { getPostConfig, getPostSessions, getPostStats } from '../../../services/api';
 import { usePostSession } from '../../../hooks/usePostSession';
@@ -14,11 +14,12 @@ import MemoryBuilder from '../post/MemoryBuilder';
 import ElementsSong from '../post/ElementsSong';
 import DrillTransition from '../post/DrillTransition';
 import WordplayTrainer from '../post/WordplayTrainer';
-import MorseTrainer from '../post/MorseTrainer';
+import MorseTrainer, { MORSE_MODE_IDS } from '../post/MorseTrainer';
 import { LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES } from '../post/constants';
 
 export default function PostTab({ tab = 'launcher', subtab }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [config, setConfig] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [stats, setStats] = useState(null);
@@ -170,8 +171,23 @@ export default function PostTab({ tab = 'launcher', subtab }) {
       );
     case 'wordplay':
       return <WordplayTrainer config={config} onConfigUpdate={setConfig} onBack={() => navigate('/post/launcher')} />;
-    case 'morse':
-      return <MorseTrainer onBack={() => navigate('/post/launcher')} />;
+    case 'morse': {
+      // The `:mode` sub-route (copy/send) is the source of truth; an unknown
+      // segment degrades to the mode grid instead of a blank panel.
+      const morseMode = MORSE_MODE_IDS.includes(subtab) ? subtab : null;
+      // Preserve the current `?ref=` search param across mode transitions so the
+      // selected reference tab (tree/length/list) survives entering/exiting a
+      // mode — both mode and reference view are deep-linkable, so switching one
+      // must not silently reset the other back to its default.
+      return (
+        <MorseTrainer
+          mode={morseMode}
+          onSelectMode={(id) => navigate(`/post/morse/${id}${location.search}`)}
+          onExitMode={() => navigate(`/post/morse${location.search}`)}
+          onBack={() => navigate('/post/launcher')}
+        />
+      );
+    }
     case 'memory':
       if (subtab === 'elements') {
         return (
