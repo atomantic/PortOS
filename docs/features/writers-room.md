@@ -105,7 +105,7 @@ All under `/api/writers-room` (`server/routes/writersRoom.js`, client wrapper `c
 - **Synced review** — `GET /works/:id/synced-review`
 - **Story bible** — `GET/POST /works/:id/{characters,places,objects}`, `PATCH/DELETE /works/:id/{characters,places,objects}/:entityId`
 
-Route inputs are Zod-validated at the boundary (`server/lib/validation.js`).
+Route inputs are Zod-validated at the boundary (`server/lib/validation.js`), except the scene-image attach route, which validates its fields inside `attachSceneImage` instead.
 
 ## Tests
 
