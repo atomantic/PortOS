@@ -299,6 +299,10 @@ let currentWorkspaceAppId = null;
  */
 export async function snapshotOnRepoSwitch(nextAppId) {
   const target = nextAppId || PORTOS_APP_ID;
+  // The read→update of the tracker is synchronous (no await between them), so
+  // concurrent spawns can't tear it — each call atomically captures its own
+  // `previous` and advances `current`. Only the subsequent file save awaits,
+  // and saveContext already serializes writes through its own single-tail queue.
   const previous = currentWorkspaceAppId;
   currentWorkspaceAppId = target;
   // First switch (no prior workspace) or same repo ⇒ nothing to snapshot.
