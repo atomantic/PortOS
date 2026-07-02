@@ -70,13 +70,16 @@ const drillTypeConfigSchema = z.object({
   // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
   // Bounds match the generator clamps in meatspacePostCognitive.js so the UI /
   // API can't accept a value the generator will silently narrow.
+  // (timeLimitSec above is validated but NOT enforced for these drill types —
+  // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
+  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
+  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
+  // keep their own internal defaults regardless.
   n: z.number().int().min(1).max(3).optional(),
   length: z.number().int().min(6).max(60).optional(),
-  stimulusMs: z.number().int().min(1000).max(5000).optional(),
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(3).max(9).optional(),
-  maxLength: z.number().int().min(3).max(12).optional(),
-  showMs: z.number().int().min(200).max(5000).optional()
+  maxLength: z.number().int().min(3).max(12).optional()
 });
 
 // Task result within a session
