@@ -7,7 +7,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { timeAgo } from '../components/feature-agents/constants';
-import { formatInterval } from '../components/cos/constants';
+import { formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
@@ -234,7 +234,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-200 truncate">{loop.name}</span>
             <StatusBadge loop={loop} />
-            <span className="text-xs text-gray-500">every {formatInterval(loop.intervalMs)}</span>
+            <span className="text-xs text-gray-500">every {formatDurationMs(loop.intervalMs)}</span>
           </div>
           <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-500">
             <span>#{loop.currentIteration || 0} iterations</span>
