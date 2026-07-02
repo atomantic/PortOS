@@ -28,13 +28,14 @@ export default function PromptManager() {
     setSearchParams(p, { replace: true });
   };
   // Selected stage / variable live in the URL (`?stage=` / `?var=`) so the open
-  // record is deep-linkable and reload-safe — the same search-param convention as
-  // the tab above (see useDrawerTab.js).
+  // record is deep-linkable and reload-safe. Unlike the `tab` param above (a view
+  // toggle that uses replace), record selection is a PUSH so Back returns to the
+  // previously-open record — matching Authors/Music/Sharing.
   const setParam = (key, val) => {
     const p = new URLSearchParams(searchParams);
     if (val == null || val === '') p.delete(key);
     else p.set(key, val);
-    setSearchParams(p, { replace: true });
+    setSearchParams(p);
   };
   const selectedStage = searchParams.get('stage');
   const selectedVar = searchParams.get('var');

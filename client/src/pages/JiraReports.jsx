@@ -161,7 +161,8 @@ export default function JiraReports() {
     const p = new URLSearchParams(searchParams);
     p.set('reportApp', appId);
     p.set('reportDate', date);
-    setSearchParams(p, { replace: true });
+    // Push (not replace) so Back returns to the previously-open report.
+    setSearchParams(p);
   };
 
   const loadApps = async () => {
