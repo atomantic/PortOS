@@ -202,7 +202,6 @@ export const fillPostDrillCache = (types, providerId, model) => request('/meatsp
 
 // MeatSpace - POST Memory Builder
 export const getMemoryItems = () => request('/meatspace/post/memory-items');
-export const getDueMemoryItems = () => request('/meatspace/post/memory-items/due');
 export const getMemoryItem = (id) => request(`/meatspace/post/memory-items/${id}`);
 export const createMemoryItem = (data) => request('/meatspace/post/memory-items', {
   method: 'POST',
