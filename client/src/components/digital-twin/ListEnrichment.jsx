@@ -191,7 +191,7 @@ export default function ListEnrichment({
               {items.length > 1 && (
                 <button
                   onClick={() => removeItem(index)}
-                  className="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-red-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                   title="Remove"
                 >
                   <X size={16} />

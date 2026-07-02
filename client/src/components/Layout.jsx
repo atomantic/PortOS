@@ -344,7 +344,7 @@ function PinButton({ label, pinned, onTogglePin }) {
       type="button"
       aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-      className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+      className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100'}`}
     >
       {pinned ? <PinOff size={14} /> : <Pin size={14} />}
     </button>

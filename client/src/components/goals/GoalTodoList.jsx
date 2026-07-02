@@ -46,7 +46,7 @@ export default function GoalTodoList({
               )}
               <button
                 onClick={() => requestDelete(todo.id)}
-                className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
+                className="p-0.5 text-gray-700 hover:text-red-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 shrink-0"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />

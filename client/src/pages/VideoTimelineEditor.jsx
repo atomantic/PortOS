@@ -86,7 +86,7 @@ function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSele
         type="button"
         onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-port-error rounded opacity-0 group-hover:opacity-100 transition-opacity text-white"
+        className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-port-error rounded opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white"
         title="Remove from timeline"
       >
         <X className="w-3 h-3" />
