@@ -144,6 +144,11 @@ describe('fetchPublicText', () => {
     expect(await fetchPublicText('https://example.com/feed.rss')).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('returns null (no throw) on a malformed redirect Location', async () => {
+    fetchMock.mockResolvedValueOnce(res({ status: 301, headers: { location: 'http://[bad' } }));
+    expect(await fetchPublicText('https://example.com/feed.rss')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {

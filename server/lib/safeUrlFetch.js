@@ -195,7 +195,11 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
   if (res && res.status >= 300 && res.status < 400) {
     const location = res.headers.get('location');
     if (!location) return null;
-    const redirectUrl = new URL(location, url).href;
+    // A malformed Location must fail closed to null (not throw) so the
+    // throwOnUnsafe:false contract holds for the redirect hop too — same
+    // guarded-parse pattern as isSafeIngestUrl.
+    let redirectUrl;
+    try { redirectUrl = new URL(location, url).href; } catch { return null; }
     const hop = await resolvePublicHttpUrl(redirectUrl, { blockPrivate });
     if (!hop.safe) return null;
     return pinnedFetch(redirectUrl, hop, { redirect: 'error', headers }, timeoutMs);
