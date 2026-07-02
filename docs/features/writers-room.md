@@ -47,7 +47,7 @@ Each draft version records `id`, `label`, `contentFile`, `contentHash`, `wordCou
 | `places` | `writers-room-places.md` | Place extraction |
 | `objects` | `writers-room-objects.md` | Object extraction |
 
-(Two more stages back the live features: `writers-room-continue.md` and `writers-room-cd-bridge.md`.) Outputs are JSON-first and schema-validated before persistence. Client: `AnalysisHistory.jsx`. Scene images can be attached to script-analysis scenes (`POST .../analysis/:analysisId/scene-image`) and persist into the work's media collection.
+(Two more stages back the live features: `writers-room-continue.md` and `writers-room-cd-bridge.md`.) Most kinds parse the model's JSON response and filter it to the expected fields before persistence; `format` is deliberately non-JSON and persists a shaped Markdown response. Client: `AnalysisHistory.jsx`. Scene images can be attached to script-analysis scenes (`POST .../analysis/:analysisId/scene-image`) and persist into the work's media collection.
 
 ## Story Bible
 
