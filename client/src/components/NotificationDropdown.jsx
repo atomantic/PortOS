@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 
 const NOTIFICATION_TYPE_CONFIG = {
@@ -33,6 +33,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: AlertTriangle,
     color: 'text-yellow-400',
     bgColor: 'bg-yellow-500/20'
+  },
+  daily_post_reminder: {
+    icon: BellRing,
+    color: 'text-cyan-400',
+    bgColor: 'bg-cyan-500/20'
   }
 };
 

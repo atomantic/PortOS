@@ -27,6 +27,7 @@ import * as memoryService from '../services/meatspacePostMemory.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
 import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
+import { registerPostReminderSchedule } from '../services/meatspacePostReminder.js';
 
 const router = Router();
 
@@ -50,6 +51,14 @@ router.get('/post/config', asyncHandler(async (req, res) => {
 router.put('/post/config', asyncHandler(async (req, res) => {
   const data = validateRequest(postConfigUpdateSchema, req.body);
   const config = await postService.updatePostConfig(data);
+  // Reschedule the daily reminder immediately (no restart needed) whenever
+  // its enabled/time fields change — see meatspacePostReminder.js. The config
+  // write above already succeeded, so a rescheduling failure (e.g. timezone
+  // settings unreadable) must not surface as a save error to the client —
+  // log and swallow it, mirroring the boot-time registration's own handling.
+  if (data.reminder) {
+    await registerPostReminderSchedule().catch(err => console.error(`❌ POST reminder reschedule failed: ${err.message}`));
+  }
   res.json(config);
 }));
 
