@@ -100,7 +100,15 @@ export function applyProjectPatch(project, patch) {
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
   if (!trackChanged) return touch(project, patch);
   const scenes = (project.scenes || []).map((s) => (s.beatAligned ? { ...s, beatAligned: false } : s));
-  return touch(project, { ...patch, audioAnalysis: null, scenes });
+  // Clearing audioAnalysis means the project must be re-analyzed before it can be
+  // planned/arranged/rendered, so a status that implies analysis existed
+  // (`analyzed`/`ready`/`rendering`/`complete`) is now stale. Regress it to `draft` —
+  // the inverse of setAudioAnalysis's draft→analyzed flip — unless the caller set an
+  // explicit status in this same patch. `draft`/`failed` already imply no usable
+  // analysis, so leave those untouched.
+  const regressStatus = !patch.status && !['draft', 'failed'].includes(project.status);
+  const statusPatch = regressStatus ? { status: 'draft' } : {};
+  return touch(project, { ...patch, ...statusPatch, audioAnalysis: null, scenes });
 }
 
 /**

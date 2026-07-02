@@ -77,6 +77,10 @@ const MORSE_DRILL_TYPES = ['morse-copy', 'morse-head-copy', 'morse-send'];
 
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
+  // Memory drills: the target memory item to drill (falls back to lowest-mastery
+  // item when absent). The /post/drill route threads config.memoryItemId into
+  // generateMemoryDrill, so it must survive validation rather than being stripped.
+  memoryItemId: z.string().optional(),
   steps: z.number().int().min(1).max(50).optional(),
   subtrahend: z.number().int().min(1).max(100).optional(),
   startValue: z.number().int().min(1).optional(),

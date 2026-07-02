@@ -155,7 +155,10 @@ function isCacheCold(type) {
 export function triggerReplenish(type, providerId, model) {
   if (!CACHEABLE_TYPES.includes(type)) return;
   if (isCacheCold(type)) return;
-  replenishType(type, providerId, model);
+  // Fire-and-forget, but guard the returned promise like requestCacheFill does —
+  // replenishType's inner saveCache() can reject on a disk-write failure, which
+  // would otherwise surface as an unhandled rejection.
+  replenishType(type, providerId, model).catch(err => console.error(`❌ POST cache: triggerReplenish failed: ${err.message}`));
   debouncedSave();
 }
 
