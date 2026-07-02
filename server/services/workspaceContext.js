@@ -276,5 +276,56 @@ export async function listContexts() {
   });
 }
 
+// In-memory tracker of the app id CoS (or the user, via workspace_switch) most
+// recently began working in — the single "current workspace" notion in this
+// single-user install. Intentionally NOT persisted: it models "where work is
+// happening right now," which resets on restart, not durable state.
+let currentWorkspaceAppId = null;
+
+/**
+ * Auto-snapshot hook for workspace/repo switches (#2035). When work moves to a
+ * DIFFERENT app/repo than the one we were last in — a CoS coding-agent dispatch,
+ * or a user `workspace_switch` — save a silent snapshot of the previous
+ * ("current") app's workspace context first, so it can later be restored.
+ *
+ * Snapshot-only: it NEVER restores (restoring stays an explicit user action) and
+ * makes NO LLM calls. Defensive by design — a missing/absent current workspace
+ * (first switch) or a switch to the same repo is a no-op, not a throw; a failed
+ * save is swallowed so it can't break the caller's dispatch/switch.
+ *
+ * @param {string|null} nextAppId - target app id (null ⇒ PortOS self)
+ * @returns {Promise<object|null>} the saved snapshot record, or null when nothing
+ *   was snapshotted (no prior workspace, same repo, or save failed).
+ */
+export async function snapshotOnRepoSwitch(nextAppId) {
+  const target = nextAppId || PORTOS_APP_ID;
+  // The read→update of the tracker is synchronous (no await between them), so
+  // concurrent spawns can't tear it — each call atomically captures its own
+  // `previous` and advances `current`. Only the subsequent file save awaits,
+  // and saveContext already serializes writes through its own single-tail queue.
+  const previous = currentWorkspaceAppId;
+  currentWorkspaceAppId = target;
+  // First switch (no prior workspace) or same repo ⇒ nothing to snapshot.
+  if (!previous || previous === target) return null;
+  const saved = await saveContext(previous).catch((err) => {
+    console.warn(`⚠️ Workspace auto-snapshot for ${previous} failed: ${err?.message || err}`);
+    return null;
+  });
+  if (saved) {
+    console.log(`🗂️ Auto-snapshotted workspace context for ${previous} (switched to ${target})`);
+  }
+  return saved;
+}
+
+/** Read the current in-memory workspace tracker (exported for tests). */
+export function getCurrentWorkspaceAppId() {
+  return currentWorkspaceAppId;
+}
+
+/** Reset the in-memory workspace tracker — exported for unit tests. */
+export function __resetWorkspaceTracker() {
+  currentWorkspaceAppId = null;
+}
+
 // Exported for unit tests — pure helpers with no I/O.
 export const __test = { tasksForApp, shellSessionsForRepo };

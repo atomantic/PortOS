@@ -212,3 +212,37 @@ describe('listContexts', () => {
     expect(portos.savedAt).toBeNull();
   });
 });
+
+describe('snapshotOnRepoSwitch (#2035 auto-save hook)', () => {
+  beforeEach(() => wc.__resetWorkspaceTracker());
+
+  it('is a no-op on the first switch (no prior workspace to snapshot)', async () => {
+    const saved = await wc.snapshotOnRepoSwitch('app-1');
+    expect(saved).toBeNull();
+    expect(await wc.getSavedContext('app-1')).toBeNull();
+    expect(wc.getCurrentWorkspaceAppId()).toBe('app-1');
+  });
+
+  it('snapshots the previous ("current") workspace when switching to a different repo', async () => {
+    await wc.snapshotOnRepoSwitch('app-1');          // no-op, sets current = app-1
+    const saved = await wc.snapshotOnRepoSwitch('portos-default'); // snapshots app-1
+    expect(saved).toBeTruthy();
+    expect(saved.appId).toBe('app-1');
+    expect(await wc.getSavedContext('app-1')).toBeTruthy();
+    expect(wc.getCurrentWorkspaceAppId()).toBe('portos-default');
+  });
+
+  it('does NOT snapshot when the target repo is unchanged', async () => {
+    await wc.snapshotOnRepoSwitch('app-1');
+    const saved = await wc.snapshotOnRepoSwitch('app-1');
+    expect(saved).toBeNull();
+    expect(await wc.getSavedContext('app-1')).toBeNull();
+  });
+
+  it('normalizes a null target to the PortOS app (CoS self dispatch)', async () => {
+    await wc.snapshotOnRepoSwitch('app-1');
+    const saved = await wc.snapshotOnRepoSwitch(null); // → portos-default, snapshots app-1
+    expect(saved?.appId).toBe('app-1');
+    expect(wc.getCurrentWorkspaceAppId()).toBe('portos-default');
+  });
+});

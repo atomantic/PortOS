@@ -42,6 +42,22 @@ vi.mock('../services/catalogDB.js', () => ({
   })),
   listRefsForIngredient: vi.fn(async () => [{ ingredientId: 'character-1', refKind: 'universe', refId: 'u1', role: 'cast' }]),
 }));
+vi.mock('../services/apps.js', () => ({
+  getActiveApps: vi.fn(async () => [{ id: 'bookloom', name: 'BookLoom' }]),
+  PORTOS_APP_ID: 'portos-default',
+}));
+vi.mock('../lib/appResolver.js', () => ({
+  resolveAppByPhrase: vi.fn((phrase, apps) =>
+    (apps || []).find((a) => a.name.toLowerCase().includes(String(phrase).toLowerCase())) || null,
+  ),
+}));
+vi.mock('../services/workspaceContext.js', () => ({
+  snapshotOnRepoSwitch: vi.fn(async () => ({ appId: 'portos-default' })),
+  restoreContext: vi.fn(async () => ({
+    saved: { branch: 'main' },
+    restorable: { shellSessions: [{ sessionId: 's1' }, { sessionId: 's2' }], missingShellSessionIds: [], branchMatches: true },
+  })),
+}));
 vi.mock('../services/askService.js', () => ({
   VALID_MODES: new Set(['ask', 'advise', 'draft']),
   runAsk: vi.fn(async function* () {
@@ -107,6 +123,17 @@ describe('GET /api/palette/manifest', () => {
     expect(ids).toContain('weather_now');
     expect(ids).toContain('timer_set');
     expect(ids).toContain('meatspace_log_workout');
+  });
+
+  it('exposes workspace_switch with its description + workspace param hydrated from the voice tool', async () => {
+    const res = await request(makeApp()).get('/api/palette/manifest');
+    const action = res.body.actions.find((a) => a.id === 'workspace_switch');
+    expect(action).toBeTruthy();
+    expect(action.section).toBe('Workspace');
+    expect(action.label).toMatch(/switch workspace/i);
+    // Description/params hydrate from the voice tool registry (DRY link).
+    expect(action.description).toMatch(/workspace|project/i);
+    expect(action.parameters?.properties?.workspace).toBeTruthy();
   });
 
   it('keeps ui_describe_visually OFF the palette (no screenshot context)', async () => {
@@ -175,6 +202,27 @@ describe('POST /api/palette/action/:id', () => {
     const hit = res.body.result.results[0];
     expect(hit).toMatchObject({ id: 'character-1', type: 'character', name: 'Mira', refsCount: 1 });
     expect(hit.snippet).toMatch(/tall stoic ranger/);
+  });
+
+  it('dispatches workspace_switch — snapshots the leaving workspace then restores the target', async () => {
+    const res = await request(makeApp())
+      .post('/api/palette/action/workspace_switch')
+      .send({ args: { workspace: 'BookLoom' } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.result.workspace).toBe('bookloom');
+    expect(res.body.result.reattachable).toBe(2);
+    expect(res.body.result.snapshotted).toBe('portos-default');
+    expect(res.body.result.summary).toMatch(/Switched to BookLoom/);
+  });
+
+  it('workspace_switch reports an unknown workspace instead of throwing', async () => {
+    const res = await request(makeApp())
+      .post('/api/palette/action/workspace_switch')
+      .send({ args: { workspace: 'nonexistent-app' } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.result.summary).toMatch(/don't see a project/i);
   });
 
   it('dispatches ui_ask through the palette and returns the answer + sources', async () => {
