@@ -6,6 +6,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatContextLength, timeAgo, recommendedRamGb } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   getLocalLlmStatus, getLocalLlmCatalog, getLocalLlmHuggingFaceSearch, installLocalLlmModel,
   deleteLocalLlmModel, switchLocalLlmBackend, migrateLocalLlmBackend, installLocalLlmBackend, upgradeLocalLlmBackend, controlOllamaService,
@@ -275,7 +276,7 @@ export function LocalLlmTab() {
   const [confirmAction, setConfirmAction] = useState(null);
   // id of the installed model awaiting a delete confirmation (two-step inline
   // confirm — deleting weights is an irreversible multi-GB rm -rf / DELETE).
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [compareTargets, setCompareTargets] = useState([]);
   const progressTimer = useRef(null);
   const statusRequestId = useRef(0);
@@ -985,24 +986,24 @@ export function LocalLlmTab() {
               {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}
               <Link
                 to={`/local-llm/playground?backend=${encodeURIComponent(selected)}&model=${encodeURIComponent(m.id)}`}
-                className="px-2.5 py-1 text-xs bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 rounded flex items-center gap-1 shrink-0 no-underline"
+                className="px-2.5 py-1 text-xs bg-port-accent-2/15 hover:bg-port-accent-2/25 text-port-accent-2 rounded flex items-center gap-1 shrink-0 no-underline"
                 title={`Chat with ${m.name || m.id}`}
               >
                 <FlaskConical size={12} />
                 Chat
               </Link>
-              {confirmDeleteId === m.id ? (
+              {isConfirmingDelete(m.id) ? (
                 <ConfirmButtonPair
                   prompt="Delete?"
                   confirmIcon={Trash2}
                   busy={busy}
                   className="shrink-0"
-                  onConfirm={() => { setConfirmDeleteId(null); remove(m.id); }}
-                  onCancel={() => setConfirmDeleteId(null)}
+                  onConfirm={() => confirmDelete(() => remove(m.id))}
+                  onCancel={cancelDelete}
                 />
               ) : (
                 <button
-                  onClick={() => setConfirmDeleteId(m.id)}
+                  onClick={() => requestDelete(m.id)}
                   disabled={busy}
                   className="px-2.5 py-1 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded disabled:opacity-50 flex items-center gap-1 shrink-0"
                   aria-label={`Delete ${m.name}`}

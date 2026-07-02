@@ -2,9 +2,16 @@
 import { readdir, readFile, writeFile, mkdir, rename } from 'fs/promises';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_ROOT_DIR = join(__dirname, '..');
+// Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
+// so a process booted from inside a CoS agent git worktree still resolves to
+// the real install (#1947). resolveInstallRoot refuses the pin when the derived
+// path is itself a worktree, so a worktree launch falls through to its own path
+// and the isWorktreeRoot backstop below skips. Falls back to the derived path
+// when the env var is unset.
+const DEFAULT_ROOT_DIR = resolveInstallRoot(join(__dirname, '..'));
 const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'migrations');
 
 const appliedFilePath = (rootDir) => join(rootDir, 'data', 'migrations.applied.json');
@@ -82,6 +89,16 @@ export async function runMigrations({
   rootDir = DEFAULT_ROOT_DIR,
   migrationsDir = DEFAULT_MIGRATIONS_DIR,
 } = {}) {
+  // Backstop for #1947: a process booted from inside a CoS agent git worktree
+  // (data/cos/worktrees/agent-*) has no gitignored data/ runtime tree, so
+  // migrations that read/write data/ or data.reference/ crash on ENOENT. A
+  // worktree checkout has no business running its own migration pass — skip it
+  // with a clear warning instead of crashing boot.
+  if (isWorktreeRoot(rootDir)) {
+    console.warn(`⚠️ Skipping migrations: rootDir is a CoS agent worktree checkout (${rootDir}) — no data/ tree to migrate`);
+    return 0;
+  }
+
   const appliedFile = appliedFilePath(rootDir);
 
   // Ensure data/ exists so we can persist applied state (migrationsDir

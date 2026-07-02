@@ -7,10 +7,9 @@
  * Stories are stored as part of the digital twin data.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES, exists as notificationExists } from './notifications.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
@@ -175,7 +174,7 @@ async function loadStories() {
 
 async function saveStories(data) {
   await ensureDir(DATA_DIR);
-  await writeFile(STORIES_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(STORIES_FILE, data);
 }
 
 async function loadConfig() {
@@ -185,7 +184,7 @@ async function loadConfig() {
 
 async function saveConfig(config) {
   await ensureDir(DATA_DIR);
-  await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+  await atomicWrite(CONFIG_FILE, config);
 }
 
 /**

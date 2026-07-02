@@ -2,7 +2,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { spawn } from 'child_process';
-import { ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
 // Inline CORS middleware snippet for generated projects (no cors package dependency)
@@ -80,7 +80,7 @@ app.listen(PORT, '0.0.0.0', () => {
     pkg.scripts['dev:all'] = 'concurrently "npm run dev" "npm run server"';
     pkg.devDependencies = pkg.devDependencies || {};
     pkg.devDependencies.concurrently = '^8.2.2';
-    await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
+    await atomicWrite(pkgPath, pkg);
 
     addStep('Add Express server', 'done');
   }

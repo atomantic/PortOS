@@ -7,7 +7,7 @@
 
 export const renderRuns = (runs, added) =>
   runs.map((run, i) => (run.changed ? (
-    <span key={i} className={added ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}>
+    <span key={i} className={added ? 'bg-port-success/20 text-port-success' : 'bg-port-error/20 text-port-error'}>
       {run.text}
     </span>
   ) : (

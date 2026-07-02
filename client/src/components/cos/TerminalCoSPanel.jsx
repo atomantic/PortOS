@@ -66,12 +66,22 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
 
   const ascii = terminalAscii[state] || terminalAscii.sleeping;
 
+  // Muted/secondary terminal text is a blend of the theme's --port-terminal-text
+  // into --port-terminal-bg (via opacity) rather than a fixed gray, so it stays
+  // legible whether the active theme's terminal surface is dark or light. Each
+  // tier is written as a full literal class string (not built via concatenation)
+  // so Tailwind's source scanner can find and generate it.
+  const termText = 'text-[var(--port-terminal-text)]';
+  const termTextDim = 'text-[var(--port-terminal-text)]/75';
+  const termTextMuted = 'text-[var(--port-terminal-text)]/55';
+  const termTextFaint = 'text-[var(--port-terminal-text)]/40';
+
   const levelColors = {
-    info: 'text-cyan-400',
-    warn: 'text-yellow-400',
-    error: 'text-red-400',
-    success: 'text-green-400',
-    debug: 'text-gray-500'
+    info: 'text-port-accent',
+    warn: 'text-port-warning',
+    error: 'text-port-error',
+    success: 'text-port-success',
+    debug: termTextMuted
   };
 
   const levelPrefixes = {
@@ -83,7 +93,11 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
   };
 
   return (
-    <div className="relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[#0d1117] border-b lg:border-b-0 lg:border-r border-gray-700/50 shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none">
+    // Background + foreground are re-themed together onto the dedicated
+    // --port-terminal-bg/--port-terminal-text tokens (tuned per-theme in
+    // portosThemes.js) so the panel stays readable in light day themes
+    // instead of rendering light-on-light. See #1909.
+    <div className={`relative flex flex-col p-3 lg:p-4 font-mono text-sm bg-[var(--port-terminal-bg)] ${termText} border-b lg:border-b-0 lg:border-r border-port-border shrink-0 lg:h-full overflow-hidden lg:overflow-y-auto scrollbar-hide max-h-[50vh] lg:max-h-none`}>
       {/* Scanline effect */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.02]"
@@ -93,17 +107,17 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
       />
 
       {/* Terminal header */}
-      <div className="flex items-center gap-3 mb-2 lg:mb-4 pb-2 border-b border-gray-700/50">
+      <div className="flex items-center gap-3 mb-2 lg:mb-4 pb-2 border-b border-port-border">
         <div className="flex gap-1.5">
-          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-red-500/80"></span>
-          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-yellow-500/80"></span>
-          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-green-500/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-port-error/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-port-warning/80"></span>
+          <span className="w-2.5 h-2.5 lg:w-3 lg:h-3 rounded-full bg-port-success/80"></span>
         </div>
-        <span className="text-gray-500 text-xs">cos-terminal</span>
+        <span className={`${termTextMuted} text-xs`}>cos-terminal</span>
         {/* Mobile-only status indicator */}
         <div className="flex items-center gap-2 ml-auto lg:hidden">
-          <span className={`w-2 h-2 rounded-full ${running ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}></span>
-          <span className={`text-xs ${running ? 'text-green-400' : 'text-gray-500'}`}>
+          <span className={`w-2 h-2 rounded-full ${running ? 'bg-port-success animate-pulse' : 'bg-[var(--port-terminal-text)]/30'}`}></span>
+          <span className={`text-xs ${running ? 'text-port-success' : termTextMuted}`}>
             {running ? 'ACTIVE' : 'IDLE'}
           </span>
         </div>
@@ -124,16 +138,16 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
           ))}
         </div>
         <div className="flex flex-col text-xs pt-0 lg:pt-1 flex-1 min-w-0">
-          <span className="text-white font-bold text-xs lg:text-sm">CoS Agent v1.0</span>
-          <span className="text-gray-400 truncate">PortOS · {stateConfig.label}</span>
-          <span className="text-gray-500 hidden lg:block">~/portos/cos</span>
+          <span className={`${termText} font-bold text-xs lg:text-sm`}>CoS Agent v1.0</span>
+          <span className={`${termTextDim} truncate`}>PortOS · {stateConfig.label}</span>
+          <span className={`${termTextMuted} hidden lg:block`}>~/portos/cos</span>
         </div>
         {/* Mobile control buttons */}
         <div className="flex lg:hidden gap-2 shrink-0">
           {running ? (
             <button
               onClick={onStop}
-              className="flex items-center gap-1 px-2 py-1 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded border border-red-700/50 text-xs transition-colors"
+              className="flex items-center gap-1 px-2 py-1 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded border border-port-error/40 text-xs transition-colors"
               aria-label="Stop CoS agent"
             >
               <Square size={10} aria-hidden="true" />
@@ -142,7 +156,7 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
           ) : (
             <button
               onClick={onStart}
-              className="flex items-center gap-1 px-2 py-1 bg-green-900/30 hover:bg-green-900/50 text-green-400 rounded border border-green-700/50 text-xs transition-colors"
+              className="flex items-center gap-1 px-2 py-1 bg-port-success/20 hover:bg-port-success/30 text-port-success rounded border border-port-success/40 text-xs transition-colors"
               aria-label="Start CoS agent"
             >
               <Play size={10} aria-hidden="true" />
@@ -154,47 +168,47 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
 
       {/* Status line - desktop only */}
       <div className="hidden lg:flex items-center gap-2 mb-3 text-xs">
-        <span className={`w-2 h-2 rounded-full ${running ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`}></span>
-        <span className={running ? 'text-green-400' : 'text-gray-500'}>
+        <span className={`w-2 h-2 rounded-full ${running ? 'bg-port-success animate-pulse' : 'bg-[var(--port-terminal-text)]/30'}`}></span>
+        <span className={running ? 'text-port-success' : termTextMuted}>
           {running ? 'ACTIVE' : 'IDLE'}
         </span>
-        <span className="text-gray-600">│</span>
-        <span className="text-gray-400">{stateConfig.icon}</span>
+        <span className={termTextFaint}>│</span>
+        <span className={termTextDim}>{stateConfig.icon}</span>
       </div>
 
       {/* Message bubble as terminal output - compact two-line layout */}
-      <div className="mb-1 lg:mb-2 px-2 py-1 bg-gray-800/50 rounded border-l-2 border-cyan-500/50 text-xs">
+      <div className="mb-1 lg:mb-2 px-2 py-1 bg-[var(--port-terminal-text)]/10 rounded border-l-2 border-port-accent/50 text-xs">
         <div className="flex items-center gap-1">
-          <span className="text-cyan-400">$</span>
-          <span className="text-gray-300 truncate">{statusMessage}</span>
+          <span className="text-port-accent">$</span>
+          <span className={`${termTextDim} truncate`}>{statusMessage}</span>
         </div>
       </div>
 
       {/* Stats as terminal output - desktop only */}
       {stats && (
         <div className="hidden lg:block mb-4 text-xs space-y-1">
-          <div className="text-gray-500">┌─ stats ──────────────────┐</div>
-          <div className="text-gray-400 pl-2">│ tasks_completed: <span className="text-green-400">{stats.tasksCompleted || 0}</span></div>
-          <div className="text-gray-400 pl-2">│ agents_spawned:  <span className="text-cyan-400">{stats.agentsSpawned || 0}</span></div>
-          <div className="text-gray-400 pl-2">│ errors:          <span className="text-red-400">{stats.errors || 0}</span></div>
-          <div className="text-gray-500">└──────────────────────────┘</div>
+          <div className={termTextMuted}>┌─ stats ──────────────────┐</div>
+          <div className={`${termTextDim} pl-2`}>│ tasks_completed: <span className="text-port-success">{stats.tasksCompleted || 0}</span></div>
+          <div className={`${termTextDim} pl-2`}>│ agents_spawned:  <span className="text-port-accent">{stats.agentsSpawned || 0}</span></div>
+          <div className={`${termTextDim} pl-2`}>│ errors:          <span className="text-port-error">{stats.errors || 0}</span></div>
+          <div className={termTextMuted}>└──────────────────────────┘</div>
         </div>
       )}
 
       {/* Event logs as terminal output - desktop only */}
       <div className="hidden lg:flex flex-1 min-w-0 mb-4 flex-col min-h-0">
-        <div className="text-gray-500 text-xs mb-1">// event_log</div>
-        <div className="flex-1 min-w-0 bg-black/30 rounded p-2 overflow-y-auto scrollbar-hide">
+        <div className={`${termTextMuted} text-xs mb-1`}>// event_log</div>
+        <div className="flex-1 min-w-0 bg-[var(--port-terminal-text)]/5 rounded p-2 overflow-y-auto scrollbar-hide">
           {(!eventLogs || eventLogs.length === 0) ? (
-            <div className="text-gray-600 text-xs">waiting for events...</div>
+            <div className={`${termTextFaint} text-xs`}>waiting for events...</div>
           ) : (
             eventLogs.slice(-20).reverse().map((log, i) => (
-              <div key={i} className={`text-xs break-all ${levelColors[log.level] || 'text-gray-400'} leading-relaxed`}>
-                <span className="text-gray-600">{new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false })}</span>
+              <div key={i} className={`text-xs break-all ${levelColors[log.level] || termTextDim} leading-relaxed`}>
+                <span className={termTextFaint}>{new Date(log.timestamp).toLocaleTimeString('en-US', { hour12: false })}</span>
                 {' '}
                 <span className={levelColors[log.level]}>{levelPrefixes[log.level] || '[LOG]'}</span>
                 {' '}
-                <span className="text-gray-300">{log.message}</span>
+                <span className={termTextDim}>{log.message}</span>
               </div>
             ))
           )}
@@ -202,12 +216,12 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
       </div>
 
       {/* Control buttons as terminal commands - desktop only */}
-      <div className="hidden lg:block mt-auto pt-3 border-t border-gray-700/50">
+      <div className="hidden lg:block mt-auto pt-3 border-t border-port-border">
         <div className="flex gap-2">
           {running ? (
             <button
               onClick={onStop}
-              className="flex items-center gap-2 px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 rounded border border-red-700/50 text-xs transition-colors"
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded border border-port-error/40 text-xs transition-colors"
               aria-label="Stop CoS agent"
             >
               <Square size={12} aria-hidden="true" />
@@ -216,7 +230,7 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
           ) : (
             <button
               onClick={onStart}
-              className="flex items-center gap-2 px-3 py-1.5 bg-green-900/30 hover:bg-green-900/50 text-green-400 rounded border border-green-700/50 text-xs transition-colors"
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-success/20 hover:bg-port-success/30 text-port-success rounded border border-port-success/40 text-xs transition-colors"
               aria-label="Start CoS agent"
             >
               <Play size={12} aria-hidden="true" />
@@ -224,9 +238,9 @@ export default function TerminalCoSPanel({ state, speaking, statusMessage, event
             </button>
           )}
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs ${
-            running ? 'text-green-400 bg-green-900/20' : 'text-gray-500 bg-gray-800/50'
+            running ? 'text-port-success bg-port-success/20' : `${termTextMuted} bg-[var(--port-terminal-text)]/10`
           }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-green-400' : 'bg-gray-600'}`}></span>
+            <span className={`w-1.5 h-1.5 rounded-full ${running ? 'bg-port-success' : 'bg-[var(--port-terminal-text)]/30'}`}></span>
             {running ? 'running' : 'stopped'}
           </div>
         </div>

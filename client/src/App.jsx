@@ -34,6 +34,7 @@ const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
+const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
@@ -206,6 +207,7 @@ export default function App() {
           <Route path="devtools/runner" element={<RunnerPage />} />
           <Route path="devtools/submodules" element={<Submodules />} />
           <Route path="devtools/usage" element={<UsagePage />} />
+          <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
           <Route path="devtools/processes" element={<ProcessesPage />} />
           <Route path="devtools/agents" element={<AgentsPage />} />
           <Route path="ai" element={<AIProviders />} />
@@ -276,6 +278,7 @@ export default function App() {
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
             <Route path="music-video" element={<MusicVideo />} />
+            <Route path="music-video/:projectId" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />

@@ -36,7 +36,7 @@ import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatDateTime } from '../utils/formatters';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -1141,15 +1141,15 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) 
           missing
         </span>
       )}
-      <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute top-1 right-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {!isPortrait && isImage && (
           <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait"
-            className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
+            className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
             <Star size={12} aria-hidden="true" />
           </button>
         )}
         <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach"
-          className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
+          className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
           <X size={12} aria-hidden="true" />
         </button>
       </div>
@@ -1188,11 +1188,11 @@ function GalleryPickerModal({ onClose, onPick }) {
                 <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
                   <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
                     className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
                     <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
                   </div>
                 </div>
               ))}
@@ -1216,7 +1216,7 @@ function SourcesPanel({ sources }) {
           {list.map((s, i) => (
             <li key={s.scrapId || i} className="text-xs text-gray-300 flex items-center justify-between gap-2">
               <span className="font-mono truncate" title={s.scrapId}>{s.scrapId}</span>
-              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{new Date(s.extractedAt).toLocaleString()}</span>}
+              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
             </li>
           ))}
         </ul>
@@ -1269,7 +1269,7 @@ function RefsPanel({ refsByKind }) {
 
 const SOURCE_BADGE = {
   user:    'bg-port-accent/20 text-port-accent border-port-accent/40',
-  extract: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  extract: 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40',
   refine:  'bg-port-warning/20 text-port-warning border-port-warning/40',
   sync:    'bg-port-success/20 text-port-success border-port-success/40',
 };

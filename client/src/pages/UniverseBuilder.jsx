@@ -16,6 +16,7 @@ import {
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { formatDateTime } from '../utils/formatters';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
   generateCategoryVariations, promoteVariationToCanon, autoSortBuckets,
@@ -1694,8 +1695,8 @@ export default function UniverseBuilder() {
                 onClick={handleDelete}
                 className={`px-3 py-2 rounded flex items-center gap-2 min-h-[40px] ${
                   pendingDeleteId === selectedId
-                    ? 'bg-red-700 hover:bg-red-600 text-white'
-                    : 'bg-red-900/30 hover:bg-red-900/50 text-red-300'
+                    ? 'bg-port-error hover:bg-port-error/80 text-white'
+                    : 'bg-port-error/30 hover:bg-port-error/50 text-port-error'
                 }`}
                 title="Delete world"
               >
@@ -2276,7 +2277,7 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
                     </button>
                     <button
                       onClick={() => removeAt(idx)}
-                      className="p-1 text-gray-400 hover:text-red-400 rounded"
+                      className="p-1 text-gray-400 hover:text-port-error rounded"
                       title="Remove"
                     >
                       <X size={14} />
@@ -2576,7 +2577,7 @@ export function CategoryEditor({
           {canRemove && (
             <button
               onClick={onRemove}
-              className="p-1 text-gray-400 hover:text-red-400 rounded"
+              className="p-1 text-gray-400 hover:text-port-error rounded"
               title="Remove category"
             >
               <Trash2 size={14} />
@@ -2827,7 +2828,7 @@ function VariationCard({
       </button>
       <button
         onClick={remove}
-        className="p-1 text-gray-400 hover:text-red-400 rounded"
+        className="p-1 text-gray-400 hover:text-port-error rounded"
         title="Remove"
       >
         <X size={14} />
@@ -2908,7 +2909,7 @@ function BibleTab({
           <button
             onClick={handleExpand}
             disabled={expanding || saving || !draft.starterPrompt?.trim()}
-            className="px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 disabled:opacity-50 text-purple-200 border border-purple-600/40 rounded flex items-center gap-2 min-h-[40px]"
+            className="px-3 py-2 bg-port-accent-2/30 hover:bg-port-accent-2/50 disabled:opacity-50 text-port-accent-2 border border-port-accent-2/40 rounded flex items-center gap-2 min-h-[40px]"
           >
             {expanding ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
             Generate From Idea
@@ -3679,7 +3680,7 @@ function RenderTab({
             {runs.map((r) => (
               <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">
                 <span className="truncate">
-                  <span className="text-gray-500">{new Date(r.createdAt).toLocaleString()} —</span>{' '}
+                  <span className="text-gray-500">{formatDateTime(r.createdAt)} —</span>{' '}
                   {r.promptCount} prompt{r.promptCount === 1 ? '' : 's'}
                 </span>
                 {r.collectionId && (

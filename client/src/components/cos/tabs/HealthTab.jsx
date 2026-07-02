@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle, TrendingUp, Brain, Zap, Database, Clock, Trophy, Activity } from 'lucide-react';
 import * as api from '../../../services/api';
+import { formatDateTime } from '../../../utils/formatters';
 import ProviderStatusCard from './ProviderStatusCard';
 
 export default function HealthTab({ health, onCheck }) {
@@ -94,10 +95,10 @@ export default function HealthTab({ health, onCheck }) {
 
               <div className="bg-port-bg/50 rounded-lg p-3">
                 <div className="flex items-center gap-2 mb-1">
-                  <Clock size={12} className="text-cyan-400" />
+                  <Clock size={12} className="text-port-accent" />
                   <span className="text-xs text-gray-500">Time Worked</span>
                 </div>
-                <div className="text-xl font-bold text-cyan-400">{todayActivity.time.combined}</div>
+                <div className="text-xl font-bold text-port-accent">{todayActivity.time.combined}</div>
                 <div className="text-xs text-gray-500">
                   {todayActivity.stats.running > 0 && `${todayActivity.stats.running} active`}
                 </div>
@@ -130,7 +131,7 @@ export default function HealthTab({ health, onCheck }) {
               <h3 className="text-sm font-semibold text-white">System Health</h3>
               {health?.lastCheck && (
                 <p className="text-xs text-gray-500">
-                  Last check: {new Date(health.lastCheck).toLocaleString()}
+                  Last check: {formatDateTime(health.lastCheck)}
                 </p>
               )}
             </div>
@@ -213,7 +214,7 @@ export default function HealthTab({ health, onCheck }) {
       <div className="bg-port-card border border-port-border rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Brain size={12} className="text-purple-400" />
+            <Brain size={12} className="text-port-accent-2" />
             <h3 className="text-sm font-semibold text-white">Task Learning</h3>
           </div>
           <div className="flex gap-2">
@@ -221,7 +222,7 @@ export default function HealthTab({ health, onCheck }) {
               <button
                 onClick={handleBackfill}
                 disabled={backfilling}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 rounded-lg transition-colors disabled:opacity-50"
               >
                 <Database size={12} />
                 {backfilling ? 'Backfilling...' : 'Backfill History'}
@@ -252,7 +253,7 @@ export default function HealthTab({ health, onCheck }) {
               <div className="text-xs text-gray-500">Success Rate</div>
             </div>
             <div className="bg-port-bg/50 rounded-lg p-3">
-              <div className="text-xl font-bold text-cyan-400">{learning.totals?.avgDurationMin || 0}m</div>
+              <div className="text-xl font-bold text-port-accent">{learning.totals?.avgDurationMin || 0}m</div>
               <div className="text-xs text-gray-500">Avg Duration</div>
             </div>
             <div className="bg-port-bg/50 rounded-lg p-3">
@@ -271,14 +272,14 @@ export default function HealthTab({ health, onCheck }) {
             {learning.insights?.bestPerforming?.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-xl p-4">
                 <h4 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-                  <TrendingUp size={12} className="text-green-400" />
+                  <TrendingUp size={12} className="text-port-success" />
                   Best Performing
                 </h4>
                 <div className="space-y-2">
                   {learning.insights.bestPerforming.map((item, idx) => (
                     <div key={idx} className="flex items-center justify-between text-sm">
                       <span className="text-gray-300 truncate">{item.type}</span>
-                      <span className="text-green-400 font-mono">{item.successRate}%</span>
+                      <span className="text-port-success font-mono">{item.successRate}%</span>
                     </div>
                   ))}
                 </div>
@@ -293,7 +294,7 @@ export default function HealthTab({ health, onCheck }) {
                     <div key={idx} className="flex items-center justify-between text-sm p-2 bg-port-bg/50 rounded">
                       <span className="text-gray-300 capitalize">{model.tier}</span>
                       <div className="flex items-center gap-2">
-                        <span className={`font-mono ${model.successRate >= 80 ? 'text-green-400' : model.successRate >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+                        <span className={`font-mono ${model.successRate >= 80 ? 'text-port-success' : model.successRate >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
                           {model.successRate}%
                         </span>
                         <span className="text-gray-500 text-xs">({model.completed})</span>
@@ -351,8 +352,8 @@ export default function HealthTab({ health, onCheck }) {
                       className={`text-sm p-2.5 rounded-lg border ${
                         rec.type === 'warning' ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400' :
                         rec.type === 'action' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
-                        rec.type === 'optimization' ? 'bg-green-500/10 border-green-500/30 text-green-400' :
-                        rec.type === 'suggestion' ? 'bg-blue-500/10 border-blue-500/30 text-blue-400' :
+                        rec.type === 'optimization' ? 'bg-port-success/10 border-port-success/30 text-port-success' :
+                        rec.type === 'suggestion' ? 'bg-port-accent/10 border-port-accent/30 text-port-accent' :
                         'bg-gray-500/10 border-gray-500/30 text-gray-400'
                       }`}
                     >
@@ -369,7 +370,7 @@ export default function HealthTab({ health, onCheck }) {
       {/* Last Updated */}
       {learning?.lastUpdated && (
         <p className="text-xs text-gray-600 text-center">
-          Learning data updated: {new Date(learning.lastUpdated).toLocaleString()}
+          Learning data updated: {formatDateTime(learning.lastUpdated)}
         </p>
       )}
     </div>

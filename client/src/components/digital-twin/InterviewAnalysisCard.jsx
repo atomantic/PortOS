@@ -33,22 +33,22 @@ export default function InterviewAnalysisCard({ analysisResult }) {
       {/* Summary badges */}
       <div className="flex flex-wrap gap-2">
         {traitCount > 0 && (
-          <span className="px-2 py-1 text-xs rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">
+          <span className="px-2 py-1 text-xs rounded-full bg-port-accent/20 text-port-accent border border-port-accent/30">
             {traitCount} trait categories updated
           </span>
         )}
         {docsCreatedCount > 0 && (
-          <span className="px-2 py-1 text-xs rounded-full bg-green-500/20 text-green-400 border border-green-500/30">
+          <span className="px-2 py-1 text-xs rounded-full bg-port-success/20 text-port-success border border-port-success/30">
             {docsCreatedCount} docs created
           </span>
         )}
         {docsUpdatedCount > 0 && (
-          <span className="px-2 py-1 text-xs rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
+          <span className="px-2 py-1 text-xs rounded-full bg-port-warning/20 text-port-warning border border-port-warning/30">
             {docsUpdatedCount} docs updated
           </span>
         )}
         {dimensionCount > 0 && (
-          <span className="px-2 py-1 text-xs rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">
+          <span className="px-2 py-1 text-xs rounded-full bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30">
             {dimensionCount} new dimensions
           </span>
         )}
@@ -114,7 +114,7 @@ export default function InterviewAnalysisCard({ analysisResult }) {
             <div className="space-y-2">
               {newDimensions.map((dim, i) => (
                 <div key={i} className="bg-port-bg rounded p-2">
-                  <div className="font-medium text-purple-400 text-xs mb-1">{dim.name}</div>
+                  <div className="font-medium text-port-accent-2 text-xs mb-1">{dim.name}</div>
                   <div className="space-y-1">
                     {dim.traits.map((t, j) => (
                       <div key={j} className="text-xs text-gray-300">
@@ -132,10 +132,10 @@ export default function InterviewAnalysisCard({ analysisResult }) {
           <CollapsibleSection title="Document Changes" icon={FileText}>
             <div className="space-y-1">
               {(documentsCreated || []).map((f, i) => (
-                <div key={`c-${i}`} className="text-xs text-green-400">+ {f}</div>
+                <div key={`c-${i}`} className="text-xs text-port-success">+ {f}</div>
               ))}
               {(documentsUpdated || []).map((f, i) => (
-                <div key={`u-${i}`} className="text-xs text-yellow-400">~ {f}</div>
+                <div key={`u-${i}`} className="text-xs text-port-warning">~ {f}</div>
               ))}
             </div>
           </CollapsibleSection>

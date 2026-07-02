@@ -1,9 +1,9 @@
-import { readdir, stat, rm, mkdir, writeFile as fsWriteFile } from 'fs/promises';
+import { readdir, stat, rm, writeFile as fsWriteFile } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -122,7 +122,7 @@ export async function archiveCategory(categoryKey, options = {}) {
   if (!existsSync(dirPath)) throw new Error(`Category directory not found: ${categoryKey}`);
 
   const backupDir = join(DATA_DIR, 'backup');
-  await mkdir(backupDir, { recursive: true });
+  await ensureDir(backupDir);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const archiveName = `${categoryKey}-${timestamp}.tar.gz`;
@@ -208,8 +208,19 @@ export async function getBackups() {
   return backups;
 }
 
+// Backup archives are named like `agents-2026-06-30T12-34-56.tar.gz`, so the raw
+// filename legitimately contains dots. Validate the dotted value directly — the
+// old `filename.replace(/[.]/g,'')` double-pass never checked the real filename,
+// leaving only the startsWith(backupDir) guard against traversal (issue #1822).
+// The regex forbids `/` and `\`, so no traversal segment can form; the only
+// regex-passing names that resolve dangerously are the bare `.`/`..` (e.g.
+// join(backupDir,'.') === backupDir), so reject those explicitly.
+const SAFE_FILENAME = /^[a-z0-9._-]+$/i;
+
 export async function deleteBackup(filename) {
-  if (!SAFE_NAME.test(filename.replace(/[.]/g, ''))) throw new Error('Invalid filename');
+  if (!SAFE_FILENAME.test(filename) || filename === '.' || filename === '..') {
+    throw new Error('Invalid filename');
+  }
   const backupDir = join(DATA_DIR, 'backup');
   const fullPath = join(backupDir, filename);
   if (!fullPath.startsWith(backupDir)) throw new Error('Path traversal not allowed');

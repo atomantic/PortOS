@@ -28,6 +28,8 @@ import {
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
+import { enqueueFirstPassPortraits, enqueueFirstPassSceneFrames } from '../services/creativeDirector/firstPassGen.js';
+import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 
@@ -97,16 +99,95 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // project (or accept an explicit one), search the catalog, APPEND the fresh
 // candidates to the project cast, and link them as creative-director refs.
 // Returns the updated project plus what was added/considered.
+//
+// Auto-compose (#1817): with `compose: true`, once the cast is seeded the
+// director autonomously writes a treatment + scene plan grounded in that cast.
+// We only kick off when the project ends up with a non-empty cast and has no
+// treatment yet — never clobber an existing treatment or trip the render/stitch
+// path. Fire-and-forget like /start; the UI's polling reflects the agent run +
+// treatment as they land. The response carries `composing` so the UI can tell
+// the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
-  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
+  const { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
-  res.json(result);
+  const project = result.project;
+  const cast = project?.cast;
+  // `advanceAfterSceneSettled` (what startCreativeDirectorProject calls) bails
+  // immediately for paused/failed projects, so kicking off there would no-op
+  // while we falsely report `composing` to the UI. Auto-compose deliberately
+  // does NOT do /start's failed-scene recovery — it's only the first-pass
+  // treatment path — so we simply skip those statuses.
+  const composable = project && project.status !== 'paused' && project.status !== 'failed';
+  const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
+  // Scene reference frames (#1867) depend on a treatment existing, which may
+  // land well after THIS request — either because `compose` kicks it off
+  // asynchronously below, or because the user opted into `generateFirstPass`
+  // without `compose` and only starts the project later via a separate
+  // `/:id/start` call (the OverviewTab toggles are independent, per its own
+  // "Independent of the treatment toggle" copy). Persist the user's opt-in on
+  // the project record unconditionally — NOT gated on `composing` — so the
+  // `/:id/treatment` handler (the only place the agent's scene plan actually
+  // lands) can find it regardless of which path triggered composition.
+  // Awaited (rather than fired alongside startCreativeDirectorProject) so
+  // there is no ordering ambiguity between this write and a same-request
+  // compose's first read.
+  if (generateFirstPass) {
+    await updateProject(req.params.id, { generateFirstPass: true })
+      .catch((e) => console.log(`⚠️ CD persist generateFirstPass flag failed: ${e.message}`));
+  }
+  if (composing) {
+    startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
+  }
+  // First-pass gen (#1818): when opted in, kick off a catalog portrait render
+  // for each member auto-cast just added that has no portrait yet. The renders
+  // are enqueued onto the media-job queue and land via the durable catalog
+  // attach hook (#1359). We await the enqueue (which resolves each member's
+  // render decision concurrently, then queues synchronously) so the response can
+  // report how many were queued; the renders themselves run in the background.
+  let firstPass = null;
+  if (generateFirstPass && Array.isArray(result.added) && result.added.length > 0) {
+    firstPass = await enqueueFirstPassPortraits(result.added)
+      .catch((e) => {
+        console.log(`⚠️ CD first-pass portraits failed: ${e.message}`);
+        return null;
+      });
+  }
+  // First-pass music bed (#1928, split from #1867): optional sibling step —
+  // enqueue one background audio render for the project itself (not a catalog
+  // ingredient, see firstPassMusicGen.js doc comment). Gated only on the
+  // project existing (unlike portraits, it doesn't depend on auto-cast having
+  // added new members — a re-running director may want a bed even when the
+  // cast was already seeded).
+  let firstPassMusicBed = null;
+  if (generateFirstPassMusicBed && project) {
+    firstPassMusicBed = await enqueueFirstPassMusicBed(project)
+      .catch((e) => {
+        console.log(`⚠️ CD first-pass music bed failed: ${e.message}`);
+        return null;
+      });
+  }
+  res.json({
+    ...result,
+    composing,
+    ...(firstPass ? { firstPass } : {}),
+    ...(firstPassMusicBed ? { firstPassMusicBed } : {}),
+  });
 }));
 
 // Agent-callable: write the treatment doc.
 router.patch('/:id/treatment', asyncHandler(async (req, res) => {
   const treatment = validateRequest(creativeDirectorTreatmentSchema, req.body);
   const updated = await setTreatment(req.params.id, treatment);
+  // Scene reference frames (#1867): the user opted into first-pass gen back
+  // at auto-cast time (persisted as `generateFirstPass` on the project since
+  // the treatment lands asynchronously, possibly much later). Now that a
+  // scene plan exists, seed a first reference frame per scene the same way
+  // first-pass portraits are seeded — fire-and-forget like auto-compose
+  // above; the response shouldn't block on render-queue work.
+  if (updated?.generateFirstPass) {
+    enqueueFirstPassSceneFrames(updated)
+      .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
+  }
   res.json(updated);
 }));
 

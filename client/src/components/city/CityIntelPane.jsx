@@ -5,8 +5,8 @@ import { computeActivityDensity, buildTimelineBuckets } from '../../utils/cityTi
 
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 const SEVERITY_COLORS = {
-  critical: { dot: 'bg-red-400', text: 'text-red-300', border: 'border-red-500/40' },
-  warning: { dot: 'bg-amber-400', text: 'text-amber-300', border: 'border-amber-500/30' },
+  critical: { dot: 'bg-port-error', text: 'text-port-error', border: 'border-port-error/40' },
+  warning: { dot: 'bg-port-warning', text: 'text-port-warning', border: 'border-port-warning/30' },
   info: { dot: 'bg-cyan-400', text: 'text-cyan-300', border: 'border-cyan-500/25' },
 };
 
@@ -124,7 +124,7 @@ function AttentionList({ items }) {
     return (
       <div className="flex-1 flex items-center justify-center px-3 py-6">
         <div className="text-center">
-          <div className="font-pixel text-[10px] text-emerald-400/70 tracking-wider mb-1">ALL CLEAR</div>
+          <div className="font-pixel text-[10px] text-port-success/70 tracking-wider mb-1">ALL CLEAR</div>
           <div className="font-pixel text-[8px] text-cyan-500/30 tracking-wide">No items need attention</div>
         </div>
       </div>
@@ -162,17 +162,17 @@ function AttentionList({ items }) {
 
 const LEVEL_COLORS = {
   info: 'text-cyan-400',
-  warn: 'text-amber-400',
-  error: 'text-red-400',
-  success: 'text-emerald-400',
+  warn: 'text-port-warning',
+  error: 'text-port-error',
+  success: 'text-port-success',
   debug: 'text-gray-500',
 };
 
 const LEVEL_INDICATORS = {
   info: 'bg-cyan-400',
-  warn: 'bg-amber-400',
-  error: 'bg-red-400',
-  success: 'bg-emerald-400',
+  warn: 'bg-port-warning',
+  error: 'bg-port-error',
+  success: 'bg-port-success',
   debug: 'bg-gray-600',
 };
 
@@ -224,9 +224,9 @@ function ActivityLogList({ logs }) {
 }
 
 const DENSITY_BAR_COLORS = {
-  error: 'bg-red-400',
-  warn: 'bg-amber-400',
-  success: 'bg-emerald-400',
+  error: 'bg-port-error',
+  warn: 'bg-port-warning',
+  success: 'bg-port-success',
   info: 'bg-cyan-400',
   debug: 'bg-gray-600',
 };
@@ -361,7 +361,7 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
             <span className="font-pixel text-[10px] tracking-wider font-bold">ATTENTION</span>
             {items.length > 0 && (
               <span className={`font-pixel text-[9px] px-1 rounded ${
-                criticalCount > 0 ? 'bg-red-500/30 text-red-300' : 'bg-cyan-500/20 text-cyan-300'
+                criticalCount > 0 ? 'bg-port-error/30 text-port-error' : 'bg-cyan-500/20 text-cyan-300'
               }`}>
                 {items.length}
               </span>

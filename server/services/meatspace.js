@@ -5,9 +5,9 @@
  * and LEV 2045 tracker. Reads genome/longevity data from Digital Twin.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getSnpIndex } from './genome.js';
 import { mlGetProfileIfEnabled, mlPatchProfileIfEnabled } from './mortalLoomStore.js';
 
@@ -68,7 +68,7 @@ async function loadConfig() {
 
 async function saveConfig(config) {
   await ensureMeatspaceDir();
-  await writeFile(CONFIG_FILE, JSON.stringify(config, null, 2));
+  await atomicWrite(CONFIG_FILE, config);
 }
 
 // === Sex Detection ===
@@ -292,7 +292,7 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
     if (goals) {
       goals.birthDate = birthDate;
       goals.updatedAt = new Date().toISOString();
-      await writeFile(join(PATHS.digitalTwin, 'goals.json'), JSON.stringify(goals, null, 2));
+      await atomicWrite(join(PATHS.digitalTwin, 'goals.json'), goals);
     }
   }
 

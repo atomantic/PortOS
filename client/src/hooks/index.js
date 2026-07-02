@@ -11,6 +11,8 @@
 export { default as useAnchorReveal } from './useAnchorReveal.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
+export { default as useChartColors } from './useChartColors.js';
+export * from './useChartColors.js';
 export { default as useClickOutside } from './useClickOutside.js';
 export { default as useConfirmDelete } from './useConfirmDelete.js';
 export { default as useColorMatch } from './useColorMatch.js';
@@ -42,6 +44,8 @@ export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useUniverse } from './useUniverse.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
+export { default as useVideoDownload } from './useVideoDownload.js';
+export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';
@@ -91,6 +95,7 @@ export * from './useArmedAction.js';
 export * from './useAutoRefetch.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
+export { default as useDrawerTab } from './useDrawerTab.js';
 export * from './useKeyboardHelp.js';
 export * from './useLockToggle.js';
 export * from './useScrollLock.js';

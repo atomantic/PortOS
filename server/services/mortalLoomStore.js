@@ -10,11 +10,11 @@
 
 import { homedir } from 'os';
 import { join, dirname, basename } from 'path';
-import { readFile, writeFile, stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
-import { safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, settingsEvents } from './settings.js';
@@ -334,7 +334,7 @@ export async function readStore() {
 }
 
 async function writeStoreAtPath(path, data) {
-  await withTransientRetry(() => writeFile(path, JSON.stringify(data, null, 2)));
+  await withTransientRetry(() => atomicWrite(path, data));
 }
 
 /** Atomic read → mutate → write. Ensures all array keys are initialized. */
@@ -607,7 +607,7 @@ export async function importToPortOS() {
     }
     if (added > 0) {
       await ensureDir(pathDir);
-      await writeFile(localPath, JSON.stringify(localArr, null, 2));
+      await atomicWrite(localPath, localArr);
     }
     return { added, skipped };
   };
@@ -624,7 +624,7 @@ export async function importToPortOS() {
   if (gAdded > 0) {
     await ensureDir(dataPath('digital-twin'));
     localGoals.updatedAt = new Date().toISOString();
-    await writeFile(goalsPath, JSON.stringify(localGoals, null, 2));
+    await atomicWrite(goalsPath, localGoals);
   }
   report.added.goals = gAdded; report.skipped.goals = gSkipped;
 
@@ -649,7 +649,7 @@ export async function importToPortOS() {
     const profilePath = dataPath('meatspace', 'profile.json');
     if (!existsSync(profilePath)) {
       await ensureDir(dataPath('meatspace'));
-      await writeFile(profilePath, JSON.stringify(store.profile, null, 2));
+      await atomicWrite(profilePath, store.profile);
       report.added.profile = 1; report.skipped.profile = 0;
     } else {
       report.added.profile = 0; report.skipped.profile = 1;

@@ -215,9 +215,9 @@ export default function AppearanceTab({ onRefresh }) {
 
       {/* Results */}
       {result && (
-        <div className="bg-port-card rounded-lg border border-green-500/30 p-6 space-y-5">
+        <div className="bg-port-card rounded-lg border border-port-success/30 p-6 space-y-5">
           <div className="flex items-center gap-3">
-            <ScanFace className="w-6 h-6 text-green-400" />
+            <ScanFace className="w-6 h-6 text-port-success" />
             <h2 className="text-lg font-semibold text-white">Appearance analysis</h2>
           </div>
 

@@ -9,6 +9,7 @@
 import { join } from 'path'
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { decodeXmlEntities } from '../lib/xmlEntities.js'
 
 const FEED_URL = 'https://github.com/anthropics/claude-code/releases.atom'
 const STATE_FILE = join(PATHS.data, 'claude-changelog.json')
@@ -22,18 +23,9 @@ const defaultState = () => ({
   entries: []
 })
 
-// Decode the five XML predefined entities (the only ones a text feed uses
-// outside CDATA). `&amp;` is intentionally last so a literal "&amp;lt;" in the
-// source decodes to "&lt;" rather than being double-decoded to "<".
-function decodeXmlEntities(s) {
-  return s
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
-}
+// Entity decoding is the shared `server/lib/xmlEntities.js` single-pass decoder
+// (named + numeric). It is double-decode-safe — a literal "&amp;lt;" decodes to
+// "&lt;", not "<" — which preserves the guard this feed used to chain manually.
 
 // Pull the first <tag>…</tag> text from an <entry> block. CDATA-wrapped
 // content (GitHub wraps release notes in <![CDATA[…]]>) is returned verbatim;
@@ -50,8 +42,8 @@ function extractTag(entryXml, tag) {
 /**
  * Parse the GitHub releases Atom feed into flat entries. The feed is small
  * and flat (one level of <entry> under <feed>), so a focused extractor beats
- * pulling in a streaming SAX parser — sax stays for the 500MB Apple Health
- * export path where streaming actually matters (issue #1167).
+ * pulling in a general XML parser — same dependency-free approach the streaming
+ * Apple Health `<Record>` parser takes for the 500MB export path (issue #1167).
  */
 function parseAtomFeed(xml) {
   const entries = []
@@ -147,5 +139,5 @@ export async function getCachedChangelog() {
 }
 
 // Exposed for unit tests — the Atom parse is the regex-extractor that replaced
-// sax on this path (issue #1167).
+// a general XML parser on this path (issue #1167).
 export const __testing = { parseAtomFeed, stripHtml, extractVersion }

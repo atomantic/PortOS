@@ -28,7 +28,7 @@ import {
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
-import { formatDurationMin } from '../../../utils/formatters';
+import { formatDurationMin, formatDateTime } from '../../../utils/formatters';
 
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
@@ -162,7 +162,7 @@ export default function LearningTab() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Brain className="w-5 h-5 text-purple-400" />
+          <Brain className="w-5 h-5 text-port-accent-2" />
           <h3 className="text-lg font-semibold text-white">Learning Analytics</h3>
         </div>
         <div className="flex gap-2">
@@ -170,7 +170,7 @@ export default function LearningTab() {
             <button
               onClick={handleBackfill}
               disabled={backfilling}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 rounded-lg transition-colors disabled:opacity-50"
             >
               <Database size={14} />
               {backfilling ? 'Backfilling...' : 'Backfill History'}
@@ -232,10 +232,10 @@ export default function LearningTab() {
 
             <div className="bg-port-card border border-port-border rounded-lg p-4">
               <div className="flex items-center gap-2 mb-1">
-                <Clock size={14} className="text-cyan-400" />
+                <Clock size={14} className="text-port-accent" />
                 <span className="text-xs text-gray-500">Avg Duration</span>
               </div>
-              <div className="text-2xl font-bold text-cyan-400">{learning.totals.avgDurationMin}m</div>
+              <div className="text-2xl font-bold text-port-accent">{learning.totals.avgDurationMin}m</div>
               <div className="text-xs text-gray-500">per task</div>
             </div>
 
@@ -253,7 +253,7 @@ export default function LearningTab() {
 
           {/* Recommendations */}
           {(learning.recommendations?.length > 0 || dismissed.length > 0) && (
-            <div className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-lg p-4">
+            <div className="bg-gradient-to-r from-port-accent-2/10 to-port-accent/10 border border-port-accent-2/30 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-sm font-medium text-white flex items-center gap-2">
                   <Zap size={14} className="text-yellow-400" />
@@ -278,8 +278,8 @@ export default function LearningTab() {
                       className={`text-sm p-2 rounded flex items-start gap-2 ${
                         rec.type === 'warning' ? 'bg-yellow-500/10 text-yellow-400' :
                         rec.type === 'action' ? 'bg-red-500/10 text-red-400' :
-                        rec.type === 'optimization' ? 'bg-green-500/10 text-green-400' :
-                        rec.type === 'suggestion' ? 'bg-blue-500/10 text-blue-400' :
+                        rec.type === 'optimization' ? 'bg-port-success/10 text-port-success' :
+                        rec.type === 'suggestion' ? 'bg-port-accent/10 text-port-accent' :
                         'bg-gray-500/10 text-gray-400'
                       }`}
                     >
@@ -328,7 +328,7 @@ export default function LearningTab() {
                           <div className="font-mono truncate">{d.id}</div>
                           {d.dismissedAt && (
                             <div className="text-gray-600 text-[10px]">
-                              dismissed {new Date(d.dismissedAt).toLocaleString()}
+                              dismissed {formatDateTime(d.dismissedAt)}
                               {d.snapshot?.value !== undefined && (
                                 <span> · snapshot: {d.snapshot.value}{d.snapshot.kind === 'rate' ? '%' : ''}</span>
                               )}
@@ -582,7 +582,7 @@ export default function LearningTab() {
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
                 {expandedSections.durations ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                <Timer size={16} className="text-cyan-400" />
+                <Timer size={16} className="text-port-accent" />
                 <span className="font-medium text-white">Duration Estimates</span>
                 <span className="text-xs text-gray-500">
                   ({Object.keys(durations).length - 1} task types)
@@ -607,7 +607,7 @@ export default function LearningTab() {
                           <td className="p-3 text-right text-gray-500 font-mono">
                             {data.avgDurationMs ? formatDurationMin(Math.round(data.avgDurationMs / 60000)) || '—' : '—'}
                           </td>
-                          <td className="p-3 text-right text-cyan-400 font-mono" title="P80 estimate used for progress bars and ETAs">
+                          <td className="p-3 text-right text-port-accent font-mono" title="P80 estimate used for progress bars and ETAs">
                             {(data.p80DurationMs || data.avgDurationMs) ? formatDurationMin(Math.round((data.p80DurationMs || data.avgDurationMs) / 60000)) || '—' : '—'}
                           </td>
                           <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
@@ -865,7 +865,7 @@ export default function LearningTab() {
           {/* Last Updated */}
           {learning.lastUpdated && (
             <div className="text-xs text-gray-600 text-center pt-4 border-t border-port-border">
-              Learning data last updated: {new Date(learning.lastUpdated).toLocaleString()}
+              Learning data last updated: {formatDateTime(learning.lastUpdated)}
             </div>
           )}
         </>

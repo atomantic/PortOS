@@ -191,7 +191,7 @@ export default function ListEnrichment({
               {items.length > 1 && (
                 <button
                   onClick={() => removeItem(index)}
-                  className="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-2 right-2 p-1.5 text-gray-500 hover:text-red-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                   title="Remove"
                 >
                   <X size={16} />
@@ -335,7 +335,7 @@ export default function ListEnrichment({
                   <ul className="space-y-2">
                     {analysis.patterns.map((pattern, i) => (
                       <li key={i} className="flex items-start gap-2 text-gray-300">
-                        <Check size={16} className="text-green-400 mt-0.5 shrink-0" />
+                        <Check size={16} className="text-port-success mt-0.5 shrink-0" />
                         {pattern}
                       </li>
                     ))}
@@ -409,7 +409,7 @@ export default function ListEnrichment({
               <button
                 onClick={saveDocument}
                 disabled={saving || !documentContent.trim()}
-                className="px-6 py-3 min-h-[44px] bg-green-600 text-white rounded-lg font-medium hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="px-6 py-3 min-h-[44px] bg-port-success text-white rounded-lg font-medium hover:bg-port-success/80 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {saving ? (
                   <>

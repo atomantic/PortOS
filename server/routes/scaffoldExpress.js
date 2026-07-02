@@ -1,5 +1,6 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 // Inline CORS middleware snippet for generated projects (no cors package dependency)
 const CORS_SNIPPET = `app.use((req, res, next) => {
@@ -23,7 +24,7 @@ export async function scaffoldExpress(repoPath, dirName, apiPort, addStep) {
       express: '^4.21.2'
     }
   };
-  await writeFile(join(repoPath, 'package.json'), JSON.stringify(pkg, null, 2));
+  await atomicWrite(join(repoPath, 'package.json'), pkg);
 
   await writeFile(join(repoPath, 'index.js'), `import express from 'express';
 

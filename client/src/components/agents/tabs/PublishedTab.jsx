@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 
 export default function PublishedTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
@@ -149,7 +149,7 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4 text-right text-gray-400">
                           {post.commentCount ?? '-'}
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(post.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(post.publishedAt)}>
                           {timeAgo(post.publishedAt)}
                         </td>
                         <td className="py-2">
@@ -200,13 +200,13 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4">
                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                             comment.isReply
-                              ? 'bg-purple-500/20 text-purple-400'
+                              ? 'bg-port-accent-2/20 text-port-accent-2'
                               : 'bg-port-accent/20 text-port-accent'
                           }`}>
                             {comment.isReply ? 'reply' : 'comment'}
                           </span>
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(comment.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(comment.publishedAt)}>
                           {timeAgo(comment.publishedAt)}
                         </td>
                         <td className="py-2">

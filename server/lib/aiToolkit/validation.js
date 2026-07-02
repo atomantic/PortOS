@@ -1,4 +1,48 @@
 import { z } from 'zod';
+import { basename, extname } from 'path';
+
+// Image extensions a vision screenshot may carry. Mirrors the runner's
+// getMimeType keys — anything else (or a no-extension path like `passwd`) is
+// rejected.
+const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
+
+/**
+ * Sanitize the untrusted `screenshots[]` array from POST /api/runs into safe,
+ * screenshots-dir-relative basenames. `screenshots[]` is unauthenticated user
+ * input passed to the vision loader, which base64-encodes each image and
+ * forwards it to the configured external provider — so without this an entry
+ * like `../../../../etc/passwd` or an absolute `/etc/passwd` would exfiltrate an
+ * arbitrary readable file (issue #1870, the sibling of the #1820 vision-test
+ * fix). `basename` collapses every directory component (neutralizing `../`
+ * traversal AND absolute-path escapes, including the legitimate absolute paths
+ * the RunnerPage uploads under data/screenshots) and the extension allow-list
+ * rejects non-image references before any file is read. Lives here (not the
+ * shared loadImageAsBase64) so trusted in-process callers that pass validated
+ * absolute paths from other image roots — e.g. Universe Builder gallery images
+ * under data/images — keep working; only the HTTP boundary is constrained.
+ *
+ * @param {unknown} screenshots
+ * @returns {{ safe: string[], rejected: string[] }}
+ */
+export function sanitizeScreenshotRefs(screenshots) {
+  const safe = [];
+  const rejected = [];
+  if (!Array.isArray(screenshots)) return { safe, rejected };
+  for (const entry of screenshots) {
+    if (typeof entry !== 'string' || !entry) {
+      rejected.push(String(entry));
+      continue;
+    }
+    const name = basename(entry);
+    if (!name || name === '.' || name === '..' ||
+        !ALLOWED_SCREENSHOT_EXTENSIONS.has(extname(name).toLowerCase())) {
+      rejected.push(entry);
+      continue;
+    }
+    safe.push(name);
+  }
+  return { safe, rejected };
+}
 
 export const providerSchema = z.object({
   // Sample providers post a stable id (e.g. 'codex') so the server can adopt

@@ -15,15 +15,15 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       {/* Overall Score */}
       <div className="text-center py-8">
         <div className="flex items-center justify-center gap-3 mb-2">
-          {isTraining ? <Dumbbell size={28} className="text-purple-400" /> : <CheckCircle size={28} className={scoreColor} />}
+          {isTraining ? <Dumbbell size={28} className="text-port-accent-2" /> : <CheckCircle size={28} className={scoreColor} />}
           <span className="text-sm text-gray-400">{isTraining ? 'Training Session' : 'Session Score'}</span>
         </div>
         {isTraining ? (
-          <div className="text-2xl text-purple-400 font-medium">Practice Complete</div>
+          <div className="text-2xl text-port-accent-2 font-medium">Practice Complete</div>
         ) : (
           <div className={`text-6xl font-mono font-bold ${scoreColor}`}>
             {sessionScore}
@@ -63,7 +63,7 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
       {/* Per-drill Breakdown */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">Drill Breakdown</h3>
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-3">
           {drillResults.map((result, i) => {
             const isLlm = LLM_DRILL_TYPES.includes(result.type);
             const isExpanded = expandedDrill === i;
@@ -138,8 +138,8 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
         <button
           onClick={handleSave}
           className={`w-full flex items-center justify-center gap-2 px-6 py-3 ${
-            isTraining ? 'bg-purple-600 hover:bg-purple-500' : 'bg-port-success hover:bg-port-success/80'
-          } text-white font-medium rounded-lg transition-colors`}
+            isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2' : 'bg-port-success hover:bg-port-success/80 text-white'
+          } font-medium rounded-lg transition-colors`}
         >
           {isTraining ? <Dumbbell size={18} /> : <Save size={18} />}
           {isTraining ? 'Log Training' : 'Save Session'}

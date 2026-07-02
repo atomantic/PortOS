@@ -23,21 +23,25 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `validation.js` | Catch-all Zod schemas + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`). Most route inputs validate through here. |
+| `validation.js` | Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing, document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`, `isSafeRecordId`, `parsePagination`). Re-exports the per-domain validation files below so existing deep imports keep working. |
+| `agentValidation.js` | Social-bot agent schemas (personality, Moltbook/Moltworld accounts, automation schedules, agent tools + Moltworld payloads) and CoS Feature Agent definitions. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
+| `cosValidation.js` | Chief-of-Staff task/job/loop/learning schemas, the Review-Loop reviewer vocabulary + helpers (`normalizeReviewers`/`buildReviewWithArgs`), the Code-Review settings slice, and the task-metadata sanitizer. |
 | `creativeDirectorValidation.js` | Creative Director project/treatment/scene + Create-Suite importer schemas. |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |
 | `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
 | `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
+| `mediaValidation.js` | Media-generation & local-model infra schemas (LoRA training, local-LLM/Ollama/LM Studio management, CyberCity snapshots, media-collection bulk ops). |
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
-| `postValidation.js` | Social post schemas. |
+| `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
+| `postValidation.js` | MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill generation/scoring, sessions, memory builder, training log. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
@@ -99,7 +103,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `hfErrors.js` | Parse huggingface_hub gated-access errors: `extractGatedRepo(text)` → `owner/name` (or null) for the UI's license deep-link. Shared by the image runner and LoRA trainer. Pure. |
 | `hfCache.js` | HuggingFace Hub cache inspection (`inspectModelCache(repoId)` → `{cached,sizeBytes,snapshotPath}`, `isModelCached`, `getHfCacheRoot`). Drives the inline "Available / Download" badge on the image + video gen forms. Also `verifyModelCache(repoId,{deep})` (structural safetensors-header + optional sha256 integrity check) and `repairModelCache(repoId,{deep})` (delete corrupt weight files so the download path re-fetches them) — power the "Repair model" banner. |
 | `hfDownload.js` | `downloadHfRepo({repo,onEvent})` returning `{promise,kill}` — spawns `scripts/hf_download_repo.py` in the FLUX.2 venv (fallback: mflux pythonPath) and emits SSE-friendly stage/progress/complete events. Powers the inline "Download" button next to the model picker. |
-| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})`, `openSseStream(res)` (`{send,safeEnd}` SSE boilerplate), `SSE_HEADERS` — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
+| `sseHeaders.js` | `SSE_HEADERS` — the canonical SSE response headers (incl. `X-Accel-Buffering:no`) in a dependency-free module so any producer (`sseDownload.js`, `sseUtils.js`) can share them without pulling in a heavier module's transitive imports. |
+| `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})`, `openSseStream(res)` (`{send,safeEnd}` SSE boilerplate; uses `SSE_HEADERS` from `sseHeaders.js`) — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
 
 ## File & I/O
 
@@ -108,7 +113,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `collectionStore.js` | Per-type, per-record JSON storage with explicit type-level `schemaVersion` stamping. Use for collections that have outgrown a monolithic JSON file. `createCollectionStore({ dir, type, schemaVersion, sanitizeRecord })` returns `loadOne` / `saveOne` / `saveOneNow` / `listIds` / `loadAll` / `deleteOne` / `loadTypeIndex` / `saveTypeIndex` / `verifySchemaVersion`. Per-id write queue means writes to different records don't serialize; `saveOneNow` is for callers already inside a collection write queue. Boot-time `verifyCollectionVersions([store, ...])` logs schema-version mismatches. **Type-index `config` slot** holds cross-record state (see the `TypeIndexConfig` typedef + header convention): `{ runs?: [], featureFlags?: {}, lockPolicies?: {} }` — `runs` is the shipped slot (universeBuilder's capped history log), the other two are reserved names; consumers may add their own keys but should reuse a reserved name when it fits and document the shape next to the consumer. `saveTypeIndex({ config })` shallow-merges `config` one level deep (a patched `runs` replaces the whole array), so a read-modify-write of a slot must load → mutate a copy → write inside `queueTypeIndexWrite(fn)`. |
 | `conflictJournal.js` | Non-blocking edit-conflict journal for cross-install LWW merges. `maybeJournalBeforeOverwrite({kind,id,local,remote,source})` (call right before a merge overwrite) archives the losing local version when a true 3-way divergence is detected (`detectConflict` via per-record `syncBaseHash` + `contentHashForRecord`), then advances the base hash; `flushBaseHashes()` persists the batched base-hash side store; `withBaseHashFlushBatch(fn)` defers every interior flush so an await-separated multi-record push loop (peer:online convergence) collapses N `sync_base_hashes.json` rewrites into one terminal write (re-entrant; flushes in `finally`). `deleteSyncBaseHash(kind,id)` evicts a record's base hash when its tombstone is hard-pruned (called from every `pruneTombstoned*` path — universe/series/issue/collection) so the side store doesn't grow without bound; `pruneOrphanedBaseHashes(resolves)` is the backstop sweep (`resolves(kind,id) => bool`; unknown kinds kept) that drops keys whose record no longer resolves, wired into the tombstone GC sweep. `conflictJournalStore()` is the `pending`/`resolved` entry store (discard resolves an entry; DELETE hard-removes it — there is no `dismissed` status). Local-only — never crosses the wire. |
 | `schemaVersions.js` | Cross-instance sync version contract. `PORTOS_SCHEMA_VERSIONS` (frozen map of `{ category: layoutVersion }`), `RECORD_KIND_SCHEMA_CATEGORIES` (frozen map of federated record kind → the schema categories it writes), `buildPortosMeta()` (envelope for every outbound sync payload), `compareSchemaVersions(sender, receiver)` returning `{ ahead, behind, compatible }`, `scopeVersionDiff(diff, categories)` (restrict that diff to the categories a specific transfer touches), and `formatVersionGap()` for UI/log lines. Receivers gate `applyIncomingPush` / share-bucket import / snapshot apply per-category on the scoped comparator result so an upgraded sender can't corrupt a downstream peer — and a bump to one category doesn't sever sync of the others. |
-| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, `expandHome` (`~/foo` → absolute), `sleep(ms)`, JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
+| `dataRoot.js` | Data-root resolution + worktree-checkout detection (#1947). `resolveInstallRoot(fallbackRoot)` prefers the `PORTOS_DATA_ROOT` env var (pinned at real launch in `ecosystem.config.cjs`) over an `import.meta.url`-derived fallback, so a process booted from inside a CoS agent git worktree still resolves `data/`/`data.reference/` to the real install instead of the worktree's empty tree. `isWorktreeRoot(rootDir)` is the boot-migration backstop — true when `rootDir` lives under `data/cos/worktrees/` (keyed on the path segment only, so a fresh install's empty `data/` isn't a false positive). `DATA_ROOT_ENV` is the env-var name constant. Consumed by `fileUtils.js` (`PATHS`), `server/index.js`, and `scripts/run-migrations.js`. |
+| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `pathExists` (async `existsSync` replacement for request/hot paths), `safeJSONParse`, `expandHome` (`~/foo` → absolute), `sleep(ms)`, JSONL append/read/write helpers, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `createKeyCachedQueue.js` | Per-KEY serialized async work queue (sibling to `fileWriteQueue.js`'s single tail). `createKeyCachedQueue()` returns `queue(key, work)` that chains each `work` thunk onto the prior in-flight promise for that `key` — same-key work runs one-after-another (later sees earlier's committed result), different keys run concurrently. Self-pruning tail Map; `work` runs on both fulfil and reject so one failure can't stall the chain; carries `.clear()` for test reset. Used by the media-job completion hooks (writers-room / catalog / music-video scene-image attach) to serialize per-record. |
 | `createNewestWinsGuard.js` | Newest-render-wins ordering guard for out-of-order async completions. `createNewestWinsGuard()` returns `{ isStale(key, at), mark(key, at), clear() }` — tracks the newest applied `queuedAt` per slot `key` so an older render completing after a newer one is dropped (`isStale` true) instead of clobbering the newer frame. ISO timestamps compare as strings; absent `at` is never stale. Used by `createMediaJobImageHook`'s opt-in guard and the catalog hook's portrait slot. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
@@ -138,14 +144,17 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `gitForge.js` | `parseGitRemote`, `parseGitHubOwnerFromRemote`, `pickGhAccountForOwner`, `detectForgeCli`, `parsePullRequestUrl` — pure GitHub/GitLab remote + PR/MR URL parsers and forge/account selectors used by `git.js`. |
 | `gitOutputParsers.js` | `parseStatus`, `parseDiffStat`, `parseBranchVerboseLine`, `parseSubmoduleStatusLine`/`SUBMODULE_STATUS_RE`, `extractAgentSummary` — pure parsers turning git command output into structured data for `git.js`. |
 | `gitRemote.js` | `getOriginInfo`, `parseGitRemoteUrl`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — classifies the local `origin` remote vs the upstream atomantic/PortOS repo. Used by the update flow to detect forks. |
+| `killWithEscalation.js` | `killWithEscalation(proc, {label, stillRunning, delayMs=8000})` — shared SIGTERM→grace→SIGKILL cancel-escalation for spawn-based media jobs. Sends SIGTERM, then escalates to SIGKILL after `delayMs` only when `stillRunning()` holds and the child hasn't exited (`exitCode===null && signalCode===null`). The timer is unref'd and the callback is try/catch-wrapped (runs outside the request lifecycle). Converges musicVideo/render, videoTimeline, imageGen local+codex, videoGen, loraTraining, and the yt-dlp track import cancel paths. |
 | `processEnv.js` | `stripDebugMallocEnv(env)` — drop macOS `Malloc*` debug env vars before spawning a child. Pinokio-launched PortOS exports `MallocStackLogging`/`MallocScribble`/etc. that flood Python subprocess stderr with `can't turn off malloc stack logging` lines; route every Node→Python spawn through this. No-op on Linux/Windows. |
 | `pythonSetup.js` | Python venv / runner setup helpers. |
+| `ytdlp.js` | `findYtDlp()` — cached discovery of the `yt-dlp` binary on PATH, mirrors `findFfmpeg()` in `ffmpeg.js`. Used by the track YouTube-import job. |
 
 ## Networking
 
 | Module | Purpose |
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
+| `abortTimeout.js` | `withAbortTimeout(timeoutMs, fn)` — runs `fn(signal)` under an `AbortController` that aborts after `timeoutMs` and always clears the timer on settle. Generic lifecycle helper for callers that need the insecure-agent `peerFetch` (so can't use `fetchWithTimeout`) or one signal across parallel fetches. |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
 | `safeUrlFetch.js` | SSRF-guarded public-URL fetch: `isPublicHttpUrlSafe`/`assertPublicHttpUrl` (scheme + blocked-host-literal via `catalogValidation.isBlockedIngestHost` + DNS-resolve), plus `fetchPublicText`/`fetchPublicBinary` (timeout, redirect revalidation, size cap). Reuse instead of copying the SSRF guard for any "fetch this remote thing the user pointed us at" flow. |
 | `pinterestFeed.js` | Pure Pinterest board RSS helpers: `normalizePinterestFeedUrl(input)` (board URL or `.rss` → `{ feedUrl, boardUrl }`, host-gated) + `parsePinterestRss(xml)` (per-pin `pinUrl`/`imageUrl`/title/description, 736x size upgrade). Feeds the mood-board Pinterest importer. |
@@ -157,7 +166,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
 | `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
-| `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
+| `tailscale.js` | Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container), and read backend state (`getTailscaleStatus` / `isTailscaleUp`) to know whether we're actually connected to the tailnet. |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 
@@ -177,6 +186,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `jsonExtract.js` | Pull JSON blocks out of LLM responses. |
 | `taskParser.js` | Parse `TASKS.md` format. |
+| `xmlEntities.js` | Shared dependency-free XML/HTML entity decoder. `decodeXmlEntities(str, extraEntities?)` — single-pass (double-decode-safe) decode of the five predefined named entities + decimal/hex numeric refs, with an optional caller-supplied extra-entity map (e.g. `{ nbsp: ' ', zwnj: '' }`). Unknown/out-of-range refs left untouched. Used by the Apple Health XML parser, Claude changelog feed, Pinterest RSS, generic feeds, and Gmail HTML-to-text. |
 
 ## Curated static data
 
@@ -201,7 +211,9 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
 | `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
+| `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
+| `postAdaptive.js` | Pure POST adaptive-difficulty policy — nudges a math drill's primary knob (`steps`/`maxDigits`/`maxExponent`/`tolerancePct`) up/down within clamped bounds from recent scored performance. Opt-in via the config Adaptive toggle. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |
@@ -234,6 +246,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `mapWithConcurrency.js` | Generic bounded-concurrency async mapper that preserves input order while capping in-flight work. |
 | `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement), `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads), `POLLUTING_KEYS` (shared `__proto__`/`constructor`/`prototype` denylist for sanitizers), `canonicalStringify` (recursive sorted-key JSON serialization for cross-machine content hashing), `isEmptyScalar` (true for null/undefined/whitespace-string/empty-array — merge gap-fill gate). |
 | `openapiSpec.js` | `buildOpenApiSpec(settings, { baseUrl, version })` — builds an OpenAPI 3.1 document for the currently-exposed public APIs from `apiRegistry`, reusing route Zod schemas via `z.toJSONSchema`. Exposed+`requireAuth` operations get a `security` requirement; passwordless ones don't. Served by `routes/apiDocs.js`. |
+| `shellQuote.js` | `shellQuote(value)` — POSIX single-quote escaping for values interpolated into shell command strings (display command lines, copy-paste blocks in agent prompts). Bare-safe tokens pass through; everything else is single-quoted. Canonical escaper — don't hand-roll. |
 | `singleFlight.js` | `createSingleFlight()` → `run(key, fn)` — keyed in-flight coalescer: concurrent calls for the same key share one `fn()` execution and result; the slot auto-clears on settle. Minimal by design (no TTL/result cache layered on top, doesn't reject concurrent callers). Used by `promptRunner.js`'s fallback mark-and-pick. |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others) plus `createSseRunner` — the shared batch-runner lifecycle (runs map, terminal-frame replay, cancel, fire-and-forget coordinator) used by the pipeline completeness/analysis/checks runners. |
 | `streamBackpressure.js` | `awaitWritableDrain(res)` — park a streaming-response producer on the socket's next `drain` (or `close`) when `res.write()` returned false, so SSE/NDJSON writes stay bounded for a slow reader. Shared by `routes/ask.js` (SSE) and `routes/localLlm.js` (NDJSON). |

@@ -176,9 +176,9 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // Mode 1: No traits and no enrichment - suggest interview
   if (!hasTraits && !hasEnrichment) {
     return (
-      <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-lg p-5">
+      <div className="bg-gradient-to-r from-port-accent-2/10 to-port-accent-2/5 border border-port-accent-2/30 rounded-lg p-5">
         <div className="flex items-start gap-3">
-          <MessageSquare className="w-5 h-5 text-purple-400 mt-0.5 shrink-0" />
+          <MessageSquare className="w-5 h-5 text-port-accent-2 mt-0.5 shrink-0" />
           <div className="flex-1">
             <h3 className="text-white font-medium mb-1">Get started with a personality assessment</h3>
             <p className="text-sm text-gray-400 mb-3">
@@ -186,7 +186,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             </p>
             <button
               onClick={() => navigate('/digital-twin/interview')}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 flex items-center gap-2"
+              className="px-4 py-2 bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
             >
               Go to Interview
               <ArrowRight size={14} />
@@ -200,9 +200,9 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
   // Mode 3: No gaps - all caught up
   if (!hasGaps) {
     return (
-      <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-5">
+      <div className="bg-port-success/10 border border-port-success/30 rounded-lg p-5">
         <div className="flex items-start gap-3">
-          <CheckCircle className="w-5 h-5 text-green-400 mt-0.5 shrink-0" />
+          <CheckCircle className="w-5 h-5 text-port-success mt-0.5 shrink-0" />
           <div className="flex-1">
             <h3 className="text-white font-medium mb-1">Your twin is well-defined</h3>
             <p className="text-sm text-gray-400 mb-3">
@@ -210,7 +210,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
             </p>
             <button
               onClick={() => navigate('/digital-twin/test')}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-500 flex items-center gap-2"
+              className="px-4 py-2 bg-port-success text-white rounded-lg text-sm hover:bg-port-success/80 flex items-center gap-2"
             >
               Run Tests
               <ArrowRight size={14} />
@@ -229,9 +229,9 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     const prompt = weakestGap ? buildContinuationPrompt(weakestGap.dimension, weakestGap) : null;
 
     return (
-      <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/30 rounded-lg p-5">
+      <div className="bg-gradient-to-r from-port-accent-2/10 to-port-accent-2/5 border border-port-accent-2/30 rounded-lg p-5">
         <div className="flex items-start gap-3">
-          <MessageSquare className="w-5 h-5 text-purple-400 mt-0.5 shrink-0" />
+          <MessageSquare className="w-5 h-5 text-port-accent-2 mt-0.5 shrink-0" />
           <div className="flex-1">
             <h3 className="text-white font-medium mb-1">Deepen: {weakestLabel}</h3>
             <p className="text-sm text-gray-400 mb-3">
@@ -251,14 +251,14 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                   className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
                   title="Copy prompt"
                 >
-                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  {copied ? <Check size={14} className="text-port-success" /> : <Copy size={14} />}
                 </button>
               </div>
             )}
             <div className="flex items-center gap-3">
               <button
                 onClick={() => navigate('/digital-twin/interview')}
-                className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-500 flex items-center gap-2"
+                className="px-4 py-2 bg-port-accent-2 text-port-on-accent-2 rounded-lg text-sm hover:bg-port-accent-2/80 flex items-center gap-2"
               >
                 Import Results
                 <ArrowRight size={14} />
@@ -392,7 +392,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                   className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white bg-port-bg rounded"
                   title="Copy prompt"
                 >
-                  {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  {copied ? <Check size={14} className="text-port-success" /> : <Copy size={14} />}
                 </button>
               </div>
               <p className="text-xs text-gray-500 mt-2">

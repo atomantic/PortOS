@@ -323,7 +323,8 @@ export async function spawnAgentForTask(task) {
     // inside buildAgentPrompt — see its doc comment.
     const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
       providerType: provider.type,
-      providerId: provider.id
+      providerId: provider.id,
+      providerCommand: provider.command
     });
 
     // Create agent directory
@@ -909,7 +910,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
       const workspacePath = agent.workspacePath || ROOT_DIR;
-      const commitFound = checkForTaskCommit(task.id, workspacePath);
+      const commitFound = await checkForTaskCommit(task.id, workspacePath);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;

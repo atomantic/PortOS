@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save } from 'lucide-react';
+import { Brain, ChevronLeft, Plus, Trash2, BookOpen, Zap, FlaskConical, Eye, X, Save, CalendarClock } from 'lucide-react';
 import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../services/api';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -13,6 +13,27 @@ const ITEM_TYPES = [
   { id: 'sequence', label: 'Sequence' },
   { id: 'text', label: 'Text' },
 ];
+
+// An item is due when its spaced-repetition schedule says so. No/invalid
+// schedule = due (matches the server's `isMemoryItemDue`), so legacy items and
+// anything the migration hasn't stamped still surface for review.
+function isItemDue(item) {
+  const nr = item?.schedule?.nextReview;
+  if (typeof nr !== 'string') return true;
+  const t = Date.parse(nr);
+  return Number.isNaN(t) || t <= Date.now();
+}
+
+// Most-overdue first: earliest (or missing/invalid) nextReview leads, so
+// "Review Next" picks the item that's waited longest — matching the server's
+// `getDueMemoryItems` ordering rather than raw list order.
+function mostOverdueFirst(a, b) {
+  const ka = Date.parse(a?.schedule?.nextReview ?? '');
+  const kb = Date.parse(b?.schedule?.nextReview ?? '');
+  const va = Number.isNaN(ka) ? -Infinity : ka;
+  const vb = Number.isNaN(kb) ? -Infinity : kb;
+  return va === vb ? 0 : va < vb ? -1 : 1;
+}
 
 export default function MemoryBuilder({ onBack, onNavigateElements }) {
   const [items, setItems] = useState([]);
@@ -37,7 +58,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   // response is `[]` and still clears. Callers (notably handleDelete) use the
   // return value to fall back to a local update when the refresh fails.
   async function loadItems() {
-    const data = await getMemoryItems().catch(() => null);
+    const data = await getMemoryItems().catch(err => { console.warn('⚠️ Failed to load memory items: ' + err.message); return null; });
     if (!Array.isArray(data)) return false;
     setItems(data);
     return true;
@@ -114,7 +135,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
@@ -134,13 +155,46 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
         )}
       </div>
 
-      <p className="text-gray-400 text-sm">
+      <p className="text-gray-400 text-sm max-w-2xl">
         Train your memory with songs, poems, speeches, and sequences. Track mastery and practice weak spots.
       </p>
 
+      {/* Due Today — spaced repetition. Recomputes reactively as `items` update. */}
+      {(() => {
+        const dueItems = items.filter(isItemDue).sort(mostOverdueFirst);
+        if (dueItems.length === 0) {
+          return (
+            <div className="flex items-center gap-2 text-sm text-gray-500 max-w-2xl">
+              <CalendarClock size={16} className="text-gray-600" />
+              Nothing due for review right now — all caught up.
+            </div>
+          );
+        }
+        return (
+          <div className="bg-port-card border border-emerald-500/30 rounded-lg p-4 max-w-2xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <CalendarClock size={20} className="text-emerald-400 shrink-0" />
+              <div className="min-w-0">
+                <div className="text-white font-medium">Due Today ({dueItems.length})</div>
+                <div className="text-xs text-gray-500 truncate">
+                  {dueItems.map(i => i.title).join(', ')}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => handleSelect(dueItems[0])}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
+            >
+              <BookOpen size={14} />
+              Review Next
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Create Form */}
       {creating && (
-        <div className="bg-port-card border border-port-accent/30 rounded-lg p-5 space-y-4">
+        <div className="bg-port-card border border-port-accent/30 rounded-lg p-5 space-y-4 max-w-2xl">
           <div className="flex items-center justify-between">
             <h3 className="text-white font-medium">Add Memory Item</h3>
             <button onClick={resetCreateForm} className="text-gray-500 hover:text-white transition-colors">
@@ -215,18 +269,18 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
       )}
 
       {/* Memory Items */}
-      <div className="space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {items.map(item => (
           <div
             key={item.id}
-            className="bg-port-card border border-port-border rounded-lg p-4 hover:border-port-accent/50 transition-colors"
+            className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col hover:border-port-accent/50 transition-colors"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 flex-1 min-w-0">
                 <ItemIcon type={item.type} builtin={item.builtin} />
                 <div className="min-w-0">
                   <h3 className="text-white font-medium truncate">{item.title}</h3>
-                  <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-0.5">
                     <span>{item.type}</span>
                     <span>{item.content?.lines?.length || 0} lines</span>
                     <span>{item.content?.chunks?.length || 0} chunks</span>
@@ -234,41 +288,50 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
                   </div>
                 </div>
               </div>
-
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col items-end gap-1 shrink-0">
                 <MasteryBadge pct={item.mastery?.overallPct || 0} />
-                <button
-                  onClick={() => handleSelect(item)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
-                >
-                  <BookOpen size={14} />
-                  Practice
-                </button>
-                {!item.builtin && (
-                  isConfirming(item.id) ? (
-                    <ConfirmButtonPair
-                      prompt="Delete?"
-                      confirmIcon={Trash2}
-                      ariaLabel={`Confirm delete ${item.title}`}
-                      onConfirm={() => confirmDelete(() => handleDelete(item.id))}
-                      onCancel={cancelDelete}
-                    />
-                  ) : (
-                    <button
-                      onClick={() => requestDelete(item.id)}
-                      className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )
+                {isItemDue(item) && (
+                  <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-emerald-400">
+                    <CalendarClock size={10} />
+                    Due
+                  </span>
                 )}
               </div>
+            </div>
+
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                onClick={() => handleSelect(item)}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              >
+                <BookOpen size={14} />
+                Practice
+              </button>
+              {!item.builtin && (
+                isConfirming(item.id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    confirmIcon={Trash2}
+                    ariaLabel={`Confirm delete ${item.title}`}
+                    onConfirm={() => confirmDelete(() => handleDelete(item.id))}
+                    onCancel={cancelDelete}
+                  />
+                ) : (
+                  <button
+                    onClick={() => requestDelete(item.id)}
+                    aria-label={`Delete ${item.title}`}
+                    className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )
+              )}
             </div>
           </div>
         ))}
 
         {items.length === 0 && (
-          <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
+          <div className="col-span-full bg-port-card border border-port-border rounded-lg p-8 text-center">
             <Brain size={32} className="text-gray-600 mx-auto mb-3" />
             <p className="text-gray-500">No memory items yet. The Elements Song will be added automatically.</p>
           </div>

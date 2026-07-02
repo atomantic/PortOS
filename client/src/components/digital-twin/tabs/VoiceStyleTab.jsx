@@ -213,9 +213,9 @@ export default function VoiceStyleTab({ onRefresh }) {
 
       {/* Results */}
       {result && (
-        <div className="bg-port-card rounded-lg border border-green-500/30 p-6 space-y-5">
+        <div className="bg-port-card rounded-lg border border-port-success/30 p-6 space-y-5">
           <div className="flex items-center gap-3">
-            <GitCompareArrows className="w-6 h-6 text-green-400" />
+            <GitCompareArrows className="w-6 h-6 text-port-success" />
             <h2 className="text-lg font-semibold text-white">Comparison</h2>
             {result.writtenSource === 'documents' && (
               <span className="text-xs text-gray-500">(written style from your documents)</span>

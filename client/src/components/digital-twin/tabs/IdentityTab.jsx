@@ -16,8 +16,8 @@ const SECTION_CONFIG = {
 };
 
 const STATUS_COLORS = {
-  active: { dot: 'bg-green-400', text: 'text-green-400' },
-  pending: { dot: 'bg-yellow-400', text: 'text-yellow-400' },
+  active: { dot: 'bg-port-success', text: 'text-port-success' },
+  pending: { dot: 'bg-port-warning', text: 'text-port-warning' },
   unavailable: { dot: 'bg-gray-500', text: 'text-gray-500' }
 };
 
@@ -32,9 +32,9 @@ const GOAL_CATEGORY_ICONS = {
 
 function urgencyColor(urgency) {
   if (urgency == null) return 'text-gray-500';
-  if (urgency >= 0.7) return 'text-red-400';
-  if (urgency >= 0.4) return 'text-yellow-400';
-  return 'text-green-400';
+  if (urgency >= 0.7) return 'text-port-error';
+  if (urgency >= 0.4) return 'text-port-warning';
+  return 'text-port-success';
 }
 
 function urgencyLabel(urgency) {
@@ -45,9 +45,9 @@ function urgencyLabel(urgency) {
 }
 
 const SEVERITY_CONFIG = {
-  success: { icon: CheckCircle, color: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10' },
-  warning: { icon: AlertTriangle, color: 'text-yellow-400', border: 'border-yellow-500/30', bg: 'bg-yellow-500/10' },
-  info: { icon: Info, color: 'text-blue-400', border: 'border-blue-500/30', bg: 'bg-blue-500/10' }
+  success: { icon: CheckCircle, color: 'text-port-success', border: 'border-port-success/30', bg: 'bg-port-success/10' },
+  warning: { icon: AlertTriangle, color: 'text-port-warning', border: 'border-port-warning/30', bg: 'bg-port-warning/10' },
+  info: { icon: Info, color: 'text-port-accent', border: 'border-port-accent/30', bg: 'bg-port-accent/10' }
 };
 
 const CATEGORY_LABELS = {
@@ -134,8 +134,8 @@ export default function IdentityTab({ onRefresh }) {
         <div className="h-2 bg-port-border rounded-full overflow-hidden mb-3">
           <div
             className={`h-full transition-all ${
-              percentage >= 80 ? 'bg-green-500' :
-              percentage >= 40 ? 'bg-yellow-500' : 'bg-red-500'
+              percentage >= 80 ? 'bg-port-success' :
+              percentage >= 40 ? 'bg-port-warning' : 'bg-port-error'
             }`}
             style={{ width: `${percentage}%` }}
           />
@@ -175,7 +175,7 @@ export default function IdentityTab({ onRefresh }) {
             {sections.genome?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 sections.genome.status === 'active'
-                  ? 'bg-green-500/20 text-green-400'
+                  ? 'bg-port-success/20 text-port-success'
                   : 'bg-gray-500/20 text-gray-400'
               }`}>
                 {sections.genome.status === 'active' ? 'Active' : 'Pending'}
@@ -221,8 +221,8 @@ export default function IdentityTab({ onRefresh }) {
             {sections.chronotype?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 sections.chronotype.status === 'active'
-                  ? 'bg-green-500/20 text-green-400'
-                  : 'bg-yellow-500/20 text-yellow-400'
+                  ? 'bg-port-success/20 text-port-success'
+                  : 'bg-port-warning/20 text-port-warning'
               }`}>
                 {sections.chronotype.status === 'active' ? 'Active' : 'Pending'}
               </span>
@@ -233,8 +233,8 @@ export default function IdentityTab({ onRefresh }) {
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 {chronotype.type.toLowerCase().includes('evening') || chronotype.type.toLowerCase().includes('owl')
-                  ? <Moon className="w-4 h-4 text-indigo-400" />
-                  : <Sun className="w-4 h-4 text-yellow-400" />
+                  ? <Moon className="w-4 h-4 text-port-accent-2" />
+                  : <Sun className="w-4 h-4 text-port-warning" />
                 }
                 <span className="text-white font-medium">{chronotype.type}</span>
                 {chronotype.confidence != null && (
@@ -268,9 +268,9 @@ export default function IdentityTab({ onRefresh }) {
                       key={name}
                       className={`text-xs px-1.5 py-0.5 rounded ${
                         marker.signal < 0
-                          ? 'bg-indigo-500/20 text-indigo-400'
+                          ? 'bg-port-accent-2/20 text-port-accent-2'
                           : marker.signal > 0
-                            ? 'bg-yellow-500/20 text-yellow-400'
+                            ? 'bg-port-warning/20 text-port-warning'
                             : 'bg-gray-500/20 text-gray-400'
                       }`}
                     >
@@ -306,8 +306,8 @@ export default function IdentityTab({ onRefresh }) {
             {sections.longevity?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 sections.longevity.status === 'active'
-                  ? 'bg-green-500/20 text-green-400'
-                  : 'bg-yellow-500/20 text-yellow-400'
+                  ? 'bg-port-success/20 text-port-success'
+                  : 'bg-port-warning/20 text-port-warning'
               }`}>
                 {sections.longevity.status === 'active' ? 'Active' : 'Pending'}
               </span>
@@ -324,7 +324,7 @@ export default function IdentityTab({ onRefresh }) {
                   <div className="text-xs text-gray-500">Adjusted LE</div>
                 </div>
                 <div className="bg-port-bg rounded-lg p-2 text-center">
-                  <div className="text-xl font-bold text-green-400">
+                  <div className="text-xl font-bold text-port-success">
                     {longevity.timeHorizons?.yearsRemaining ?? '—'}
                   </div>
                   <div className="text-xs text-gray-500">Years Left</div>
@@ -382,8 +382,8 @@ export default function IdentityTab({ onRefresh }) {
             {sections.aesthetics?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 sections.aesthetics.status === 'active'
-                  ? 'bg-green-500/20 text-green-400'
-                  : 'bg-yellow-500/20 text-yellow-400'
+                  ? 'bg-port-success/20 text-port-success'
+                  : 'bg-port-warning/20 text-port-warning'
               }`}>
                 {sections.aesthetics.status === 'active' ? 'Active' : 'Pending'}
               </span>
@@ -407,9 +407,9 @@ export default function IdentityTab({ onRefresh }) {
                     >
                       <div className={`w-2 h-2 rounded-full ${
                         (section.completedQuestions ?? 0) >= (section.totalQuestions ?? 1)
-                          ? 'bg-green-400'
+                          ? 'bg-port-success'
                           : (section.completedQuestions ?? 0) > 0
-                            ? 'bg-yellow-400'
+                            ? 'bg-port-warning'
                             : 'bg-gray-600'
                       }`} />
                       <span className="text-gray-400">{section.name || section.id}</span>
@@ -443,8 +443,8 @@ export default function IdentityTab({ onRefresh }) {
             {sections.goals?.status && (
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 sections.goals.status === 'active'
-                  ? 'bg-green-500/20 text-green-400'
-                  : 'bg-yellow-500/20 text-yellow-400'
+                  ? 'bg-port-success/20 text-port-success'
+                  : 'bg-port-warning/20 text-port-warning'
               }`}>
                 {sections.goals.status === 'active' ? 'Active' : 'Pending'}
               </span>

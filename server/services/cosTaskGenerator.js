@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, LOCAL_LLM_REVIEWERS, DEFAULT_REVIEWERS } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, LOCAL_LLM_REVIEWERS, DEFAULT_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -211,6 +211,58 @@ export function resolveIssueAuthorFilterBlock(promptTaskType, mode = 'self') {
   return (ISSUE_AUTHOR_FILTER_BLOCKS[issueForge] || ISSUE_AUTHOR_FILTER_BLOCKS.gh)[filterMode];
 }
 
+// Per-forge nouns/commands for the swarm directive. The orchestration shape is
+// forge-agnostic (partition → fan-out → serialized merge); only the PR/MR noun
+// and the merge command differ between GitHub (`gh`) and GitLab (`glab`).
+const SWARM_FORGE = {
+  gh: { pr: 'PR', mergeCmd: 'gh pr merge' },
+  glab: { pr: 'MR', mergeCmd: 'glab mr merge' }
+};
+
+/**
+ * Resolve the `{swarm}` directive prepended to the claim-issue prompt when the
+ * task's `taskMetadata.swarmCount` turns on slashdo `/do:next --swarm` mode.
+ *
+ * Returns '' (no-op) when swarm is off (count < SWARM_COUNT_MIN) OR the resolved
+ * prompt type is not a forge issue tracker (plan-task / claim-issue-jira have no
+ * swarm flow — swarm is GitHub/GitLab issues only, matching slashdo). Otherwise
+ * returns a Markdown block that converts the single-issue prompt below it into a
+ * partition → parallel fan-out → serialized-merge orchestration over up to
+ * `count` independent issues. The block does NOT restate the per-issue phases —
+ * each fan-out agent reuses the single-issue Phases 2–6 verbatim, so the swarm
+ * layer stays a thin orchestration wrapper (never a divergent claim path).
+ */
+export function resolveSwarmBlock(promptTaskType, count) {
+  const n = Number.isInteger(count) ? count : 0;
+  if (n < SWARM_COUNT_MIN) return '';
+  const forgeKey = promptTaskType === 'claim-issue-gitlab' ? 'glab'
+    : promptTaskType === 'claim-issue' ? 'gh'
+      : null;
+  if (!forgeKey) return ''; // plan-task / jira have no swarm flow
+  const { pr, mergeCmd } = SWARM_FORGE[forgeKey];
+  return `# ⚡ SWARM MODE — claim and ship up to ${n} independent issues in parallel
+
+**This run operates in slashdo \`/do:next --swarm=${n}\` mode.** The single-issue framing in the task body below is your PER-AGENT playbook, not the shape of the whole run: instead of claiming ONE issue, claim up to ${n} *mutually independent* open issues and ship them concurrently, then serialize only the merges. Swarm adds exactly two things over the single-issue flow — a partition step up front and a serialized merge queue at the end; everything in between (claim, worktree, verify, implement, changelog, review gate) is the unchanged single-issue flow run once per agent. Never special-case a swarm agent's claim/ship logic.
+
+**Swarm is issues-mode only.** If the resolved work tracker is not a forge issue tracker (no claimable open issues), ignore this section entirely and run the normal single-issue flow below.
+
+## Phase A — Partition the batch (ONCE, up front)
+1. Run Phase 1's candidate scan + in-flight filter (below) to build the eligible-issue queue (oldest-first, honoring the author filter).
+2. From that queue pick up to ${n} issues that are **mutually independent** — no shared files/subsystems likely to collide on merge, no parent/child or dependency links; prefer issues that touch disjoint areas. **Under-fill is fine:** if fewer than ${n} independent issues exist, run a smaller swarm and say so. **If only ONE is eligible, just run the single-issue flow below and say so** — a one-agent swarm is pure overhead.
+
+## Phase B — Fan out (one subagent per picked issue)
+For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–6 below** for that one issue — claim (own \`claim/issue-<num>\` worktree + assignee + \`in-progress\` label) → verify → implement → changelog → open the ${pr} → run the review gate ({reviewers}) — **but with NO merge and NO Phase 7 cleanup** (the orchestrator owns those; each agent opens its ${pr} the equivalent of \`--no-merge\`). Because each agent claims through the normal Phase 2 assignee marker + race read-back, two agents can never ship the same issue.
+
+## Phase C — Serialize the merges (orchestrator, after all agents finish)
+Merge the ready ${pr}s ONE AT A TIME. For each: re-sync onto the latest default branch, gate on **required** CI (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next), then \`${mergeCmd}\`. After all merges, run Phase 7 cleanup once per merged worktree.
+
+Everything not covered above (claim mechanics, branch naming, verify/skip rules, implement conventions, ${pr} body, review loop) is exactly the single-issue flow documented below.
+
+---
+
+`;
+}
+
 /**
  * Build a one-off "claim the next work item" task for `app`, routed by the app's
  * configured workTracker — the manual (Slashdo `/do:next` button) counterpart to
@@ -279,8 +331,14 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
   }
   const reviewersCsv = (reviewersList.length ? reviewersList : [...DEFAULT_REVIEWERS]).join(',');
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
+  // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
+  // placeholder) so it stays an opt-in orchestration wrapper that needs no
+  // prompt-default version bump; empty when swarmCount is off or the tracker
+  // isn't a forge issue tracker. {reviewers} inside the block is substituted by
+  // the same replacer below.
+  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const prompt = template
+  const prompt = `${swarmBlock}${template}`
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
@@ -1681,8 +1739,13 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // from `metadata` (default 'self', the slashdo `/do:next --self` security
   // boundary — only claim issues you filed).
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, metadata.issueAuthorFilter || 'self');
+  // Swarm directive — prepended (see buildClaimWorkTask note). swarmCount was
+  // merged (global → per-app override) + value-constrained by
+  // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
+  // trackers and when swarm is off.
+  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const description = promptTemplate
+  const description = `${swarmBlock}${promptTemplate}`
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)

@@ -306,7 +306,7 @@ export default function MemoryTab({ apps = [] }) {
                   <button
                     onClick={() => handleApprove(memory.id)}
                     disabled={!!actionInFlight}
-                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-green-500/20 text-green-400 hover:bg-green-500/30 active:bg-green-500/40 rounded-lg transition-colors disabled:opacity-50"
+                    className="flex-1 sm:flex-none p-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-success/20 text-port-success hover:bg-port-success/30 active:bg-port-success/40 rounded-lg transition-colors disabled:opacity-50"
                     title="Approve"
                     aria-label="Approve memory"
                   >
@@ -402,7 +402,7 @@ export default function MemoryTab({ apps = [] }) {
                       </span>
                       <span className="text-xs text-gray-500">{memory.category}</span>
                       {memory.sourceAppId === 'brain' ? (
-                        <span className="flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/30">
+                        <span className="flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-port-accent-2/10 text-port-accent-2 border border-port-accent-2/30">
                           <Brain size={10} /> Brain
                         </span>
                       ) : (

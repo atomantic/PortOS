@@ -1,6 +1,6 @@
 // Procedural window-grid layout for CyberCity buildings that use the
-// three-fenestra interior-mapping material (parallax fake-3D rooms behind flat
-// window panes). The geometry/material live in
+// InteriorMappingMaterial interior-mapping material (parallax fake-3D rooms
+// behind flat window panes). The geometry/material live in
 // `client/src/components/city/BuildingWindows.jsx`; this module is the pure,
 // side-effect-free math it consumes so the placement is unit-testable without a
 // WebGL context (headless GL can't render the city — see the city visual

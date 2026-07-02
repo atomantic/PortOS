@@ -392,6 +392,14 @@ describe('generateMusic backend selection', () => {
     await expect(generateMusic({ prompt: 'x' }))
       .rejects.toMatchObject({ status: 500, code: 'PIPELINE_MUSIC_GEN_FAILED' });
   });
+
+  it('never spawns when the signal is already aborted (cancel raced the call)', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(generateMusic({ prompt: 'x', signal: controller.signal }))
+      .rejects.toMatchObject({ status: 500, code: 'PIPELINE_MUSIC_GEN_FAILED' });
+    expect(spawnCalls).toHaveLength(0);
+  });
 });
 
 describe('isEngineReady', () => {

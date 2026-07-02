@@ -676,7 +676,7 @@ function CharacterArcsSection({ series, patchSeries }) {
         <button
           type="button"
           onClick={addArc}
-          className="flex items-center gap-1 text-[11px] text-port-accent hover:text-blue-400"
+          className="flex items-center gap-1 text-[11px] text-port-accent hover:text-port-accent/80"
         >
           <Plus size={12} /> Add arc
         </button>
@@ -726,7 +726,7 @@ function CharacterArcsSection({ series, patchSeries }) {
                   <button
                     type="button"
                     onClick={() => addTransition(i)}
-                    className="flex items-center gap-1 text-[11px] text-port-accent hover:text-blue-400"
+                    className="flex items-center gap-1 text-[11px] text-port-accent hover:text-port-accent/80"
                   >
                     <Plus size={11} /> Add beat
                   </button>

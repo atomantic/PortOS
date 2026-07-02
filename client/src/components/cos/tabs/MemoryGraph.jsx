@@ -248,6 +248,9 @@ export default function MemoryGraph() {
           ))}
           <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
             <div className="flex items-center gap-2">
+              {/* Stays a fixed blue (not port-accent) to match GraphEdges' hardcoded
+                  #3b82f6 three.js edge color below — theming just the legend would
+                  desync it from the actual rendered edge color on non-blue themes. */}
               <span className="inline-block w-4 h-0 border-t border-blue-400" />
               <span className="text-gray-500">linked</span>
             </div>

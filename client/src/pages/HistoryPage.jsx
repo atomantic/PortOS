@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Trash2 } from 'lucide-react';
 import * as api from '../services/api';
-import { formatTime, formatRuntime } from '../utils/formatters';
+import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 
@@ -185,7 +185,7 @@ export function HistoryPage() {
                             <span className="text-gray-400 text-sm sm:text-base">→ {entry.targetName}</span>
                           )}
                           {entry.details?.runtime && (
-                            <span className="text-xs text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</span>
+                            <span className="text-xs text-port-accent font-mono">{formatRuntime(entry.details.runtime)}</span>
                           )}
                         </div>
                         {entry.details?.command && (
@@ -220,7 +220,7 @@ export function HistoryPage() {
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</div>
-                          <div className="text-gray-300">{new Date(entry.timestamp).toLocaleString()}</div>
+                          <div className="text-gray-300">{formatDateTime(entry.timestamp)}</div>
                         </div>
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Status</div>
@@ -231,7 +231,7 @@ export function HistoryPage() {
                         {entry.details?.runtime && (
                           <div>
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime</div>
-                            <div className="text-cyan-400 font-mono">{formatRuntime(entry.details.runtime)}</div>
+                            <div className="text-port-accent font-mono">{formatRuntime(entry.details.runtime)}</div>
                           </div>
                         )}
                         {entry.details?.exitCode !== undefined && (
@@ -249,7 +249,7 @@ export function HistoryPage() {
                         <div>
                           <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Command</div>
                           <div className="bg-port-card border border-port-border rounded-lg p-3">
-                            <code className="text-sm text-cyan-300 font-mono whitespace-pre-wrap break-all">
+                            <code className="text-sm text-port-accent/90 font-mono whitespace-pre-wrap break-all">
                               {entry.details.command}
                             </code>
                           </div>

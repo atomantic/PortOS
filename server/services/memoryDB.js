@@ -284,8 +284,10 @@ export async function updateMemory(id, updates) {
     }
   }
 
-  // Update summary if content changed but no explicit summary
-  if (updates.content && !updates.summary) {
+  // Update summary if content changed but no explicit summary. Gate on "is a
+  // string" not truthiness, mirroring the file backend (memory.js) and keeping
+  // null/undefined out of generateSummary (absent-vs-cleared, CLAUDE.md).
+  if (typeof updates.content === 'string' && !updates.summary) {
     fields.push(`summary = $${paramIdx++}`);
     params.push(generateSummary(updates.content));
   }

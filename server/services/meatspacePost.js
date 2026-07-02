@@ -5,16 +5,28 @@
  * Reads/writes to meatspace data files.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { EventEmitter } from 'events';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
+import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
+import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
+import { advanceScheduleFromSession, mergeMasteryFromSession } from './meatspacePostMemory.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
 const CONFIG_FILE = join(MEATSPACE_DIR, 'post-config.json');
+
+// Tiny pub/sub (mirrors settingsEvents in server/services/settings.js) so
+// features that react to a specific config slice — e.g. meatspacePostReminder.js
+// rescheduling its cron when `reminder` changes — can subscribe without
+// meatspacePost.js importing back into them (which would create a service
+// cycle). This is what makes updatePostConfig() the single place ANY current
+// or future caller gets slice-specific side effects "for free", instead of
+// each route handler having to remember to bolt one on (#2015).
+export const postConfigEvents = new EventEmitter();
 
 const DEFAULT_CONFIG = {
   mentalMath: {
@@ -39,9 +51,36 @@ const DEFAULT_CONFIG = {
       'pun-wordplay': { enabled: true, count: 5, timeLimitSec: 120 }
     }
   },
+  // Deterministic cognitive drills (working-memory / attention / inhibition).
+  // No provider calls — enabled by default since they're free to run. No
+  // timeLimitSec — these drills are self-paced/stimulus-driven and never
+  // enforce a countdown (see client PostCognitiveDrillRunner.jsx / issue #2008).
+  cognitive: {
+    enabled: true,
+    drillTypes: {
+      'n-back': { enabled: true, n: 2, length: 20 },
+      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
+      'stroop': { enabled: true, count: 15 },
+      'schulte-table': { enabled: true, size: 5 },
+      'mental-rotation': { enabled: true, count: 8 },
+      'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 }
+    }
+  },
   sessionModules: ['mental-math'],
-  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0 } }
+  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0, 'cognitive': 1.0 } },
+  // Opt-in adaptive difficulty (default OFF). When enabled, math drills are
+  // nudged harder/easier at generation time from recent scored performance.
+  adaptive: { enabled: false },
+  // Opt-in daily reminder (default OFF, off-by-default per CLAUDE.md's
+  // single-user/no-surprise-background-behavior convention). When enabled,
+  // meatspacePostReminder.js fires a deterministic (no-LLM) in-app notification
+  // at `time` (HH:MM, user's configured timezone) if today's POST is incomplete.
+  reminder: { enabled: false, time: '09:00' }
 };
+
+// Math tasks are logged under this coarse module in scored sessions, so the
+// adaptive signal reads `byDrill['mental-math:<type>']`.
+const MATH_MODULE = 'mental-math';
 
 async function ensureMeatspaceDir() {
   await ensureDir(MEATSPACE_DIR);
@@ -60,9 +99,25 @@ export async function getPostConfig() {
 export async function updatePostConfig(updates) {
   const config = await getPostConfig();
   const merged = deepMerge(config, updates);
+  if (updates?.reminder) {
+    // Stamp WHEN the reminder's enabled/time settings last changed. Read by
+    // meatspacePostReminder.js's missed-slot catch-up: a cron occurrence
+    // that fell before this timestamp happened under a DIFFERENT (possibly
+    // disabled) configuration, so replaying it after a restart would nag for
+    // a slot the current settings never actually owned — e.g. enabling the
+    // reminder for an already-past time today, then restarting later that
+    // same day, would otherwise catch up a slot the reminder wasn't even
+    // active for.
+    merged.reminder = { ...merged.reminder, updatedAt: new Date().toISOString() };
+  }
   await ensureMeatspaceDir();
-  await writeFile(CONFIG_FILE, JSON.stringify(merged, null, 2));
+  await atomicWrite(CONFIG_FILE, merged);
   console.log(`🧪 POST config updated`);
+  // Emit AFTER the write succeeds so a subscriber (reminder rescheduler, etc.)
+  // never reacts to a config change that didn't actually persist. `updates` is
+  // included (not just `merged`) so subscribers can gate on which slice was
+  // touched rather than re-evaluating on every unrelated save.
+  postConfigEvents.emit('post-config:updated', { config: merged, updates });
   return merged;
 }
 
@@ -117,6 +172,13 @@ export async function submitPostSession(sessionData) {
       return { ...rest, score: 0 };
     }
 
+    // Cognitive drills: deterministic — recompute the answer key from the
+    // generated drillData (never trust client `correct`/`score`).
+    if (COGNITIVE_DRILL_TYPES.includes(rest.type)) {
+      const { score, questions } = scoreCognitiveDrill(rest.type, rest.drillData, rest.questions || []);
+      return { ...rest, questions, score };
+    }
+
     // Math drills: strip correct from individual questions and rescore
     const sanitizedQuestions = (rest.questions || []).map(q => {
       const { correct: _qCorrect, ...qRest } = q;
@@ -144,8 +206,34 @@ export async function submitPostSession(sessionData) {
   data.sessions.push(session);
   data.sessions.sort((a, b) => a.date.localeCompare(b.date));
   await ensureMeatspaceDir();
-  await writeFile(SESSIONS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(SESSIONS_FILE, data);
   console.log(`🧪 POST session saved: score=${session.score} modules=${session.modules.join(',')}`);
+
+  // A memory drill completed inside this session IS a review — mirror the
+  // dedicated MemoryBuilder practice flow (submitPractice) and advance each
+  // drilled item's spaced-repetition schedule, so it reschedules and clears
+  // from "Due Today" just like a direct MemoryBuilder practice session would.
+  // Ratio comes from raw correctness (not `score`, which also folds in a speed
+  // bonus) to match the accuracy signal `advanceSchedule` expects. Chunk/element
+  // MASTERY is also merged (mergeMasteryFromSession) using the chunkId/element
+  // attribution usePostSession.js's submitAnswer now preserves per-question —
+  // the other half of submitPractice's bookkeeping, deferred out of #2010 into
+  // #2016 until the client carried that attribution.
+  // Sequential, not Promise.all: advanceScheduleFromSession/mergeMasteryFromSession
+  // each do a full read-modify-write of the shared memory-items file with no
+  // write queue, so two tasks (or two calls for the same task) resolved
+  // concurrently could race and drop an update (last write wins). A session
+  // rarely has more than 1-2 memory tasks, so the latency cost of awaiting
+  // each is negligible.
+  for (const task of rescoredTasks) {
+    if (!POST_SUPPORTED_MEMORY_TYPES.includes(task.type) || !task.memoryItemId) continue;
+    const total = task.questions?.length || 0;
+    const correct = task.questions?.filter(q => q.correct).length || 0;
+    const ratio = total ? correct / total : 0;
+    await advanceScheduleFromSession(task.memoryItemId, ratio, new Date(now));
+    await mergeMasteryFromSession(task.memoryItemId, task.questions, new Date(now));
+  }
+
   return session;
 }
 
@@ -215,7 +303,7 @@ export async function getPostStats(days = 30) {
   }
 
   if (recent.length === 0) {
-    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {}, ...streaks };
+    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {}, byDrillCount: {}, ...streaks };
   }
 
   const scores = recent.map(s => s.score);
@@ -236,9 +324,13 @@ export async function getPostStats(days = 30) {
 
   const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
   for (const key of Object.keys(byModule)) byModule[key] = avg(byModule[key]);
+  // byDrillCount is the per-drill sample size, used to gate adaptive difficulty
+  // (don't adapt off a single lucky/unlucky run). Captured before averaging.
+  const byDrillCount = {};
+  for (const key of Object.keys(byDrill)) byDrillCount[key] = byDrill[key].length;
   for (const key of Object.keys(byDrill)) byDrill[key] = avg(byDrill[key]);
 
-  return { days, sessionCount: recent.length, overall, byModule, byDrill, ...streaks };
+  return { days, sessionCount: recent.length, overall, byModule, byDrill, byDrillCount, ...streaks };
 }
 
 // =============================================================================
@@ -335,9 +427,77 @@ export function generateDrill(type, config = {}) {
       return generatePowers(config.bases, config.maxExponent, config.count);
     case 'estimation':
       return generateEstimation(config.count, config.tolerancePct);
+    case 'n-back':
+    case 'digit-span':
+    case 'stroop':
+    case 'schulte-table':
+    case 'mental-rotation':
+    case 'reaction-time':
+      return generateCognitiveDrill(type, config);
     default:
       return null;
   }
+}
+
+// =============================================================================
+// ADAPTIVE DIFFICULTY
+// =============================================================================
+
+/**
+ * Read the recent performance signal for one math drill type from scored
+ * sessions. Returns { score, samples } — score is the avg session score (0-100)
+ * over the adaptive window; samples is how many task samples backed it.
+ */
+async function getAdaptiveSignal(type) {
+  const stats = await getPostStats(ADAPTIVE_DEFAULTS.windowDays);
+  const key = `${MATH_MODULE}:${type}`;
+  const score = stats.byDrill?.[key];
+  const samples = stats.byDrillCount?.[key] || 0;
+  return { score: score == null ? null : score, samples };
+}
+
+/**
+ * Resolve the effective drill config for generation. When the Adaptive toggle
+ * is off (default), the caller's manual config is returned unchanged. When on,
+ * math drills are nudged from recent scored performance within clamped bounds.
+ * Non-math (LLM/memory) types and unsupported math types pass through untouched.
+ *
+ * @returns {{ config: object, adaptive: object|null }}
+ */
+export async function resolveDrillConfig(type, requestedConfig = {}) {
+  const config = await getPostConfig();
+  if (!config?.adaptive?.enabled || !ADAPTIVE_SPECS[type]) {
+    return { config: requestedConfig, adaptive: null };
+  }
+  const signal = await getAdaptiveSignal(type);
+  const result = adaptDrillConfig(type, requestedConfig, signal);
+  return { config: result.config, adaptive: result };
+}
+
+/**
+ * Build a transparent per-type preview of the effective adaptive difficulty for
+ * every supported math drill, so the config UI can show what Adaptive will do
+ * before a session starts. `enabled` reflects the saved Adaptive toggle.
+ */
+export async function getAdaptivePreview() {
+  const config = await getPostConfig();
+  const enabled = !!config?.adaptive?.enabled;
+  const stats = await getPostStats(ADAPTIVE_DEFAULTS.windowDays);
+  const savedDrills = config?.mentalMath?.drillTypes || {};
+
+  const drills = {};
+  for (const type of Object.keys(ADAPTIVE_SPECS)) {
+    const key = `${MATH_MODULE}:${type}`;
+    const signal = {
+      score: stats.byDrill?.[key] == null ? null : stats.byDrill[key],
+      samples: stats.byDrillCount?.[key] || 0,
+    };
+    // Base off the user's saved config so the preview matches what a session
+    // would actually use; adaptDrillConfig falls back to the spec base per field.
+    drills[type] = adaptDrillConfig(type, savedDrills[type] || {}, signal);
+  }
+
+  return { enabled, windowDays: ADAPTIVE_DEFAULTS.windowDays, thresholds: { highScore: ADAPTIVE_DEFAULTS.highScore, lowScore: ADAPTIVE_DEFAULTS.lowScore, minSamples: ADAPTIVE_DEFAULTS.minSamples }, drills };
 }
 
 // =============================================================================

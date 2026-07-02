@@ -9,6 +9,7 @@ import { getAllAccounts as getAllSocialAccounts } from './socialAccounts.js';
 import { DIGITAL_TWIN_DIR, now } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { getTraits } from './digital-twin-analysis.js';
+import { estimateTokens } from '../lib/contextBudget.js';
 
 export function getExportFormats() {
   return [
@@ -80,7 +81,7 @@ function exportAsSystemPrompt(docs) {
     format: 'system_prompt',
     content: output.trim(),
     documentCount: docs.length,
-    tokenEstimate: Math.ceil(output.length / 4)
+    tokenEstimate: estimateTokens(output)
   };
 }
 
@@ -98,7 +99,7 @@ function exportAsClaudeMd(docs) {
     format: 'claude_md',
     content: output.trim(),
     documentCount: docs.length,
-    tokenEstimate: Math.ceil(output.length / 4)
+    tokenEstimate: estimateTokens(output)
   };
 }
 
@@ -124,7 +125,7 @@ function exportAsJson(docs) {
     format: 'json',
     content: jsonString,
     documentCount: docs.length,
-    tokenEstimate: Math.ceil(jsonString.length / 4)
+    tokenEstimate: estimateTokens(jsonString)
   };
 }
 
@@ -138,7 +139,7 @@ function exportAsIndividual(docs) {
       content: doc.content
     })),
     documentCount: docs.length,
-    tokenEstimate: docs.reduce((sum, d) => sum + Math.ceil(d.content.length / 4), 0)
+    tokenEstimate: docs.reduce((sum, d) => sum + estimateTokens(d.content), 0)
   };
 }
 
@@ -276,7 +277,7 @@ async function exportAsLegacyPortrait(docs) {
     documentCount: docs.length,
     storyCount: stories.length,
     goalCount: goals.length,
-    tokenEstimate: Math.ceil(content.length / 4)
+    tokenEstimate: estimateTokens(content)
   };
 }
 

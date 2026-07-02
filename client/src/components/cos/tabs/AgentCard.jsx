@@ -31,7 +31,7 @@ import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
-import { formatDurationMs } from '../../../utils/formatters';
+import { formatDurationMs, formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -537,7 +537,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           {completed && agent.completedAt && (
             <>
               <span className="text-gray-600">|</span>
-              <span className="text-gray-500 whitespace-nowrap" title={new Date(agent.completedAt).toLocaleString()}>
+              <span className="text-gray-500 whitespace-nowrap" title={formatDateTime(agent.completedAt)}>
                 {new Date(agent.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}{' '}
                 {new Date(agent.completedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
               </span>
@@ -591,7 +591,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (
           <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-0.5 text-xs bg-blue-500/20 text-blue-400 rounded font-mono">
+            <span className="px-2 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded font-mono">
               {agent.metadata.jiraTicketId}
             </span>
             {agent.metadata?.jiraTicketUrl && (
@@ -599,7 +599,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 href={agent.metadata.jiraTicketUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
                 title="Open JIRA ticket in new tab"
               >
                 View ticket
@@ -776,7 +776,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <div className={`text-sm flex items-center gap-1 ${
                 agent.memoryExtraction?.created > 0 ? 'text-purple-400' :
                 agent.memoryExtraction?.pendingApproval > 0 ? 'text-yellow-400' : 'text-gray-500'
-              }`} title={agent.memoryExtraction?.extractedAt ? `Extracted at ${new Date(agent.memoryExtraction.extractedAt).toLocaleString()}` : 'No memories extracted'}>
+              }`} title={agent.memoryExtraction?.extractedAt ? `Extracted at ${formatDateTime(agent.memoryExtraction.extractedAt)}` : 'No memories extracted'}>
                 <Brain size={14} aria-hidden="true" />
                 {agent.memoryExtraction?.created > 0 ? (
                   <span>{agent.memoryExtraction.created} memor{agent.memoryExtraction.created === 1 ? 'y' : 'ies'}</span>

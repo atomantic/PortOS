@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
+import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { recordUpdateResult } from './updateChecker.js';
 
 const UPDATE_SH = join(PATHS.root, 'update.sh');
@@ -9,8 +10,20 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 
 /**
  * Execute the PortOS update script (git pull to latest).
- * Spawns update.sh (or update.ps1 on Windows) detached so it survives
- * the Node process dying during the PM2 restart phase.
+ *
+ * On POSIX the script is launched via spawnDetached's double-fork so it
+ * reparents to init and SURVIVES pm2's TreeKill. A plain
+ * `spawn(..., { detached: true })` does NOT survive: pm2 walks PPID
+ * (`ps -e -o pid=,ppid=`), not the process group, so when update.sh reaches
+ * its `pm2-stop` step (`pm2 delete ecosystem.config.cjs`) the script itself —
+ * still a PPID-child of portos-server — was tree-killed with the server,
+ * leaving every app stopped with nothing alive to run the final `pm2 start`
+ * (the reconcile/update "shuts down but never comes back" failure). See the
+ * rationale in `server/lib/detachedSpawn.js`.
+ *
+ * Windows keeps the prior plain-spawn behavior (pm2 there is taskkill-based;
+ * detached survival is a POSIX-only guarantee — same trade-off as
+ * spawnDetached's own win32 fallback).
  *
  * The scripts pull the latest code via `git pull --rebase --autostash` and
  * write the actual resulting version to `data/update-complete.json`.
@@ -46,14 +59,46 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
     ? { ...process.env, PORTOS_FORCE_CLEAN_WORKSPACES: cleanList.join(',') }
     : process.env;
 
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: PATHS.root,
-      env: childEnv
-    });
+  // POSIX: double-fork via spawnDetached so the script reparents to init and
+  // survives the pm2 TreeKill its own `pm2 delete`/`pm2 start` steps trigger.
+  // The returned handle is ChildProcess-like (stdout/stderr 'data', 'close',
+  // 'error'), streamed by tailing the control dir's log files — so the STEP:
+  // progress parsing below works unchanged. The control dir is reused across
+  // updates (spawnDetached truncates stale files) and kept afterward as the
+  // post-mortem record of the launch.
+  const controlDir = join(PATHS.data, 'update-detached');
 
+  // Refuse to reuse the control dir while a prior update script is still
+  // running (survival path: the old script outlives the server restart it
+  // triggers, and its supervisor's late `exit` write into a truncated control
+  // dir would prematurely close the new handle with the OLD script's status).
+  // A still-running script also means a second update is wrong regardless.
+  if (!isWindows && await isDetachedRunning(controlDir)) {
+    const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
+    await recordUpdateResult({
+      version: tag.replace(/^v/, ''),
+      success: false,
+      completedAt: new Date().toISOString(),
+      log: errorMessage
+    }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+    emit('starting', 'error', errorMessage);
+    return { success: false, failedStep: 'starting', errorMessage };
+  }
+
+  const child = isWindows
+    ? spawn(cmd, args, {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: PATHS.root,
+        env: childEnv
+      })
+    : await spawnDetached(cmd, args, {
+        cwd: PATHS.root,
+        env: childEnv,
+        controlDir
+      });
+
+  return new Promise((resolve) => {
     let lastStep = 'starting';
 
     // Parse STEP:name:status:message lines from stdout/stderr streams
@@ -149,7 +194,9 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
       resolve({ success: false, failedStep: 'starting', errorMessage });
     });
 
-    // Unref so the parent process doesn't wait for the detached child
-    child.unref();
+    // Unref so the parent process doesn't wait for the detached child.
+    // The spawnDetached handle has no unref (its launcher already unref'd);
+    // only the Windows plain-spawn child needs it.
+    child.unref?.();
   });
 }

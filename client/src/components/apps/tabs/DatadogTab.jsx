@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, Clock, ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
+import { formatDateTime } from '../../../utils/formatters';
 
 const TIME_RANGES = [
   { value: '1h', label: 'Last 1 hour', ms: 60 * 60 * 1000 },
@@ -153,7 +154,7 @@ export default function DatadogTab({ app }) {
                         {timestamp && (
                           <span className="flex items-center gap-1">
                             <Clock size={12} />
-                            {new Date(timestamp).toLocaleString()}
+                            {formatDateTime(timestamp)}
                           </span>
                         )}
                         <span className="px-1.5 py-0.5 bg-port-error/20 text-port-error rounded">{status}</span>

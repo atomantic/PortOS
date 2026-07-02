@@ -12,7 +12,15 @@ tryReadFile: vi.fn().mockResolvedValue(null),
     data: '/mock/data',
     meatspace: '/mock/data/meatspace'
   },
-  ensureDir: vi.fn().mockResolvedValue(undefined)
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) sites (#1837); route
+  // it through the mocked fs/promises.writeFile so the existing
+  // writeFile.toHaveBeenCalled / JSON.parse(calls[0][1]) asserts keep working.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  })
 }));
 
 import { writeFile } from 'fs/promises';

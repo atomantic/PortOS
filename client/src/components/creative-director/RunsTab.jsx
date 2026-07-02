@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { formatDateTime } from '../../utils/formatters';
 
 const STATUS_BADGE = {
   running: 'bg-port-accent/30 text-port-accent',
@@ -23,8 +24,8 @@ export default function RunsTab({ project }) {
             <span className={`text-xs px-2 py-0.5 rounded ${STATUS_BADGE[r.status] || ''}`}>{r.status}</span>
           </div>
           <div className="text-xs text-port-text-muted mt-1">
-            {r.startedAt && new Date(r.startedAt).toLocaleString()}
-            {r.completedAt && ` → ${new Date(r.completedAt).toLocaleString()}`}
+            {r.startedAt && formatDateTime(r.startedAt)}
+            {r.completedAt && ` → ${formatDateTime(r.completedAt)}`}
           </div>
           {r.taskId && (
             <div className="text-xs text-port-text-muted mt-1">

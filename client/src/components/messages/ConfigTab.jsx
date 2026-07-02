@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, RefreshCw, Mail, Globe, MessageSquare, Save, ExternalLink, User } from 'lucide-react';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -350,7 +351,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     </div>
                     {account.lastSyncAt && (
                       <div className="text-xs text-gray-600">
-                        Last sync: {new Date(account.lastSyncAt).toLocaleString()} ({account.lastSyncStatus})
+                        Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
                       </div>
                     )}
                   </div>
@@ -435,7 +436,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
         <div className="p-4 bg-port-card rounded-lg border border-port-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <User size={20} className={config?.voiceMode ? 'text-purple-400' : 'text-gray-600'} />
+              <User size={20} className={config?.voiceMode ? 'text-port-accent-2' : 'text-gray-600'} />
               <div>
                 <div className="text-sm font-medium text-white">Voice Mode</div>
                 <div className="text-xs text-gray-500">
@@ -447,7 +448,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
               onClick={() => { setConfig(prev => ({ ...prev, voiceMode: !prev.voiceMode })); setConfigDirty(true); }}
               className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
                 config?.voiceMode
-                  ? 'bg-purple-500/20 text-purple-400'
+                  ? 'bg-port-accent-2/20 text-port-accent-2'
                   : 'bg-gray-700 text-gray-400'
               }`}
             >

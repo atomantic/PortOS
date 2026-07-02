@@ -93,7 +93,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, st
               <button
                 type="button"
                 onClick={() => onDelete(c.id)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
+                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
                 aria-label={`Delete conversation: ${c.title}`}
                 title="Delete conversation"
               >

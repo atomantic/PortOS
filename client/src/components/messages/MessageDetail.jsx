@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User } from 'lucide-react';
 import toast from '../ui/Toast';
+import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 
 /**
@@ -187,14 +188,14 @@ export default function MessageDetail({ message, accounts, onBack }) {
             <span className="text-xs text-gray-500">{threadMessages.length} messages</span>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button onClick={() => setShowReply(!showReply)} className="p-1.5 text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
-          <button onClick={() => setUseVoice(v => !v)} className={`p-1.5 rounded transition-colors ${useVoice ? 'text-purple-400 bg-purple-500/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Voice mode ON — replies use your Digital Twin voice' : 'Voice mode OFF — replies use generic tone'}><User size={14} /></button>
-          <button onClick={handleGenerateReply} disabled={generating} className="p-1.5 text-purple-400 hover:bg-purple-500/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
-          <button onClick={handleRefresh} disabled={refreshing} className="p-1.5 text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          <button onClick={() => setShowReply(!showReply)} className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
+          <button onClick={() => setUseVoice(v => !v)} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Voice mode ON — replies use your Digital Twin voice' : 'Voice mode OFF — replies use generic tone'}><User size={14} /></button>
+          <button onClick={handleGenerateReply} disabled={generating} className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
+          <button onClick={handleRefresh} disabled={refreshing} className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
           <span className="w-px h-4 bg-port-border mx-0.5" />
-          <button onClick={() => handleAction('archive')} disabled={!!actioning} className="p-1.5 text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>
-          <button onClick={() => handleAction('delete')} disabled={!!actioning} className="p-1.5 text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>
+          <button onClick={() => handleAction('archive')} disabled={!!actioning} className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-warning hover:bg-port-warning/10 rounded transition-colors disabled:opacity-50" title="Archive"><Archive size={14} /></button>
+          <button onClick={() => handleAction('delete')} disabled={!!actioning} className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50" title="Delete"><Trash2 size={14} /></button>
         </div>
       </div>
 
@@ -240,7 +241,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
                   From: <span className="text-white">{msg.from?.name || msg.from?.email || 'Unknown'}</span>
                 </span>
                 {msg.date && (
-                  <span className="text-gray-500">{new Date(msg.date).toLocaleString()}</span>
+                  <span className="text-gray-500">{formatDateTime(msg.date)}</span>
                 )}
               </div>
               {msg.to?.length > 0 && (

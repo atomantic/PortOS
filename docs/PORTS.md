@@ -7,7 +7,7 @@ PortOS uses a contiguous port allocation scheme to make it easy to understand wh
 ### Convention
 
 1. **Contiguous Ranges**: Each app should use a contiguous block of ports
-2. **Labeled Ports**: Use the `ports` object in `ecosystem.config.cjs` to define all ports with descriptive labels
+2. **Labeled Ports**: Define all ports in the top-level `PORTS` object in `ecosystem.config.cjs` (re-exported at `server/lib/ports.js`); the per-process label map lives in `server/services/apps.js`
 3. **No Gaps**: Avoid leaving gaps between port allocations within an app
 
 ### Port Labels
@@ -24,7 +24,7 @@ Common port labels:
 | Port | Process | Label | Description |
 |------|---------|-------|-------------|
 | 5553 | portos-server | api-local | Loopback-only HTTP mirror of the API (only listens when HTTPS is active on 5555). Lets `http://localhost:5553` work without cert warnings. Override with `PORTOS_HTTP_PORT`. |
-| 5554 | portos-client | ui | Vite dev server (React UI) — only present in `npm run dev`; `npm start` serves the built client from :5555 directly. |
+| 5554 | portos-ui | ui | Vite dev server (React UI) — only present in `npm run dev`; `npm start` serves the built client from :5555 directly. |
 | 5555 | portos-server | api | Main API server — **always the user-facing port**. Switches between HTTP and HTTPS based on whether `data/certs/{cert,key}.pem` exists. |
 | 5556 | portos-browser | cdp | Chrome DevTools Protocol |
 | 5557 | portos-browser | health | Browser health check API |

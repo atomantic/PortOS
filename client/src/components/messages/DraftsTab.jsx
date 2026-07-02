@@ -89,7 +89,7 @@ export default function DraftsTab({ accounts }) {
                 </span>
                 <span className="text-xs text-gray-500">{getAccountName(draft.accountId)}</span>
                 {draft.generatedBy === 'ai' && (
-                  <span className="text-xs text-purple-400">AI generated</span>
+                  <span className="text-xs text-port-accent-2">AI generated</span>
                 )}
               </div>
               <div className="flex items-center gap-1">

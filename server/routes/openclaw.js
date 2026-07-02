@@ -10,6 +10,7 @@ import {
   sendSessionMessage,
   streamSessionMessage
 } from '../integrations/openclaw/api.js';
+import { openSseStream } from '../lib/sseDownload.js';
 
 const router = express.Router();
 
@@ -183,16 +184,15 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
 
     const { response } = streamResult;
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders();
+    // Shared SSE header boilerplate (writeHead flushes headers). This route
+    // proxies raw upstream bytes / named `event:` frames, so it uses safeEnd
+    // but not send.
+    const { safeEnd } = openSseStream(res);
 
     const upstream = response.body;
     if (!upstream) {
       res.write('event: error\ndata: {"error":"No upstream stream body"}\n\n');
-      return res.end();
+      return safeEnd();
     }
 
     reader = upstream.getReader();
@@ -220,7 +220,7 @@ router.post('/sessions/:id/messages/stream', asyncHandler(async (req, res) => {
       }
     }
 
-    if (!res.writableEnded && !res.destroyed) res.end();
+    safeEnd();
   } finally {
     req.off('close', handleClose);
   }

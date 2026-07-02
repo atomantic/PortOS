@@ -74,8 +74,8 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 ## Non-Goals
 
 - **Multi-user support**: PortOS is a personal tool built for one person. Adding auth, roles, or multi-tenancy would add complexity with no benefit.
-- **Public internet deployment**: Runs on a private Tailscale network. No HTTPS, CORS, rate limiting, or public-facing hardening needed.
-- **Database-backed persistence (general)**: JSON files are the primary persistence layer — human-readable, git-friendly, and sufficient for single-user scale. PostgreSQL + pgvector is used only for the memory system (vector search requires it). Do not migrate other data stores to a database.
+- **Public internet deployment**: Runs on a private Tailscale network. No CORS, rate limiting, or public-facing hardening needed. (HTTPS is supported via `npm run setup:cert` for browser-API and cert-trust convenience — not as public-exposure hardening.)
+- **ORM / heavyweight database tooling**: PostgreSQL + pgvector is the primary datastore for app-native relational records (see the [storage contract](./docs/STORAGE.md) and the [Postgres ADR](./docs/decisions/2026-06-07-postgres-as-primary-datastore.md)), but PortOS deliberately uses plain SQL — no ORM, no query builder. Binary assets and externally-synced/ephemeral state stay as files under `data/`.
 - **Authentication / Authorization**: Single-user on a private network. Auth would be security theater here.
 - **Cloud hosting**: Runs on your local machine. Your data stays on your hardware.
 

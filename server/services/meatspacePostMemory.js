@@ -14,6 +14,117 @@ const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 
 // =============================================================================
+// SPACED-REPETITION SCHEDULER (SM-2 inspired)
+// =============================================================================
+//
+// Every memory item carries a lightweight review schedule:
+//   { ease, intervalDays, nextReview, lastReviewed }
+// An item is "due" when `nextReview <= now`. Practicing it advances the schedule
+// (a correct-heavy session pushes the next review further out; a miss resets it
+// to "due now" so the item resurfaces immediately). The 4-field shape is
+// additive and migration-safe — legacy items with no schedule are treated as
+// due now (see `ensureSchedule`) and get a persisted default by migration 154.
+
+export const DEFAULT_EASE = 2.5;
+const MIN_EASE = 1.3;
+// Ceiling mirrors `memoryScheduleSchema.ease.max(5)` in postValidation.js — the
+// per-session +0.1 bumps are unbounded otherwise, so ~26 perfect reps would push
+// ease past 5 and a later round-trip through POST/PUT (import / out-of-band
+// reschedule) would 400 on the server's own value. Keep the two in sync.
+const MAX_EASE = 5;
+// Cap the interval at a year so a long run of perfect reviews can't grow it
+// without bound — an astronomically large `intervalDays` would overflow
+// `new Date(now + intervalDays*DAY_MS)` into an Invalid Date and throw. A yearly
+// review floor is a conventional SRS ceiling and keeps items resurfacing.
+const MAX_INTERVAL_DAYS = 365;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Fresh schedule — due at `nowIso` (i.e. immediately). */
+export function defaultSchedule(nowIso = new Date().toISOString()) {
+  return { ease: DEFAULT_EASE, intervalDays: 0, nextReview: nowIso, lastReviewed: null };
+}
+
+/**
+ * Guarantee an item has a valid schedule. Legacy/built-in items with none get a
+ * default anchored to their own `updatedAt`/`createdAt` (stable + in the past →
+ * due now), so "due" state doesn't flap between reads. Mutates in place.
+ */
+function ensureSchedule(item) {
+  const s = item?.schedule;
+  const valid = s && typeof s === 'object' && typeof s.nextReview === 'string';
+  if (!valid) {
+    item.schedule = defaultSchedule(item?.updatedAt || item?.createdAt || new Date().toISOString());
+  }
+  return item;
+}
+
+/**
+ * Advance a schedule from a practice session's correctness ratio (0..1).
+ * Pure — returns a new schedule object, never mutates the input.
+ *   - ratio maps to an SM-2 quality (0..5); ease adjusts per the SM-2 formula.
+ *   - quality < 3 (a miss-heavy session) → intervalDays 0 → due now again.
+ *   - otherwise the interval steps 0→1→6→round(interval*ease).
+ */
+export function advanceSchedule(schedule, ratio, now = new Date()) {
+  const prev = schedule && typeof schedule === 'object' ? schedule : {};
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
+  const quality = Math.round(clamped * 5); // 0..5
+  const nowIso = now.toISOString();
+
+  const prevEase = typeof prev.ease === 'number' ? prev.ease : DEFAULT_EASE;
+  let ease = prevEase + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+  ease = Math.min(MAX_EASE, Math.max(MIN_EASE, Math.round(ease * 100) / 100));
+
+  let intervalDays;
+  if (quality < 3) {
+    intervalDays = 0; // relearn — resurface immediately
+  } else {
+    const prevInterval = typeof prev.intervalDays === 'number' ? prev.intervalDays : 0;
+    if (prevInterval <= 0) intervalDays = 1;
+    else if (prevInterval < 6) intervalDays = 6;
+    else intervalDays = Math.max(1, Math.round(prevInterval * ease));
+    intervalDays = Math.min(MAX_INTERVAL_DAYS, intervalDays);
+  }
+
+  const nextReview = new Date(now.getTime() + intervalDays * DAY_MS).toISOString();
+  return { ease, intervalDays, nextReview, lastReviewed: nowIso };
+}
+
+/**
+ * Merge a freshly-advanced schedule against the item's prior schedule, gating
+ * interval GROWTH to once per review day.
+ *
+ * Why: a "review" of a memory item is one pass through it, but the existing
+ * spaced-practice flow (`MemoryPractice.advanceSpaced`) submits once PER CHUNK.
+ * Advancing on every submission would compound a multi-chunk item's interval in
+ * a single sitting (0→1→6→16d) and drop it off the due list far longer than one
+ * completed review warrants. So a same-day continuation only refreshes ease and
+ * `lastReviewed` — it keeps the interval/nextReview already set earlier today.
+ * A miss (interval shrinks to 0) always applies, so a fumbled chunk still
+ * resurfaces the item immediately regardless of earlier same-day success.
+ */
+export function mergeScheduleAdvance(prev, advanced, now = new Date()) {
+  const prevInterval = typeof prev?.intervalDays === 'number' ? prev.intervalDays : 0;
+  const lastReviewedMs = Date.parse(prev?.lastReviewed ?? '');
+  const sameReviewDay = Number.isFinite(lastReviewedMs)
+    && new Date(lastReviewedMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+  // Suppress compounding only when this is a same-day continuation AND the
+  // interval would grow. Any shrink (a miss reset) always applies.
+  if (sameReviewDay && advanced.intervalDays > prevInterval) {
+    return { ...prev, ease: advanced.ease, lastReviewed: advanced.lastReviewed };
+  }
+  return advanced;
+}
+
+/** True when an item is due for review (no schedule / invalid date = due). */
+export function isMemoryItemDue(item, now = new Date()) {
+  const nr = item?.schedule?.nextReview;
+  if (typeof nr !== 'string') return true;
+  const t = Date.parse(nr);
+  return Number.isNaN(t) || t <= now.getTime();
+}
+
+// =============================================================================
 // TOM LEHRER'S ELEMENTS SONG — BUILT-IN CONTENT
 // =============================================================================
 
@@ -151,9 +262,15 @@ async function loadMemoryItems() {
     const existing = items[existingIdx];
     const fresh = structuredClone(ELEMENTS_SONG);
     fresh.mastery = existing.mastery || fresh.mastery;
+    // Preserve the learned review schedule across content re-seeds (like mastery).
+    if (existing.schedule) fresh.schedule = existing.schedule;
     fresh.updatedAt = existing.updatedAt;
     items[existingIdx] = fresh;
   }
+
+  // Backfill a schedule on any item that predates spaced-repetition (built-in
+  // or legacy custom items) so every item is schedulable + surfaces as due.
+  for (const item of items) ensureSchedule(item);
 
   return items;
 }
@@ -213,6 +330,9 @@ export async function createMemoryItem(data) {
       chunks: remappedChunks,
     },
     mastery: { overallPct: 0, chunks: {}, elements: {} },
+    // Honor a client-provided schedule (e.g. importing an item with progress),
+    // else stamp a fresh "due now" default.
+    schedule: data.schedule || defaultSchedule(now),
     createdAt: now,
     updatedAt: now,
   };
@@ -228,9 +348,10 @@ export async function updateMemoryItem(id, updates) {
   const idx = items.findIndex(i => i.id === id);
   if (idx === -1) return null;
   if (items[idx].builtin) {
-    // Only allow mastery updates on built-in items
-    if (updates.mastery) {
-      items[idx].mastery = updates.mastery;
+    // Only allow mastery / schedule updates on built-in items
+    if (updates.mastery || updates.schedule) {
+      if (updates.mastery) items[idx].mastery = updates.mastery;
+      if (updates.schedule) items[idx].schedule = updates.schedule;
       items[idx].updatedAt = new Date().toISOString();
       await saveMemoryItems(items);
       return items[idx];
@@ -241,6 +362,7 @@ export async function updateMemoryItem(id, updates) {
   const item = items[idx];
   if (updates.title) item.title = updates.title;
   if (updates.type) item.type = updates.type;
+  if (updates.schedule) item.schedule = updates.schedule;
   if (updates.lines) {
     item.content.lines = updates.lines.map(l => ({
       text: l.text || l,
@@ -305,6 +427,18 @@ export async function submitPractice(id, practiceData) {
 
   // Recompute overall mastery percentage
   item.mastery.overallPct = computeOverallMastery(item);
+
+  // Advance the spaced-repetition schedule from this session's accuracy. The
+  // schedule is per-ITEM (mastery is per-chunk); practicing any part of an item
+  // counts as reviewing it, so it resurfaces on the next review day rather than
+  // staying due today. `mergeScheduleAdvance` gates interval growth to once per
+  // day so the per-chunk submits of a spaced session don't compound the interval,
+  // while a miss anywhere still resets the item to due-now.
+  const correctCount = results.filter(r => r.correct).length;
+  const ratio = results.length ? correctCount / results.length : 0;
+  const advanced = advanceSchedule(item.schedule, ratio, new Date(now));
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, new Date(now));
+
   item.updatedAt = now;
   await saveMemoryItems(items);
 
@@ -322,8 +456,100 @@ export async function submitPractice(id, practiceData) {
   });
   await saveTrainingLog(log);
 
-  console.log(`🧠 Practice logged: "${item.title}" mode=${mode} ${results.filter(r => r.correct).length}/${results.length}`);
-  return { mastery: item.mastery, practiceId: log.entries[log.entries.length - 1].id };
+  console.log(`🧠 Practice logged: "${item.title}" mode=${mode} ${correctCount}/${results.length} → next review in ${item.schedule.intervalDays}d`);
+  return { mastery: item.mastery, schedule: item.schedule, practiceId: log.entries[log.entries.length - 1].id };
+}
+
+/**
+ * Advance a memory item's spaced-repetition schedule from a POST-session
+ * memory drill's accuracy ratio (0..1). Mirrors the schedule half of
+ * `submitPractice` — a POST-session memory drill IS a review, so it should
+ * reschedule the item and clear it from "Due Today" just like MemoryBuilder's
+ * dedicated practice flow. Unlike `submitPractice`, this does NOT touch
+ * chunk/element mastery — POST sessions don't carry the chunk/element-level
+ * result data `submitPractice` uses for that.
+ *
+ * Returns the updated schedule, or `null` when `memoryItemId` is absent or
+ * doesn't match a known item (unsupported memory drills like
+ * `memory-fill-blank` carry no memoryItemId — see POST_SUPPORTED_MEMORY_TYPES).
+ */
+export async function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
+  if (!memoryItemId) return null;
+  const items = await loadMemoryItems();
+  const item = items.find(i => i.id === memoryItemId);
+  if (!item) return null;
+
+  const advanced = advanceSchedule(item.schedule, ratio, now);
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
+  item.updatedAt = now.toISOString();
+  await saveMemoryItems(items);
+
+  console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+  return item.schedule;
+}
+
+/**
+ * Merge a POST session's per-question memory drill results into an item's
+ * chunk/element mastery (`item.mastery.chunks`/`item.mastery.elements`) —
+ * the mastery half of what `submitPractice` does, deferred out of #2010
+ * (schedule-only) into #2016 because POST-session answers didn't carry
+ * chunk/element attribution until `usePostSession.js`'s `submitAnswer` started
+ * preserving `q.chunkId` / `q.element` onto each answer.
+ *
+ * Unlike `submitPractice` (one `chunkId` for the whole batch — a dedicated
+ * chunk-practice session), a POST-session memory-sequence drill can span
+ * several chunks and a memory-element-flash drill spans several elements, so
+ * this buckets PER-QUESTION by whichever attribution that question carries.
+ * Questions with neither `chunkId` nor `element` (e.g. an unsupported/legacy
+ * shape) are counted toward correctness of nothing — they simply don't shift
+ * `item.mastery`.
+ *
+ * Returns the updated mastery, or `null` when `memoryItemId`/`questions` are
+ * absent or the id doesn't match a known item.
+ */
+export async function mergeMasteryFromSession(memoryItemId, questions, now = new Date()) {
+  if (!memoryItemId || !Array.isArray(questions) || !questions.length) return null;
+  const items = await loadMemoryItems();
+  const item = items.find(i => i.id === memoryItemId);
+  if (!item) return null;
+
+  const nowIso = now.toISOString();
+  for (const q of questions) {
+    if (q.chunkId) {
+      if (!item.mastery.chunks[q.chunkId]) {
+        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
+      }
+      const chunk = item.mastery.chunks[q.chunkId];
+      chunk.attempts += 1;
+      if (q.correct) chunk.correct += 1;
+      chunk.lastPracticed = nowIso;
+    }
+    if (q.element) {
+      if (!item.mastery.elements[q.element]) {
+        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
+      }
+      item.mastery.elements[q.element].attempts += 1;
+      if (q.correct) item.mastery.elements[q.element].correct += 1;
+    }
+  }
+
+  item.mastery.overallPct = computeOverallMastery(item);
+  item.updatedAt = nowIso;
+  await saveMemoryItems(items);
+
+  console.log(`🧠 POST session mastery merged: "${item.title}" ${questions.length} answers → ${item.mastery.overallPct}% overall`);
+  return item.mastery;
+}
+
+/**
+ * List memory items currently due for review (`nextReview <= now`), sorted by
+ * how overdue they are (most overdue first).
+ */
+export async function getDueMemoryItems(now = new Date()) {
+  const items = await loadMemoryItems();
+  return items
+    .filter(i => isMemoryItemDue(i, now))
+    .sort((a, b) => Date.parse(a.schedule?.nextReview || 0) - Date.parse(b.schedule?.nextReview || 0));
 }
 
 export async function getMastery(id) {

@@ -14,7 +14,8 @@ const NOTIFICATION_TYPES = [
   { key: 'health_issue', label: 'Health Issues' },
   { key: 'briefing_ready', label: 'Briefings' },
   { key: 'autobiography_prompt', label: 'Autobiography Prompts' },
-  { key: 'plan_question', label: 'Plan Questions' }
+  { key: 'plan_question', label: 'Plan Questions' },
+  { key: 'daily_post_reminder', label: 'POST Reminders' }
 ];
 
 export function TelegramTab() {

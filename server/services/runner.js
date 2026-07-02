@@ -5,11 +5,12 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -37,6 +38,23 @@ let runnerConfig = { dataDir: './data', hooks: {} };
 export function setAIToolkit(toolkit, config = {}) {
   setAIToolkitInstance(toolkit);
   runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
+}
+
+// Invoke a completion hook / callback so that a throw is logged but never
+// propagates — these run at out-of-request boundaries where an uncaught throw
+// is an unhandled rejection that crashes the process. Each call is isolated so
+// a throwing hook can't prevent a later `onComplete` from settling the caller.
+// Handles both a synchronous throw AND a rejected promise from an async hook —
+// the latter would otherwise surface as an unhandled rejection.
+function safeSettle(fn, label) {
+  try {
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      result.catch(err => console.error(`❌ ${label} threw during recovery: ${err.message}`));
+    }
+  } catch (err) {
+    console.error(`❌ ${label} threw during recovery: ${err.message}`);
+  }
 }
 
 export async function createRun(options) {
@@ -96,7 +114,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     metadata.errorAnalysis = errorAnalysis;
   }
 
-  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+  await atomicWrite(metadataPath, metadata).catch(() => {});
 
   if (success) {
     runnerConfig.hooks?.onRunCompleted?.(metadata, output);
@@ -137,12 +155,24 @@ export async function patchRunMetadata(runId, patch) {
   let metadata;
   try { metadata = JSON.parse(metadataStr); } catch { return; }
   Object.assign(metadata, patch);
-  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+  await atomicWrite(metadataPath, metadata).catch(() => {});
 }
 
 /**
- * Override executeCliRun to fix shell security issue
- * This removes 'shell: true' which causes DEP0190 warning and potential security issues
+ * Override executeCliRun.
+ *
+ * Runs without `shell:true` (never set it here): npm-installed CLI providers
+ * (opencode, codex, claude, …) are .cmd/.bat shims on Windows, but
+ * `shell:true` + an args array does NOT escape arguments — it just
+ * space-joins them (the literal DEP0190 warning) — so any arg or prompt
+ * content containing a space or a cmd.exe metacharacter would silently
+ * corrupt or be shell-injectable. The fix for #1865 instead resolves the
+ * bare command to its explicit-extension path (`resolveWindowsExecutable`)
+ * and, when that's a `.cmd`/`.bat` shim, spawns it via Node's own documented
+ * safe pattern — `cmd.exe /c <path> <args>` — instead of targeting it
+ * directly (`prepareWindowsSafeSpawn`; see its docstring for why a direct
+ * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
+ * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
 export async function executeCliRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout }) {
   const toolkit = requireToolkit();
@@ -165,18 +195,28 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     if (!analysis) return;
     immediateFallbackAnalysis = analysis;
     console.log(`⚡ Run ${runId} detected fallback signal (${analysis.category}); stopping ${provider.name || provider.id || provider.command}`);
-    childProcess.kill('SIGTERM');
+    killProcessTree(childProcess);
   };
 
   // Build provider-specific args for stdin-based prompt delivery
   const args = buildCliArgs(provider);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
 
-  childProcess = spawn(provider.command, args, {
+  // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
+  // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
+  const childEnv = { ...process.env, ...provider.envVars };
+  delete childEnv.CLAUDECODE;
+  Object.assign(childEnv, agentGuardEnv(childEnv));
+
+  // See the executeCliRun docblock above for why this is a resolve+wrap, not
+  // a shell:true. Resolved against `childEnv` (not bare process.env) so a
+  // provider-configured PATH override is honored.
+  const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
+  const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+
+  childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: workspacePath,
-    // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
-    // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
-    env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })(),
+    env: childEnv,
     windowsHide: true
   });
 
@@ -184,11 +224,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   childProcess.stdin.write(prompt);
   childProcess.stdin.end();
 
-  // Track active run (store on the runner service itself for stopRun to access)
-  if (!toolkit.services.runner._portosActiveRuns) {
-    toolkit.services.runner._portosActiveRuns = new Map();
-  }
-  toolkit.services.runner._portosActiveRuns.set(runId, childProcess);
+  // Track active run via the toolkit's declared external-run registry so its
+  // stopRun/isRunActive/deleteRun account for this host-spawned child process.
+  toolkit.services.runner.registerExternalRun(runId, childProcess);
 
   // Call hooks
   runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
@@ -198,7 +236,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const timeoutHandle = effectiveTimeout > 0 ? setTimeout(() => {
     if (childProcess && !childProcess.killed) {
       console.log(`⏱️ Run ${runId} timed out after ${effectiveTimeout}ms`);
-      childProcess.kill('SIGTERM');
+      killProcessTree(childProcess);
     }
   }, effectiveTimeout) : null;
 
@@ -218,7 +256,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
   childProcess.on('error', async (err) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    toolkit.services.runner._portosActiveRuns?.delete(runId);
+    toolkit.services.runner.unregisterExternalRun(runId);
     console.error(`❌ Run ${runId} spawn error: ${err.message}`);
 
     const metadata = {
@@ -232,47 +270,75 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     };
 
     await writeFile(outputPath, output).catch(() => {});
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
-    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
-    onComplete?.(metadata);
+    await atomicWrite(metadataPath, metadata).catch(() => {});
+    // Isolate the hook from onComplete — a throwing onRunFailed must not block
+    // the caller from settling, and an uncaught throw here would crash the
+    // process (this runs outside the request lifecycle).
+    safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
   });
 
   childProcess.on('close', async (code) => {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    toolkit.services.runner._portosActiveRuns?.delete(runId);
+    // This runs outside the Express request lifecycle — an uncaught throw
+    // (e.g. a failed metadata write) would crash the Node process, so wrap
+    // the whole body and log via the emoji-prefixed convention.
+    try {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      toolkit.services.runner.unregisterExternalRun(runId);
 
-    await writeFile(outputPath, output);
+      await writeFile(outputPath, output);
 
-    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
-    let metadata = {};
-    try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
-    metadata.endTime = new Date().toISOString();
-    metadata.duration = Date.now() - startTime;
-    metadata.exitCode = code;
-    // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
-    // child; if it happens to exit 0 in that race, don't record the run as
-    // successful — the fallback path (onRunFailed) must fire. Mirrors the TUI
-    // finish({ success: false }) handling of the same signal.
-    metadata.success = code === 0 && !immediateFallbackAnalysis;
-    metadata.outputSize = Buffer.byteLength(output);
+      const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+      let metadata = {};
+      try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
+      metadata.endTime = new Date().toISOString();
+      metadata.duration = Date.now() - startTime;
+      metadata.exitCode = code;
+      // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
+      // child; if it happens to exit 0 in that race, don't record the run as
+      // successful — the fallback path (onRunFailed) must fire. Mirrors the TUI
+      // finish({ success: false }) handling of the same signal.
+      metadata.success = code === 0 && !immediateFallbackAnalysis;
+      metadata.outputSize = Buffer.byteLength(output);
 
-    // Analyze errors if the run failed (delegate to toolkit's error detection)
-    if (!metadata.success && toolkit.services.errorDetection) {
-      const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, code);
-      metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
-      metadata.errorCategory = errorAnalysis.category;
-      metadata.errorAnalysis = errorAnalysis;
+      // Analyze errors if the run failed (delegate to toolkit's error detection)
+      if (!metadata.success && toolkit.services.errorDetection) {
+        const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, code);
+        metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+        metadata.errorCategory = errorAnalysis.category;
+        metadata.errorAnalysis = errorAnalysis;
+      }
+
+      await atomicWrite(metadataPath, metadata);
+
+      // Isolate the completion hooks + onComplete from the outer catch — a
+      // throwing onRunCompleted must NOT be reinterpreted as a finalization
+      // failure that flips a successful run to success:false for the caller.
+      if (metadata.success) {
+        safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
+      } else {
+        safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+      }
+      safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+    } catch (err) {
+      console.error(`❌ Run ${runId} close handler error: ${err.message}`);
+      // The timeout was already cleared and the child has closed, so callers
+      // waiting on onComplete would hang forever if we only logged. Settle them
+      // with failure metadata so a disk/hook failure surfaces as a failed run.
+      // The hook and onComplete are isolated from each other — a throwing
+      // onRunFailed must NOT prevent onComplete from settling the caller.
+      const failMetadata = {
+        endTime: new Date().toISOString(),
+        duration: Date.now() - startTime,
+        exitCode: code,
+        success: false,
+        error: `Run finalization failed: ${err.message}`,
+        errorCategory: 'finalization_error',
+        outputSize: Buffer.byteLength(output),
+      };
+      safeSettle(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+      safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
     }
-
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
-
-    if (metadata.success) {
-      runnerConfig.hooks?.onRunCompleted?.(metadata, output);
-    } else {
-      runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
-    }
-
-    onComplete?.(metadata);
   });
 
   return runId;
@@ -284,34 +350,26 @@ export async function executeApiRun(options) {
 
 /**
  * Register an in-flight run's killable process (ChildProcess or IPty) in the
- * same `_portosActiveRuns` map the patched `stopRun`/`isRunActive` consult.
- * Used by `executeTuiRun` so TUI runs can be stopped from /runs the same way
- * CLI runs can. Both ChildProcess and node-pty IPty expose `.kill(signal?)`.
+ * toolkit's declared external-run registry the toolkit `stopRun`/`isRunActive`/
+ * `deleteRun` consult. Used by `executeTuiRun` so TUI runs can be stopped from
+ * /runs the same way CLI runs can. Both ChildProcess and node-pty IPty expose
+ * `.kill(signal?)`.
  */
 export function registerActiveRun(runId, killable) {
-  const toolkit = requireToolkit();
-  if (!toolkit.services.runner._portosActiveRuns) {
-    toolkit.services.runner._portosActiveRuns = new Map();
-  }
-  toolkit.services.runner._portosActiveRuns.set(runId, killable);
+  requireToolkit().services.runner.registerExternalRun(runId, killable);
 }
 
 export function unregisterActiveRun(runId) {
   // No-throw read: cleanup paths may run after the toolkit is gone (e.g.
   // shutdown), so use `getAIToolkitInstance()` rather than `requireToolkit()`.
-  getAIToolkitInstance()?.services?.runner?._portosActiveRuns?.delete(runId);
+  getAIToolkitInstance()?.services?.runner?.unregisterExternalRun?.(runId);
 }
 
 export async function stopRun(runId) {
-  const toolkit = requireToolkit();
-  // Check local active runs first (CLI runs spawned by this override)
-  const localProcess = toolkit.services.runner._portosActiveRuns?.get(runId);
-  if (localProcess && !localProcess.killed) {
-    localProcess.kill('SIGTERM');
-    toolkit.services.runner._portosActiveRuns.delete(runId);
-    return { stopped: true, runId };
-  }
-  return toolkit.services.runner.stopRun(runId);
+  // The toolkit's stopRun now consults the external-run registry first (it kills
+  // the registered child/pty before falling back to its own activeRuns map), so
+  // this is a thin pass-through.
+  return requireToolkit().services.runner.stopRun(runId);
 }
 
 export async function getRun(runId) {

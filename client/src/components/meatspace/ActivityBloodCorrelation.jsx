@@ -1,6 +1,7 @@
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import useChartColors from '../../hooks/useChartColors.js';
 
 // Blood markers to chart — prefer common ones if available in the test results
 const PREFERRED_MARKERS = ['cholesterol', 'glucose', 'ldl', 'hdl', 'triglycerides'];
@@ -27,13 +28,11 @@ function pickMarkers(bloodTests) {
   return found;
 }
 
-const MARKER_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b'];
-
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, colors }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
-      <p style={{ color: '#9ca3af', marginBottom: 4 }}>{label}</p>
+    <div style={{ background: colors.tooltipBg, border: `1px solid ${colors.tooltipBorder}`, color: colors.text, padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
+      <p style={{ color: colors.axis, marginBottom: 4 }}>{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.color ?? entry.fill, margin: '2px 0' }}>
           {entry.name}: {entry.value != null ? Math.round(entry.value).toLocaleString() : '—'}
@@ -45,6 +44,8 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function ActivityBloodCorrelation({ data, range }) {
+  const chartColors = useChartColors();
+  const markerColors = [chartColors.chart1, chartColors.chart2, chartColors.chart3];
   const dailyData = data?.dailyData ?? [];
   const bloodTests = data?.bloodTests ?? [];
 
@@ -100,32 +101,32 @@ export default function ActivityBloodCorrelation({ data, range }) {
 
       <ResponsiveContainer width="100%" height={220}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
-          <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+          <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+          <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} />
           <YAxis
             yAxisId="steps"
             orientation="left"
-            tick={{ fill: '#9ca3af', fontSize: 11 }}
+            tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={60}
             tickFormatter={v => v.toLocaleString()}
-            label={{ value: 'Steps (30d avg)', angle: -90, position: 'insideLeft', fill: '#9ca3af', fontSize: 10 }}
+            label={{ value: 'Steps (30d avg)', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 10 }}
           />
           {markers.length > 0 && (
             <YAxis
               yAxisId="markers"
               orientation="right"
-              tick={{ fill: '#9ca3af', fontSize: 11 }}
+              tick={{ fill: chartColors.axis, fontSize: 11 }}
               width={40}
-              label={{ value: 'Blood (mg/dL)', angle: 90, position: 'insideRight', fill: '#9ca3af', fontSize: 10 }}
+              label={{ value: 'Blood (mg/dL)', angle: 90, position: 'insideRight', fill: chartColors.axis, fontSize: 10 }}
             />
           )}
-          <Tooltip content={<CustomTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
+          <Tooltip content={<CustomTooltip colors={chartColors} />} />
+          <Legend wrapperStyle={{ fontSize: 11, color: chartColors.axis }} />
           <Bar
             yAxisId="steps"
             dataKey="steps"
             name="30d Avg Steps"
-            fill="#6b7280"
+            fill={chartColors.axis}
             opacity={0.6}
             maxBarSize={40}
           />
@@ -136,9 +137,9 @@ export default function ActivityBloodCorrelation({ data, range }) {
               type="monotone"
               dataKey={marker}
               name={marker.charAt(0).toUpperCase() + marker.slice(1)}
-              stroke={MARKER_COLORS[i]}
+              stroke={markerColors[i]}
               strokeWidth={2}
-              dot={{ r: 4, fill: MARKER_COLORS[i] }}
+              dot={{ r: 4, fill: markerColors[i] }}
               connectNulls
             />
           ))}

@@ -42,13 +42,25 @@ export const suggestCreativeDirectorAutoCast = (brief, { types, limit } = {}, op
     body: JSON.stringify({ brief, ...(types ? { types } : {}), ...(limit ? { limit } : {}) }),
     ...options,
   });
-export const applyCreativeDirectorAutoCast = (id, { brief, types, limit } = {}, options = {}) =>
+// `compose: true` (#1817) tells the director to autonomously write a treatment +
+// scene plan grounded in the freshly-seeded cast — the response carries
+// `composing: true` when the server actually kicked the agent off.
+// `generateFirstPass: true` (#1818) additionally enqueues a catalog portrait
+// render for each newly-cast member lacking one — the response carries a
+// `firstPass: { mode, enqueued, skipped }` summary when it ran.
+// `generateFirstPassMusicBed: true` (#1928) additionally enqueues a background
+// music-bed render for the project itself — the response carries a
+// `firstPassMusicBed: { mode, enqueued, jobId?, reason? }` summary when it ran.
+export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = {}, options = {}) =>
   request(`/creative-director/${encodeURIComponent(id)}/auto-cast`, {
     method: 'POST',
     body: JSON.stringify({
       ...(brief ? { brief } : {}),
       ...(types ? { types } : {}),
       ...(limit ? { limit } : {}),
+      ...(compose ? { compose: true } : {}),
+      ...(generateFirstPass ? { generateFirstPass: true } : {}),
+      ...(generateFirstPassMusicBed ? { generateFirstPassMusicBed: true } : {}),
     }),
     ...options,
   });

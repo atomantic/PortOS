@@ -4,11 +4,18 @@ vi.mock('fs', () => ({
   existsSync: vi.fn()
 }));
 
+vi.mock('child_process', () => ({
+  execFile: vi.fn()
+}));
+
 import { existsSync } from 'fs';
+import { execFile } from 'child_process';
 import {
   findTailscale,
   isSandboxedTailscale,
   hasOnlySandboxedTailscale,
+  getTailscaleStatus,
+  isTailscaleUp,
   MACOS_TAILSCALE_APP_BUNDLE
 } from './tailscale.js';
 
@@ -135,5 +142,62 @@ describe('hasOnlySandboxedTailscale', () => {
     process.env.PATH = '/some/custom/bin';
     existsSync.mockImplementation((p) => p === '/some/custom/bin/tailscale');
     expect(hasOnlySandboxedTailscale()).toBe(false);
+  });
+});
+
+describe('getTailscaleStatus / isTailscaleUp', () => {
+  let originalPath;
+
+  beforeEach(() => {
+    originalPath = process.env.PATH;
+    vi.clearAllMocks();
+    // Default: a Tailscale binary exists at a known candidate path.
+    existsSync.mockImplementation((p) => p === '/opt/homebrew/bin/tailscale');
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+  });
+
+  // promisify(execFile) with no custom symbol resolves with the value passed as
+  // the callback's first non-error arg — so returning { stdout } matches how the
+  // real (custom-promisified) execFile resolves { stdout, stderr }.
+  const mockStatusJSON = (obj) => {
+    execFile.mockImplementation((cmd, args, opts, cb) => cb(null, { stdout: JSON.stringify(obj) }));
+  };
+
+  it('reports not-installed when no binary is found', async () => {
+    existsSync.mockReturnValue(false);
+    process.env.PATH = '';
+    const status = await getTailscaleStatus();
+    expect(status).toEqual({ available: false, running: false, state: null, reason: 'tailscale-not-installed' });
+    expect(execFile).not.toHaveBeenCalled();
+    expect(await isTailscaleUp()).toBe(false);
+  });
+
+  it('reports running when BackendState is Running', async () => {
+    mockStatusJSON({ BackendState: 'Running' });
+    const status = await getTailscaleStatus();
+    expect(status).toMatchObject({ available: true, running: true, state: 'Running', reason: 'running' });
+    expect(await isTailscaleUp()).toBe(true);
+  });
+
+  it('reports not-running when Tailscale is installed but Stopped', async () => {
+    mockStatusJSON({ BackendState: 'Stopped' });
+    const status = await getTailscaleStatus();
+    expect(status).toMatchObject({ available: true, running: false, state: 'Stopped', reason: 'tailscale-stopped' });
+    expect(await isTailscaleUp()).toBe(false);
+  });
+
+  it('degrades to not-running when the CLI errors', async () => {
+    execFile.mockImplementation((cmd, args, opts, cb) => cb(new Error('boom')));
+    const status = await getTailscaleStatus();
+    expect(status).toMatchObject({ available: true, running: false, state: null, reason: 'tailscale-status-failed' });
+  });
+
+  it('degrades to not-running on non-JSON output', async () => {
+    execFile.mockImplementation((cmd, args, opts, cb) => cb(null, { stdout: 'not json at all' }));
+    const status = await getTailscaleStatus();
+    expect(status).toMatchObject({ available: true, running: false, state: null, reason: 'tailscale-parse-error' });
   });
 });

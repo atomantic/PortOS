@@ -35,7 +35,7 @@ export default function ProgressSlider({ goal, onCommit }) {
       {goal.velocity && (
         <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-500">
           <div className="flex items-center gap-1">
-            {goal.velocity.trend === 'increasing' && <TrendingUp className="w-3 h-3 text-green-400" />}
+            {goal.velocity.trend === 'increasing' && <TrendingUp className="w-3 h-3 text-port-success" />}
             {goal.velocity.trend === 'decreasing' && <TrendingDown className="w-3 h-3 text-red-400" />}
             {goal.velocity.trend === 'stable' && <Minus className="w-3 h-3 text-gray-400" />}
             <span>{goal.velocity.percentPerMonth}%/mo</span>

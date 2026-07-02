@@ -6,10 +6,9 @@
  */
 
 import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, extname } from 'path';
+import { extname } from 'path';
 import { getProviderById } from './providers.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, resolveScreenshot } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { describeImageViaCli } from './visionCli.js';
@@ -41,10 +40,13 @@ function getMimeType(filepath) {
  * @returns {Promise<string>} - Base64 data URL
  */
 async function loadImageAsBase64(imagePath) {
-  const fullPath = imagePath.startsWith('/') ? imagePath : join(SCREENSHOTS_DIR, imagePath);
-
-  if (!existsSync(fullPath)) {
-    throw new Error(`Image not found: ${fullPath}`);
+  // `imagePath` originates from req.body — basename-allowlist it to a real file
+  // under SCREENSHOTS_DIR. This rejects `../` traversal and absolute-path
+  // escapes so an attacker can't have an arbitrary file base64-encoded and
+  // forwarded to the external vision provider (issue #1820).
+  const fullPath = resolveScreenshot(imagePath);
+  if (!fullPath) {
+    throw new Error(`Image not found under screenshots dir: ${imagePath}`);
   }
 
   const buffer = await readFile(fullPath);

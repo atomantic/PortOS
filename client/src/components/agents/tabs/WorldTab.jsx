@@ -383,7 +383,11 @@ export default function WorldTab({ agentId }) {
 
   const profile = status?.profile;
   const bal = status?.balance?.balance || status?.balance;
-  const displayNearby = presence.length > 0 ? presence : nearby;
+  // `presence === null` = no live snapshot yet → fall back to the last REST
+  // join/explore result. Once the WS has spoken (even an empty `[]`), the live
+  // snapshot wins so a "nobody nearby" event clears the panel instead of
+  // leaving stale phantoms.
+  const displayNearby = presence !== null ? presence : nearby;
 
   const statusDotColor = {
     connected: 'bg-port-success',
@@ -603,7 +607,7 @@ export default function WorldTab({ agentId }) {
           <div className="bg-port-card border border-port-border rounded-lg p-4">
             <h3 className="font-semibold text-white mb-3">
               Nearby Agents{displayNearby.length > 0 && <span className="text-gray-500 font-normal ml-2 text-sm">({displayNearby.length})</span>}
-              {presence.length > 0 && wsConnected && (
+              {presence?.length > 0 && wsConnected && (
                 <span className="text-xs text-port-success ml-2 font-normal">(live)</span>
               )}
             </h3>
@@ -843,7 +847,7 @@ export default function WorldTab({ agentId }) {
               <button
                 onClick={() => handleExplore(true)}
                 disabled={moving}
-                className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-500 disabled:opacity-50"
+                className="px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
               >
                 {moving ? 'Exploring...' : 'Random Explore'}
               </button>

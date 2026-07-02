@@ -15,8 +15,8 @@ describe('HunkDiff', () => {
     const oldText = `${lines('top', 3)}\nThe cat sat here\n${lines('bottom', 3)}`;
     const newText = `${lines('top', 3)}\nThe dog sat here\n${lines('bottom', 3)}`;
     const { container } = render(<HunkDiff oldText={oldText} newText={newText} />);
-    const removed = container.querySelectorAll('.bg-red-900\\/50');
-    const added = container.querySelectorAll('.bg-green-900\\/50');
+    const removed = container.querySelectorAll('.bg-port-error\\/20');
+    const added = container.querySelectorAll('.bg-port-success\\/20');
     expect(removed).toHaveLength(1);
     expect(added).toHaveLength(1);
     expect(removed[0].textContent).toBe('cat');
@@ -41,7 +41,7 @@ describe('HunkDiff', () => {
     const oldText = `${body}\nmiddle cat paragraph\n${body}`;
     const newText = `${body}\nmiddle dog paragraph\n${body}`;
     const { container } = render(<HunkDiff oldText={oldText} newText={newText} />);
-    const removed = container.querySelectorAll('.bg-red-900\\/50');
+    const removed = container.querySelectorAll('.bg-port-error\\/20');
     expect(removed).toHaveLength(1);
     expect(removed[0].textContent).toBe('cat');
     expect(screen.queryByText(/Diff too large/)).not.toBeInTheDocument();

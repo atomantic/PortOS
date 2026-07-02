@@ -167,7 +167,7 @@ export default function GoalEditForm({
         </div>
       </div>
       <div className="flex gap-2">
-        <button onClick={saveEdit} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600">
+        <button onClick={saveEdit} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">
           Save
         </button>
         <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded bg-port-border text-gray-300">

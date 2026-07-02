@@ -14,11 +14,12 @@ import { execFile, spawn } from 'child_process';
 import { existsSync, statSync } from 'fs';
 import { unlink, writeFile, copyFile } from 'fs/promises';
 import { join, basename } from 'path';
-import { homedir, tmpdir, totalmem, cpus, type as osType, release as osRelease } from 'os';
+import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
-import { ensureDir, PATHS, readJSONFile, atomicWrite, UUID_RE } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { spawnDetached } from '../../lib/detachedSpawn.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -29,14 +30,25 @@ import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
 import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
-
-// Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
-// scripts/setup-image-video.sh`. Used when a model entry has
-// `runtime: 'ltx2'`. The companion helper at scripts/generate_ltx2.py
-// imports `ltx_pipelines_mlx` from this venv and emits the same SSE
-// progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
-const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
-const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+import {
+  LTX2_VENV_PYTHON,
+  LTX2_HELPER_SCRIPT,
+  WAN22_VENV_PYTHON,
+  WAN22_HELPER_SCRIPT,
+  WAN22_REPO_DIR,
+  HUNYUAN_VENV_PYTHON,
+  HUNYUAN_HELPER_SCRIPT,
+  HUNYUAN_REPO_DIR,
+  BYOV_RUNTIME_INFO,
+  BYOV_VIDEO_RUNTIMES,
+  assertByovRuntimeInstalled,
+  invalidateByovReadyCache,
+} from './runtimes.js';
+import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
+// Re-export the extracted runtime + history surface so existing deep imports
+// (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
+export * from './runtimes.js';
+export { loadHistory, saveHistory, mutateVideoHistory };
 
 // LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
 // `mlx_video.generate_av` CLI has no --lora flag, but the package ships an
@@ -46,28 +58,6 @@ const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
 // in the SAME venv as the bare `-m mlx_video.generate_av` path (the configured
 // pythonPath), not a separate BYOV venv. See isMlxVideoLtxLoraCapable.
 const AV_LORA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_av_lora.py');
-
-// Wan 2.2 MLX runtime — osama-ata/Wan2.2-mlx cloned at
-// ~/.portos/wan2.2-mlx/. The wrapper at scripts/generate_wan22.py
-// subprocesses upstream generate.py so PortOS releases don't drift from
-// upstream's CLI. Provisioned via `INSTALL_WAN22=1 bash scripts/setup-image-video.sh`.
-const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'wan2.2-mlx', '.venv', 'bin', 'python3');
-const WAN22_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22.py');
-const WAN22_REPO_DIR = join(homedir(), '.portos', 'wan2.2-mlx');
-
-// HunyuanVideo MLX runtime — gaurav-nelson/HunyuanVideo_MLX cloned at
-// ~/.portos/hunyuan-video-mlx/. ~60 GB resident at bf16 so practical only
-// with the 4-bit Gemma text encoder + everything else evicted. Provisioned
-// via `INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh`.
-const HUNYUAN_VENV_PYTHON = join(homedir(), '.portos', 'hunyuan-video-mlx', '.venv', 'bin', 'python3');
-const HUNYUAN_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_hunyuan.py');
-const HUNYUAN_REPO_DIR = join(homedir(), '.portos', 'hunyuan-video-mlx');
-
-// Standalone runtime-fingerprint probe (scripts/runtime_fingerprint.py). Run in
-// each installed BYOV venv by resolveRuntimeFingerprint() to surface resolved
-// package versions on GET /api/video-gen/status without running a render. Shares
-// its fingerprint definition with the inline render-time emit (_runner_common).
-const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerprint.py');
 
 const execFileAsync = promisify(execFile);
 
@@ -101,218 +91,9 @@ const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
-// Per-runtime metadata for "bring-your-own-venv" video runtimes — those that
-// resolve their own Python interpreter inside buildArgs (so the legacy
-// mlx_video `settings.imageGen.local.pythonPath` is irrelevant). Single
-// source of truth: the BYOV_VIDEO_RUNTIMES Set + the /setup/runtime-* routes
-// + the client install banner all derive from this map's keys.
-//
-// `importProbe` is a tiny Python expression run by isByovRuntimeReady() to
-// confirm the venv's *packages* are actually installed (not just the venv
-// binary). A partial install (e.g. setup script aborted after `uv venv`
-// before `uv pip install`) leaves the binary present but no torch — without
-// this probe the UI would hide the install banner and renders would fail
-// with a deep ImportError inside the runner script.
-export const BYOV_RUNTIME_INFO = Object.freeze({
-  hunyuan: {
-    id: 'hunyuan',
-    label: 'HunyuanVideo MLX',
-    venvPython: HUNYUAN_VENV_PYTHON,
-    repoDir: HUNYUAN_REPO_DIR,
-    installEnvVar: 'INSTALL_HUNYUAN',
-    repoUrl: 'https://github.com/gaurav-nelson/HunyuanVideo_MLX',
-    // `hyvideo` isn't pip-installed — mirror the runner's sys.path prepend so
-    // the probe walks the same transitive import chain (loguru, diffusers, …).
-    importProbe: `import sys; sys.path.insert(0, ${JSON.stringify(HUNYUAN_REPO_DIR)}); import hyvideo.inference`,
-    // Distributions the /status runtime-fingerprint probe resolves versions for
-    // (must match scripts/generate_hunyuan.py's emit_runtime_fingerprint call).
-    fingerprintPackages: ['torch', 'diffusers', 'transformers', 'mlx'],
-  },
-  wan22: {
-    id: 'wan22',
-    label: 'Wan 2.2 MLX',
-    venvPython: WAN22_VENV_PYTHON,
-    repoDir: WAN22_REPO_DIR,
-    installEnvVar: 'INSTALL_WAN22',
-    repoUrl: 'https://github.com/osama-ata/Wan2.2-mlx',
-    // Walks the package's __init__ chain so transitive deps absent from
-    // upstream's pyproject.toml (e.g. einops, imported by wan/modules/vae2_1.py)
-    // fail the probe instead of slipping past a flat torch/transformers check.
-    importProbe: 'import wan',
-    // Mirror scripts/generate_wan22.py's emit_runtime_fingerprint package list.
-    fingerprintPackages: ['wan', 'mlx', 'mlx_metal', 'torch'],
-  },
-  ltx2: {
-    id: 'ltx2',
-    label: 'LTX-2 MLX',
-    venvPython: LTX2_VENV_PYTHON,
-    repoDir: join(homedir(), '.portos', 'ltx-2-mlx'),
-    installEnvVar: 'INSTALL_LTX2',
-    repoUrl: 'https://github.com/dgrauet/ltx-2-mlx',
-    // Matches the post-install check setup-image-video.sh runs after
-    // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
-    // for this venv).
-    importProbe: 'import ltx_pipelines_mlx',
-    // Mirror scripts/generate_ltx2.py's emit_runtime_fingerprint package list.
-    fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
-  },
-});
-
-export const BYOV_VIDEO_RUNTIMES = Object.freeze(new Set(Object.keys(BYOV_RUNTIME_INFO)));
-
-export function isByovRuntimeInstalled(runtimeId) {
-  const info = BYOV_RUNTIME_INFO[runtimeId];
-  if (!info) return false;
-  return existsSync(info.venvPython);
-}
-
-// Cache the import-probe result per runtime for the life of the server
-// process (or until invalidateByovReadyCache is called). The probe itself
-// spawns python + imports torch — measured ~500ms-2s warm, ~5s cold — so
-// repeating it on every status request is too slow. Positive results are
-// stable (you don't accidentally uninstall packages); negative results we
-// re-probe each request so a finished install reflects immediately. The
-// install-completion path in routes/videoGen.js explicitly invalidates
-// the entry for the runtime it just installed.
-const readyCache = new Map();
-export function invalidateByovReadyCache(runtimeId) {
-  if (runtimeId) readyCache.delete(runtimeId); else readyCache.clear();
-}
-export async function isByovRuntimeReady(runtimeId) {
-  const info = BYOV_RUNTIME_INFO[runtimeId];
-  if (!info) return false;
-  if (!existsSync(info.venvPython)) return false;
-  if (readyCache.get(runtimeId) === true) return true;
-  const probeOk = await new Promise((resolve) => {
-    const child = spawn(info.venvPython, ['-c', info.importProbe], {
-      env: safeChildProcessEnv(),
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve(false); }, 30000);
-    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
-    child.on('error', () => { clearTimeout(timer); resolve(false); });
-  });
-  if (probeOk) readyCache.set(runtimeId, true);
-  return probeOk;
-}
-
-// Throws the same shape the per-runtime buildArgs used to throw inline — a
-// 500 with a stable runtime-specific code the route layer and tests already
-// match against. The error codes are LTX2_VENV_MISSING / WAN22_VENV_MISSING
-// / HUNYUAN_VENV_MISSING; keep `runtimeId.toUpperCase()` to preserve them.
-export function assertByovRuntimeInstalled(runtimeId) {
-  const info = BYOV_RUNTIME_INFO[runtimeId];
-  if (!info) return;
-  if (existsSync(info.venvPython)) return;
-  throw new ServerError(
-    `${info.label} venv not found at ${info.venvPython}. Run \`${info.installEnvVar}=1 bash scripts/setup-image-video.sh\` to install.`,
-    { status: 500, code: `${runtimeId.toUpperCase()}_VENV_MISSING` },
-  );
-}
-
-// Cache runtime fingerprints per BYOV runtime for the life of the process.
-// An entry holds EITHER a resolved fingerprint object (success — stable until a
-// reinstall) OR the in-flight Promise while a probe runs, so overlapping
-// /status calls await one shared probe instead of spawning a stampede of python
-// children. Errors (timeout / spawn-fail / unparseable) are NOT cached — the
-// entry is dropped on failure so a freshly finished install reflects on the
-// next /status. invalidate on (re)install.
-const fingerprintCache = new Map();
-export function invalidateRuntimeFingerprintCache(runtimeId) {
-  if (runtimeId) fingerprintCache.delete(runtimeId); else fingerprintCache.clear();
-}
-
-// Max bytes of probe stdout to buffer — the fingerprint JSON is a few hundred
-// bytes; cap it so a misbehaving venv that spews warnings to stdout can't bloat
-// the Node heap. A truncated payload simply fails to parse → { error }.
-const FINGERPRINT_STDOUT_CAP = 64 * 1024;
-
-// Run the standalone probe in one installed BYOV venv → its fingerprint object
-// ({ runtime, versions, chip, os, python }) or { error } on any failure.
-// Best-effort and bounded (15s SIGKILL) so a wedged venv can't hang /status.
-async function probeRuntimeFingerprint(runtimeId) {
-  const info = BYOV_RUNTIME_INFO[runtimeId];
-  if (!info || !existsSync(info.venvPython)) return null;
-  // A resolved object OR an in-flight Promise both short-circuit here; only a
-  // missing/dropped entry (undefined) triggers a fresh probe.
-  const cached = fingerprintCache.get(runtimeId);
-  if (cached !== undefined) return cached;
-  const inFlight = (async () => {
-    const result = await new Promise((resolve) => {
-      let out = '';
-      const child = spawn(
-        info.venvPython,
-        [RUNTIME_FINGERPRINT_SCRIPT, runtimeId, ...(info.fingerprintPackages || [])],
-        { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'ignore'] },
-      );
-      const timer = setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); resolve({ error: 'timeout' }); }, 15000);
-      child.stdout.on('data', (c) => { if (out.length < FINGERPRINT_STDOUT_CAP) out += c.toString(); });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (code !== 0) return resolve({ error: `exit ${code}` });
-        // The probe prints exactly one JSON line; take the last non-empty line
-        // defensively in case a venv import prints a stray warning to stdout.
-        const lastLine = out.trim().split('\n').filter(Boolean).pop() || '';
-        try { resolve(JSON.parse(lastLine)); } catch { resolve({ error: 'unparseable' }); }
-      });
-      child.on('error', () => { clearTimeout(timer); resolve({ error: 'spawn-failed' }); });
-    });
-    // Keep successful results cached; drop the in-flight entry on failure so the
-    // next request re-probes (don't cache errors).
-    if (result && !result.error) fingerprintCache.set(runtimeId, result);
-    else fingerprintCache.delete(runtimeId);
-    return result;
-  })();
-  fingerprintCache.set(runtimeId, inFlight);
-  return inFlight;
-}
-
-// Host runtime fingerprint computed in Node — cheap, always present (no python).
-// chip/os/arch are useful even before any BYOV runtime is installed.
-export function hostRuntimeFingerprint() {
-  return {
-    chip: cpus()?.[0]?.model || 'unknown',
-    os: `${osType()} ${osRelease()}`,
-    platform: process.platform,
-    arch: process.arch,
-    node: process.version,
-  };
-}
-
-// Full runtime block for GET /api/video-gen/status: the Node-side host info plus
-// per-installed-BYOV-runtime resolved package versions. Surfaces "what am I
-// running" so a garbled-output bug report carries the exact numerical stack
-// without running a render (#1325).
-//
-// NON-BLOCKING: /status is the page-load probe that populates the models list +
-// install/runtime gates, so it must never wait on a python fingerprint probe (a
-// cold or wedged venv could otherwise stall the whole Video Gen page for up to
-// the 15s probe timeout). We therefore return host info immediately plus only
-// the fingerprints already resolved in cache, and kick off a background warm for
-// any uncached installed runtime so its versions appear on the next /status.
-export async function resolveRuntimeFingerprint() {
-  const runtimes = {};
-  for (const id of Object.keys(BYOV_RUNTIME_INFO)) {
-    if (!isByovRuntimeInstalled(id)) continue;
-    const cached = fingerprintCache.get(id);
-    if (cached && typeof cached.then !== 'function') {
-      // A resolved fingerprint object (never an error — errors aren't cached).
-      runtimes[id] = cached;
-    } else if (cached === undefined) {
-      // Not cached and not already in flight — warm it in the background; the
-      // result lands in the cache for a subsequent /status. Fire-and-forget.
-      probeRuntimeFingerprint(id).catch(() => {});
-    }
-    // An in-flight Promise means a warm is already running — skip (don't await).
-  }
-  return { host: hostRuntimeFingerprint(), runtimes };
-}
-
 export const listVideoModels = () => getVideoModels();
 
 export const defaultVideoModelId = () => getDefaultVideoModelId();
-
-const HISTORY_FILE = join(PATHS.data, 'video-history.json');
 
 const jobs = new Map();
 let activeProcess = null;
@@ -331,25 +112,14 @@ export const cancel = () => {
   if (activeChain) activeChain.stopped = true;
   if (!activeProcess) return !!activeChain;
   const proc = activeProcess;
-  proc.kill('SIGTERM');
   // KEEP activeProcess set until proc.on('close') clears it. Without this,
   // the BUSY guard immediately allows a new generation while the SIGTERM'd
   // child is still running (mlx_video can ignore SIGTERM mid-tensor-op),
-  // and we'd lose the handle for a follow-up SIGKILL. Escalate after 8s.
-  setTimeout(() => {
-    // proc.killed is set the moment proc.kill() is called; it does NOT mean
-    // the child has exited. Check exitCode (null until 'close' fires) so the
-    // SIGKILL escalation actually triggers when mlx_video ignores SIGTERM.
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log(`⚠️ video child didn't exit on SIGTERM — escalating to SIGKILL`);
-      proc.kill('SIGKILL');
-    }
-  }, 8000);
+  // and we'd lose the handle for a follow-up SIGKILL. The `activeProcess ===
+  // proc` guard escalates only when this is still the tracked child.
+  killWithEscalation(proc, { label: 'video child', stillRunning: () => activeProcess === proc });
   return true;
 };
-
-export const loadHistory = () => readJSONFile(HISTORY_FILE, []);
-export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 
 // FFLF/ltx2 stage-2 peak memory scales with the pixel-frame count
 // (width × height × numFrames), so the cap is on that product. Anchors are
@@ -1252,7 +1022,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         if (watchdogSuccess) {
           console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
         }
-        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory });
+        await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
       }
     } catch (err) {
       // Finalize/teardown threw — fail the job loudly instead of crashing the
@@ -1485,12 +1255,14 @@ export async function generateChainedVideo({ chunks, jobId: outerJobId, ...rest 
 async function setHistoryItemsHidden(ids, hidden) {
   if (!ids?.length) return;
   const wanted = new Set(ids);
-  const history = await loadHistory().catch(() => null);
-  if (!Array.isArray(history)) return;
-  for (const item of history) {
-    if (wanted.has(item.id)) item.hidden = !!hidden;
-  }
-  await saveHistory(history).catch(() => {});
+  // Serialized through the shared history tail so a concurrent write path
+  // (a download completing, a render finalizing) can't clobber this update.
+  await mutateVideoHistory((history) => {
+    for (const item of history) {
+      if (wanted.has(item.id)) item.hidden = !!hidden;
+    }
+    return history;
+  }).catch(() => {});
 }
 
 // Extract the last frame of a video as a PNG into data/images/ — used to
@@ -1699,9 +1471,10 @@ export async function stitchVideos(videoIds, opts = {}) {
       loraScales: videos[0].loraScales,
     } : {}),
   };
-  const h = await loadHistory();
-  h.unshift(stitchedMeta);
-  await saveHistory(h);
+  // Serialized append against the shared history tail (re-reads the freshest
+  // list inside the mutator) so a concurrent download/render write can't drop
+  // this stitched entry.
+  await mutateVideoHistory((history) => { history.unshift(stitchedMeta); return history; });
   console.log(`🎬 Stitched ${videos.length} videos → ${outFilename}`);
   return stitchedMeta;
 }
@@ -1764,20 +1537,25 @@ export async function upscaleHistoryItem(historyId) {
     // even when the source clip was hidden.
     hidden: false,
   };
-  const refreshedHistory = await loadHistory();
-  refreshedHistory.unshift(newEntry);
-  await saveHistory(refreshedHistory);
+  // Serialized append (re-reads inside the mutator) so a concurrent
+  // download/render write can't drop the upscaled entry.
+  await mutateVideoHistory((history) => { history.unshift(newEntry); return history; });
   console.log(`✅ Upscaled [${newId.slice(0, 8)}]: ${newFilename} (${newEntry.width}×${newEntry.height})`);
   return newEntry;
 }
 
 export async function setHistoryItemHidden(id, hidden) {
-  const history = await loadHistory();
-  const item = history.find((h) => h.id === id);
-  if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  item.hidden = !!hidden;
-  await saveHistory(history);
-  return { ok: true, hidden: item.hidden };
+  let result;
+  // Serialized find-and-set through the shared tail; a 404 throw inside the
+  // mutator rejects before any save, preserving the not-found semantics.
+  await mutateVideoHistory((history) => {
+    const item = history.find((h) => h.id === id);
+    if (!item) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+    item.hidden = !!hidden;
+    result = { ok: true, hidden: item.hidden };
+    return history;
+  });
+  return result;
 }
 
 export async function deleteHistoryItem(id) {
@@ -1799,7 +1577,9 @@ export async function deleteHistoryItem(id) {
     const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
     if (frameFile) await unlink(frameFile).catch(() => {});
   }
-  await saveHistory(history.filter((h) => h.id !== id));
+  // Serialized removal through the shared tail (re-filters the freshest list),
+  // so a concurrent download/render append isn't dropped by this save.
+  await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
   console.log(`🗑️ Deleted video: ${item.filename}`);
   return { ok: true };
 }

@@ -12,6 +12,7 @@ import { Link } from 'react-router-dom';
 import { Dumbbell, Loader2, Square, CheckCircle2, XCircle, Sparkles, RotateCcw, Moon, AlertTriangle, Eraser } from 'lucide-react';
 import toast from '../ui/Toast';
 import { useSseProgress } from '../../hooks/useSseProgress';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import CheckpointPicker from './CheckpointPicker';
 import LiveSampleGallery from './LiveSampleGallery';
 import {
@@ -40,13 +41,12 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
   // fragments that repeat + the captioned-image total they're measured against.
   // Non-empty fragments → render the inline confirm row instead of queueing.
   const [captionLeak, setCaptionLeak] = useState({ fragments: [], total: 0 });
-  const [strippingLeak, setStrippingLeak] = useState(false);
 
   useEffect(() => {
     getLoraTrainingStatus().then((s) => {
       setStatus(s);
       setParams((prev) => prev || { ...s.defaults });
-    }).catch(() => setStatus({ runtimes: {}, defaults: {} }));
+    }).catch(err => { console.warn('⚠️ Failed to load training status: ' + err.message); setStatus({ runtimes: {}, defaults: {} }); });
     listImageModels().then((list) => {
       // FLUX.2 Klein only — mflux ≥0.17 dropped FLUX.1 training, and the
       // torch fallback trains the same bf16 Klein bases.
@@ -63,7 +63,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         const nonBf16 = nineB.find((m) => !/bf16/i.test(m.id));
         return (nonBf16 || nineB[0] || trainable[0])?.id || '';
       });
-    }).catch(() => setModels([]));
+    }).catch(err => { console.warn('⚠️ Failed to load image models: ' + err.message); setModels([]); });
   }, []);
 
   // A reassigned dataset keeps its id but its old runs belong to the previous
@@ -88,7 +88,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
       );
       setActiveRun(own.find(isActive) || null);
       setLastRun(own.find((r) => !isActive(r)) || null);
-    }).catch(() => {});
+    }).catch(err => console.warn('⚠️ Failed to refresh training runs: ' + err.message));
   }, [dataset.id, charEntryId, charEntryKind, charUniverseId]);
   useEffect(() => { refreshRuns(); }, [refreshRuns]);
 
@@ -132,22 +132,15 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
 
   // From the leak row: strip the shared identity fragments server-side, sync the
   // parent's caption view, then re-launch (the gate now passes).
-  const stripAndQueue = async () => {
-    setStrippingLeak(true);
-    try {
-      const { removedFragments } = await stripLoraDatasetSharedCaptionFragments(dataset.id);
-      if (removedFragments?.length) {
-        toast.success(`Stripped ${removedFragments.length} shared identity fragment${removedFragments.length === 1 ? '' : 's'}`);
-      }
-      onRunFinished?.(); // parent reloads the dataset so captions + the lint banner refresh
-      setCaptionLeak({ fragments: [], total: 0 });
-      await start();
-    } catch (err) {
-      toast.error(err?.message || 'Failed to strip captions');
-    } finally {
-      setStrippingLeak(false);
+  const [stripAndQueue, strippingLeak] = useAsyncAction(async () => {
+    const { removedFragments } = await stripLoraDatasetSharedCaptionFragments(dataset.id);
+    if (removedFragments?.length) {
+      toast.success(`Stripped ${removedFragments.length} shared identity fragment${removedFragments.length === 1 ? '' : 's'}`);
     }
-  };
+    onRunFinished?.(); // parent reloads the dataset so captions + the lint banner refresh
+    setCaptionLeak({ fragments: [], total: 0 });
+    await start();
+  }, { errorMessage: 'Failed to strip captions' });
 
   const cancel = async () => {
     if (!activeRun) return;

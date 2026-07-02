@@ -23,16 +23,17 @@
 import { query } from '../lib/db.js';
 
 // ref_kind → the DB table its ref_id points at, plus the predicate that makes a
-// row a LIVE target. universes/pipeline/writers-room soft-delete (deleted
-// column); creative_director_projects hard-deletes (row absence = gone), so it
-// has no liveClause. This map is the single source of truth for the resolver —
-// adding a new referenceable record kind means adding one row here.
+// row a LIVE target. All five target kinds soft-delete (a `deleted` column;
+// creative_director_projects gained one in #1564 so its deletion federates), so
+// a live target is `deleted = FALSE` in every case. This map is the single
+// source of truth for the resolver — adding a new referenceable record kind
+// means adding one row here.
 export const REF_TARGET_TABLES = Object.freeze({
   universe: { table: 'universes', liveClause: 'deleted = FALSE' },
   series: { table: 'pipeline_series', liveClause: 'deleted = FALSE' },
   issue: { table: 'pipeline_issues', liveClause: 'deleted = FALSE' },
   work: { table: 'writers_room_works', liveClause: 'deleted = FALSE' },
-  'creative-director': { table: 'creative_director_projects', liveClause: null },
+  'creative-director': { table: 'creative_director_projects', liveClause: 'deleted = FALSE' },
 });
 
 /** The ref kinds this resolver can resolve (those with a known target table). */

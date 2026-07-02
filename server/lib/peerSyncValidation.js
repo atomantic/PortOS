@@ -238,15 +238,23 @@ const writersRoomExercisePushSchema = z.object({
   kind: z.literal('writersRoomExercise'),
   ...peerSyncPushBase,
 }).strict();
+// Optional bundled linked-track record (#1858) — a music-video project created
+// the create-UI way stores `trackId` (not `uploadedAudioFilename`), so its
+// master audio rides as a `music` asset-manifest entry AND the linked track
+// RECORD rides here, so a peer subscribed to musicVideoProjects ONLY (no Tracks
+// category) can resolve `project.trackId` at render time. ONLY valid on a
+// music-video push (a track push IS the track; other kinds' `.strict()` reject
+// it). Same wire shape as any record (id required, sanitizer handles the rest).
+const linkedTrackField = { linkedTrack: peerWireRecordSchema.optional() };
 // Music Video projects (#1770) push the bare record (metadata + beat-aligned
-// scenes[]) — no bundled children/linked collection. #1772 bundles referenced
-// media (uploaded audio as a `music` entry, rendered scene clips as `video`
-// entries) via the base `assetManifest`, which already accepts both kinds; no
-// project-specific manifest field is needed (`.strict()` still rejects smuggled
-// bundle keys, same posture as creativeDirectorProject/writersRoomFolder).
+// scenes[]). #1772 bundles referenced media (uploaded audio as a `music` entry,
+// rendered scene clips as `video` entries) via the base `assetManifest`; #1858
+// adds the optional `linkedTrack` record bundle above (`.strict()` still rejects
+// any OTHER smuggled bundle key, same posture as creativeDirectorProject).
 const musicVideoProjectPushSchema = z.object({
   kind: z.literal('musicVideoProject'),
   ...peerSyncPushBase,
+  ...linkedTrackField,
 }).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,

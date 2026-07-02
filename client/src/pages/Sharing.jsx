@@ -13,6 +13,8 @@ import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { formatDateTime } from '../utils/formatters';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import FolderPicker from '../components/FolderPicker';
 import DuplicatesTab from '../components/sharing/DuplicatesTab';
 import ConflictsTab from '../components/sharing/ConflictsTab';
@@ -106,7 +108,7 @@ function SharingBuckets() {
   const [inboxByBucket, setInboxByBucket] = useState({}); // bucketId → items[]
   const [activityByBucket, setActivityByBucket] = useState({});
 
-  const [armedRemove, setArmedRemove] = useState(null);
+  const { isConfirming: isRemoveArmed, requestDelete: armRemove, confirmDelete: confirmRemove } = useConfirmDelete();
 
   // Load buckets + settings on mount.
   useEffect(() => {
@@ -197,17 +199,18 @@ function SharingBuckets() {
   };
 
   const handleDelete = async (bucket) => {
-    if (armedRemove !== bucket.id) {
-      setArmedRemove(bucket.id);
+    if (!isRemoveArmed(bucket.id)) {
+      armRemove(bucket.id);
       return;
     }
-    setArmedRemove(null);
-    const prior = buckets;
-    setBuckets((prev) => prev.filter((b) => b.id !== bucket.id));
-    if (selectedId === bucket.id) setSelectedId(prior[0]?.id !== bucket.id ? prior[0]?.id : (prior[1]?.id || null));
-    await deleteShareBucket(bucket.id).catch((err) => {
-      toast.error(err.message || 'Failed to remove bucket');
-      setBuckets(prior);
+    await confirmRemove(() => {
+      const prior = buckets;
+      setBuckets((prev) => prev.filter((b) => b.id !== bucket.id));
+      if (selectedId === bucket.id) setSelectedId(prior[0]?.id !== bucket.id ? prior[0]?.id : (prior[1]?.id || null));
+      return deleteShareBucket(bucket.id).catch((err) => {
+        toast.error(err.message || 'Failed to remove bucket');
+        setBuckets(prior);
+      });
     });
   };
 
@@ -499,7 +502,7 @@ function SharingBuckets() {
                   bucket={selected}
                   onToggleMode={() => handleModeToggle(selected)}
                   onDelete={() => handleDelete(selected)}
-                  armed={armedRemove === selected.id}
+                  armed={isRemoveArmed(selected.id)}
                 />
               )}
             </div>
@@ -552,7 +555,7 @@ function Inboxlist({ bucket, items, onPromote, onDismiss }) {
                   <span className="text-gray-500 text-[11px]">(PortOS {item.producedByVersion})</span>
                 )}
                 <span className="text-gray-600">· {item.kind}</span>
-                <span className="text-gray-600">· {new Date(item.receivedAt || item.createdAt).toLocaleString()}</span>
+                <span className="text-gray-600">· {formatDateTime(item.receivedAt || item.createdAt)}</span>
                 {isLiveSubscription(item) && (
                   <span
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-port-success/10 border border-port-success/30 text-[10px] text-port-success"
@@ -615,7 +618,7 @@ function ActivityList({ manifests }) {
     <ul className="space-y-1.5">
       {manifests.map((m) => (
         <li key={m.id} className="p-2 bg-port-card border border-port-border rounded text-xs flex items-center gap-2 flex-wrap">
-          <span className="text-gray-500">{new Date(m.createdAt).toLocaleString()}</span>
+          <span className="text-gray-500">{formatDateTime(m.createdAt)}</span>
           <span className="text-port-accent">{m.source}</span>
           {m.producedByVersion && m.producedByVersion !== 'unknown' && (
             <span className="text-gray-500 text-[10px]">v{m.producedByVersion}</span>

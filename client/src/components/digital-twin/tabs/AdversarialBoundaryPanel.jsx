@@ -94,11 +94,11 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
   const getResultIcon = (result) => {
     switch (result) {
       case 'held':
-        return <CheckCircle className="w-5 h-5 text-green-400" />;
+        return <CheckCircle className="w-5 h-5 text-port-success" />;
       case 'breached':
-        return <XCircle className="w-5 h-5 text-red-400" />;
+        return <XCircle className="w-5 h-5 text-port-error" />;
       case 'partial':
-        return <AlertCircle className="w-5 h-5 text-yellow-400" />;
+        return <AlertCircle className="w-5 h-5 text-port-warning" />;
       default:
         return <Clock className="w-5 h-5 text-gray-400" />;
     }
@@ -204,7 +204,7 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                     {results.map(r => (
                       <td key={`${r.providerId}-${r.model}-score`} className="px-4 py-3">
                         {r.error ? (
-                          <span className="text-sm text-red-400">{r.error}</span>
+                          <span className="text-sm text-port-error">{r.error}</span>
                         ) : (
                           <>
                             <span className={`text-lg font-bold ${scoreToColor(r.score || 0)}`}>
@@ -246,11 +246,11 @@ export default function AdversarialBoundaryPanel({ selectedProviders = [], perso
                     )}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                       <div>
-                        <div className="text-green-400 text-xs mb-1">Held Response</div>
+                        <div className="text-port-success text-xs mb-1">Held Response</div>
                         <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.heldResponse}</div>
                       </div>
                       <div>
-                        <div className="text-red-400 text-xs mb-1">Breached Response</div>
+                        <div className="text-port-error text-xs mb-1">Breached Response</div>
                         <div className="text-gray-400 bg-port-card p-3 rounded">{scenario.breachedResponse}</div>
                       </div>
                     </div>

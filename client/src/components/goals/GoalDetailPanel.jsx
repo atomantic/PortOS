@@ -25,7 +25,7 @@ const urgencyColor = (u) => {
   if (u == null) return 'text-gray-500';
   if (u >= 0.7) return 'text-red-400';
   if (u >= 0.4) return 'text-yellow-400';
-  return 'text-green-400';
+  return 'text-port-success';
 };
 
 // The goal itself is yours — title, horizon, category are all stated outright.
@@ -279,7 +279,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             {goal.status === 'active' && (
               <button
                 onClick={s.handleComplete}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
               >
                 <Check className="w-3 h-3" />
                 Complete

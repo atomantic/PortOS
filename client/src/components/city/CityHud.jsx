@@ -60,18 +60,18 @@ const formatUptime = (seconds) => {
 };
 
 const getHealthSentinel = (systemHealth, onlineRatio) => {
-  if (systemHealth?.overallHealth === 'critical') return { dot: 'bg-red-400', text: 'text-red-400', label: 'CRITICAL' };
-  if (systemHealth?.overallHealth === 'warning') return { dot: 'bg-amber-400', text: 'text-amber-400', label: 'WARN' };
-  if (systemHealth?.overallHealth === 'healthy') return { dot: 'bg-emerald-400', text: 'text-emerald-400', label: 'OK' };
+  if (systemHealth?.overallHealth === 'critical') return { dot: 'bg-port-error', text: 'text-port-error', label: 'CRITICAL' };
+  if (systemHealth?.overallHealth === 'warning') return { dot: 'bg-port-warning', text: 'text-port-warning', label: 'WARN' };
+  if (systemHealth?.overallHealth === 'healthy') return { dot: 'bg-port-success', text: 'text-port-success', label: 'OK' };
   if (onlineRatio >= 0.8) return { dot: 'bg-cyan-400', text: 'text-cyan-400', label: 'OK' };
-  if (onlineRatio >= 0.5) return { dot: 'bg-amber-400', text: 'text-amber-400', label: 'WARN' };
-  return { dot: 'bg-red-400', text: 'text-red-400', label: 'CRIT' };
+  if (onlineRatio >= 0.5) return { dot: 'bg-port-warning', text: 'text-port-warning', label: 'WARN' };
+  return { dot: 'bg-port-error', text: 'text-port-error', label: 'CRIT' };
 };
 
 const metricColor = (pct) => {
   if (pct == null) return 'text-gray-500';
-  if (pct >= 90) return 'text-red-400';
-  if (pct >= 75) return 'text-amber-400';
+  if (pct >= 90) return 'text-port-error';
+  if (pct >= 75) return 'text-port-warning';
   return 'text-cyan-400';
 };
 
@@ -349,8 +349,8 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           <HudCorner position="br" />
 
           <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-emerald-400 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-400 shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
-            <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-red-400'}`}>
+            <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-port-error shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
+            <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-port-error'}`}>
               {connected ? 'LINK' : 'OFFLINE'}
             </span>
           </div>

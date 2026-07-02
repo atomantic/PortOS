@@ -239,6 +239,52 @@ describe('CoS Routes', () => {
       expect(response.body).toHaveProperty('user');
       expect(response.body).toHaveProperty('cos');
     });
+
+    it('should bound each source and add a pagination block when limit/offset are passed', async () => {
+      const mockTasks = {
+        user: {
+          tasks: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }],
+          grouped: { pending: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }] },
+          awaitingApproval: [{ id: 'u1' }],
+          autoApproved: [{ id: 'u2' }],
+          file: 'data/cos/user-tasks.md',
+          exists: true,
+          type: 'user'
+        },
+        cos: {
+          tasks: [{ id: 'c1' }, { id: 'c2' }],
+          grouped: { pending: [{ id: 'c1' }, { id: 'c2' }] },
+          awaitingApproval: [],
+          autoApproved: [],
+          file: 'data/cos/cos-tasks.md',
+          exists: true,
+          type: 'internal'
+        }
+      };
+      cos.getAllTasks.mockResolvedValue(mockTasks);
+
+      const response = await request(app).get('/api/cos/tasks?limit=1&offset=1');
+
+      expect(response.status).toBe(200);
+      // Inner task arrays are windowed...
+      expect(response.body.user.tasks).toEqual([{ id: 'u2' }]);
+      expect(response.body.cos.tasks).toEqual([{ id: 'c2' }]);
+      // ...scalar metadata is preserved...
+      expect(response.body.user).toMatchObject({ file: 'data/cos/user-tasks.md', exists: true, type: 'user' });
+      // ...and the full-set derived collections are dropped so the response is
+      // genuinely bounded (not re-leaked through grouped/awaiting/auto-approved).
+      expect(response.body.user).not.toHaveProperty('grouped');
+      expect(response.body.user).not.toHaveProperty('awaitingApproval');
+      expect(response.body.user).not.toHaveProperty('autoApproved');
+      expect(response.body.cos).not.toHaveProperty('grouped');
+      expect(response.body.pagination).toEqual({
+        limit: 1,
+        offset: 1,
+        userTotal: 3,
+        cosTotal: 2,
+        total: 5
+      });
+    });
   });
 
   describe('POST /api/cos/tasks', () => {
@@ -271,6 +317,31 @@ describe('CoS Routes', () => {
         .send({ priority: 'HIGH' });
 
       expect(response.status).toBe(400);
+    });
+
+    it('should accept multiple screenshots and attachment objects', async () => {
+      const taskData = {
+        description: 'Test task with images',
+        screenshots: ['/data/screenshots/a.png', '/data/screenshots/b.png'],
+        attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/data/cos/attachments/a-123.png', size: 100, mimeType: 'image/png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/data/cos/attachments/b-456.png', size: 200, mimeType: 'image/png' },
+        ]
+      };
+      cos.addTask.mockResolvedValue({ id: 'task-002', ...taskData, status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks')
+        .send(taskData);
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          screenshots: taskData.screenshots,
+          attachments: taskData.attachments,
+        }),
+        'user'
+      );
     });
   });
 

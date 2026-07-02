@@ -1,4 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock file I/O so submitPostSession tests stay pure. Shared by meatspacePost.js
+// AND meatspacePostMemory.js (imported transitively for advanceScheduleFromSession) —
+// route responses by path substring so both modules' reads/writes are covered
+// without depending on call order.
+vi.mock('../lib/fileUtils.js', () => ({
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  // `data` is needed too — postValidation.js transitively imports
+  // meatspacePostDrillCache.js, which builds a path off PATHS.data at module load.
+  PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  readJSONFile: vi.fn((path, defaultValue) => Promise.resolve(defaultValue)),
+}));
+
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   generateDoublingChain,
   generateSerialSubtraction,
@@ -8,6 +23,9 @@ import {
   scoreDrill,
   computeExpectedFromPrompt,
   computePostStreaks,
+  submitPostSession,
+  updatePostConfig,
+  postConfigEvents,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -428,5 +446,226 @@ describe('computePostStreaks', () => {
   it('spans a month boundary without an off-by-one (UTC day math)', () => {
     const r = computePostStreaks([s('2026-05-31'), s('2026-06-01')], '2026-06-01');
     expect(r.currentStreak).toBe(2);
+  });
+});
+
+// =============================================================================
+// SUBMIT SESSION — MEMORY DRILL SCHEDULE ADVANCE + MASTERY MERGE (#2010, #2016)
+// =============================================================================
+
+describe('submitPostSession — memory drill schedule advance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Route each readJSONFile call by path so both meatspacePost.js's own
+    // reads (config/sessions) and meatspacePostMemory.js's read (memory items,
+    // called internally by advanceScheduleFromSession) resolve sensibly
+    // regardless of call order.
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-memory-items')) {
+        return Promise.resolve({
+          items: [{
+            id: 'song-1',
+            title: 'Test Song',
+            builtin: false,
+            schedule: { ease: 2.5, intervalDays: 0, nextReview: '2026-06-01T00:00:00.000Z', lastReviewed: null },
+            mastery: { overallPct: 0, chunks: {}, elements: {} },
+            content: { lines: [{ text: 'a line' }], chunks: [] },
+          }],
+        });
+      }
+      if (p.includes('post-sessions')) {
+        return Promise.resolve({ sessions: [] });
+      }
+      // post-config.json — fall through to the default (baseDefaults clone)
+      return Promise.resolve(defaultValue);
+    });
+  });
+
+  it('advances the schedule of the memory item a POST-supported memory task references', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'line one', expected: 'line two', answered: 'line two', correct: true, responseMs: 500 },
+          { prompt: 'line two', expected: 'line three', answered: 'line three', correct: true, responseMs: 500 },
+        ],
+        score: 90,
+        totalMs: 2000,
+      }],
+      tags: {},
+    });
+
+    expect(session).toBeTruthy();
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeTruthy();
+    const updatedItem = memoryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
+    expect(updatedItem.schedule.lastReviewed).toBeTruthy();
+  });
+
+  it('merges chunk/element mastery from per-question attribution alongside the schedule advance (issue #2016)', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'line one', expected: 'line two', answered: 'line two', correct: true, responseMs: 500, chunkId: 'verse-1' },
+          { prompt: 'line two', expected: 'line three', answered: null, correct: false, responseMs: 500, chunkId: 'verse-1' },
+        ],
+        score: 50,
+        totalMs: 2000,
+      }],
+      tags: {},
+    });
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    // One write for the schedule advance, one for the mastery merge.
+    expect(memoryWrites.length).toBe(2);
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: expect.any(String) });
+  });
+
+  it('buckets memory-element-flash answers into element mastery via the element attribution', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-element-flash',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'Hydrogen', expected: 'H', answered: 'H', correct: true, responseMs: 400, element: 'H' },
+        ],
+        score: 100,
+        totalMs: 400,
+      }],
+      tags: {},
+    });
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.mastery.elements.H).toEqual({ correct: 1, attempts: 1 });
+  });
+
+  it('does not touch memory items for a session with no memory tasks', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        config: { startValue: 2, steps: 1 },
+        questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 500 }],
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeUndefined();
+  });
+
+  it('does not advance a schedule for an unsupported memory drill type with no memoryItemId', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-fill-blank',
+        questions: [{ prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500 }],
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrite).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// UPDATE CONFIG — postConfigEvents (issue #2015)
+//
+// updatePostConfig() emits `post-config:updated` on its own EventEmitter
+// (postConfigEvents) after every successful write, carrying both the merged
+// config and the raw `updates` patch. meatspacePostReminder.js subscribes to
+// this to reschedule the daily reminder — this is what centralizes
+// reschedule-on-save so ANY caller of updatePostConfig gets it for free,
+// instead of each route handler having to remember to bolt one on.
+// =============================================================================
+
+describe('updatePostConfig — postConfigEvents', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+    atomicWrite.mockResolvedValue(undefined);
+  });
+
+  it('emits post-config:updated with the merged config and the raw updates patch', async () => {
+    const handler = vi.fn();
+    postConfigEvents.once('post-config:updated', handler);
+
+    const merged = await updatePostConfig({ reminder: { enabled: true, time: '09:00' } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual({
+      config: merged,
+      updates: { reminder: { enabled: true, time: '09:00' } },
+    });
+    expect(merged.reminder).toMatchObject({ enabled: true, time: '09:00' });
+  });
+
+  // Regression (codex review finding on #2015): the missed-slot catch-up in
+  // meatspacePostReminder.js needs to know WHEN the reminder's settings last
+  // changed, so it can tell "a slot that happened under the current config"
+  // apart from "a slot that happened before the user even set this up."
+  it('stamps reminder.updatedAt whenever the reminder slice is part of the patch', async () => {
+    const before = Date.now();
+    const merged = await updatePostConfig({ reminder: { enabled: true, time: '09:00' } });
+    const after = Date.now();
+
+    expect(merged.reminder.updatedAt).toBeDefined();
+    const stampedMs = new Date(merged.reminder.updatedAt).getTime();
+    expect(stampedMs).toBeGreaterThanOrEqual(before);
+    expect(stampedMs).toBeLessThanOrEqual(after);
+  });
+
+  it('does not stamp reminder.updatedAt for a patch that does not touch the reminder slice', async () => {
+    const merged = await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(merged.reminder.updatedAt).toBeUndefined();
+  });
+
+  it('still emits for updates unrelated to the reminder — subscribers decide what to react to', async () => {
+    const handler = vi.fn();
+    postConfigEvents.once('post-config:updated', handler);
+
+    await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].updates).toEqual({ adaptive: { enabled: true } });
+  });
+
+  it('only emits after the config write has persisted, not before', async () => {
+    let writeResolved = false;
+    atomicWrite.mockImplementationOnce(async () => { writeResolved = true; });
+    const handler = vi.fn(() => {
+      expect(writeResolved).toBe(true);
+    });
+    postConfigEvents.once('post-config:updated', handler);
+
+    await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

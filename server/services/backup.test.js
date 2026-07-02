@@ -48,7 +48,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { getBackendName } from './memoryBackend.js';
 import * as fs from 'fs/promises';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, restoreSnapshot } from './backup.js';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
@@ -653,5 +653,32 @@ describe('generateManifest', () => {
     const manifest = await generateManifest(dataDir, join(tmpRoot, 'manifest.json'), dumpPath);
 
     expect(manifest.files['../portos-db.sql']).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+// restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
+// BEFORE runRsync/spawn is reached, so no fake child process is needed — an
+// invalid filter must never make it into an `--include=` rsync arg.
+describe('restoreSnapshot subdirFilter guard', () => {
+  beforeEach(() => {
+    spawn.mockReset();
+  });
+
+  it('rejects a wildcard filter before spawning rsync', async () => {
+    await expect(restoreSnapshot('/dest', 'snap-1', { subdirFilter: '*' }))
+      .rejects.toThrow(/Invalid subdirFilter/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a traversal filter before spawning rsync', async () => {
+    await expect(restoreSnapshot('/dest', 'snap-1', { subdirFilter: '../escape' }))
+      .rejects.toThrow(/Invalid subdirFilter/);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('rejects an absolute-path filter before spawning rsync', async () => {
+    await expect(restoreSnapshot('/dest', 'snap-1', { subdirFilter: '/etc' }))
+      .rejects.toThrow(/Invalid subdirFilter/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

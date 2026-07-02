@@ -15,7 +15,9 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 import {
   assertSafeFilename,
+  atomicWrite,
   ensureDir,
+  pathExists,
   expandHome,
   isValidJSON,
   listDirectoryByExtension,
@@ -29,6 +31,7 @@ import {
   formatDuration,
   sha256File,
   resolveImageInputPath,
+  resolveScreenshot,
   PATHS,
   sanitizeFilename,
   getFileExtension,
@@ -383,6 +386,27 @@ describe('fileUtils', () => {
     });
   });
 
+  describe('pathExists', () => {
+    const tmpRoot = join(tmpdir(), `fileutils-pathexists-${process.pid}-${Date.now()}`);
+
+    beforeEach(() => mkdir(tmpRoot, { recursive: true }));
+    afterEach(() => rm(tmpRoot, { recursive: true, force: true }));
+
+    it('resolves true for an existing file', async () => {
+      const f = join(tmpRoot, 'present.txt');
+      await writeFile(f, 'hi');
+      expect(await pathExists(f)).toBe(true);
+    });
+
+    it('resolves true for an existing directory', async () => {
+      expect(await pathExists(tmpRoot)).toBe(true);
+    });
+
+    it('resolves false for a missing path without throwing', async () => {
+      expect(await pathExists(join(tmpRoot, 'nope.txt'))).toBe(false);
+    });
+  });
+
   describe('formatDuration', () => {
     it('should return "0m" for zero or falsy values', () => {
       expect(formatDuration(0)).toBe('0m');
@@ -648,10 +672,12 @@ describe('fileUtils', () => {
 
     it('resolves a basename present only in visualTemplates', () => {
       const out = resolveImageInputPath(templateName);
-      expect(out).toBeTruthy();
-      // visualTemplates is the third root; without a basename in gallery first
-      // it falls through. We can't fully isolate that here without temp dirs,
-      // so just assert the resolver doesn't return null.
+      // `templateName` is unique to the visualTemplates root (it is NOT copied
+      // into gallery or image-refs), so the resolver must land on the third
+      // root and the returned path must carry that root's segment + basename —
+      // a plain truthiness check would pass even on a wrong-root resolution.
+      expect(out).toContain('data/templates/');
+      expect(out).toContain(templateName);
     });
 
     it('REGRESSION: absolute path under a specific root stays in that root', () => {
@@ -677,6 +703,52 @@ describe('fileUtils', () => {
       const out = resolveImageInputPath(refsAbs);
       expect(out).toContain('data/image-refs/');
       expect(out).not.toContain('data/images/');
+    });
+  });
+
+  describe('resolveScreenshot', () => {
+    const sampleTemplate = join(__dirname_test, '..', '..', 'data.reference', 'templates', 'character-reference-sheet.png');
+    const shotName = 'fileutils-test-screenshot.png';
+    const shotPath = join(PATHS.screenshots, shotName);
+
+    beforeEach(() => {
+      if (!existsSync(PATHS.screenshots)) mkdirSync(PATHS.screenshots, { recursive: true });
+      if (existsSync(sampleTemplate) && !existsSync(shotPath)) copyFileSync(sampleTemplate, shotPath);
+    });
+
+    afterAll(() => {
+      // Remove ONLY the uniquely-named fixture — never the real screenshots root.
+      if (existsSync(shotPath)) rmSync(shotPath, { force: true });
+    });
+
+    it('resolves a basename present under the screenshots root', () => {
+      const out = resolveScreenshot(shotName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/screenshots/');
+      expect(out).toContain(shotName);
+    });
+
+    it('SECURITY: rejects parent-directory traversal that escapes the screenshots root', () => {
+      // `loadImageAsBase64` (issue #1820) fed `imagePath` straight from req.body;
+      // a `../` payload must NOT resolve to a file outside data/screenshots.
+      expect(resolveScreenshot('../../etc/passwd')).toBeNull();
+      expect(resolveScreenshot('../package.json')).toBeNull();
+    });
+
+    it('SECURITY: rejects an absolute path outside the screenshots root', () => {
+      expect(resolveScreenshot('/etc/passwd')).toBeNull();
+      expect(resolveScreenshot('/etc/hosts')).toBeNull();
+    });
+
+    it('rejects non-image extensions and missing files', () => {
+      expect(resolveScreenshot('notes.txt')).toBeNull();
+      expect(resolveScreenshot('does-not-exist.png')).toBeNull();
+    });
+
+    it('returns null for non-string / empty input', () => {
+      expect(resolveScreenshot(null)).toBeNull();
+      expect(resolveScreenshot('')).toBeNull();
+      expect(resolveScreenshot(undefined)).toBeNull();
     });
   });
 
@@ -789,6 +861,54 @@ describe('fileUtils', () => {
       const realFailure = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
       fsPromises.mkdir.mockRejectedValueOnce(realFailure);
       await expect(ensureDir(target)).rejects.toThrow(/EACCES/);
+    });
+  });
+
+  describe('atomicWrite', () => {
+    let tmpRoot;
+
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-atomicwrite-'));
+    });
+
+    afterEach(() => {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it('serializes a plain object with 2-space indentation', async () => {
+      const target = join(tmpRoot, 'obj.json');
+      await atomicWrite(target, { b: 2, a: 1 });
+      expect(await readFile(target, 'utf8')).toBe('{\n  "b": 2,\n  "a": 1\n}');
+    });
+
+    it('writes a string payload verbatim (preserving a trailing newline)', async () => {
+      const target = join(tmpRoot, 'raw.json');
+      await atomicWrite(target, '{"x":1}\n');
+      expect(await readFile(target, 'utf8')).toBe('{"x":1}\n');
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'preserves the destination file\'s restrictive mode on rewrite (regression: #1837)',
+      async () => {
+        const target = join(tmpRoot, 'secret.json');
+        // Seed a hand-restricted secret file (e.g. an OAuth tokens.json the user
+        // chmod 600'd). The temp-write + rename must NOT widen it to the umask
+        // default — a plain writeFile(existing) kept the inode's mode, and
+        // atomicWrite mirrors that.
+        writeFileSync(target, '{"token":"old"}', { mode: 0o600 });
+        const { chmodSync } = await import('fs');
+        chmodSync(target, 0o600); // ensure 600 regardless of umask at creation
+        await atomicWrite(target, { token: 'new' });
+        const { statSync } = await import('fs');
+        expect(statSync(target).mode & 0o777).toBe(0o600);
+        expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ token: 'new' });
+      }
+    );
+
+    it('creates a new file at the default mode when the destination does not exist', async () => {
+      const target = join(tmpRoot, 'fresh.json');
+      await atomicWrite(target, { created: true });
+      expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ created: true });
     });
   });
 });

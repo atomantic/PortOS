@@ -26,6 +26,7 @@ import {
   CheckCircle,
   Dna,
   Download,
+  Film,
   MessageSquare,
   Palette,
   PenLine,
@@ -251,6 +252,7 @@ const navItems = [
       { to: '/system-health', label: 'System Health', icon: Activity },
       { to: '/uploads', label: 'Uploads', icon: Upload },
       { to: '/devtools/usage', label: 'Usage', icon: BarChart3 },
+      { to: '/devtools/video-download', label: 'Video Downloader', icon: Film },
       { to: '/workspace-contexts', label: 'Workspaces', icon: Layers },
     ],
   },
@@ -342,7 +344,7 @@ function PinButton({ label, pinned, onTogglePin }) {
       type="button"
       aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-      className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}
+      className={`px-2 rounded-lg hover:bg-port-border/50 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100'}`}
     >
       {pinned ? <PinOff size={14} /> : <Pin size={14} />}
     </button>
@@ -871,7 +873,7 @@ export default function Layout() {
   };
 
   return (
-    <div className="h-screen h-[100dvh] print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
+    <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -894,7 +896,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 h-screen print:hidden
+          fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}

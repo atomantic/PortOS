@@ -4,6 +4,7 @@ import {
   applyProjectPatch,
   setAudioAnalysis,
   addScene,
+  addScenes,
   applySceneUpdate,
   removeScene,
   reorderScenes,
@@ -48,6 +49,64 @@ describe('applyProjectPatch', () => {
   it('accepts a valid status', () => {
     expect(applyProjectPatch(baseProject(), { status: 'ready' }).status).toBe('ready');
   });
+
+  it('clears cached audioAnalysis when trackId changes to a different track (#1945)', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [{ label: 'Section 1', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    expect(analyzed.audioAnalysis).not.toBeNull();
+    const next = applyProjectPatch(analyzed, { trackId: 't2' });
+    expect(next.trackId).toBe('t2');
+    expect(next.audioAnalysis).toBeNull();
+  });
+
+  it('leaves audioAnalysis intact when trackId is patched to the SAME value', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { trackId: 't1', name: 'Renamed' });
+    expect(next.audioAnalysis).not.toBeNull();
+  });
+
+  it('leaves audioAnalysis intact for a patch that does not touch the track', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { name: 'Renamed' });
+    expect(next.audioAnalysis).not.toBeNull();
+  });
+
+  it('clears audioAnalysis when uploadedAudioFilename changes to a different file', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), uploadedAudioFilename: 'a.mp3' }, {
+      bpm: 100, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const next = applyProjectPatch(analyzed, { uploadedAudioFilename: 'b.mp3' });
+    expect(next.audioAnalysis).toBeNull();
+  });
+
+  it('clears beatAligned on scenes when the track changes — their bounds were snapped to the OLD beat grid', () => {
+    const withScenes = {
+      ...baseProject(),
+      trackId: 't1',
+      scenes: [
+        { sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true },
+        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false },
+      ],
+    };
+    const next = applyProjectPatch(withScenes, { trackId: 't2' });
+    expect(next.scenes[0]).toMatchObject({ beatAligned: false, startSec: 1, endSec: 2 });
+    expect(next.scenes[1]).toMatchObject({ beatAligned: false, startSec: 3, endSec: 4 });
+  });
+
+  it('leaves scene beatAligned flags untouched when the track does not change', () => {
+    const withScenes = {
+      ...baseProject(),
+      trackId: 't1',
+      scenes: [{ sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true }],
+    };
+    const next = applyProjectPatch(withScenes, { name: 'Renamed' });
+    expect(next.scenes[0].beatAligned).toBe(true);
+  });
 });
 
 describe('setAudioAnalysis', () => {
@@ -79,6 +138,36 @@ describe('scene board operations', () => {
 
   it('rejects a scene whose endSec precedes startSec', () => {
     expect(() => addScene(baseProject(), { startSec: 10, endSec: 5 })).toThrow(/Scene validation failed/);
+  });
+
+  it('addScenes bulk-appends in one pass with incrementing order (the autonomous planner, #1855)', () => {
+    const { project, scenes } = addScenes(baseProject(), [
+      { label: 'Intro', startSec: 0, endSec: 10 },
+      { label: 'Drop', startSec: 10, endSec: 18 },
+    ]);
+    expect(scenes).toHaveLength(2);
+    expect(scenes.map((s) => s.order)).toEqual([0, 1]);
+    expect(scenes[0].sceneId).not.toBe(scenes[1].sceneId);
+    expect(project.scenes).toHaveLength(2);
+  });
+
+  it('addScenes continues ordering after existing scenes', () => {
+    const { project: seeded } = addScene(baseProject(), { prompt: 'existing' });
+    const { scenes } = addScenes(seeded, [{ label: 'Next' }]);
+    expect(scenes[0].order).toBe(1);
+  });
+
+  it('addScenes rejects the whole batch if any scene is invalid', () => {
+    expect(() => addScenes(baseProject(), [
+      { label: 'ok', startSec: 0, endSec: 5 },
+      { label: 'bad', startSec: 10, endSec: 5 },
+    ])).toThrow(/Scene validation failed/);
+  });
+
+  it('addScenes treats a non-array input as empty', () => {
+    const { project, scenes } = addScenes(baseProject(), null);
+    expect(scenes).toEqual([]);
+    expect(project.scenes).toEqual([]);
   });
 
   it('updates a scene by id', () => {

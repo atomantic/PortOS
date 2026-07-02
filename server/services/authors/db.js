@@ -19,6 +19,7 @@ import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { buildAuthorRecord, applyAuthorPatch, mergeAuthorRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 function rowToAuthor(row) {
@@ -167,6 +168,10 @@ export async function pruneTombstonedAuthors(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('author', r.id);
+  // Coalesce the per-author base-hash evictions into ONE disk write — each
+  // `deleteSyncBaseHash` otherwise flushes `sync_base_hashes.json` per row.
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('author', r.id);
+  });
   return { pruned: rows.length };
 }

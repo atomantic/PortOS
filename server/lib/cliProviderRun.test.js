@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { pickCliProvider, runCliProviderPrompt } from './cliProviderRun.js';
+import { describe, it, expect, vi } from 'vitest';
+
+// Wrap the REAL resolveWindowsExecutable in a spy (not a stub) so every
+// existing real-spawn test below is unaffected (a no-op pass-through on the
+// non-win32 host running this suite) while one test can force a specific
+// resolved path to prove runCliProviderPrompt actually spawns it.
+vi.mock('./bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveWindowsExecutable: vi.fn(actual.resolveWindowsExecutable) };
+});
+
+const { pickCliProvider, runCliProviderPrompt } = await import('./cliProviderRun.js');
+const { resolveWindowsExecutable } = await import('./bufferedSpawn.js');
 
 const cli = (id, extra = {}) => ({ id, type: 'cli', command: id, enabled: true, models: [], ...extra });
 
@@ -105,6 +116,23 @@ describe('runCliProviderPrompt', () => {
       prompt: 'x'.repeat(100000),
     });
     expect(result.error).toBeUndefined();
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('spawns the resolveWindowsExecutable-resolved path when one is found (#1865)', async () => {
+    // Force resolution to a real binary (resolved via `which`, so this works
+    // regardless of the host's exact PATH layout) so the round-trip still
+    // completes — proves the resolved path, not the bare provider.command,
+    // is what actually gets spawned.
+    const { execFileSync } = await import('child_process');
+    const catPath = execFileSync('which', ['cat']).toString().trim();
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(catPath);
+    const result = await runCliProviderPrompt({
+      provider: { id: 'gemini-cli', type: 'cli', command: 'this-name-is-never-spawned-directly', args: [] },
+      prompt: 'resolved path round-trip',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.text).toBe('resolved path round-trip');
     expect(result.exitCode).toBe(0);
   });
 });

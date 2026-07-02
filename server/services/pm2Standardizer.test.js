@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { reassignCollidingPorts } from './pm2Standardizer.js';
+import { describe, it, expect, vi } from 'vitest';
+import { reassignCollidingPorts, runStandardizeFlow } from './pm2Standardizer.js';
 
 describe('reassignCollidingPorts', () => {
   it('moves a process off a taken port and rewrites both env.PORT and --port args', () => {
@@ -98,5 +98,104 @@ describe('reassignCollidingPorts', () => {
     reassignCollidingPorts(processes, [5173]);
     expect(processes[0].env.PORT).toBe(6000);
     expect(processes[0].env.RETRIES).toBe(5173); // not a port key
+  });
+});
+
+describe('runStandardizeFlow', () => {
+  // A successful analysis plan shape (only the fields the flow reads).
+  const okAnalysis = {
+    success: true,
+    proposedChanges: { processes: [{ name: 'srv' }], strayPorts: [{ file: '.env' }] }
+  };
+
+  it('runs analyze → backup → apply and returns a success outcome with the backup branch', async () => {
+    const analyze = vi.fn().mockResolvedValue(okAnalysis);
+    const backup = vi.fn().mockResolvedValue({ success: true, branch: 'portos-backup-123' });
+    const apply = vi.fn().mockResolvedValue({ success: true, filesModified: ['ecosystem.config.cjs'], errors: [] });
+
+    const outcome = await runStandardizeFlow('/repo', 'prov-1', { analyze, backup, apply });
+
+    expect(analyze).toHaveBeenCalledWith('/repo', 'prov-1');
+    // Step 3 must skip its own backup since step 2 already made one.
+    expect(apply).toHaveBeenCalledWith('/repo', okAnalysis, { skipBackup: true });
+    expect(outcome).toEqual({
+      success: true,
+      result: {
+        backupBranch: 'portos-backup-123',
+        filesModified: ['ecosystem.config.cjs'],
+        processes: okAnalysis.proposedChanges.processes
+      }
+    });
+  });
+
+  it('emits ordered step + analyzed callbacks while it runs', async () => {
+    const steps = [];
+    const analyzed = vi.fn();
+    await runStandardizeFlow('/repo', null, {
+      onStep: ({ step, status }) => steps.push(`${step}:${status}`),
+      onAnalyzed: analyzed,
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: true, branch: 'b1' }),
+      apply: vi.fn().mockResolvedValue({ success: true, filesModified: [], errors: [] })
+    });
+
+    expect(steps).toEqual([
+      'analyze:running', 'analyze:done',
+      'backup:running', 'backup:done',
+      'apply:running', 'apply:done'
+    ]);
+    expect(analyzed).toHaveBeenCalledWith({ plan: okAnalysis });
+  });
+
+  it('short-circuits with the analyze error and never backs up or applies', async () => {
+    const backup = vi.fn();
+    const apply = vi.fn();
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockResolvedValue({ success: false, error: 'No AI provider configured' }),
+      backup,
+      apply
+    });
+    expect(outcome).toEqual({ success: false, error: 'No AI provider configured' });
+    expect(backup).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('aborts on a dirty worktree (DIRTY_WORKTREE) before applying', async () => {
+    const apply = vi.fn();
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: false, code: 'DIRTY_WORKTREE', reason: 'uncommitted changes' }),
+      apply
+    });
+    expect(outcome).toEqual({ success: false, error: 'uncommitted changes' });
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('treats a non-git repo as a skipped backup and still applies (backupBranch null)', async () => {
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: false, reason: 'Not a git repository' }),
+      apply: vi.fn().mockResolvedValue({ success: true, filesModified: ['ecosystem.config.cjs'], errors: [] })
+    });
+    expect(outcome.success).toBe(true);
+    expect(outcome.result.backupBranch).toBeNull();
+  });
+
+  it('returns the joined apply errors when applying fails', async () => {
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: true, branch: 'b1' }),
+      apply: vi.fn().mockResolvedValue({ success: false, filesModified: [], errors: ['disk full', 'oops'] })
+    });
+    expect(outcome).toEqual({ success: false, error: 'disk full, oops' });
+  });
+
+  it('surfaces a thrown analyze rejection as a failed outcome', async () => {
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockRejectedValue(new Error('boom')),
+      backup: vi.fn(),
+      apply: vi.fn()
+    });
+    expect(outcome).toEqual({ success: false, error: 'boom' });
   });
 });

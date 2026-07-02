@@ -6,6 +6,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { buildClinicianReport, reportToMarkdown, formatRange, STATUS_LABELS } from '../../../lib/clinicianReport';
 import { STATUS_COLORS } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
+import { formatDateTime } from '../../../utils/formatters';
 
 export default function ExportTab() {
   const [report, setReport] = useState(null);
@@ -82,7 +83,7 @@ export default function ExportTab() {
             Clinician Summary — Blood &amp; Lifestyle
           </h2>
           <p className="text-xs text-gray-500 print:text-gray-700">
-            Generated {report.generatedAt.toLocaleString()}
+            Generated {formatDateTime(report.generatedAt)}
           </p>
           <p className="text-xs text-gray-600 print:text-gray-700 italic">
             Self-tracked data exported from PortOS. Reference ranges are general adult ranges

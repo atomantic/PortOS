@@ -18,14 +18,14 @@
  */
 
 import { existsSync } from 'fs';
-import { link, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises';
+import { link, readFile, rename, rm, stat, unlink } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { randomBytes } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   applyDownloadToken,
@@ -235,7 +235,7 @@ export const patchLoraSidecar = async (filename, patch) => {
   }
   const current = (await readSidecar(filename)) || { filename };
   const next = { ...current, ...patch, filename };
-  await writeFile(sidecarPath(filename), JSON.stringify(next, null, 2) + '\n');
+  await atomicWrite(sidecarPath(filename), JSON.stringify(next, null, 2) + '\n');
   return next;
 };
 
@@ -403,7 +403,7 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   });
 
   const sidecar = buildSidecar({ model, version, file, filename });
-  await writeFile(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
+  await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
   console.log(`✅ Installed Civitai LoRA: ${filename}`);
   return sidecar;
 };
@@ -472,7 +472,7 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch } = {}) 
   });
 
   const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });
-  await writeFile(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
+  await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
   console.log(`✅ Installed HuggingFace LoRA: ${filename}`);
   return sidecar;
 };

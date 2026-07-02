@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { appendFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -13,6 +13,7 @@ import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_S
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
+import { resolveInstallRoot } from './dataRoot.js';
 
 // Promisified execFile — shared so callers (e.g. backup's pg_dump probing)
 // don't each re-wrap it. Returns { stdout, stderr }.
@@ -23,6 +24,19 @@ const IS_WIN = process.platform === 'win32';
 const __lib_filename = fileURLToPath(import.meta.url);
 const __lib_dirname = dirname(__lib_filename);
 
+// The executing checkout's root (where THIS file physically lives). Code/source
+// paths — the repo root for git ops, `lib/slashdo` — must stay anchored here so
+// they always point at the checkout that loaded the code.
+const CODE_ROOT = join(__lib_dirname, '../..');
+
+// The install root that holds the runtime `data/` tree. Prefer an explicit
+// PORTOS_DATA_ROOT env var over the executing-file location so a process booted
+// from inside a CoS agent git worktree resolves `data/` to the real install
+// instead of the worktree's empty checkout (#1947). Falls back to CODE_ROOT
+// when the env var is unset (the two coincide for a normal install). Only
+// `data/*` paths follow this — source/git paths stay on CODE_ROOT.
+const INSTALL_ROOT = resolveInstallRoot(CODE_ROOT);
+
 /**
  * MIME types that could execute scripts when served inline — force Content-Disposition: attachment
  */
@@ -32,67 +46,73 @@ export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'applicat
  * Base directories relative to project root
  */
 export const PATHS = {
-  root: join(__lib_dirname, '../..'),
-  data: join(__lib_dirname, '../../data'),
-  cos: join(__lib_dirname, '../../data/cos'),
-  brain: join(__lib_dirname, '../../data/brain'),
-  digitalTwin: join(__lib_dirname, '../../data/digital-twin'),
-  health: join(__lib_dirname, '../../data/health'),
-  runs: join(__lib_dirname, '../../data/runs'),
-  memory: join(__lib_dirname, '../../data/cos/memory'),
-  cosAgents: join(__lib_dirname, '../../data/cos/agents'),  // CoS sub-agents
-  scripts: join(__lib_dirname, '../../data/cos/scripts'),
-  reports: join(__lib_dirname, '../../data/cos/reports'),
+  root: CODE_ROOT,
+  // The data-bearing install root (parent of `data/`). Equals `root` for a
+  // normal install; diverges only when PORTOS_DATA_ROOT pins a different tree
+  // (worktree boot, #1947). Use this — not `root` — for anything anchored to
+  // the `data/` tree but living one level above it (e.g. the migration ledger
+  // `data/migrations.applied.json`), so its reader agrees with where boot wrote it.
+  installRoot: INSTALL_ROOT,
+  data: join(INSTALL_ROOT, 'data'),
+  cos: join(INSTALL_ROOT, 'data/cos'),
+  brain: join(INSTALL_ROOT, 'data/brain'),
+  digitalTwin: join(INSTALL_ROOT, 'data/digital-twin'),
+  health: join(INSTALL_ROOT, 'data/health'),
+  runs: join(INSTALL_ROOT, 'data/runs'),
+  memory: join(INSTALL_ROOT, 'data/cos/memory'),
+  cosAgents: join(INSTALL_ROOT, 'data/cos/agents'),  // CoS sub-agents
+  scripts: join(INSTALL_ROOT, 'data/cos/scripts'),
+  reports: join(INSTALL_ROOT, 'data/cos/reports'),
   // AI Agent Personalities data
-  agentPersonalities: join(__lib_dirname, '../../data/agents'),
-  meatspace: join(__lib_dirname, '../../data/meatspace'),
-  calendar: join(__lib_dirname, '../../data/calendar'),
-  messages: join(__lib_dirname, '../../data/messages'),
-  screenshots: join(__lib_dirname, '../../data/screenshots'),
-  uploads: join(__lib_dirname, '../../data/uploads'),
-  cosAttachments: join(__lib_dirname, '../../data/cos/attachments'),
-  worktrees: join(__lib_dirname, '../../data/cos/worktrees'),
-  repos: join(__lib_dirname, '../../data/repos'),
-  browserProfile: join(__lib_dirname, '../../data/browser-profile'),
+  agentPersonalities: join(INSTALL_ROOT, 'data/agents'),
+  meatspace: join(INSTALL_ROOT, 'data/meatspace'),
+  calendar: join(INSTALL_ROOT, 'data/calendar'),
+  messages: join(INSTALL_ROOT, 'data/messages'),
+  screenshots: join(INSTALL_ROOT, 'data/screenshots'),
+  uploads: join(INSTALL_ROOT, 'data/uploads'),
+  cosAttachments: join(INSTALL_ROOT, 'data/cos/attachments'),
+  worktrees: join(INSTALL_ROOT, 'data/cos/worktrees'),
+  repos: join(INSTALL_ROOT, 'data/repos'),
+  browserProfile: join(INSTALL_ROOT, 'data/browser-profile'),
   browserDownloads: join(homedir(), 'Downloads'),
-  digests: join(__lib_dirname, '../../data/cos/digests'),
-  promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
-  promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),
-  decisions: join(__lib_dirname, '../../data/cos/decisions'),
-  telegram: join(__lib_dirname, '../../data/telegram'),
-  templates: join(__lib_dirname, '../../data/prompts/templates'),
+  digests: join(INSTALL_ROOT, 'data/cos/digests'),
+  promptSkills: join(INSTALL_ROOT, 'data/prompts/skills'),
+  promptSkillsJobs: join(INSTALL_ROOT, 'data/prompts/skills/jobs'),
+  decisions: join(INSTALL_ROOT, 'data/cos/decisions'),
+  telegram: join(INSTALL_ROOT, 'data/telegram'),
+  templates: join(INSTALL_ROOT, 'data/prompts/templates'),
   // Visual template assets (e.g. the character reference-sheet layout PNG used
   // as the init-image anchor by the universe-builder character sheet renderer).
   // Distinct from `templates` above, which is the legacy prompt-template dir.
   // Files here are shipped via data.reference/templates/ on first install.
-  visualTemplates: join(__lib_dirname, '../../data/templates'),
-  settings: join(__lib_dirname, '../../data/settings'),
-  missions: join(__lib_dirname, '../../data/cos/missions'),
-  tools: join(__lib_dirname, '../../data/tools'),
-  images: join(__lib_dirname, '../../data/images'),
+  visualTemplates: join(INSTALL_ROOT, 'data/templates'),
+  settings: join(INSTALL_ROOT, 'data/settings'),
+  missions: join(INSTALL_ROOT, 'data/cos/missions'),
+  tools: join(INSTALL_ROOT, 'data/tools'),
+  images: join(INSTALL_ROOT, 'data/images'),
   // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of
   // `images/` rather than a subdir so the gallery's flat `.png` enumeration
   // never surfaces them, and so a future per-render cleanup pass can drop
   // the whole dir without touching the gallery.
-  imageRefs: join(__lib_dirname, '../../data/image-refs'),
-  loras: join(__lib_dirname, '../../data/loras'),
+  imageRefs: join(INSTALL_ROOT, 'data/image-refs'),
+  loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout:
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
   // Machine-local like `loras/` — datasets never federate.
-  loraDatasets: join(__lib_dirname, '../../data/lora-datasets'),
+  loraDatasets: join(INSTALL_ROOT, 'data/lora-datasets'),
   // LoRA training run artifacts (checkpoints/samples/cache per run). Run
   // RECORDS live in Postgres (lora_training_runs); only artifacts live here.
-  trainingRuns: join(__lib_dirname, '../../data/training-runs'),
-  videos: join(__lib_dirname, '../../data/videos'),
-  videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
+  trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),
+  videos: join(INSTALL_ROOT, 'data/videos'),
+  videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
   // Persisted audio renders (voice-over lines). Kept distinct from
   // the in-memory voice-agent synthesis path in services/voice/ — that path
   // streams WAV over Socket.IO without ever touching disk.
-  audio: join(__lib_dirname, '../../data/audio'),
+  audio: join(INSTALL_ROOT, 'data/audio'),
   // Uploaded + (eventually) generated background music tracks. Separate from
   // `audio/` so the user can browse + reuse a track across issues without
   // walking through the VO-line filenames.
-  music: join(__lib_dirname, '../../data/music'),
+  music: join(INSTALL_ROOT, 'data/music'),
   // Extracted assets from third-party imports (ChatGPT export images/audio/
   // PDFs). Served read-only at `/data/brain-imports/...` so the Memory
   // conversation viewer can render inline `![](url)` images and asset links.
@@ -100,8 +120,8 @@ export const PATHS = {
   // asset referenced from multiple conversations is stored once. The transcript
   // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
   // served — only this assets subtree is.
-  brainImportAssets: join(__lib_dirname, '../../data/brain/imports/assets'),
-  slashdo: join(__lib_dirname, '../../lib/slashdo')
+  brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
+  slashdo: join(CODE_ROOT, 'lib/slashdo')
 };
 
 /**
@@ -131,6 +151,22 @@ export async function ensureDir(dir) {
     }
     throw err;
   });
+}
+
+/**
+ * Async existence check — the non-blocking replacement for `existsSync` on
+ * request/hot paths. Resolves true iff `path` is accessible, false otherwise.
+ * Never throws (a missing path, permission error, etc. all resolve false), so
+ * it drops in wherever `existsSync` guarded a request handler.
+ *
+ * @param {string} path - File or directory path to test.
+ * @returns {Promise<boolean>}
+ *
+ * @example
+ * if (!(await pathExists(filepath))) throw new ServerError('Not found', { status: 404 });
+ */
+export async function pathExists(path) {
+  return access(path).then(() => true, () => false);
 }
 
 /**
@@ -166,8 +202,23 @@ export async function atomicWrite(filePath, data) {
   // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
   const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   await ensureDir(dirname(filePath));
+  // Preserve the destination's existing permission bits. A plain
+  // writeFile(existing) truncated the inode in place and kept its mode, but
+  // atomicWrite creates a fresh temp inode and renames it over the target —
+  // which would silently widen a hand-restricted file (e.g. a `chmod 600`
+  // OAuth tokens.json) to the umask default (typically 0644) on every rewrite.
+  // Read the destination's mode FIRST and create the temp file with it from
+  // the start, so the secret bytes are never written to a world-readable temp
+  // (a crash between write and chmod would otherwise leave a readable copy, and
+  // a local user could race-read it during the window). A trailing chmod pins
+  // the exact mode in case the umask tightened the create below it. New files
+  // (stat fails with ENOENT) keep the umask default, exactly as before.
+  const existingMode = await stat(filePath).then((s) => s.mode & 0o777, () => null);
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await writeFile(tmp, payload);
+  await writeFile(tmp, payload, existingMode !== null ? { mode: existingMode } : undefined);
+  if (existingMode !== null) {
+    await chmod(tmp, existingMode).catch(() => {});
+  }
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.
@@ -1033,6 +1084,21 @@ export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates, {
   extensions: ['png', 'jpg', 'jpeg', 'webp'],
   cache: true,
+});
+
+/**
+ * Resolve a user-supplied screenshot filename to an absolute path under
+ * `PATHS.screenshots`. Used by the vision-test endpoint, whose `imagePath`
+ * comes straight from `req.body` — basenaming the input (and rejecting any
+ * non-image extension or missing file) stops `../` traversal and absolute-path
+ * escapes from reading arbitrary files off disk and forwarding their contents
+ * to an external vision provider. Returns `null` on any failure so the caller
+ * can surface a clean error. See `makePathResolver` for the defense-in-depth
+ * checks. Late-binds via a thunk so tests that mutate `PATHS.screenshots` still
+ * steer the resolver.
+ */
+export const resolveScreenshot = makePathResolver(() => PATHS.screenshots, {
+  extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
 });
 
 /**

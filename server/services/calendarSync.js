@@ -1,6 +1,6 @@
-import { readdir, unlink, writeFile } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
@@ -38,7 +38,7 @@ export async function loadCache(accountId) {
 export async function saveCache(accountId, cache) {
   await ensureDir(CACHE_DIR);
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  await writeFile(filePath, JSON.stringify(cache, null, 2));
+  await atomicWrite(filePath, cache);
 }
 
 function filterDeclinedAndCancelled(events) {

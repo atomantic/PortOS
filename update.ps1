@@ -61,9 +61,19 @@ function Step {
 function Invoke-Logged {
     param([Parameter(ValueFromRemainingArguments)]$CmdArgs)
     $cmd = $CmdArgs[0]
-    $args = @()
-    if ($CmdArgs.Count -gt 1) { $args = $CmdArgs[1..($CmdArgs.Count - 1)] }
-    & $cmd @args >> $UpdateLog 2>&1
+    # Name must differ from $CmdArgs by more than case — PowerShell variable names are
+    # case-insensitive, so a $cmdArgs would alias the $CmdArgs parameter and wipe it.
+    $cmdRest = @()
+    if ($CmdArgs.Count -gt 1) { $cmdRest = $CmdArgs[1..($CmdArgs.Count - 1)] }
+    # Native commands (git, npm, node) routinely write progress/status to stderr —
+    # `git pull` prints "From https://github.com/..." there on every SUCCESSFUL run.
+    # Under the script-level $ErrorActionPreference='Stop', PowerShell promotes that
+    # redirected stderr into a terminating NativeCommandError and aborts the update on
+    # a command that actually succeeded (issue #1811). Real failures are detected via
+    # $LASTEXITCODE by every caller, so downgrade the error action to Continue for the
+    # external call only — this assignment is function-scoped and reverts on return.
+    $ErrorActionPreference = 'Continue'
+    & $cmd @cmdRest >> $UpdateLog 2>&1
 }
 
 Write-SafeHost "===================================" -ForegroundColor Cyan
@@ -304,7 +314,13 @@ Step "migrations" "done" "Migrations complete"
 # Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
 # all detected envs instead of hanging on readline (update.ps1 has no TTY).
 Step "slash-do" "running" "Installing/updating slash-do commands..."
-"a" | & npx --yes slash-do@latest >> $UpdateLog 2>&1
+# npx writes status to stderr; scope the same Continue downgrade as Invoke-Logged
+# around this stdin-piped call so it isn't aborted by a NativeCommandError (#1811).
+# $LASTEXITCODE set inside the script block still propagates to the check below.
+& {
+    $ErrorActionPreference = 'Continue'
+    "a" | & npx --yes slash-do@latest >> $UpdateLog 2>&1
+}
 if ($LASTEXITCODE -ne 0) {
     Write-SafeHost "⚠️  slash-do install/update failed. Continuing (re-run later: npx slash-do@latest)." -ForegroundColor Yellow
     $global:LASTEXITCODE = 0

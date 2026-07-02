@@ -177,7 +177,9 @@ export function initSocket(io) {
       }
     });
 
-    // Handle PM2 standardization
+    // Handle PM2 standardization — the multi-step analyze→backup→apply flow
+    // lives in pm2Standardizer.runStandardizeFlow (testable + HTTP-callable);
+    // the socket handler only wires progress callbacks to socket events.
     socket.on('standardize:start', async (rawData) => {
       try {
         const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
@@ -185,74 +187,14 @@ export function initSocket(io) {
         const { repoPath, providerId } = data;
         console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-        const emit = (step, status, data = {}) => {
-          socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
-        };
-
-        // Step 1: Analyze
-        emit('analyze', 'running', { message: 'Analyzing project configuration...' });
-
-        const analysis = await pm2Standardizer.analyzeApp(repoPath, providerId)
-          .catch(err => ({ success: false, error: err.message }));
-
-        if (!analysis.success) {
-          emit('analyze', 'error', { message: analysis.error });
-          socket.emit('standardize:complete', { success: false, error: analysis.error });
-          return;
-        }
-
-        emit('analyze', 'done', {
-          message: `Found ${analysis.proposedChanges.processes?.length || 0} processes`,
-          processes: analysis.proposedChanges.processes,
-          strayPorts: analysis.proposedChanges.strayPorts
+        const outcome = await pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+          onStep: ({ step, status, data }) => {
+            socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
+          },
+          onAnalyzed: (payload) => socket.emit('standardize:analyzed', payload)
         });
 
-        socket.emit('standardize:analyzed', { plan: analysis });
-
-        // Step 2: Backup
-        emit('backup', 'running', { message: 'Creating git backup...' });
-
-        const backup = await pm2Standardizer.createGitBackup(repoPath)
-          .catch(err => ({ success: false, reason: err.message }));
-
-        if (backup.success) {
-          emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
-        } else if (backup.code === 'DIRTY_WORKTREE') {
-          emit('backup', 'error', { message: backup.reason });
-          socket.emit('standardize:complete', { success: false, error: backup.reason });
-          return;
-        } else {
-          emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
-        }
-
-        // Step 3: Apply changes
-        emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
-
-        const result = await pm2Standardizer.applyStandardization(repoPath, analysis, { skipBackup: true })
-          .catch(err => ({ success: false, errors: [err.message] }));
-
-        if (result.errors?.length > 0) {
-          emit('apply', 'error', { message: result.errors.join(', ') });
-          socket.emit('standardize:complete', { success: false, error: result.errors.join(', ') });
-          return;
-        }
-
-        emit('apply', 'done', {
-          message: `Modified ${result.filesModified.length} files`,
-          filesModified: result.filesModified
-        });
-
-        // Complete — use backup branch from step 2 since step 3 skips backup
-        socket.emit('standardize:complete', {
-          success: true,
-          result: {
-            backupBranch: backup.branch || null,
-            filesModified: result.filesModified,
-            processes: analysis.proposedChanges.processes
-          }
-        });
-
-        console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
+        socket.emit('standardize:complete', outcome);
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [standardize:start]: ${message}`);
@@ -480,31 +422,25 @@ export function initSocket(io) {
       }
     });
 
-    // App deploy handler — streams real-time output from deploy.sh
+    // App deploy handler — streams real-time output from deploy.sh. The
+    // app-lookup → deploy-script check → run orchestration lives in
+    // appDeployer.runDeployFlow (testable + HTTP-callable); the handler only
+    // forwards streamed frames and maps the terminal outcome to socket events.
     socket.on('app:deploy', async (rawData) => {
       try {
         const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
         if (!data) return;
 
-        const app = await appsService.getAppById(data.appId);
-        if (!app) {
-          socket.emit('app:deploy:error', { message: 'App not found' });
-          return;
-        }
-
-        if (!appDeployer.hasDeployScript(app)) {
-          socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
-          return;
-        }
-
-        console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
-        const emit = (type, payload) => {
+        const onOutput = (type, payload) => {
           socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
         };
 
-        const result = await appDeployer.deployApp(app, data.flags, emit);
-        socket.emit('app:deploy:complete', { success: result.success, code: result.code });
-        console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+        const outcome = await appDeployer.runDeployFlow(data.appId, data.flags, { onOutput });
+        if (!outcome.ok) {
+          socket.emit('app:deploy:error', { message: outcome.error });
+          return;
+        }
+        socket.emit('app:deploy:complete', { success: outcome.success, code: outcome.code });
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [app:deploy]: ${message}`);

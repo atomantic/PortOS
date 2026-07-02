@@ -28,6 +28,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (preservedIndex !== null) {
     writeFileSync(INDEX_PATH, preservedIndex);
     preservedIndex = null;
@@ -47,22 +48,55 @@ describe('buildId — cache invalidation', () => {
     utimesSync(INDEX_PATH, t0, t0);
 
     const mod = await import('./buildId.js');
-    const idA = mod.getBuildId();
+    const idA = mod.getBuildId(); // primes the cache synchronously
     const htmlA = mod.getStampedIndexHtml();
     expect(idA).not.toBe('dev');
     expect(htmlA).toContain(`<meta name="portos-build-id" content="${idA}">`);
     expect(htmlA).toContain('body>A');
 
-    // Simulate a Vite rebuild: new content, new mtime.
+    // Simulate a Vite rebuild: new content, new mtime. refreshBuildId() is the
+    // explicit synchronous recompute hook (bypasses the throttle window the
+    // hot-path getters honor) — deterministic, no timing.
     writeFileSync(INDEX_PATH, '<html><head></head><body>B</body></html>');
     const t1 = new Date('2026-02-01T00:00:00Z');
     utimesSync(INDEX_PATH, t1, t1);
+
+    const snap = mod.refreshBuildId();
+    expect(snap.id).not.toBe(idA);
 
     const idB = mod.getBuildId();
     const htmlB = mod.getStampedIndexHtml();
     expect(idB).not.toBe(idA);
     expect(htmlB).toContain(`<meta name="portos-build-id" content="${idB}">`);
     expect(htmlB).toContain('body>B');
+  });
+
+  it('serves the cached snapshot within the throttle window, then re-syncs after it (no per-request stat)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
+
+    writeFileSync(INDEX_PATH, '<html><head></head><body>old</body></html>');
+    const t0 = new Date('2026-05-01T00:00:00Z');
+    utimesSync(INDEX_PATH, t0, t0);
+
+    const mod = await import('./buildId.js');
+    const idOld = mod.getBuildId(); // primes; stamps the throttle clock
+    expect(idOld).not.toBe('dev');
+
+    // Rebuild on disk. Within the throttle window the getter must NOT re-stat —
+    // it serves the cached (stale) snapshot.
+    writeFileSync(INDEX_PATH, '<html><head></head><body>new</body></html>');
+    const t1 = new Date('2026-05-01T00:10:00Z');
+    utimesSync(INDEX_PATH, t1, t1);
+    vi.advanceTimersByTime(500); // < CHECK_THROTTLE_MS (1000ms)
+    expect(mod.getBuildId()).toBe(idOld);
+
+    // Past the throttle window the next read re-stats, sees the new mtime, and
+    // recomputes — so the served HTML re-syncs with the on-disk chunks.
+    vi.advanceTimersByTime(600); // now > 1000ms since the prime
+    const idNew = mod.getBuildId();
+    expect(idNew).not.toBe(idOld);
+    expect(mod.getStampedIndexHtml()).toContain('body>new');
   });
 
   it('returns the same id from cache when mtime is unchanged', async () => {

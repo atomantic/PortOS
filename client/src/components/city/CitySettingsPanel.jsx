@@ -287,7 +287,7 @@ export default function CitySettingsPanel() {
           {/* Reset */}
           <button
             onClick={resetSettings}
-            className="w-full font-pixel text-[10px] py-2 rounded border border-red-500/30 text-red-400/60 hover:bg-red-500/10 hover:text-red-400 transition-all tracking-wider"
+            className="w-full font-pixel text-[10px] py-2 rounded border border-port-error/30 text-port-error/60 hover:bg-port-error/10 hover:text-port-error transition-all tracking-wider"
           >
             RESET DEFAULTS
           </button>

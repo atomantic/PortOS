@@ -4,10 +4,24 @@ import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
-export default function OverviewTab({ project, onProjectUpdate }) {
+export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueued }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
   const [autoCasting, setAutoCasting] = useState(false);
+  // Auto-compose (#1817): when checked, auto-cast also hands the seeded cast to
+  // the treatment agent so the director writes a first-pass treatment + scene
+  // plan. Director-first — off by default so the user opts into the autonomy.
+  const [composeAfter, setComposeAfter] = useState(false);
+  // First-pass gen (#1818): when checked, auto-cast also enqueues a catalog
+  // portrait render for each newly-cast member lacking one, so the cast arrives
+  // on-model. Off by default — opt into the autonomy. Independent of compose:
+  // portraits are useful with or without an auto-written treatment.
+  const [generateFirstPass, setGenerateFirstPass] = useState(false);
+  // First-pass music bed (#1928, split from #1867): when checked, auto-cast
+  // also enqueues a background music-bed render for the project itself. Off by
+  // default — opt into the autonomy. Independent of the other toggles: there's
+  // no "newly-cast member" requirement, so it's offered even on a re-cast.
+  const [generateFirstPassMusicBed, setGenerateFirstPassMusicBed] = useState(false);
   // Track the project id this tab is currently mounted for. If the user
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
@@ -30,6 +44,12 @@ export default function OverviewTab({ project, onProjectUpdate }) {
     // id matching, so without this a same-instance project swap could strand the
     // flag (defensive; the parent currently remounts on id change).
     setAutoCasting(false);
+    // The compose toggle is a per-project intent — don't carry it across a switch.
+    setComposeAfter(false);
+    // First-pass toggle is per-project intent too — reset on switch.
+    setGenerateFirstPass(false);
+    // First-pass music-bed toggle is per-project intent too — reset on switch.
+    setGenerateFirstPassMusicBed(false);
   }, [project.id]);
   useEffect(() => {
     if (!savingRef.current) {
@@ -68,13 +88,58 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   const handleAutoCast = () => {
     setAutoCasting(true);
     const requestProjectId = project.id;
-    applyCreativeDirectorAutoCast(requestProjectId, {}, { silent: true })
+    // Only ask the server to compose when there's no treatment yet — the server
+    // guards this too, but gating here keeps the toast honest. Omit the flag
+    // entirely in the default case so the request body stays minimal.
+    const wantCompose = composeAfter && !project.treatment;
+    applyCreativeDirectorAutoCast(
+      requestProjectId,
+      {
+        ...(wantCompose ? { compose: true } : {}),
+        ...(generateFirstPass ? { generateFirstPass: true } : {}),
+        ...(generateFirstPassMusicBed ? { generateFirstPassMusicBed: true } : {}),
+      },
+      { silent: true },
+    )
       .then((result) => {
         if (projectIdRef.current !== requestProjectId) return;
         const added = result?.added?.length || 0;
-        onProjectUpdate?.({ cast: result?.project?.cast || [] });
-        if (added > 0) toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}`);
-        else toast.info('Auto-cast found no new catalog matches for this brief');
+        const composing = Boolean(result?.composing);
+        const firstPassQueued = result?.firstPass?.enqueued?.length || 0;
+        const musicBedQueued = Boolean(result?.firstPassMusicBed?.enqueued);
+        // When the director starts composing, optimistically flip the status to
+        // 'planning' as well — the detail page disables polling for 'draft'
+        // projects, so without this the treatment + runs the agent produces stay
+        // invisible until a manual refresh. The 5s poll re-corrects if needed.
+        onProjectUpdate?.({
+          cast: result?.project?.cast || [],
+          ...(composing ? { status: 'planning' } : {}),
+        });
+        // Portraits land on a catalog ingredient (no project-status change to
+        // ride), and the music bed lands on `project.musicBed` directly — both
+        // attach asynchronously, well after this response. A project that
+        // hasn't been started/composed yet stays at status 'draft', which the
+        // detail page's poll gate treats as terminal (no compose flip to
+        // escape it, unlike the `composing` branch above). Tell the parent to
+        // extend polling for a bit so either result actually shows up in the
+        // open tab instead of requiring a manual Refresh / navigate-away.
+        if (firstPassQueued > 0 || musicBedQueued) onAsyncWorkQueued?.();
+        // Suffix the portrait-gen count + music-bed status onto whichever
+        // success toast fires, so a user who opted into either first-pass gen
+        // sees it kicked off in one place.
+        const portraitSuffix = firstPassQueued > 0
+          ? ` — rendering ${firstPassQueued} first-pass portrait${firstPassQueued === 1 ? '' : 's'}`
+          : '';
+        const musicBedSuffix = musicBedQueued ? ' + a first-pass music bed' : '';
+        if (composing) {
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'} — director is composing the treatment…${portraitSuffix}${musicBedSuffix}`);
+        } else if (added > 0) {
+          toast.success(`Auto-cast added ${added} ingredient${added === 1 ? '' : 's'}${portraitSuffix}${musicBedSuffix}`);
+        } else if (musicBedQueued) {
+          toast.success(`Auto-cast found no new catalog matches for this brief${musicBedSuffix}`);
+        } else {
+          toast.info('Auto-cast found no new catalog matches for this brief');
+        }
       })
       .catch((err) => toast.error(err.message || 'Auto-cast failed'))
       .finally(() => {
@@ -115,6 +180,12 @@ export default function OverviewTab({ project, onProjectUpdate }) {
           </div>
         </div>
         <Field label="Collection" value={project.collectionId ? <Link to={collectionLink} className="text-port-accent">{project.collectionId}</Link> : <span className="text-port-text-muted">—</span>} />
+        {project.musicBed?.filename && (
+          <Field
+            label="Music bed"
+            value={`${project.musicBed.filename}${project.musicBed.durationSec ? ` (${Math.round(project.musicBed.durationSec)}s, ${project.musicBed.engine || 'audio-gen'})` : ''}`}
+          />
+        )}
         <Field label="Final video" value={final} />
         {project.timelineProjectId && (
           <Field label="Timeline" value={<Link to={`/media/timeline/${project.timelineProjectId}`} className="text-port-accent">{project.timelineProjectId}</Link>} />
@@ -141,21 +212,79 @@ export default function OverviewTab({ project, onProjectUpdate }) {
             Cast ({Array.isArray(project.cast) ? project.cast.length : 0})
           </h2>
           {/* Autonomous auto-cast (#1810): seed the cast from the catalog without
-              hand-picking. Disabled with no brief to search on. */}
-          <button
-            type="button"
-            onClick={handleAutoCast}
-            disabled={autoCasting || !hasSearchableBrief(project)}
-            title={hasSearchableBrief(project)
-              ? 'Let the director pick catalog ingredients from this project’s brief'
-              : 'Add a style spec or story first — auto-cast searches the catalog from the project brief'}
-            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-port-text hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {autoCasting
-              ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-              : <Sparkles size={12} aria-hidden="true" />}
-            {autoCasting ? 'Auto-casting…' : 'Auto-cast'}
-          </button>
+              hand-picking. Disabled with no brief to search on. The compose
+              toggle (#1817) chains the treatment agent after seeding — only
+              offered while there's no treatment yet (it can't clobber one). */}
+          <div className="flex items-center gap-2">
+            {!project.treatment && (
+              <label
+                htmlFor="cd-compose-after"
+                className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+                title="After seeding the cast, let the director write a first-pass treatment + scene plan grounded in it"
+              >
+                <input
+                  id="cd-compose-after"
+                  type="checkbox"
+                  checked={composeAfter}
+                  onChange={(e) => setComposeAfter(e.target.checked)}
+                  disabled={autoCasting}
+                  className="accent-port-accent"
+                />
+                <span>+ treatment</span>
+              </label>
+            )}
+            {/* First-pass gen (#1818): render an on-model portrait for each
+                newly-cast member lacking one. Independent of the treatment
+                toggle, so it's always offered alongside auto-cast. */}
+            <label
+              htmlFor="cd-first-pass"
+              className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+              title="After seeding the cast, queue a catalog portrait render for each new member that has no portrait yet"
+            >
+              <input
+                id="cd-first-pass"
+                type="checkbox"
+                checked={generateFirstPass}
+                onChange={(e) => setGenerateFirstPass(e.target.checked)}
+                disabled={autoCasting}
+                className="accent-port-accent"
+              />
+              <span>+ portraits</span>
+            </label>
+            {/* First-pass music bed (#1928, split from #1867): enqueue a
+                background music-bed render for the project itself. No
+                catalog ingredient to attach to, so the result lands on
+                project.musicBed via a durable server-side hook instead. */}
+            <label
+              htmlFor="cd-first-pass-music-bed"
+              className="flex items-center gap-1 text-xs text-port-text-muted cursor-pointer"
+              title="After seeding the cast, queue a first-pass music-bed render for the project (local audio-gen only)"
+            >
+              <input
+                id="cd-first-pass-music-bed"
+                type="checkbox"
+                checked={generateFirstPassMusicBed}
+                onChange={(e) => setGenerateFirstPassMusicBed(e.target.checked)}
+                disabled={autoCasting}
+                className="accent-port-accent"
+              />
+              <span>+ music bed</span>
+            </label>
+            <button
+              type="button"
+              onClick={handleAutoCast}
+              disabled={autoCasting || !hasSearchableBrief(project)}
+              title={hasSearchableBrief(project)
+                ? 'Let the director pick catalog ingredients from this project’s brief'
+                : 'Add a style spec or story first — auto-cast searches the catalog from the project brief'}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-port-text hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {autoCasting
+                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                : <Sparkles size={12} aria-hidden="true" />}
+              {autoCasting ? 'Auto-casting…' : 'Auto-cast'}
+            </button>
+          </div>
         </div>
         <p className="text-xs text-port-text-muted mb-2">
           Catalog ingredients remixed into this project — the director grounds the treatment and per-scene casting on them. Auto-cast appends new matches; you can always edit the result.

@@ -1492,7 +1492,7 @@ export default function ImageGen() {
         onSelect={handleGallerySelect}
       />
 
-      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
+      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">
         <ImageGenTab />
       </Drawer>
 

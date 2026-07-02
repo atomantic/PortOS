@@ -14,6 +14,7 @@ import dns from 'dns/promises';
 import net from 'net';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { decodeXmlEntities } from '../lib/xmlEntities.js';
 
 const FEEDS_FILE = join(PATHS.data, 'feeds.json');
 const MAX_ITEMS_PER_FEED = 100;
@@ -80,7 +81,7 @@ const extractAtomLink = (xml) => {
 /**
  * Strip HTML tags from a string for plain text display.
  */
-const stripHtml = (html) => html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+const stripHtml = (html) => decodeXmlEntities(html.replace(/<[^>]+>/g, '')).trim();
 
 /**
  * Parse RSS 2.0 feed XML into normalized items.

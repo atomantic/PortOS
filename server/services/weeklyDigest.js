@@ -6,12 +6,12 @@
  * error patterns, and accomplishments.
  */
 
-import { writeFile, readdir } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getAgents, getAgentDates, getAgentsByDate } from './cosAgents.js';
-import { ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
 
 const DIGESTS_DIR = PATHS.digests;
 
@@ -75,7 +75,7 @@ async function loadDigest(weekId) {
 async function saveDigest(digest) {
   await ensureDigestDir();
   const path = getDigestPath(digest.weekId);
-  await writeFile(path, JSON.stringify(digest, null, 2));
+  await atomicWrite(path, digest);
   return path;
 }
 

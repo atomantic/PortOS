@@ -22,7 +22,7 @@ export default function GoalMilestones({
                   onClick={() => !ms.completedAt && handleCompleteMilestone(ms.id)}
                   className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                     ms.completedAt
-                      ? 'bg-green-500/20 border-green-500 text-green-400'
+                      ? 'bg-port-success/20 border-port-success text-port-success'
                       : 'border-gray-600 hover:border-port-accent'
                   }`}
                 >
@@ -48,7 +48,7 @@ export default function GoalMilestones({
                           onClick={() => handleCompleteMilestoneTask?.(ms.id, task.id)}
                           className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
                             done
-                              ? 'bg-green-500/20 border-green-500 text-green-400'
+                              ? 'bg-port-success/20 border-port-success text-port-success'
                               : 'border-gray-600 hover:border-port-accent'
                           }`}
                         >

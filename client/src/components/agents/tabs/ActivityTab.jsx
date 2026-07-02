@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { ACTION_TYPES } from '../constants';
+import { formatDateTime } from '../../../utils/formatters';
 
 export default function ActivityTab({ agentId }) {
   const [activities, setActivities] = useState([]);
@@ -108,7 +109,7 @@ export default function ActivityTab({ agentId }) {
                       </span>
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
-                      {new Date(activity.timestamp).toLocaleString()}
+                      {formatDateTime(activity.timestamp)}
                       {activity.scheduleId && (
                         <span className="ml-2">• Scheduled</span>
                       )}

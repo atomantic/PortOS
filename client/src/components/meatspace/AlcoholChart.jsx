@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import useChartColors from '../../hooks/useChartColors.js';
 import { localDateStr } from './constants';
 
 const VIEWS = [
@@ -19,6 +20,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
   const [unit, setUnit] = useState('grams'); // 'grams' or 'drinks'
+  const chartColors = useChartColors();
 
   const dailyMax = sex === 'female' ? 1 : 2;
 
@@ -127,41 +129,41 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
       ) : (
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
             <XAxis
               dataKey="label"
-              tick={{ fill: '#6b7280', fontSize: 11 }}
+              tick={{ fill: chartColors.axis, fontSize: 11 }}
               interval={view === '7d' ? 0 : view === '30d' ? 2 : 6}
             />
-            <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} />
+            <YAxis tick={{ fill: chartColors.axis, fontSize: 11 }} />
             <Tooltip content={<CustomTooltip />} />
             {unit === 'grams' ? (
               <>
                 <ReferenceLine
                   y={10}
-                  stroke="#22c55e"
+                  stroke={chartColors.success}
                   strokeDasharray="5 5"
-                  label={{ value: '10g target', fill: '#22c55e', fontSize: 10, position: 'right' }}
+                  label={{ value: '10g target', fill: chartColors.success, fontSize: 10, position: 'right' }}
                 />
                 <ReferenceLine
                   y={40}
-                  stroke="#ef4444"
+                  stroke={chartColors.error}
                   strokeDasharray="5 5"
-                  label={{ value: '40g danger', fill: '#ef4444', fontSize: 10, position: 'right' }}
+                  label={{ value: '40g danger', fill: chartColors.error, fontSize: 10, position: 'right' }}
                 />
               </>
             ) : (
               <ReferenceLine
                 y={dailyMax}
-                stroke="#f59e0b"
+                stroke={chartColors.warning}
                 strokeDasharray="5 5"
-                label={{ value: 'Daily limit', fill: '#f59e0b', fontSize: 10, position: 'right' }}
+                label={{ value: 'Daily limit', fill: chartColors.warning, fontSize: 10, position: 'right' }}
               />
             )}
             <Bar
               dataKey={dataKey}
               radius={[2, 2, 0, 0]}
-              fill="#3b82f6"
+              fill={chartColors.accent}
               maxBarSize={view === '7d' ? 40 : view === '30d' ? 16 : 8}
             />
           </BarChart>

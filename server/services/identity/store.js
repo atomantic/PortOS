@@ -1,6 +1,5 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
 
 // === Goal normalization defaults ===
@@ -100,7 +99,7 @@ export async function loadJSON(filePath, defaultVal) {
 
 export async function saveJSON(filePath, data) {
   await ensureIdentityDir();
-  await writeFile(filePath, JSON.stringify(data, null, 2));
+  await atomicWrite(filePath, data);
   // Mirror goals array into MortalLoom.json so iOS/macOS app sees the change.
   if (filePath === GOALS_FILE && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
     await mlReplace('goals', data.goals);

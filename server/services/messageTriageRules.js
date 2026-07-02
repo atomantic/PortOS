@@ -1,6 +1,5 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const RULES_FILE = join(PATHS.messages, 'triage-rules.json');
 
@@ -13,7 +12,7 @@ async function loadRules() {
 
 async function saveRules(data) {
   await ensureDir(PATHS.messages);
-  await writeFile(RULES_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(RULES_FILE, data);
 }
 
 /**

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
+import { formatDateTime } from '../../../utils/formatters';
 
 export default function SchedulesTab({ agentId }) {
   const [schedules, setSchedules] = useState([]);
@@ -349,7 +350,7 @@ export default function SchedulesTab({ agentId }) {
                     </p>
                     {schedule.lastRun && (
                       <p className="text-xs text-gray-500 mt-1">
-                        Last run: {new Date(schedule.lastRun).toLocaleString()} ({schedule.runCount} total)
+                        Last run: {formatDateTime(schedule.lastRun)} ({schedule.runCount} total)
                       </p>
                     )}
                   </div>

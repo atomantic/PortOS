@@ -1,6 +1,6 @@
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
@@ -17,6 +17,74 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
+
+// Extensions Windows can launch directly, checked in cmd.exe's own resolution
+// preference. Deliberately excludes an extension-less match — npm ships a
+// POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
+// wrappers (for Git Bash/WSL); that stub is not natively launchable here, and
+// is exactly what `where` can return as its first match (see #1865 — the
+// issue's literal error text was produced by this function resolving that
+// stub as `commandPath`, not by a missing shell).
+const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+/**
+ * Resolve a bare command name to its full path WITH extension on Windows —
+ * mirrors `resolveWindowsExecutable` in `server/lib/bufferedSpawn.js`
+ * (duplicated here for this directory's self-containment; see ./CLAUDE.md).
+ * Filesystem-only (no subprocess), so it can't reorder/misselect the way a
+ * raw `where` first-line read can.
+ */
+function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32', searchEnv = process.env) {
+  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
+  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const ext of WIN_EXECUTABLE_EXTS) {
+      const candidate = join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
+
+/**
+ * Return the `{ command, args }` pair that's actually safe to hand to
+ * `execFile()` under `shell:false` — mirrors `prepareWindowsSafeSpawn` in
+ * `server/lib/bufferedSpawn.js` (duplicated here for self-containment).
+ * `.bat`/`.cmd` files cannot be launched directly under `shell:false` even
+ * with the explicit extension (Node's CVE-2024-27980 patch makes
+ * spawn/execFile refuse them outright); the documented safe alternative is
+ * to invoke `cmd.exe /c <path> <args>` directly.
+ */
+function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
+  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
+    return {
+      command: 'cmd.exe',
+      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
+    };
+  }
+  return { command, args };
+}
+
+// cmd.exe metacharacters that act as command separators / redirection /
+// grouping on its raw command line.
+const CMD_METACHAR_RE = /[&|<>^()]/g;
+// Node's argv→command-line quoting wraps an argument in literal double
+// quotes only when it contains whitespace or a `"`; characters inside that
+// quoted span are not re-interpreted by cmd.exe.
+const NEEDS_NODE_QUOTING_RE = /[\s"]/;
+
+/**
+ * Caret-escape cmd.exe metacharacters, but ONLY when Node's own quoting
+ * would otherwise leave the argument unquoted on cmd.exe's raw command line.
+ * Mirrors server/lib/bufferedSpawn.js for self-containment.
+ */
+function escapeCmdMetacharsIfUnquoted(value) {
+  const str = String(value);
+  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
+  return str.replace(CMD_METACHAR_RE, '^$&');
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -439,12 +507,16 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'cli' || provider.type === 'tui') {
+        // Read fresh per call (not hoisted to module scope) so tests can drive
+        // both branches by stubbing process.platform per test.
+        const isWin32 = process.platform === 'win32';
+
         // Resolve the command on PATH. Windows has no `which` — it ships `where`
         // instead — so a `which` lookup there always fails and falsely reports the
         // command "not found in PATH" even when it resolves fine from a shell.
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
-        const lookup = process.platform === 'win32' ? 'where' : 'which';
+        const lookup = isWin32 ? 'where' : 'which';
         const { stdout } = await execFileAsync(lookup, [provider.command])
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
@@ -456,18 +528,36 @@ export function createProviderService(config = {}) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
-        // Track whether the resolved path could actually be spawned. A bare PATH
-        // lookup (`where`) on Windows happily returns npm `.cmd`/`.bat` shims,
-        // which execFile (shell:false) — and the agent runner, which also spawns
-        // shell:false — cannot launch. Without this, a non-spawnable shim falls
-        // through to `version: 'available'` and the Test button reports a provider
-        // the runner can never actually invoke as usable.
+        // On Windows, `where` can return the wrong file: npm ships an
+        // extension-less POSIX shell-script stub (for Git Bash/WSL) alongside
+        // the real `.cmd`/`.bat`/`.ps1` wrappers, and `where`'s first-line
+        // match is not guaranteed to be a launchable one (this is exactly
+        // what produced the literal error text in #1865). Re-resolve via the
+        // same extension-aware filesystem search the agent runner uses
+        // (server/lib/bufferedSpawn.js's resolveWindowsExecutable), searched
+        // against the same provider-envVars-merged env the runner actually
+        // spawns under (so a configured PATH override is honored here too),
+        // and prefer it for both the actual invocation AND what we report
+        // back — falling back to the `where` result only when that search
+        // finds nothing.
+        const searchEnv = { ...process.env, ...provider.envVars };
+        const invokePath = (isWin32 && resolveWindowsExecutable(provider.command, isWin32, searchEnv)) || commandPath;
+
+        // Track whether the resolved path could actually be spawned. Without
+        // this, a non-spawnable shim falls through to `version: 'available'`
+        // and the Test button reports a provider the runner can never
+        // actually invoke as usable.
         let everSpawned = false;
         const tryVersion = async (flag) => {
-          // Invoke the resolved path so Windows runs the exact `.exe` we found —
-          // execFile won't re-apply PATHEXT to a bare command name.
+          // Invoke the resolved path so Windows runs the exact `.exe`/`.cmd`
+          // we found — execFile won't re-apply PATHEXT to a bare command
+          // name. A `.cmd`/`.bat` target still can't be launched directly
+          // under shell:false (Node refuses it outright, even with the
+          // explicit extension — see prepareWindowsSafeSpawn above), so wrap
+          // it through cmd.exe /c exactly like the runner does.
           try {
-            const out = await execFileAsync(commandPath, [flag]);
+            const { command: execCommand, args: execArgs } = prepareWindowsSafeSpawn(invokePath, [flag]);
+            const out = await execFileAsync(execCommand, execArgs);
             everSpawned = true;
             return out?.stdout?.trim() || null;
           } catch (err) {
@@ -483,13 +573,13 @@ export function createProviderService(config = {}) {
         if (!everSpawned) {
           return {
             success: false,
-            error: `Resolved '${provider.command}' to ${commandPath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+            error: `Resolved '${provider.command}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
           };
         }
 
         return {
           success: true,
-          path: commandPath,
+          path: invokePath,
           version: versionOut || 'available'
         };
       }
@@ -652,6 +742,7 @@ export function createProviderService(config = {}) {
       return [
         'claude-opus-4-8',
         'claude-opus-4-7',
+        'claude-sonnet-5',
         'claude-sonnet-4-6',
         'claude-opus-4-5-20251101',
         'claude-sonnet-4-5-20250929',
@@ -674,7 +765,8 @@ export function createProviderService(config = {}) {
       }
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+        { signal: AbortSignal.timeout(8000) }
       ).catch(() => null);
 
       if (!response?.ok) {

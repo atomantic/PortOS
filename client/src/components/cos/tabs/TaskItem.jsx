@@ -23,6 +23,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import Modal from '../../ui/Modal';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -241,7 +242,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
-              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded shrink-0" title={task.metadata.app}>
+              <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0" title={task.metadata.app}>
                 {apps.find(a => a.id === task.metadata.app).name}
               </span>
             )}
@@ -346,12 +347,12 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               {(task.metadata?.model || task.metadata?.provider) && (
                 <div className="flex items-center gap-2 mt-1">
                   {task.metadata?.model && (
-                    <span className="px-1.5 py-0.5 text-xs bg-purple-500/20 text-purple-400 rounded font-mono">
+                    <span className="px-1.5 py-0.5 text-xs bg-port-accent-2/20 text-port-accent-2 rounded font-mono">
                       {task.metadata.model}
                     </span>
                   )}
                   {task.metadata?.provider && (
-                    <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded">
+                    <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded">
                       {task.metadata.provider}
                     </span>
                   )}
@@ -450,50 +451,46 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
       </div>
 
       {/* Blocked Reason Modal */}
-      {showBlockedModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowBlockedModal(false)}>
-          <div
-            className="bg-port-card border border-port-border rounded-lg p-4 w-full max-w-md mx-4"
-            onClick={e => e.stopPropagation()}
-            role="dialog"
-            aria-labelledby="blocked-modal-title"
+      <Modal
+        open={showBlockedModal}
+        onClose={() => setShowBlockedModal(false)}
+        size="sm"
+        ariaLabelledBy="blocked-modal-title"
+        panelClassName="bg-port-card border border-port-border rounded-lg p-4"
+      >
+        <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
+          <Ban size={18} className="text-port-error" aria-hidden="true" />
+          Mark Task as Blocked
+        </h3>
+        <p className="text-sm text-gray-400 mb-3">
+          What&apos;s blocking this task? This helps track dependencies and unblock work.
+        </p>
+        <input
+          ref={blockedInputRef}
+          type="text"
+          value={blockedReason}
+          onChange={e => setBlockedReason(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleConfirmBlocked();
+          }}
+          placeholder="e.g., Waiting for API access, Needs design review..."
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => setShowBlockedModal(false)}
+            className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
           >
-            <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
-              <Ban size={18} className="text-port-error" aria-hidden="true" />
-              Mark Task as Blocked
-            </h3>
-            <p className="text-sm text-gray-400 mb-3">
-              What&apos;s blocking this task? This helps track dependencies and unblock work.
-            </p>
-            <input
-              ref={blockedInputRef}
-              type="text"
-              value={blockedReason}
-              onChange={e => setBlockedReason(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleConfirmBlocked();
-                if (e.key === 'Escape') setShowBlockedModal(false);
-              }}
-              placeholder="e.g., Waiting for API access, Needs design review..."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowBlockedModal(false)}
-                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmBlocked}
-                className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
-              >
-                Mark Blocked
-              </button>
-            </div>
-          </div>
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirmBlocked}
+            className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
+          >
+            Mark Blocked
+          </button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

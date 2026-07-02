@@ -1,5 +1,7 @@
 # OpenClaw Operator Chat — Extension Point Audit
 
+> **Note:** Historical pre-implementation extension-point audit (2026-04/05). The feature has since shipped largely along these lines; kept as a design record, not maintained.
+
 This audit maps the real PortOS insertion points for a generic OpenClaw/operator chat feature.
 
 It is a companion to:

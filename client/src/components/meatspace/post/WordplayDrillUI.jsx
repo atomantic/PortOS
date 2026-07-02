@@ -9,7 +9,7 @@ const LOADING_MESSAGES = [
   'Almost ready...',
 ];
 
-export function AILoadingIndicator({ label, color = 'text-purple-400' }) {
+export function AILoadingIndicator({ label, color = 'text-port-accent-2' }) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -152,7 +152,7 @@ export function BridgeWordUI({ puzzle, inputValue, setInputValue, onSubmit, inpu
         <div className="text-sm text-gray-500 mb-3">Find the word that fills all blanks:</div>
         <div className="flex flex-col items-center gap-2">
           {(puzzle?.clues || []).map((clue, i) => (
-            <span key={i} className="px-4 py-2 bg-purple-500/20 text-purple-300 rounded-lg text-lg font-mono">{clue}</span>
+            <span key={i} className="px-4 py-2 bg-port-accent-2/20 text-port-accent-2 rounded-lg text-lg font-mono">{clue}</span>
           ))}
         </div>
         <div className="text-xs text-gray-600 mt-3 italic">One word completes all the blanks above</div>
@@ -270,7 +270,7 @@ export function IdiomTwistUI({ challenge, inputValue, setInputValue, onSubmit, i
         <p className="text-white text-lg leading-relaxed italic mb-3">"{challenge?.idiom}"</p>
         <div className="flex items-center justify-center gap-2">
           <span className="text-gray-500">New domain:</span>
-          <span className="px-3 py-1 bg-cyan-500/20 text-cyan-400 rounded-lg font-medium">{challenge?.domain}</span>
+          <span className="px-3 py-1 bg-port-accent/20 text-port-accent rounded-lg font-medium">{challenge?.domain}</span>
         </div>
         <ExampleHint example={challenge?.example} />
         {challenge?.difficulty && <div className="mt-3"><DifficultyBadge difficulty={challenge.difficulty} /></div>}

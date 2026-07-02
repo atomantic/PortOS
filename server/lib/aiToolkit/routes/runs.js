@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { runSchema, validate } from '../validation.js';
+import { runSchema, validate, sanitizeScreenshotRefs } from '../validation.js';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 
 export function createRunsRoutes(runnerService, options = {}) {
@@ -38,6 +38,20 @@ export function createRunsRoutes(runnerService, options = {}) {
       throw new ServerError('prompt is required', { status: 400 });
     }
 
+    // `screenshots[]` is untrusted user input that the vision loader
+    // base64-encodes and forwards to the external provider — constrain it to
+    // safe screenshots-dir basenames here so a `../` traversal or absolute path
+    // can't exfiltrate an arbitrary file (issue #1870). A non-image / traversal
+    // entry is rejected loudly rather than silently dropped.
+    const { safe: safeScreenshots, rejected } = sanitizeScreenshotRefs(screenshots);
+    if (rejected.length > 0) {
+      throw new ServerError('Invalid screenshot path', {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        context: { details: `Disallowed screenshot reference(s): ${rejected.join(', ')}` },
+      });
+    }
+
     const runData = await runnerService.createRun({
       providerId,
       model,
@@ -45,7 +59,7 @@ export function createRunsRoutes(runnerService, options = {}) {
       workspacePath,
       workspaceName,
       timeout,
-      screenshots
+      screenshots: safeScreenshots
     });
 
     const { runId, provider, metadata, timeout: effectiveTimeout } = runData;
@@ -91,7 +105,7 @@ export function createRunsRoutes(runnerService, options = {}) {
         model: runModel,
         prompt,
         workspacePath,
-        screenshots,
+        screenshots: safeScreenshots,
         onData: (data) => {
           io?.emit(`run:${runId}:data`, data);
         },
@@ -128,7 +142,7 @@ export function createRunsRoutes(runnerService, options = {}) {
         status: 400,
         context: {
           details: provider.type === 'tui'
-            ? 'TUI executor not attached to runner — check that executeTuiRun is patched in index.js'
+            ? 'TUI executor not attached to runner — check that setTuiRunner() was called in index.js'
             : `Known types: cli, api, tui (received: ${provider.type})`,
         },
       });

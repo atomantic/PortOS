@@ -12,6 +12,7 @@ import {
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
+  formatDateTime,
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
@@ -417,7 +418,7 @@ export default function AIProviders() {
           </div>
 
           {runProviderIsTui && (
-            <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+            <div className="text-xs text-port-accent bg-port-accent/10 border border-port-accent/20 rounded-lg px-3 py-2">
               TUI providers spawn a PTY-backed run that streams output here and is stoppable from the run list.
             </div>
           )}
@@ -519,9 +520,9 @@ export default function AIProviders() {
                   {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
                     <p className="text-xs">
                       Tiers:
-                      {provider.lightModel && <span className="ml-1 text-green-400">{provider.lightModel}</span>}
-                      {provider.mediumModel && <span className="ml-1 text-yellow-400">{provider.mediumModel}</span>}
-                      {provider.heavyModel && <span className="ml-1 text-red-400">{provider.heavyModel}</span>}
+                      {provider.lightModel && <span className="ml-1 text-port-success">{provider.lightModel}</span>}
+                      {provider.mediumModel && <span className="ml-1 text-port-warning">{provider.mediumModel}</span>}
+                      {provider.heavyModel && <span className="ml-1 text-port-error">{provider.heavyModel}</span>}
                     </p>
                   )}
                   {provider.headlessArgs?.length > 0 && (
@@ -661,7 +662,7 @@ export default function AIProviders() {
                   <div className="min-w-0">
                     <p className="text-sm text-white break-words">{run.prompt}</p>
                     <p className="text-xs text-gray-500 break-words">
-                      {run.providerName} • {run.workspaceName || 'No workspace'} • {new Date(run.startTime).toLocaleString()}
+                      {run.providerName} • {run.workspaceName || 'No workspace'} • {formatDateTime(run.startTime)}
                     </p>
                   </div>
                 </div>
@@ -1010,7 +1011,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1"></span>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-success mr-1"></span>
                   Light (fast)
                 </label>
                 {availableModels.length > 0 ? (
@@ -1036,7 +1037,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1"></span>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-warning mr-1"></span>
                   Medium (balanced)
                 </label>
                 {availableModels.length > 0 ? (
@@ -1062,7 +1063,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-error mr-1"></span>
                   Heavy (powerful)
                 </label>
                 {availableModels.length > 0 ? (

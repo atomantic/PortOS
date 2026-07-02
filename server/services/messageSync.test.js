@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'crypto';
 
 // Mock fs/promises before importing the module
 vi.mock('fs/promises', () => ({
@@ -41,15 +42,16 @@ vi.mock('./messageGmailSync.js', () => ({
 }));
 
 vi.mock('./messagePlaywrightSync.js', () => ({
-  syncPlaywright: vi.fn()
+  syncPlaywright: vi.fn(),
+  refreshMessageDetail: vi.fn()
 }));
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage } from './messageSync.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
-import { syncPlaywright } from './messagePlaywrightSync.js';
+import { syncPlaywright, refreshMessageDetail } from './messagePlaywrightSync.js';
 
 const VALID_UUID = '11111111-1111-1111-1111-111111111111';
 const VALID_UUID_2 = '22222222-2222-2222-2222-222222222222';
@@ -506,5 +508,61 @@ describe('getSyncStatus', () => {
   it('should return null for nonexistent account', async () => {
     getAccount.mockResolvedValue(null);
     expect(await getSyncStatus(VALID_UUID)).toBeNull();
+  });
+});
+
+// ─── refreshMessage (absent-vs-cleared body merge, #1826) ───
+
+describe('refreshMessage', () => {
+  // Mirror makeExternalId() in messageSync.js so a crafted detail entry matches
+  // an existing cached message by externalId (exercising the in-place merge path).
+  const makeExternalId = (date, sender, subject) =>
+    'pw-' + createHash('md5').update(`${date}|${sender}|${subject}`).digest('hex').slice(0, 12);
+
+  it('overwrites cached body with an empty extracted body (clear), not the stale text', async () => {
+    const extId = makeExternalId('2026-01-01', 'Alice', 'Hi');
+    readFile.mockResolvedValue(JSON.stringify({
+      syncCursor: null,
+      messages: [{ id: 'msg-1', externalId: extId, bodyText: 'stale body', from: { name: 'Alice' }, subject: 'Hi', date: '2026-01-01' }]
+    }));
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail.mockResolvedValue([{ from: 'Alice', date: '2026-01-01', body: '' }]);
+
+    const result = await refreshMessage(VALID_UUID, 'msg-1');
+
+    const merged = result.find(m => m.externalId === extId);
+    expect(merged.bodyText).toBe('');
+    expect(merged.bodyFull).toBe(true);
+  });
+
+  it('keeps the cached body when the extracted body is absent (null/undefined)', async () => {
+    const extId = makeExternalId('2026-01-01', 'Alice', 'Hi');
+    readFile.mockResolvedValue(JSON.stringify({
+      syncCursor: null,
+      messages: [{ id: 'msg-1', externalId: extId, bodyText: 'keep me', from: { name: 'Alice' }, subject: 'Hi', date: '2026-01-01' }]
+    }));
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail.mockResolvedValue([{ from: 'Alice', date: '2026-01-01' }]); // no body key
+
+    const result = await refreshMessage(VALID_UUID, 'msg-1');
+
+    const merged = result.find(m => m.externalId === extId);
+    expect(merged.bodyText).toBe('keep me');
+  });
+
+  it('clears the original message body when the extracted body is empty (fallback path)', async () => {
+    // No externalId on the cached message → it is not matched in the loop and
+    // falls through to the original-message update (line ~284).
+    readFile.mockResolvedValue(JSON.stringify({
+      syncCursor: null,
+      messages: [{ id: 'msg-1', bodyText: 'stale original', from: { name: 'Bob' }, subject: 'Re: x', date: '2026-02-01' }]
+    }));
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail.mockResolvedValue([{ from: 'Carol', date: '2026-03-01', body: '' }]);
+
+    const result = await refreshMessage(VALID_UUID, 'msg-1');
+
+    const original = result.find(m => m.id === 'msg-1');
+    expect(original.bodyText).toBe('');
   });
 });

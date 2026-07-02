@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 
 const NOTIFICATION_TYPE_CONFIG = {
@@ -33,6 +33,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: AlertTriangle,
     color: 'text-yellow-400',
     bgColor: 'bg-yellow-500/20'
+  },
+  daily_post_reminder: {
+    icon: BellRing,
+    color: 'text-cyan-400',
+    bgColor: 'bg-cyan-500/20'
   }
 };
 
@@ -177,7 +182,7 @@ export default function NotificationDropdown({
                               e.stopPropagation();
                               onRemove(notification.id);
                             }}
-                            className="p-1 rounded hover:bg-port-border transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                            className="p-1 rounded hover:bg-port-border transition-colors opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                             aria-label={`Remove notification: ${notification.title}`}
                           >
                             <X className="w-3 h-3 text-gray-500" aria-hidden="true" />

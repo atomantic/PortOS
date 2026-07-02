@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
+import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
+import { HHMM_STRICT_RE } from './timezone.js';
 
 // =============================================================================
 // POST (Power On Self Test) VALIDATION SCHEMAS
@@ -7,15 +10,33 @@ import { z } from 'zod';
 // Tags for session conditions (sleep, caffeine, stress, etc.)
 export const postTagsSchema = z.record(z.string().max(200));
 
+// 24h "HH:MM" time-of-day — HHMM_STRICT_RE is timezone.js's single source of
+// truth for this exact zero-padded pattern (shared with dashboardLayouts.js's
+// activateWindow validator); don't re-derive a local copy.
+
 // Individual question result (math + memory drills)
 // Math: server recomputes expected/correct via scoreDrill (numeric values)
 // Memory: client scores with string comparison (text values)
 const questionResultSchema = z.object({
   prompt: z.string(),
+  // Cognitive drills key each trial back to its position in the generated
+  // drillData (n-back sequence index, digit-span/stroop trial index) so the
+  // server can recompute the answer key. Absent for math/memory drills.
+  index: z.number().int().min(0).optional(),
   expected: z.union([z.number(), z.string()]).optional(),
   answered: z.union([z.number(), z.string()]).nullable(),
   correct: z.boolean().optional(),
-  responseMs: z.number().min(0)
+  responseMs: z.number().min(0),
+  // Reaction-time drill only: player pressed before the stimulus appeared.
+  // Always scored wrong server-side regardless of any client-supplied correct.
+  falseStart: z.boolean().optional(),
+  // Memory drill questions only: which chunk (memory-sequence) / element
+  // (memory-element-flash) this answer attributes to, so submitPostSession can
+  // merge per-chunk/per-element mastery (mergeMasteryFromSession in
+  // meatspacePostMemory.js) the same way MemoryBuilder's submitPractice does.
+  // Absent for math/LLM/cognitive drills.
+  chunkId: z.string().nullable().optional(),
+  element: z.string().nullable().optional()
 });
 
 // LLM drill response (text-based)
@@ -40,7 +61,19 @@ const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', '
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // Memory drills supported by the POST runner (client-side scoring with string comparison)
 const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
-const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES];
+// Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
+// Sourced from meatspacePostCognitive.js so the type list has one owner.
+const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
+// Morse trainer drill types (client-side scoring — exact-match copy/send comparison).
+// Deliberately NOT spliced into DRILL_TYPES: that array also backs
+// taskResultSchema.type (the *scored* full-session submit endpoint,
+// postSessionSubmitSchema) and postDrillRequestSchema.type (server-side drill
+// generation). meatspacePost.js's scoring dispatch only special-cases
+// LLM/MEMORY/COGNITIVE types and falls through everything else to scoreDrill's
+// math-expression parser (computeExpectedFromPrompt) — a Morse task type would
+// pass validation there but silently mis-score as a failed math drill instead
+// of being rejected. Morse only ever posts through trainingEntrySchema below.
+const MORSE_DRILL_TYPES = ['morse-copy', 'morse-head-copy', 'morse-send'];
 
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
@@ -53,7 +86,29 @@ const drillTypeConfigSchema = z.object({
   maxDigits: z.number().int().min(1).max(4).optional(),
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
-  tolerancePct: z.number().min(1).max(50).optional()
+  tolerancePct: z.number().min(1).max(50).optional(),
+  // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
+  // Bounds match the generator clamps in meatspacePostCognitive.js so the UI /
+  // API can't accept a value the generator will silently narrow. Exception:
+  // `length`'s effective floor is `n + 5` (dynamic, up to 8) inside the
+  // generator — Zod can't express a cross-field minimum here, so this schema
+  // keeps a conservative fixed floor of 6 and lets the generator clamp up.
+  // (timeLimitSec above is validated but NOT enforced for these drill types —
+  // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
+  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
+  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
+  // keep their own internal defaults regardless.
+  n: z.number().int().min(1).max(3).optional(),
+  length: z.number().int().min(6).max(60).optional(),
+  direction: z.enum(['forward', 'backward']).optional(),
+  startLength: z.number().int().min(3).max(9).optional(),
+  maxLength: z.number().int().min(3).max(12).optional(),
+  // --- Cognitive drill knobs (schulte-table / mental-rotation / reaction-time) ---
+  size: z.number().int().min(3).max(7).optional(),
+  mode: z.enum(['simple', 'choice']).optional(),
+  minDelayMs: z.number().int().min(300).max(5000).optional(),
+  maxDelayMs: z.number().int().min(300).max(8000).optional(),
+  choices: z.number().int().min(2).max(4).optional()
 });
 
 // Task result within a session
@@ -65,6 +120,11 @@ const taskResultSchema = z.object({
   questions: z.array(questionResultSchema).optional().default([]),
   responses: z.array(llmResponseSchema).optional().default([]),
   drillData: z.any().optional(),
+  // Memory drills: which memory item this task drilled, so the session-submit
+  // path can map the result back and advance that item's spaced-repetition
+  // schedule (mirrors the dedicated MemoryBuilder practice flow). Absent for
+  // every other drill type.
+  memoryItemId: z.string().optional(),
   score: z.number().min(0).max(100).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(100).optional(),
@@ -106,9 +166,33 @@ export const postConfigUpdateSchema = z.object({
     model: z.string().nullable().optional(),
     drillTypes: z.record(z.enum(LLM_DRILL_TYPES), llmDrillTypeConfigSchema).optional()
   }).optional(),
+  // Deterministic cognitive drills — no provider, so no provider/model fields.
+  cognitive: z.object({
+    enabled: z.boolean().optional(),
+    drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
+  }).optional(),
   sessionModules: z.array(z.string()).optional(),
   scoring: z.object({
     weights: z.record(z.number().min(0).max(1)).optional()
+  }).optional(),
+  // Opt-in adaptive difficulty: when enabled, math drill params are nudged at
+  // generation time from recent scored performance (server/lib/postAdaptive.js).
+  // Default OFF so existing installs are unchanged — additive, no migration.
+  adaptive: z.object({
+    enabled: z.boolean().optional()
+  }).optional(),
+  // Opt-in daily reminder (default OFF, off by default). `time` is a 24h
+  // "HH:MM" string interpreted in the user's configured timezone. The native
+  // <input type="time"> can be cleared to '' by the user; treat that as
+  // "no change" (absent) rather than a validation failure that would reject
+  // the whole config PUT — same UI-sentinel-tolerance pattern CLAUDE.md
+  // documents for CLI provider endpoints.
+  reminder: z.object({
+    enabled: z.boolean().optional(),
+    time: z.preprocess(
+      v => (v === '' ? undefined : v),
+      z.string().regex(HHMM_STRICT_RE, 'Must be HH:MM format').optional()
+    )
   }).optional()
 }).partial();
 
@@ -130,6 +214,13 @@ export const postLlmScoreRequestSchema = z.object({
   model: z.string().optional()
 });
 
+// Explicit, user-consented request to warm the wordplay drill cache
+export const postDrillCacheFillSchema = z.object({
+  types: z.array(z.enum(CACHEABLE_TYPES)).min(1).optional(),
+  providerId: z.string().optional(),
+  model: z.string().optional()
+});
+
 // =============================================================================
 // MEMORY BUILDER VALIDATION
 // =============================================================================
@@ -145,11 +236,22 @@ const memoryChunkSchema = z.object({
   label: z.string(),
 });
 
+// Spaced-repetition schedule (SM-2 inspired). Server-managed via practice, but
+// accepted on both POST (seed an imported item's progress) and PUT (persist an
+// out-of-band reschedule). When absent the service stamps a fresh default.
+export const memoryScheduleSchema = z.object({
+  ease: z.number().min(1.3).max(5),
+  intervalDays: z.number().min(0),
+  nextReview: z.string(),
+  lastReviewed: z.string().nullable().optional(),
+});
+
 export const memoryItemCreateSchema = z.object({
   title: z.string().min(1).max(200),
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional().default('text'),
   lines: z.array(z.union([z.string(), memoryLineSchema])).min(1),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
 });
 
 export const memoryItemUpdateSchema = z.object({
@@ -157,6 +259,7 @@ export const memoryItemUpdateSchema = z.object({
   type: z.enum(['song', 'poem', 'speech', 'sequence', 'text']).optional(),
   lines: z.array(z.union([z.string(), memoryLineSchema])).optional(),
   chunks: z.array(memoryChunkSchema).optional(),
+  schedule: memoryScheduleSchema.optional(),
   mastery: z.object({
     overallPct: z.number().min(0).max(100).optional(),
     chunks: z.record(z.object({
@@ -195,10 +298,14 @@ export const memoryDrillRequestSchema = z.object({
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
-  drillType: z.enum(DRILL_TYPES),
+  // Training log entries also cover Morse (client-side scored, never a scored
+  // POST session) — union in MORSE_DRILL_TYPES here rather than in the shared
+  // DRILL_TYPES so postSessionSubmitSchema/postDrillRequestSchema can't accept
+  // a Morse type (see the MORSE_DRILL_TYPES comment above).
+  drillType: z.enum([...DRILL_TYPES, ...MORSE_DRILL_TYPES]),
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };

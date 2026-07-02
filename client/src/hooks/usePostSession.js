@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
-import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
+import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
 
 function computeSessionScoreFromResults(results) {
   if (!results.length) return 0;
@@ -25,6 +25,18 @@ function computeSessionScoreFromResults(results) {
   }
   // Fallback: simple average
   return Math.round(results.reduce((s, r) => s + (r.score || 0), 0) / results.length);
+}
+
+// Memory drill questions carry chunk/element attribution the server needs to
+// bucket mastery bookkeeping (item.mastery.chunks / item.mastery.elements) —
+// chunkId on memory-sequence questions (via findChunkForLine), element on
+// memory-element-flash questions. Non-memory questions never have these, so
+// this only adds fields when present rather than sending explicit nulls.
+function memoryAttribution(q) {
+  const attrs = {};
+  if (q?.chunkId != null) attrs.chunkId = q.chunkId;
+  if (q?.element != null) attrs.element = q.element;
+  return attrs;
 }
 
 // States: idle → loading → drilling → between-drills → complete → saving → saved
@@ -98,11 +110,16 @@ export function usePostSession() {
     const speedBonus = Math.max(0, 1 - avgResponseMs / timeLimitMs);
     const score = Math.min(100, Math.max(0, Math.round((correctRatio * 0.8 + speedBonus * 0.2) * 100)));
 
+    const isMemoryDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
     const result = {
-      module: 'mental-math',
+      module: isMemoryDrill ? 'memory' : 'mental-math',
       type: currentDrill.type,
       config: currentDrill.config,
       questions: finalAnswers,
+      // Memory drills: carry the drilled item's id through to session submit so
+      // the server can map this review back to it and advance its
+      // spaced-repetition schedule (mirrors the MemoryBuilder practice flow).
+      ...(isMemoryDrill && currentDrill.memoryItemId ? { memoryItemId: currentDrill.memoryItemId } : {}),
       score,
       totalMs
     };
@@ -157,7 +174,8 @@ export function usePostSession() {
       expected: q.expected,
       answered,
       correct,
-      responseMs
+      responseMs,
+      ...memoryAttribution(q)
     };
 
     const newAnswers = [...answers, answer];
@@ -223,7 +241,8 @@ export function usePostSession() {
       expected: q.expected,
       answered: null,
       correct: false,
-      responseMs: 0
+      responseMs: 0,
+      ...memoryAttribution(q)
     }));
 
     const finalAnswers = [...answers, ...remaining];
@@ -260,6 +279,23 @@ export function usePostSession() {
     }
 
     const newResults = [...drillResults, scoredResult];
+    setDrillResults(newResults);
+
+    if (currentDrillIndex + 1 < drills.length) {
+      setState(STATES.BETWEEN_DRILLS);
+    } else {
+      setSessionScore(computeSessionScoreFromResults(newResults));
+      setState(STATES.COMPLETE);
+    }
+  }, [drillResults, currentDrillIndex, drills]);
+
+  // Interactive cognitive drills (n-back / digit-span / stroop) build their own
+  // fully-formed result (questions + local score) and hand it back here. Unlike
+  // LLM drills there is no async scoring call — the server recomputes the score
+  // deterministically from drillData on submit. Mirrors completeLlmDrill's
+  // advance/complete bookkeeping.
+  const completeCognitiveDrill = useCallback((drillResult) => {
+    const newResults = [...drillResults, drillResult];
     setDrillResults(newResults);
 
     if (currentDrillIndex + 1 < drills.length) {
@@ -343,6 +379,7 @@ export function usePostSession() {
     nextDrill,
     timeExpired,
     completeLlmDrill,
+    completeCognitiveDrill,
     saveSession,
     reset
   };

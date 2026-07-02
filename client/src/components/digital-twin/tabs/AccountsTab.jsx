@@ -240,11 +240,11 @@ export default function AccountsTab() {
             <div className="text-xs text-gray-500">Ingestion Enabled</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-purple-400">{Object.keys(stats.byCategory || {}).length}</div>
+            <div className="text-2xl font-bold text-port-accent-2">{Object.keys(stats.byCategory || {}).length}</div>
             <div className="text-xs text-gray-500">Categories</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-green-400">{Object.keys(stats.byPlatform || {}).length}</div>
+            <div className="text-2xl font-bold text-port-success">{Object.keys(stats.byPlatform || {}).length}</div>
             <div className="text-xs text-gray-500">Platforms</div>
           </div>
         </div>
@@ -479,7 +479,7 @@ export default function AccountsTab() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button
                       onClick={() => handleEdit(account)}
                       className="p-1.5 text-gray-400 hover:text-white rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"

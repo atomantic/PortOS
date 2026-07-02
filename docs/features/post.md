@@ -167,7 +167,8 @@ Users can add their own items via the Config page:
 - `GET/POST/PUT/DELETE /api/meatspace/post/memory-items` — memory item CRUD
 - `POST /api/meatspace/post/memory-items/:id/practice` — submit practice result, update mastery
 - `GET /api/meatspace/post/memory-items/:id/mastery` — get mastery breakdown
-- `POST /api/meatspace/post/drill` — extended to support `imagination` and `memory` drill types
+- `POST /api/meatspace/post/drill` — extended to support the `imagination` drill type
+- `POST /api/meatspace/post/memory-drill` — generate memory drills (separate endpoint)
 
 ## UI Components
 

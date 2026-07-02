@@ -6,9 +6,31 @@ vi.mock('child_process', async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
+// Keep the real killProcessTree (existing tests below rely on its real
+// non-Windows SIGTERM branch) but stub resolveWindowsExecutable AND
+// prepareWindowsSafeSpawn so the Windows command-resolution/wrap path can be
+// driven deterministically regardless of the host platform actually running
+// the suite (prepareWindowsSafeSpawn's own win32 check is bound to the real
+// platform by default, which is never win32 in CI).
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    resolveWindowsExecutable: vi.fn(() => null),
+    prepareWindowsSafeSpawn: vi.fn((command, args) => ({ command, args })),
+  };
+});
+
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  // atomicWrite replaced the raw writeFile(JSON.stringify) metadata sites (#1837);
+  // route it through the mocked fs/promises.writeFile so it resolves cleanly.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+    const { writeFile } = await import('fs/promises');
+    return writeFile(filePath, payload);
+  }),
 }));
 
 vi.mock('fs/promises', () => ({
@@ -17,15 +39,25 @@ vi.mock('fs/promises', () => ({
 }));
 
 const { spawn } = await import('child_process');
+const { writeFile } = await import('fs/promises');
 const runner = await import('./runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
 
-// Minimal toolkit stub that satisfies executeCliRun's expectations
+// Minimal toolkit stub that satisfies executeCliRun's expectations. Mirrors the
+// real toolkit runner's declared external-run registry (registerExternalRun /
+// unregisterExternalRun) that the override now drives instead of poking a
+// private `_portosActiveRuns` map.
 function fakeToolkit(errorDetection = null) {
+  const externalRuns = new Map();
   return {
     services: {
-      runner: { _portosActiveRuns: new Map() },
+      runner: {
+        registerExternalRun: (runId, killable) => externalRuns.set(runId, killable),
+        unregisterExternalRun: (runId) => externalRuns.delete(runId),
+        hasExternalRun: (runId) => externalRuns.has(runId),
+        _externalRuns: externalRuns,
+      },
       errorDetection,
     },
   };
@@ -159,6 +191,169 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     const metadata = await completed;
     expect(metadata.success).toBe(false);
     expect(metadata.errorAnalysis).toMatchObject({ requiresFallback: true });
+  });
+});
+
+describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
+  it('wraps a resolved .cmd shim via cmd.exe /c — the actual #1865 fix (never shell:true)', async () => {
+    const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
+    const resolvedPath = 'C:\\Users\\Joe\\AppData\\Roaming\\npm\\opencode.cmd';
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(resolvedPath);
+    // Exercise the REAL wrap logic (not the describe-level identity stub) so
+    // this test pins the actual cmd.exe /c contract, with isWin32 forced true
+    // since the host running this suite is never win32.
+    const { prepareWindowsSafeSpawn: realPrepare } = await vi.importActual('../lib/bufferedSpawn.js');
+    vi.mocked(prepareWindowsSafeSpawn).mockImplementationOnce((cmd, args) => realPrepare(cmd, args, true));
+
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = { id: 'codex', command: 'codex', args: ['exec', '-'], timeout: 5000 };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-resolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+
+    const [command, args, options] = spawn.mock.calls.at(-1);
+    expect(command).toBe('cmd.exe');
+    // buildCliArgs injects/transforms provider.args per-provider convention —
+    // assert the WRAPPING contract (/c + resolved path prepended), not the
+    // exact downstream arg list.
+    expect(args[0]).toBe('/c');
+    expect(args[1]).toBe(resolvedPath);
+    // Never set shell:true — DEP0190's unescaped-join hazard. The cmd.exe
+    // wrapper relies on Node's own correct non-shell argv escaping instead.
+    expect(options.shell).toBeFalsy();
+  });
+
+  it('falls back to the bare command when resolution finds nothing (e.g. off win32, or not on PATH)', async () => {
+    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(null);
+
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = { id: 'codex', command: 'codex', args: [], timeout: 5000 };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-unresolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+
+    const [command, , options] = spawn.mock.calls.at(-1);
+    expect(command).toBe('codex');
+    expect(options.shell).toBeFalsy();
+  });
+});
+
+describe('executeCliRun — close handler crash guard', () => {
+  // Drive a codex run whose first write (output) succeeds and second write
+  // (metadata) rejects, so the close handler's recovery path runs. Returns the
+  // onComplete spy + console.error spy for assertions.
+  async function runWithMetadataWriteFailure(runId, { hooks } = {}) {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('ENOSPC: disk full'));
+    if (hooks) setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    const onComplete = vi.fn();
+    await executeCliRun({ runId, provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve)); // let the detached handler settle
+    return { onComplete, errorSpy };
+  }
+
+  it('does not crash and still settles the caller when a metadata write fails on close', async () => {
+    const { onComplete, errorSpy } = await runWithMetadataWriteFailure('run-write-fail');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('run-write-fail close handler error'));
+    // The caller must still be settled with failure metadata, not left hanging.
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
+    errorSpy.mockRestore();
+  });
+
+  it('still settles onComplete when the recovery onRunFailed hook itself throws', async () => {
+    // Metadata write fails AND the recovery onRunFailed hook throws — the
+    // caller must STILL be settled (the hook must not block onComplete).
+    const { onComplete, errorSpy } = await runWithMetadataWriteFailure('run-hook-throws', {
+      hooks: { onRunFailed: () => { throw new Error('hook boom'); } },
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false, errorCategory: 'finalization_error' });
+    errorSpy.mockRestore();
+  });
+
+  it('does not flip a successful run to failed when onRunCompleted throws', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Writes succeed (success path runs); the success hook throws — the caller
+    // must still receive success:true, not a finalization-failure flip.
+    writeFile.mockResolvedValue(undefined);
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunCompleted: () => { throw new Error('hook boom'); } },
+    });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-success-hook-throws', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
+    errorSpy.mockRestore();
+  });
+
+  it('observes a rejected promise from an async completion hook (no unhandled rejection)', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    writeFile.mockResolvedValue(undefined);
+    // An async hook that REJECTS — safeSettle must attach a .catch so it does
+    // not escape as an unhandled rejection, and onComplete must still settle.
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunCompleted: () => Promise.reject(new Error('async hook boom')) },
+    });
+
+    const provider = {
+      id: 'codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    const onComplete = vi.fn();
+    await executeCliRun({ runId: 'run-async-hook-rejects', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('onRunCompleted hook threw during recovery'));
+    errorSpy.mockRestore();
   });
 });
 

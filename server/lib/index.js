@@ -16,19 +16,23 @@
 // brain and digital-twin) can be disambiguated as `brainValidation.X` /
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
+export * as agentValidation from './agentValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as cosValidation from './cosValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as genomeValidation from './genomeValidation.js';
 export * as identityValidation from './identityValidation.js';
 export * as meatspaceValidation from './meatspaceValidation.js';
+export * as mediaValidation from './mediaValidation.js';
 export * as memoryValidation from './memoryValidation.js';
 export * as moodBoardValidation from './moodBoardValidation.js';
 export * as musicVideoValidation from './musicVideoValidation.js';
 export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
+export * as pipelineValidation from './pipelineValidation.js';
 export * as postValidation from './postValidation.js';
 export * as socketValidation from './socketValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
@@ -85,6 +89,7 @@ export * from './hfErrors.js';
 export * from './hfCache.js';
 export * from './hfDownload.js';
 export * from './sseDownload.js';
+export * from './sseHeaders.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
@@ -103,6 +108,7 @@ export * from './collectionStore.js';
 export * from './conflictJournal.js';
 export * from './createKeyCachedQueue.js';
 export * from './createNewestWinsGuard.js';
+export * from './dataRoot.js';
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './schemaVersions.js';
@@ -128,11 +134,14 @@ export * from './gitArgs.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';
+export * from './killWithEscalation.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './pythonSetup.js';
+export * from './ytdlp.js';
 
 // === Networking ===
+export * from './abortTimeout.js';
 export * from './fetchWithTimeout.js';
 export * from './requestAbort.js';
 export * from './httpClient.js';
@@ -159,6 +168,7 @@ export * from './vectorMath.js';
 // === Extraction & parsing ===
 export * from './jsonExtract.js';
 export * from './taskParser.js';
+export * from './xmlEntities.js';
 
 // === Curated static data ===
 export * from './curatedGenomeMarkers.js';
@@ -178,9 +188,11 @@ export * from './mediaItemKey.js';
 export * from './navManifest.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
+export * from './postAdaptive.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
+export * from './textUtils.js';
 
 // === Model & config ===
 export * from './browserConfig.js';
@@ -204,6 +216,7 @@ export * from './lwwTimestamp.js';
 export * from './mapWithConcurrency.js';
 export * from './objects.js';
 export * from './openapiSpec.js';
+export * from './shellQuote.js';
 export * from './singleFlight.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';

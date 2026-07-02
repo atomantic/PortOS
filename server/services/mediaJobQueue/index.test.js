@@ -42,9 +42,11 @@ tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateAudio: vi.fn(async () => ({ jobId: 'whatever' })),
   cancelVideo: vi.fn(),
   cancelImage: vi.fn(),
   cancelImageCodex: vi.fn(),
+  cancelAudio: vi.fn(),
   // #1332: loraTraining is dynamically imported by the queue for runTraining
   // (worker) and hasSurvivingTrainer (boot reconcile). Stub both so the boot
   // re-attach decision is testable without loading the real trainer module.
@@ -68,6 +70,11 @@ vi.mock('../imageGen/codex.js', () => ({
   cancel: (...args) => stubs.cancelImageCodex(...args),
 }));
 
+vi.mock('../audioGen/local.js', () => ({
+  generateAudio: (...args) => stubs.generateAudio(...args),
+  cancel: (...args) => stubs.cancelAudio(...args),
+}));
+
 vi.mock('../loraTraining/index.js', () => ({
   runTraining: (...args) => stubs.runTraining(...args),
   hasSurvivingTrainer: (...args) => stubs.hasSurvivingTrainer(...args),
@@ -80,12 +87,14 @@ vi.mock('../loraTraining/index.js', () => ({
 let mediaJobQueue;
 let videoGenEvents;
 let imageGenEvents;
+let audioGenEvents;
 
 async function importFresh() {
   vi.resetModules();
   mediaJobQueue = await import('./index.js');
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
   imageGenEvents = (await import('../imageGenEvents.js')).imageGenEvents;
+  audioGenEvents = (await import('../audioGen/events.js')).audioGenEvents;
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 250));
@@ -125,7 +134,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('rejects unknown kinds', () => {
-    expect(() => mediaJobQueue.enqueueJob({ kind: 'audio', params: {} })).toThrow(/invalid kind/);
+    expect(() => mediaJobQueue.enqueueJob({ kind: 'bogus', params: {} })).toThrow(/invalid kind/);
   });
 
   it('listJobs filters by kind / status / owner', async () => {
@@ -753,6 +762,35 @@ describe('mediaJobQueue', () => {
 
     delete process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS;
   });
+});
+
+describe('Audio kind (#1928)', () => {
+  it('dispatches an audio job to audioGen/local.js#generateAudio and completes', async () => {
+    const job = mediaJobQueue.enqueueJob({
+      kind: 'audio',
+      params: { prompt: 'a moody synth bed', engine: 'musicgen' },
+    });
+    await waitFor(() => stubs.generateAudio.mock.calls.length === 1);
+
+    expect(stubs.generateAudio).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.jobId, prompt: 'a moody synth bed', engine: 'musicgen' }),
+    );
+    // Audio shares the GPU lane (no parallel codex-style lane) — the other
+    // gen modules must not have been invoked.
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+
+    audioGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.wav`, durationSec: 12 });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
+
+    const settled = mediaJobQueue.getJob(job.jobId);
+    expect(settled.result).toEqual({ generationId: job.jobId, filename: `${job.jobId}.wav`, durationSec: 12 });
+  });
+
+  // cancelJob's dispatch-by-kind (mod.cancel(jobId)) is exercised generically
+  // by the Codex lane's cancel test below via the same getGenModuleForJob
+  // mechanism; audioGen/local.js#cancel's own behavior (aborting the in-flight
+  // generateMusic signal) is unit-tested directly in audioGen/local.test.js.
 });
 
 describe('Codex lane', () => {
