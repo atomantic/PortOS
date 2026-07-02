@@ -28,6 +28,10 @@
 
 - **The Story Builder index now uses the full desktop width instead of a single narrow column.** The create form and the "Continue a story" session list previously stacked in one `max-w-3xl` column, leaving most of a 1280px+ screen empty. Above the `lg` breakpoint they now sit side by side — form left, in-progress sessions in a fixed-width sidebar on the right — mirroring the POST launcher's two-column layout (#1986), so your existing stories are visible without scrolling. Below `lg` the columns stack exactly as before, so mobile is unchanged (#2030).
 
+## Dashboard
+
+- **Two new dashboard widgets surface previously invisible data: a Feeds unread digest and a health-logging streak.** The Feeds Digest widget shows your total unread RSS/Atom count plus the top unread feeds by count and deep-links to Brain → Feeds — it consumes the existing `getFeedStats` wrapper (now the endpoint's first real caller) so unread counts aren't recomputed. The Health Logging Streak widget mirrors the Activity Streak / Daily POST pattern: current + best cross-domain logging streak, a 7-day sparkline, and this-week counts per domain (alcohol, nicotine, workouts, body, blood pressure) via a new `GET /api/meatspace/logging-stats` aggregate, deep-linking to MeatSpace. Both are gated hidden on fresh installs with no feeds/logs and render at mobile widths (#2034).
+
 ## Loading states
 
 - **The DataDog, Jira, and GitHub integration pages now show a layout-shaped skeleton on first paint instead of a centered "Loading…" line.** Each page previously rendered a bare full-screen text message sized with `h-screen`, which mis-sized under mobile browser chrome and jumped when the real content arrived. They now share a `PageSkeleton` that reserves the header + card-grid dimensions (matching the loaded layout, using the `port-*` design tokens like the dashboard's `WidgetSkeleton`), so there's no post-load layout jump and no full-height wrapper fighting Layout's scroll (#2029).
