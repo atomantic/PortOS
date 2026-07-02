@@ -270,6 +270,36 @@ export const searchQuerySchema = z.object({
 });
 
 // =============================================================================
+// MEDIA SKETCH / ANNOTATION SCHEMAS (issue #2036, phase 1)
+// =============================================================================
+
+// Vector strokes drawn over a generated image. Points are stored in the
+// image's natural-pixel space so they restore exactly regardless of the
+// display size (see AnnotationCanvas.jsx). The service (mediaSketches.js)
+// re-sanitizes + clamps beyond this schema; the Zod layer rejects the
+// obviously-malformed shapes early with a 400.
+const sketchPointSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite()
+});
+
+const sketchStrokeSchema = z.object({
+  mode: z.enum(['draw', 'erase']).optional(),
+  color: z.string().max(32).optional(),
+  size: z.number().positive().max(512).optional(),
+  points: z.array(sketchPointSchema).min(1).max(20000)
+});
+
+export const mediaSketchSaveSchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+  strokes: z.array(sketchStrokeSchema).max(5000),
+  // Flattened raster (image + strokes) as a PNG data URL. Optional so a caller
+  // can persist just the vector layer; the service decodes + stores the bytes.
+  png: z.string().startsWith('data:image/png;base64,').optional()
+});
+
+// =============================================================================
 // BACKUP SCHEMAS
 // =============================================================================
 
