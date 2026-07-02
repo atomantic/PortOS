@@ -15,6 +15,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { cadenceStatus } from '../lib/tribeCadence.js';
 import * as calendarSync from './calendarSync.js';
 
 // Default check-in cadence (days) per ring. Mirrored on the client in
@@ -109,32 +110,12 @@ async function ensureReady() {
   await ensureSchema();
 }
 
-// Whole days from an ISO date (YYYY-MM-DD) to today, or null when unparseable.
-// Mirrors `daysBetween` in client/src/lib/tribe.js — keep in sync.
-export function daysSinceDate(dateStr) {
-  if (!dateStr) return null;
-  const start = new Date(`${String(dateStr).slice(0, 10)}T00:00:00`);
-  if (Number.isNaN(start.getTime())) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.floor((today - start) / 86400000);
-}
-
-// Cadence health for a person — the single server-side source of truth for
-// "who needs care." Mirrors `contactStatus` in client/src/lib/tribe.js (state
-// names match: external / missing / overdue / soon / steady). `daysOverdue` is
-// 0 unless overdue, and null for a missing (never-contacted) person so callers
-// can sort those to the top without a magic number.
-export function personCadenceStatus(person) {
-  // External people carry no care cadence — never nag about a drifted contact.
-  if (person.ring === 'external') return { state: 'external', daysRemaining: null, daysOverdue: 0 };
-  const elapsed = daysSinceDate(person.lastContact);
-  if (elapsed == null) return { state: 'missing', daysRemaining: null, daysOverdue: null };
-  const daysRemaining = Number(person.cadenceDays || 45) - elapsed;
-  if (daysRemaining < 0) return { state: 'overdue', daysRemaining, daysOverdue: Math.abs(daysRemaining) };
-  if (daysRemaining <= 7) return { state: 'soon', daysRemaining, daysOverdue: 0 };
-  return { state: 'steady', daysRemaining, daysOverdue: 0 };
-}
+// Cadence health for a person — the server-side entry point into the shared,
+// authoritative cadence rules in server/lib/tribeCadence.js (mirrored to the
+// client). Kept as a named re-export so existing callers/tests importing
+// `personCadenceStatus` from this service stay stable while the rules live in
+// exactly one place. See tribeCadence.js for the state semantics.
+export const personCadenceStatus = cadenceStatus;
 
 // Care summary for the dashboard widget + proactive alert: who in the active
 // tribe (external excluded) is overdue or has no touchpoint yet, most-overdue

@@ -85,6 +85,7 @@ export * from './songProgress.js';
 export * from './syncCounts.js';
 export * from './terminalTheme.js';
 export * from './tribe.js';
+export * from './tribeCadence.js';
 export * from './universeBuilderExpand.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
