@@ -46,6 +46,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-editorial-chekhov.md': ['bfacbf343ba2b9a3f6037bb45b94e1bb'],
   'pipeline-editorial-on-the-nose.md': ['48182b49149e6b5829fbed71b3ffc242'],
   'pipeline-tv-script.md': ['3f6fecc25573ed054b47db392250034a'],
+  'cd-treatment.md': ['2ffa482e7bfb6fe8b7224505fedbf712', '16d0ef6a7fd2533719a846019122ebee', '95b7685690ecfee4f682b0293b790277'],
 };
 const EXPECTED_STAGE_NEW = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f',
@@ -70,6 +71,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-editorial-chekhov.md': '1f8a1696b5e4f476051dc5b2e5737db9',
   'pipeline-editorial-on-the-nose.md': 'e5786fb019e5bf19c7aa6ed0c8b35cda',
   'pipeline-tv-script.md': '376f779f4687b598f1c92ca4e770fd5a',
+  'cd-treatment.md': 'd940eadfb406ce584f0e244032f33382',
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],
