@@ -101,6 +101,12 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
       existing.endTime = event.endTime;
       existing.isAllDay = event.isAllDay;
       existing.isCancelled = event.isCancelled;
+      // Refresh the identity fields too so an event already in cache gains
+      // organizer/attendees for Tribe touchpoint matching and an up-to-date
+      // declined status (#2033) — not just newly-added events.
+      existing.organizer = event.organizer;
+      existing.attendees = event.attendees;
+      existing.myStatus = event.myStatus;
       existing.syncedAt = event.syncedAt;
       updatedCount++;
     } else {

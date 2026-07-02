@@ -190,6 +190,7 @@ export async function syncAccount(accountId, io, options = {}) {
         if (event.endTime !== undefined) existing.endTime = event.endTime;
         if (event.isAllDay !== undefined) existing.isAllDay = event.isAllDay;
         if (event.isCancelled !== undefined) existing.isCancelled = event.isCancelled;
+        if (event.organizer !== undefined) existing.organizer = event.organizer;
         if (event.attendees !== undefined) existing.attendees = event.attendees;
         if (event.myStatus !== undefined) existing.myStatus = event.myStatus;
         if (event.categories !== undefined) existing.categories = event.categories;
@@ -257,9 +258,12 @@ export async function logCalendarTouchpoints(accountId, events = []) {
   const candidates = [];
   for (const event of events) {
     if (event.isCancelled || event.myStatus === 'declined') continue;
-    const when = event.startTime || event.endTime;
-    if (!when) continue;
-    if (safeDate(when) > now) continue; // future event — hasn't happened yet
+    const startedAt = event.startTime || event.endTime;
+    if (!startedAt) continue;
+    // Gate on the event's END (completion), not its start: an in-progress or
+    // all-day event isn't a finished contact until it ends.
+    const completedAt = event.endTime || event.startTime;
+    if (safeDate(completedAt) > now) continue; // not finished yet
     const identities = [event.organizer, ...(event.attendees || [])].filter(Boolean);
     if (identities.length === 0) continue;
     const eventKey = event.externalId || event.id;
@@ -267,7 +271,7 @@ export async function logCalendarTouchpoints(accountId, events = []) {
     candidates.push({
       identities,
       source: 'calendar',
-      happenedAt: when,
+      happenedAt: startedAt,
       channel: event.location || 'Calendar',
       summary: event.title || 'Calendar touchpoint',
       dedupeKey: `cal:${accountId}:${eventKey}`,
