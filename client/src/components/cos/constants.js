@@ -362,13 +362,6 @@ export const detectAutonomyLevel = (config) => {
   return null; // Custom configuration
 };
 
-// Format milliseconds as human-readable interval
-export const formatInterval = (ms) => {
-  if (ms < 60000) return `${ms / 1000}s`;
-  if (ms < 3600000) return `${ms / 60000}min`;
-  return `${ms / 3600000}hr`;
-};
-
 // Avatar style labels for display
 export const AVATAR_STYLE_LABELS = {
   svg: 'Digital (SVG)',

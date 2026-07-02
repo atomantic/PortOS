@@ -5,6 +5,7 @@ import CityAgentBar from './CityAgentBar';
 import CityFilterBar from './CityFilterBar';
 import CityXpBadge from './CityXpBadge';
 import CityMiniMap from './CityMiniMap';
+import { formatDurationMs } from '../../utils/formatters';
 
 // WASD controls hint shown briefly on first exploration entry
 function ControlsHint({ visible }) {
@@ -48,16 +49,6 @@ function ControlsHint({ visible }) {
     </div>
   );
 }
-
-// Format uptime from page load
-const formatUptime = (seconds) => {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-};
 
 const getHealthSentinel = (systemHealth, onlineRatio) => {
   if (systemHealth?.overallHealth === 'critical') return { dot: 'bg-port-error', text: 'text-port-error', label: 'CRITICAL' };
@@ -213,7 +204,7 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           <div className="flex items-center justify-between gap-6">
             <span className="font-pixel text-[10px] text-gray-400 tracking-wide">UPTIME</span>
             <span className="font-pixel text-[11px] text-cyan-400" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-              {formatUptime(uptimeSeconds)}
+              {formatDurationMs(uptimeSeconds * 1000)}
             </span>
           </div>
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  formatContextLength, formatDurationMin, formatEventDateTime, timeAgo,
+  formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo,
   formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs,
 } from './formatters.js';
 
@@ -19,6 +19,26 @@ describe('formatContextLength', () => {
     expect(formatContextLength(0)).toBeNull();
     expect(formatContextLength(-5)).toBeNull();
     expect(formatContextLength('nope')).toBeNull();
+  });
+});
+
+describe('formatDurationMs', () => {
+  it('formats sub-minute, minute, and hour buckets', () => {
+    expect(formatDurationMs(0)).toBe('0s');
+    expect(formatDurationMs(45_000)).toBe('45s');
+    expect(formatDurationMs(72_000)).toBe('1m 12s');
+    expect(formatDurationMs(2 * 3_600_000 + 5 * 60_000)).toBe('2h 5m');
+  });
+
+  it('buckets multi-day durations into days + hours', () => {
+    expect(formatDurationMs(24 * 3_600_000)).toBe('1d 0h');
+    expect(formatDurationMs(25 * 3_600_000)).toBe('1d 1h');
+    expect(formatDurationMs(51 * 3_600_000)).toBe('2d 3h');
+  });
+
+  it('returns a dash for nullish input', () => {
+    expect(formatDurationMs(null)).toBe('-');
+    expect(formatDurationMs(undefined)).toBe('-');
   });
 });
 
