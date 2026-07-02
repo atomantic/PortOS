@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { getProviders } from '../../../services/api';
+import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
 
@@ -400,8 +401,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             <h3 className="text-sm font-medium text-gray-400 mb-3">Conditions (optional)</h3>
             <div className="grid grid-cols-3 gap-3">
               {Object.entries(tags).map(([key, value]) => (
-                <div key={key}>
-                  <label className="text-xs text-gray-500 mb-1 block capitalize">{key}</label>
+                <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block capitalize" label={key}>
                   <input
                     type="text"
                     value={value}
@@ -409,7 +409,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                     placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
                     className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
                   />
-                </div>
+                </FormField>
               ))}
             </div>
           </div>}

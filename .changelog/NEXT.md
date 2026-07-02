@@ -33,6 +33,7 @@
 ## Accessibility
 
 - **Config form labels now focus their field when clicked and read correctly to screen readers.** Many settings/config forms (AI Providers, DataDog, feature-agent config, message & calendar account setup, scheduled-task provider/model pickers, the agent world/schedule tabs, MeatSpace nicotine + POST drills, and more) rendered the label as a plain sibling of its input with no association, so clicking the label did nothing and assistive tech couldn't announce the pairing. These fields now flow through a shared `FormField` wrapper that generates a stable id and wires `htmlFor`/`id` automatically, keeping the exact same styling (#2027). Remaining forms are tracked for a follow-up sweep (#2051).
+- **The follow-up sweep wired the remaining config-form labels to their controls.** Continuing #2027, ~130 more sibling `<label>`+input pairs across ~40 files — agents (overview/list/published), digital-twin tabs, image-gen controls, media/prompt tools, MeatSpace panels, brain, CoS memory/resume, writers-room, and pages (PromptManager, VideoGen, Jira, Sharing, Loras, Security, ImageGen, Templates, Loops, Browser, and more) — now flow through the shared `FormField` wrapper so clicking a label focuses its field and screen readers announce the pairing. Accessibility only: existing Tailwind classes are preserved verbatim, wrapping `<label><input/></label>` and radio/toggle group labels are left untouched, and controls whose custom component doesn't forward `id` to a DOM input were deliberately skipped (#2051).
 
 ## Layout
 

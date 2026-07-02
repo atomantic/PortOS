@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import { FormField } from '../ui/FormField';
 
 const WIZARD_STEPS = [
   {
@@ -202,8 +203,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
       {/* Fields */}
       <div className="space-y-4 mb-6">
         {step.fields.map(field => (
-          <div key={field.id}>
-            <label className="block text-sm text-gray-400 mb-1">{field.label}</label>
+          <FormField key={field.id} label={field.label}>
             <input
               type={field.type}
               value={formData[step.id]?.[field.id] || ''}
@@ -211,7 +211,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
               placeholder={field.placeholder}
               className="w-full px-4 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent"
             />
-          </div>
+          </FormField>
         ))}
       </div>
 

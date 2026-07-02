@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { ICON_MAP, IconForName } from './icons';
+import { FormField } from '../../../ui/FormField';
 
 export default function AddActivityForm({ onAdd }) {
   const [open, setOpen] = useState(false);
@@ -36,8 +37,7 @@ export default function AddActivityForm({ onAdd }) {
   return (
     <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-gray-400 mb-1 block">Name</label>
+        <FormField label="Name" labelClassName="text-xs text-gray-400 mb-1 block">
           <input
             type="text"
             value={name}
@@ -46,7 +46,7 @@ export default function AddActivityForm({ onAdd }) {
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
             autoFocus
           />
-        </div>
+        </FormField>
         <div>
           <label className="text-xs text-gray-400 mb-1 block">Icon</label>
           <div className="flex gap-1 flex-wrap">
@@ -64,8 +64,7 @@ export default function AddActivityForm({ onAdd }) {
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs text-gray-400 mb-1 block">Frequency</label>
+        <FormField label="Frequency" labelClassName="text-xs text-gray-400 mb-1 block">
           <input
             type="number"
             value={frequency}
@@ -74,9 +73,8 @@ export default function AddActivityForm({ onAdd }) {
             step="0.5"
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
           />
-        </div>
-        <div>
-          <label className="text-xs text-gray-400 mb-1 block">Cadence</label>
+        </FormField>
+        <FormField label="Cadence" labelClassName="text-xs text-gray-400 mb-1 block">
           <select
             value={cadence}
             onChange={(e) => setCadence(e.target.value)}
@@ -87,7 +85,7 @@ export default function AddActivityForm({ onAdd }) {
             <option value="month">Per Month</option>
             <option value="year">Per Year</option>
           </select>
-        </div>
+        </FormField>
       </div>
       <div className="flex gap-2">
         <button type="submit" className="px-3 py-1.5 bg-port-accent text-white text-sm rounded hover:bg-port-accent/80 transition-colors">

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Save, Plus, Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
+import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName } from '../../../utils/formatters';
@@ -140,10 +141,10 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
           </div>
 
           {/* Content */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Content <span className="text-port-accent">*</span>
-            </label>
+          <FormField
+            label={<>Content <span className="text-port-accent">*</span></>}
+            labelClassName="block text-sm text-gray-400 mb-2"
+          >
             <textarea
               value={formData.content}
               onChange={e => setFormData({ ...formData, content: e.target.value })}
@@ -155,11 +156,10 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             <p className="text-xs text-gray-500 mt-1">
               Editing content will regenerate the embedding for semantic search.
             </p>
-          </div>
+          </FormField>
 
           {/* Summary */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Summary (optional)</label>
+          <FormField label="Summary (optional)" labelClassName="block text-sm text-gray-400 mb-2">
             <input
               type="text"
               value={formData.summary}
@@ -167,12 +167,11 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
               placeholder="Brief summary..."
               className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
             />
-          </div>
+          </FormField>
 
           {/* Category and App */}
           <div className="flex flex-col sm:flex-row gap-3">
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-2">Category</label>
+            <FormField label="Category" className="flex-1" labelClassName="block text-sm text-gray-400 mb-2">
               <select
                 value={formData.category}
                 onChange={e => setFormData({ ...formData, category: e.target.value })}
@@ -189,9 +188,8 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 <option value="system">System</option>
                 <option value="project">Project</option>
               </select>
-            </div>
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-2">Associated App</label>
+            </FormField>
+            <FormField label="Associated App" className="flex-1" labelClassName="block text-sm text-gray-400 mb-2">
               <select
                 value={formData.sourceAppId}
                 onChange={e => setFormData({ ...formData, sourceAppId: e.target.value })}
@@ -202,7 +200,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                   <option key={app.id} value={app.id}>{app.name}</option>
                 ))}
               </select>
-            </div>
+            </FormField>
           </div>
 
           {/* Tags */}
@@ -247,10 +245,11 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
 
           {/* Importance and Confidence */}
           <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-2">
-                Importance: {(formData.importance * 100).toFixed(0)}%
-              </label>
+            <FormField
+              label={<>Importance: {(formData.importance * 100).toFixed(0)}%</>}
+              className="flex-1"
+              labelClassName="block text-sm text-gray-400 mb-2"
+            >
               <input
                 type="range"
                 min="0"
@@ -260,11 +259,12 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 onChange={e => setFormData({ ...formData, importance: parseFloat(e.target.value) })}
                 className="w-full h-8 accent-port-accent"
               />
-            </div>
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-2">
-                Confidence: {(formData.confidence * 100).toFixed(0)}%
-              </label>
+            </FormField>
+            <FormField
+              label={<>Confidence: {(formData.confidence * 100).toFixed(0)}%</>}
+              className="flex-1"
+              labelClassName="block text-sm text-gray-400 mb-2"
+            >
               <input
                 type="range"
                 min="0"
@@ -274,7 +274,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 onChange={e => setFormData({ ...formData, confidence: parseFloat(e.target.value) })}
                 className="w-full h-8 accent-port-accent"
               />
-            </div>
+            </FormField>
           </div>
 
           {/* Source Info (read-only) */}

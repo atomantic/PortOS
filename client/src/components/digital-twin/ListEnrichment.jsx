@@ -12,6 +12,7 @@ import {ArrowLeft,
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import { FormField } from '../ui/FormField';
 
 import { ENRICHMENT_CATEGORIES } from './constants';
 
@@ -199,10 +200,10 @@ export default function ListEnrichment({
               )}
 
               <div className="space-y-3">
-                <div>
-                  <label className="text-xs text-gray-500 uppercase tracking-wider mb-1 block">
-                    {config?.itemLabel} {index + 1}
-                  </label>
+                <FormField
+                  label={<>{config?.itemLabel} {index + 1}</>}
+                  labelClassName="text-xs text-gray-500 uppercase tracking-wider mb-1 block"
+                >
                   <input
                     type="text"
                     value={item.title}
@@ -210,12 +211,12 @@ export default function ListEnrichment({
                     placeholder={config?.itemPlaceholder}
                     className="w-full px-3 py-2.5 bg-port-card border border-port-border rounded-lg text-white focus:outline-hidden focus:border-port-accent"
                   />
-                </div>
+                </FormField>
 
-                <div>
-                  <label className="text-xs text-gray-500 uppercase tracking-wider mb-1 block">
-                    Notes (optional)
-                  </label>
+                <FormField
+                  label="Notes (optional)"
+                  labelClassName="text-xs text-gray-500 uppercase tracking-wider mb-1 block"
+                >
                   <textarea
                     value={item.note}
                     onChange={(e) => updateItem(index, 'note', e.target.value)}
@@ -223,7 +224,7 @@ export default function ListEnrichment({
                     rows={2}
                     className="w-full px-3 py-2.5 bg-port-card border border-port-border rounded-lg text-white resize-none focus:outline-hidden focus:border-port-accent"
                   />
-                </div>
+                </FormField>
               </div>
             </div>
           ))}
@@ -241,10 +242,11 @@ export default function ListEnrichment({
       {/* Provider Selection & Analyze Button */}
       <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 mb-6">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-          <div className="flex-1">
-            <label className="text-xs text-gray-500 uppercase tracking-wider mb-2 block">
-              Analyze with
-            </label>
+          <FormField
+            label="Analyze with"
+            className="flex-1"
+            labelClassName="text-xs text-gray-500 uppercase tracking-wider mb-2 block"
+          >
             <select
               value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
               onChange={(e) => {
@@ -261,7 +263,7 @@ export default function ListEnrichment({
                 ))
               ))}
             </select>
-          </div>
+          </FormField>
 
           <button
             onClick={analyzeList}

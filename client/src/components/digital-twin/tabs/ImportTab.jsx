@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 import { formatBytes } from '../../../utils/formatters';
 
 const SOURCE_ICONS = {
@@ -235,10 +236,7 @@ export default function ImportTab() {
           </div>
 
           {/* Provider Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Analysis Provider
-            </label>
+          <FormField className="mb-6" label="Analysis Provider" labelClassName="block text-sm font-medium text-gray-400 mb-2">
             <select
               value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
               onChange={(e) => {
@@ -255,7 +253,7 @@ export default function ImportTab() {
                 ))
               ))}
             </select>
-          </div>
+          </FormField>
 
           {/* Analyze Button */}
           <button

@@ -14,6 +14,7 @@ import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
+import { FormField } from '../ui/FormField';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -70,8 +71,7 @@ export default function ImageGenControls({
   return (
     <div className={className}>
       {showModel && isLocal && models.length > 0 && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
+        <FormField label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={modelId || ''}
             onChange={(e) => onModelChange?.(e.target.value)}
@@ -88,11 +88,10 @@ export default function ImageGenControls({
               estimateLabel={deriveSizeEstimate(currentModel?.name)}
             />
           )}
-        </div>
+        </FormField>
       )}
 
-      <div>
-        <label className="block text-xs font-medium text-gray-400 mb-1">Resolution</label>
+      <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
         <select
           value={resolutionLabel}
           onChange={handleResolution}
@@ -102,7 +101,7 @@ export default function ImageGenControls({
           {availableResolutions.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
           {!matched && resolutionLabel && <option value={resolutionLabel}>{resolutionLabel} (custom)</option>}
         </select>
-      </div>
+      </FormField>
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
           is honored, so the rest of the knobs are hidden in that mode. */}
@@ -132,10 +131,10 @@ export default function ImageGenControls({
       )}
 
       {!isCodex && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">
-            Steps {currentModel?.steps && `(default: ${currentModel.steps})`}
-          </label>
+        <FormField
+          label={<>Steps {currentModel?.steps && `(default: ${currentModel.steps})`}</>}
+          labelClassName="block text-xs font-medium text-gray-400 mb-1"
+        >
           <input
             type="number" min={1} max={150}
             value={steps ?? ''}
@@ -144,7 +143,7 @@ export default function ImageGenControls({
             disabled={disabled}
             className={inputCls}
           />
-        </div>
+        </FormField>
       )}
 
       {/* Step-wise distilled models (Flux Schnell, FLUX.2 Klein, Z-Image-Turbo)
@@ -152,10 +151,10 @@ export default function ImageGenControls({
           any guidance scale we pass and prints a warning. Hide the input for
           those models so the user doesn't waste a knob-turn on a no-op. */}
       {!isCodex && isLocal && !currentModel?.cfgDisabled && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">
-            Guidance {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}
-          </label>
+        <FormField
+          label={<>Guidance {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}</>}
+          labelClassName="block text-xs font-medium text-gray-400 mb-1"
+        >
           <input
             type="number" min={0} max={20} step={0.5}
             value={guidance ?? ''}
@@ -164,12 +163,11 @@ export default function ImageGenControls({
             disabled={disabled}
             className={inputCls}
           />
-        </div>
+        </FormField>
       )}
 
       {!isCodex && isLocal && showQuantize && !isFlux2 && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Quantize (bits)</label>
+        <FormField label="Quantize (bits)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={quantize ?? '8'}
             onChange={(e) => onQuantizeChange?.(e.target.value)}
@@ -178,12 +176,14 @@ export default function ImageGenControls({
           >
             {QUANTIZE_OPTIONS.map((q) => <option key={q.value} value={q.value}>{q.label}</option>)}
           </select>
-        </div>
+        </FormField>
       )}
 
       {!isCodex && !isLocal && onCfgScaleChange && (
-        <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">CFG Scale ({cfgScale})</label>
+        <FormField
+          label={<>CFG Scale ({cfgScale})</>}
+          labelClassName="block text-xs font-medium text-gray-400 mb-1"
+        >
           <input
             type="range" min={1} max={20} step={0.5}
             value={cfgScale ?? 7}
@@ -191,7 +191,7 @@ export default function ImageGenControls({
             onChange={(e) => onCfgScaleChange?.(Number(e.target.value))}
             className="w-full accent-port-accent"
           />
-        </div>
+        </FormField>
       )}
     </div>
   );

@@ -13,6 +13,7 @@ import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Chec
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
+import { FormField } from '../components/ui/FormField';
 import { formatBytes } from '../utils/formatters';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
 import {
@@ -917,16 +918,17 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
       </p>
 
       <form onSubmit={handleSave} className="space-y-2">
-        <label className="block text-xs font-medium text-gray-400">API key</label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={auth?.hasKey ? '•••• key already set — paste a new one to replace' : 'paste your Civitai API key'}
-          className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 font-mono"
-          disabled={saving}
-          autoFocus
-        />
+        <FormField label="API key" labelClassName="block text-xs font-medium text-gray-400" className="space-y-2">
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={auth?.hasKey ? '•••• key already set — paste a new one to replace' : 'paste your Civitai API key'}
+            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 font-mono"
+            disabled={saving}
+            autoFocus
+          />
+        </FormField>
         <div className="flex items-center gap-2 pt-1">
           <button
             type="submit"

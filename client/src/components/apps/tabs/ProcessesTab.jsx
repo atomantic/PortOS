@@ -4,6 +4,7 @@ import * as api from '../../../services/api';
 import { executeCommand } from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
+import { FormField } from '../../ui/FormField';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { formatBytes, formatDurationMs } from '../../../utils/formatters';
 
@@ -209,8 +210,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                               )}
                             </div>
                             <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-2">
-                                <label className="text-xs text-gray-500">Tail lines:</label>
+                              <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
                                 <select
                                   value={tailLines}
                                   onChange={(e) => {
@@ -225,7 +225,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                                   <option value={1000}>1000</option>
                                   <option value={2000}>2000</option>
                                 </select>
-                              </div>
+                              </FormField>
                               <span className="text-xs text-gray-600">{logs.length} lines</span>
                               <button
                                 onClick={() => setLogs([])}
@@ -294,8 +294,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
               )}
             </div>
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-500">Tail lines:</label>
+              <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-sm text-gray-500">
                 <select
                   value={tailLines}
                   onChange={(e) => {
@@ -310,7 +309,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                   <option value={1000}>1000</option>
                   <option value={2000}>2000</option>
                 </select>
-              </div>
+              </FormField>
               <span className="text-sm text-gray-600">{logs.length} lines</span>
               <button
                 onClick={() => setLogs([])}

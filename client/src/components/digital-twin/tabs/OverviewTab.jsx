@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 
 import {
   DOCUMENT_CATEGORIES,
@@ -267,15 +268,14 @@ export default function OverviewTab({ status, settings, onRefresh }) {
                 />
                 <span className="text-white">Auto-inject soul context into CoS agents</span>
               </label>
-              <div>
-                <label className="block text-sm text-gray-400 mb-2">Max context tokens</label>
+              <FormField labelClassName="block text-sm text-gray-400 mb-2" label="Max context tokens">
                 <input
                   type="number"
                   value={settingsForm.maxContextTokens || 4000}
                   onChange={(e) => setSettingsForm({ ...settingsForm, maxContextTokens: parseInt(e.target.value, 10) })}
                   className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
                 />
-              </div>
+              </FormField>
               <button
                 onClick={handleSaveSettings}
                 disabled={saving}
