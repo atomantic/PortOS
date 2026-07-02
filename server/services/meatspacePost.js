@@ -99,6 +99,17 @@ export async function getPostConfig() {
 export async function updatePostConfig(updates) {
   const config = await getPostConfig();
   const merged = deepMerge(config, updates);
+  if (updates?.reminder) {
+    // Stamp WHEN the reminder's enabled/time settings last changed. Read by
+    // meatspacePostReminder.js's missed-slot catch-up: a cron occurrence
+    // that fell before this timestamp happened under a DIFFERENT (possibly
+    // disabled) configuration, so replaying it after a restart would nag for
+    // a slot the current settings never actually owned — e.g. enabling the
+    // reminder for an already-past time today, then restarting later that
+    // same day, would otherwise catch up a slot the reminder wasn't even
+    // active for.
+    merged.reminder = { ...merged.reminder, updatedAt: new Date().toISOString() };
+  }
   await ensureMeatspaceDir();
   await atomicWrite(CONFIG_FILE, merged);
   console.log(`🧪 POST config updated`);

@@ -573,7 +573,28 @@ describe('updatePostConfig — postConfigEvents', () => {
       config: merged,
       updates: { reminder: { enabled: true, time: '09:00' } },
     });
-    expect(merged.reminder).toEqual({ enabled: true, time: '09:00' });
+    expect(merged.reminder).toMatchObject({ enabled: true, time: '09:00' });
+  });
+
+  // Regression (codex review finding on #2015): the missed-slot catch-up in
+  // meatspacePostReminder.js needs to know WHEN the reminder's settings last
+  // changed, so it can tell "a slot that happened under the current config"
+  // apart from "a slot that happened before the user even set this up."
+  it('stamps reminder.updatedAt whenever the reminder slice is part of the patch', async () => {
+    const before = Date.now();
+    const merged = await updatePostConfig({ reminder: { enabled: true, time: '09:00' } });
+    const after = Date.now();
+
+    expect(merged.reminder.updatedAt).toBeDefined();
+    const stampedMs = new Date(merged.reminder.updatedAt).getTime();
+    expect(stampedMs).toBeGreaterThanOrEqual(before);
+    expect(stampedMs).toBeLessThanOrEqual(after);
+  });
+
+  it('does not stamp reminder.updatedAt for a patch that does not touch the reminder slice', async () => {
+    const merged = await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(merged.reminder.updatedAt).toBeUndefined();
   });
 
   it('still emits for updates unrelated to the reminder — subscribers decide what to react to', async () => {

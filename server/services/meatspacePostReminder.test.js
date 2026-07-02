@@ -200,6 +200,56 @@ describe('registerPostReminderSchedule', () => {
       expect(getPostSessions).not.toHaveBeenCalled();
     });
 
+    // Regression (codex review finding): a same-day missed slot is only a
+    // genuine miss if the CURRENT reminder settings actually owned it. If the
+    // user enables the reminder (or changes its time) for an already-past
+    // time today, then the server restarts later that same day for unrelated
+    // reasons, the slot still falls on today's local day — but it happened
+    // before this configuration existed, so replaying it would nag for a
+    // period the reminder wasn't even active for.
+    it('does not fire when the missed slot occurred before the reminder config was last saved', async () => {
+      getPostConfig.mockResolvedValue({
+        reminder: { enabled: true, time: '09:00', updatedAt: '2026-07-01T10:00:00.000Z' }
+      });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      // The 09:00 slot happened BEFORE the 10:00 config save.
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+      expect(getPostSessions).not.toHaveBeenCalled();
+    });
+
+    it('fires when the missed slot occurred after the reminder config was last saved', async () => {
+      getPostConfig.mockResolvedValue({
+        reminder: { enabled: true, time: '09:00', updatedAt: '2026-06-01T00:00:00.000Z' }
+      });
+      getPostSessions.mockResolvedValue([]);
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires regardless of slot timing when the config predates the updatedAt field (backward compat)', async () => {
+      // Older on-disk configs saved before this field existed have no
+      // `updatedAt` at all — absence must not block catch-up outright.
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      getPostSessions.mockResolvedValue([]);
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).toHaveBeenCalledTimes(1);
+    });
+
     it('is idempotent — firePostReminderIfIncomplete still skips when today is already complete', async () => {
       getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
       todayInTimezone.mockReturnValue('2026-07-01');

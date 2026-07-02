@@ -130,17 +130,33 @@ export async function firePostReminderIfIncomplete() {
  * elapsed time (e.g. "within one cron period") can't distinguish "yesterday's
  * slot, already handled" from "today's slot, genuinely missed," and would
  * wrongly fire on every boot before the scheduled hour. Gating on the local
- * calendar day removes that ambiguity outright. `firePostReminderIfIncomplete`
- * itself is idempotent (completedToday + already-notified-today guards), so
- * calling it here is safe even on a rare false-positive gate.
+ * calendar day removes that ambiguity outright.
+ *
+ * `reminderUpdatedAt` (from `config.reminder.updatedAt`, stamped by
+ * updatePostConfig whenever the reminder slice is saved) additionally guards
+ * against replaying a slot the CURRENT settings never actually owned: if the
+ * user enables the reminder (or changes its time) for an already-past time
+ * today, then the server happens to restart later that same day, the most
+ * recent occurrence still falls on today's local day — but it happened
+ * before this configuration took effect, under whatever settings (possibly
+ * disabled) were active at that moment. Absent `updatedAt` (older on-disk
+ * configs saved before this field existed), skip the guard rather than
+ * blocking catch-up outright — there's no information to restrict it, and
+ * that's the existing behavior those installs already have.
+ * `firePostReminderIfIncomplete` itself is idempotent (completedToday +
+ * already-notified-today guards), so calling it here is safe even on a rare
+ * false-positive gate.
  */
-async function catchUpMissedSlot(cron, timezone) {
+async function catchUpMissedSlot(cron, timezone, reminderUpdatedAt) {
   const now = Date.now();
   const prevRun = parseCronToPrevRun(cron, new Date(now), timezone);
   if (!prevRun) return;
 
+  const prevRunMs = prevRun.getTime();
   const todayStr = todayInTimezone(timezone);
-  if (!isOnLocalDay(prevRun.getTime(), timezone, todayStr)) return;
+  if (!isOnLocalDay(prevRunMs, timezone, todayStr)) return;
+
+  if (reminderUpdatedAt && prevRunMs < new Date(reminderUpdatedAt).getTime()) return;
 
   console.log(`🔔 POST reminder: missed slot detected (${prevRun.toISOString()}) — catching up now`);
   await firePostReminderIfIncomplete();
@@ -160,7 +176,7 @@ async function catchUpMissedSlot(cron, timezone) {
  */
 export async function registerPostReminderSchedule({ catchUpMissedSlot: shouldCatchUp = false } = {}) {
   const config = await getPostConfig();
-  const { enabled, time } = config.reminder || {};
+  const { enabled, time, updatedAt } = config.reminder || {};
 
   if (!enabled) {
     cancel(POST_REMINDER_EVENT_ID);
@@ -189,7 +205,7 @@ export async function registerPostReminderSchedule({ catchUpMissedSlot: shouldCa
   console.log(`🔔 POST reminder: registered daily at ${time} (${timezone})`);
 
   if (shouldCatchUp) {
-    await catchUpMissedSlot(cron, timezone);
+    await catchUpMissedSlot(cron, timezone, updatedAt);
   }
 }
 
