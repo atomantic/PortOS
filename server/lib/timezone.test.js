@@ -1,9 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
+
+// getUserTimezone/getTimezoneUpdatedAt read from settings.js; the pure helpers
+// below don't touch settings, so mocking it only affects the getter tests.
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn()
+}))
+
+import { getSettings } from '../services/settings.js'
 import {
   getLocalParts,
   getUtcOffsetMs,
   nextLocalTime,
   todayInTimezone,
+  getTimezoneUpdatedAt,
   HHMM_RE,
   HHMM_STRICT_RE,
   parseHHMM,
@@ -185,6 +194,25 @@ describe('timezone', () => {
       expect(pdtDate).toBe('2026-03-23')
 
       vi.useRealTimers()
+    })
+  })
+
+  describe('getTimezoneUpdatedAt (#2040)', () => {
+    it('returns the stamped numeric timestamp when set', async () => {
+      getSettings.mockResolvedValue({ timezone: 'UTC', timezoneUpdatedAt: 1700000000000 })
+      expect(await getTimezoneUpdatedAt()).toBe(1700000000000)
+    })
+
+    it('returns null when the field is absent (unset sentinel — never gates)', async () => {
+      getSettings.mockResolvedValue({ timezone: 'UTC' })
+      expect(await getTimezoneUpdatedAt()).toBeNull()
+    })
+
+    it('returns null for a non-numeric or non-positive value', async () => {
+      getSettings.mockResolvedValue({ timezoneUpdatedAt: '1700000000000' })
+      expect(await getTimezoneUpdatedAt()).toBeNull()
+      getSettings.mockResolvedValue({ timezoneUpdatedAt: 0 })
+      expect(await getTimezoneUpdatedAt()).toBeNull()
     })
   })
 })
