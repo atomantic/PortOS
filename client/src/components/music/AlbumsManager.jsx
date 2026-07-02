@@ -126,23 +126,20 @@ export default function AlbumsManager() {
   const startCreate = () => navigate('/music/albums/new');
 
   // Hydrate the editor form from the URL-selected album. Keyed on the id so a
-  // list refresh doesn't clobber the open form (see Authors.jsx for the pattern).
+  // list refresh doesn't clobber the open form; resets run for every selection
+  // change (incl. idle / not-found) so a stray render can't land on the previous
+  // album (see Authors.jsx for the base pattern).
   const hydratedRef = useRef(null);
+  const selectionKey = id ?? null;
   useEffect(() => {
     if (loading) return;
-    if (hydratedRef.current === id) return;
-    if (isCreate) {
-      setForm(emptyForm());
-    } else if (selected) {
-      setForm(formFromAlbum(selected));
-    } else {
-      hydratedRef.current = id || null;
-      return;
-    }
-    hydratedRef.current = id;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  }, [id, isCreate, selected, loading]);
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromAlbum(selected));
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleGenerateCover = async () => {
     if (isGenerating || uploadingCover) return;

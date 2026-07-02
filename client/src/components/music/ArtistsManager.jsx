@@ -180,23 +180,20 @@ export default function ArtistsManager() {
   const startCreate = () => navigate('/music/artists/new');
 
   // Hydrate the editor form from the URL-selected artist. Keyed on the id so a
-  // list refresh doesn't clobber the open form (see Authors.jsx for the pattern).
+  // list refresh doesn't clobber the open form; resets run for every selection
+  // change (incl. idle / not-found) so a stray render can't land on the previous
+  // artist (see Authors.jsx for the base pattern).
   const hydratedRef = useRef(null);
+  const selectionKey = id ?? null;
   useEffect(() => {
     if (loading) return;
-    if (hydratedRef.current === id) return;
-    if (isCreate) {
-      setForm(emptyForm());
-    } else if (selected) {
-      setForm(formFromArtist(selected));
-    } else {
-      hydratedRef.current = id || null;
-      return;
-    }
-    hydratedRef.current = id;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  }, [id, isCreate, selected, loading]);
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromArtist(selected));
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleSave = async () => {
     const name = form.name.trim();

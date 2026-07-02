@@ -121,25 +121,20 @@ export default function TracksManager() {
   // Hydrate the editor form from the URL-selected track. Keyed on the id so a
   // list refresh (audio upload, generate, upsertLocal) doesn't clobber the open
   // form; `selectedIdRef` is kept in sync so async handlers can still detect a
-  // selection change that happened mid-round-trip (see Authors.jsx for the base
-  // pattern).
+  // selection change that happened mid-round-trip. Per-track view state is reset
+  // for every selection change (incl. idle / not-found) so a modal/remix left
+  // open can't drive the previous track (see Authors.jsx for the base pattern).
   const hydratedRef = useRef(null);
+  const selectionKey = id ?? null;
   useEffect(() => {
     if (loading) return;
-    if (hydratedRef.current === id) return;
-    if (isCreate) {
-      setForm(emptyForm());
-    } else if (selected) {
-      setForm(formFromTrack(selected));
-    } else {
-      hydratedRef.current = id || null;
-      selectedIdRef.current = id || null;
-      return;
-    }
-    hydratedRef.current = id;
-    selectedIdRef.current = id;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
+    selectedIdRef.current = selectionKey;
     resetTrackViewState();
-  }, [id, isCreate, selected, loading]);
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromTrack(selected));
+  }, [selectionKey, isCreate, selected, loading]);
 
   const upsertLocal = (track) => {
     setTracks((prev) => {

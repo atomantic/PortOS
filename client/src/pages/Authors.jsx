@@ -203,24 +203,22 @@ export default function Authors() {
 
   // Hydrate the editor form from the URL-selected author. Keyed on the id so a
   // list refresh (create/update/delete mutating `authors`) doesn't clobber the
-  // open form; `hydratedRef` tracks which selection is already loaded.
+  // open form; `hydratedRef` tracks which selection is already loaded. Resets
+  // (confirm-delete + any in-flight generation) run for EVERY selection change —
+  // including navigating to the idle index or a stale id — so a stray render
+  // can't land on the previous author after you've moved on.
   const hydratedRef = useRef(null);
+  const selectionKey = authorId ?? null;
   useEffect(() => {
     if (loading) return;
-    if (hydratedRef.current === authorId) return;
-    if (isCreate) {
-      setForm(emptyForm());
-    } else if (selected) {
-      setForm(formFromAuthor(selected));
-    } else {
-      // No selection or unknown id — don't hydrate (idle / not-found fallback).
-      hydratedRef.current = authorId || null;
-      return;
-    }
-    hydratedRef.current = authorId;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  }, [authorId, isCreate, selected, loading]);
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromAuthor(selected));
+    // else: idle / not-found — leave the form; the fallback UI handles it.
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleSave = async () => {
     const name = form.name.trim();
