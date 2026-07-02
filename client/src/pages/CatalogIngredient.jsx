@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCatalogIngredientDetails,
@@ -22,7 +22,10 @@ import {
   attachCatalogIngredientMedia,
   setCatalogIngredientPortrait,
   detachCatalogIngredientMedia,
+  uploadCatalogIngredientMediaFile,
+  recordCatalogIngredientVoiceMemo,
 } from '../services/apiCatalog';
+import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
 import { listImageGallery } from '../services/apiImageVideo';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
@@ -275,6 +278,36 @@ export default function CatalogIngredient() {
     toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
   }, [record, media, refreshMedia]);
 
+  // Upload a dropped/picked file straight onto the ingredient. The server picks
+  // the media kind (image→reference, audio, video) from the MIME and stores the
+  // bytes in the matching federating library dir. Reconcile via refreshMedia.
+  const handleUploadFile = useCallback(async (file) => {
+    if (!record || !file) return;
+    const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+    const ok = await uploadCatalogIngredientMediaFile(
+      record.id,
+      { dataBase64, mimeType: file.type || 'application/octet-stream', filename: file.name },
+      { silent: true },
+    ).then(() => true).catch((err) => { toast.error(err?.message || 'Upload failed'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('File attached');
+  }, [record, refreshMedia]);
+
+  // Attach a recorded voice memo — the server transcribes it via Whisper and
+  // stores the transcript in the audio row's caption.
+  const handleRecordVoiceMemo = useCallback(async (clip) => {
+    if (!record || !clip?.audioBase64) return;
+    const ok = await recordCatalogIngredientVoiceMemo(
+      record.id,
+      { audioBase64: clip.audioBase64, mimeType: clip.mimeType },
+      { silent: true },
+    ).then(() => true).catch((err) => { toast.error(err?.message || 'Voice memo failed'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('Voice memo attached');
+  }, [record, refreshMedia]);
+
   const handleSave = async () => {
     if (!record) return;
     const trimmedName = name.trim();
@@ -489,6 +522,8 @@ export default function CatalogIngredient() {
           onAttach={handleAttachMedia}
           onSetPortrait={handleSetPortrait}
           onDetach={handleDetachMedia}
+          onUploadFile={handleUploadFile}
+          onRecordVoice={handleRecordVoiceMemo}
           genIngredientId={record.id}
           genName={name}
           genDescription={genDescription}
@@ -869,10 +904,11 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
 // the panel scopes its picker to the existing gallery/history. The portrait
 // (one per ingredient) renders large at the head; other attachments tile below.
 // Drag-and-drop accepts an in-app gallery filename dragged as text (the
-// dashboard/gallery tiles set `dataTransfer.setData('text/plain', filename)`);
-// file-upload + voice-memo capture are intentionally out of scope here and
-// land via the separate `[catalog-source-kinds-url-file-voice]` item — the
-// `onAttach(mediaKey, kind)` seam is all those paths need to reuse.
+// dashboard/gallery tiles set `dataTransfer.setData('text/plain', filename)`) OR
+// a real file dropped from the OS. "Upload file" (image/audio/video) and "Record
+// memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
+// media-upload/voice routes into the federating library dirs, then attach via
+// the same media-refs seam gallery picks use.
 // "Generate" affordance for the Media panel — turns the ingredient's
 // description into an image via the same image-gen queue the Universe canon
 // renders use. The generated file lands in the media library as `<jobId>.png`;
@@ -1045,12 +1081,26 @@ function GenerateImageControl({ ingredientId, name, description, universeId, onC
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false); // upload or transcription in flight
+  const [recording, setRecording] = useState(false);
+  const fileInputRef = useRef(null);
+  const recorderRef = useRef(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
   const others = list.filter((m) => m.kind !== 'portrait');
+
+  // Release the mic if the panel unmounts mid-recording (navigating away).
+  useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
+
+  const doUpload = async (file) => {
+    if (!file || busy) return;
+    setBusy(true);
+    await onUploadFile(file);
+    setBusy(false);
+  };
 
   const onDrop = (e) => {
     e.preventDefault();
@@ -1058,7 +1108,41 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
     // In-app gallery DnD: the dragged tile carries its filename as text.
     const key = (e.dataTransfer.getData('text/plain') || '').trim();
     if (key) { onAttach(key, 'reference'); return; }
-    toast.error('Drop a gallery image, or use “Pick from gallery”. File upload coming soon.');
+    const file = e.dataTransfer.files?.[0];
+    if (file) { doUpload(file); return; }
+    toast.error('Drop a gallery image, a file, or use “Pick from gallery”.');
+  };
+
+  const onFilePicked = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (file) doUpload(file);
+  };
+
+  const startRecording = async () => {
+    const handle = await startMemoRecording().catch((err) => {
+      toast.error(err?.message || 'Microphone unavailable');
+      return null;
+    });
+    if (!handle) return;
+    recorderRef.current = handle;
+    setRecording(true);
+  };
+
+  const stopRecording = async () => {
+    const handle = recorderRef.current;
+    if (!handle) return;
+    recorderRef.current = null;
+    setRecording(false);
+    const clip = await handle.stop().catch((err) => { toast.error(err?.message || 'Recording failed'); return null; });
+    if (!clip?.audioBase64) return;
+    if (clip.peak !== undefined && clip.peak < 0.01) {
+      toast.error('That memo was silent — check your microphone and try again.');
+      return;
+    }
+    setBusy(true);
+    await onRecordVoice(clip);
+    setBusy(false);
   };
 
   return (
@@ -1067,12 +1151,28 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery
           </button>
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy || recording}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-40">
+            <Upload size={12} aria-hidden="true" /> Upload file
+          </button>
+          {!recording ? (
+            <button type="button" onClick={startRecording} disabled={busy}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-40">
+              <Mic size={12} aria-hidden="true" /> Record memo
+            </button>
+          ) : (
+            <button type="button" onClick={stopRecording}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-error text-port-error hover:bg-port-error/10 animate-pulse">
+              <Square size={12} aria-hidden="true" /> Stop &amp; transcribe
+            </button>
+          )}
+          <input ref={fileInputRef} type="file" accept="image/*,audio/*,video/*" onChange={onFilePicked} className="hidden" />
         </div>
       </div>
 
@@ -1082,7 +1182,9 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
         onDrop={onDrop}
         className={`mb-3 rounded-lg border border-dashed p-3 text-center text-xs transition-colors ${dragOver ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-500'}`}
       >
-        Drag a gallery image here to attach it as a reference.
+        {busy
+          ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Uploading…</span>)
+          : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
       </div>
 
       {portrait && (
@@ -1103,7 +1205,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
       )}
 
       {list.length === 0 && (
-        <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, or a recorded memo (memo capture coming soon).</p>
+        <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
       {pickerOpen && (
@@ -1122,15 +1224,32 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
 
 // One media attachment tile. Images render via <MediaImage> (gracefully shows a
 // "syncing" placeholder when the asset hasn't arrived — the same surface the
-// `missing` integrity flag warns about). Non-image kinds render a labeled chip.
+// `missing` integrity flag warns about). Audio/video render inline players
+// (their bytes are served from /data/audio and /data/videos); a voice memo's
+// transcript rides in `caption`. Other kinds render a labeled chip.
 function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) {
   const isImage = m.kind === 'portrait' || m.kind === 'reference';
+  const isAudio = m.kind === 'audio';
+  const isVideo = m.kind === 'video';
   return (
     <div className="relative group rounded border border-port-border overflow-hidden bg-port-bg">
-      {isImage ? (
+      {isImage && (
         <MediaImage src={`/data/images/${m.mediaKey}`} alt={m.caption || m.kind}
           className={isPortrait ? 'w-full max-w-[180px] aspect-square object-cover' : 'w-full aspect-square object-cover'} />
-      ) : (
+      )}
+      {isAudio && (
+        <div className="p-2 flex flex-col gap-1">
+          <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-1">
+            <Mic size={10} aria-hidden="true" /> {m.role === 'voice-memo' ? 'voice memo' : 'audio'}
+          </div>
+          <audio controls preload="none" src={`/data/audio/${m.mediaKey}`} className="w-full" />
+          {m.caption && <p className="text-[11px] text-gray-300 whitespace-pre-wrap line-clamp-4">{m.caption}</p>}
+        </div>
+      )}
+      {isVideo && (
+        <video controls preload="none" src={`/data/videos/${m.mediaKey}`} className="w-full aspect-square object-cover bg-black" />
+      )}
+      {!isImage && !isAudio && !isVideo && (
         <div className="w-full aspect-square flex items-center justify-center text-[10px] uppercase tracking-wider text-gray-400 px-1 text-center">
           {m.kind}<br />{m.mediaKey}
         </div>

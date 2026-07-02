@@ -181,6 +181,16 @@ export const setCatalogIngredientPortrait = (id, body, options) =>
 export const detachCatalogIngredientMedia = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/media`, { method: 'DELETE', body: JSON.stringify(body), ...options });
 
+// Upload a raw file (base64 + MIME) onto an ingredient; server picks the media
+// kind + library dir from the MIME and returns the attached media row.
+export const uploadCatalogIngredientMediaFile = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/upload`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Attach a recorded voice memo (base64 WAV) — server transcribes via Whisper and
+// returns `{ media, transcript }`.
+export const recordCatalogIngredientVoiceMemo = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/media/voice`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 // --- Bulk import / export ----------------------------------------------
 
 export const bulkImportCatalogIngredients = (body, options) =>
