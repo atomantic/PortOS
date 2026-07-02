@@ -100,7 +100,17 @@ module.exports = {
       // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
       // `'**/.cache/**'`, `'**/portos-stepwise-*/**'`) to `ignore_watch`.
       watch: false,
-      max_memory_restart: SERVER_MAX_MEMORY
+      max_memory_restart: SERVER_MAX_MEMORY,
+      // PM2's default kill_timeout (1600ms) is shorter than the server's own
+      // GRACEFUL_SHUTDOWN_TIMEOUT_MS (10s) force-exit in server/index.js, so if
+      // shutdown ever stalls, PM2 would SIGKILL the process before its graceful
+      // handler (or its own force-exit) could run — losing the clean DB-pool close
+      // and, when the killed process is the one orchestrating a self-restart,
+      // leaving the app down. Give PM2 a ceiling just above the app's internal
+      // force-exit so the app always controls its own exit. (The graceful path now
+      // completes in ~1s — the double-close hang it used to stall on is fixed in
+      // server/index.js's shutdown() — so this ceiling is a backstop, not the norm.)
+      kill_timeout: 12000
       // NOTE: do NOT set `treekill: false` here to protect long media jobs from
       // restart-SIGINT. Tried 2026-06-14: pm2 then fails to reap the old node
       // process on restart, so it lingers holding :5555 and the new instance

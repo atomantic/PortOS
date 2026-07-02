@@ -1060,13 +1060,40 @@ ensureSelf()
     process.exit(1);
   });
 
-const closeServer = (server, label) => new Promise((resolve) => {
-  if (!server) return resolve();
-  server.close((err) => {
-    if (err) console.error(`⚠️ Error closing ${label}: ${err.message}`);
-    else console.log(`✅ ${label} closed`);
+// Run an async close but resolve anyway after `ms` — so a close that never
+// settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
+// leaked DB client) can't hang shutdown; process.exit() reclaims the resources at
+// the OS level. `run(finish)` receives a settle-once callback: finish() /
+// finish(successMsg) / finish(errMsg, true). The backstop is .unref()'d so it
+// never keeps the event loop alive on its own.
+const withGrace = (label, ms, run) => new Promise((resolve) => {
+  let settled = false;
+  const finish = (msg, isErr) => {
+    if (settled) return;
+    settled = true;
+    if (msg) (isErr ? console.error : console.log)(msg);
     resolve();
+  };
+  run(finish);
+  setTimeout(() => finish(`⚠️ ${label} close exceeded ${ms}ms — proceeding`, true), ms).unref?.();
+});
+
+// graceMs is deliberately short: closeAllConnections() force-drops every
+// connection, so there is no graceful drain left to wait for — the only thing that
+// can outlast it is a WebSocket-upgraded socket the server no longer tracks (and
+// io.close()'s engine.close() already tore those down protocol-side; the OS reaps
+// the TCP remnant on process.exit). So don't tax every restart waiting on it.
+// ERR_SERVER_NOT_RUNNING means it was already closed (io.close() closes whichever
+// server is its current this.httpServer) — success for us, not a failure.
+const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, (finish) => {
+  if (!server) return finish();
+  server.close((err) => {
+    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finish(`⚠️ Error closing ${label}: ${err.message}`, true);
+    else finish(`✅ ${label} closed`);
   });
+  // Order matters: close() above stops accepting NEW connections; NOW force-drop
+  // the existing long-lived ones (SSE + keep-alive). (Node 18.2+.)
+  server.closeAllConnections?.();
 });
 
 // Hard ceiling on graceful shutdown: if Socket.IO/HTTP don't close within this
@@ -1093,21 +1120,40 @@ const shutdown = async (signal) => {
     console.error('⚠️ Graceful shutdown timed out, forcing exit');
     process.exit(1);
   }, GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+  // Don't let the safety timer itself keep the event loop alive — if every
+  // other handle has closed we should exit immediately, not wait out the timer.
+  forceExitTimer.unref?.();
 
-  await new Promise((resolve) => {
-    io.close((err) => {
-      if (err) console.error(`⚠️ Error closing Socket.IO: ${err.message}`);
-      else console.log('✅ Socket.IO server closed');
-      resolve();
-    });
-  });
-  await closeServer(httpServer, 'HTTP server');
-  await closeServer(localHttpServer, 'Local HTTP server');
+  // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
+  // below don't wait on connections that never end on their own.
+  try { httpServer.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(http): ${e.message}`); }
+  try { localHttpServer?.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(mirror): ${e.message}`); }
+
+  // socket.io's io.close() closes engine.io AND its current this.httpServer — and
+  // every io.attach() reassigns this.httpServer (socket.io index.js:303), so with
+  // HTTPS on (io.attach(localHttpServer) at boot) io.close() closes the *mirror*,
+  // not the primary :5555 server. The historical bug was calling close() a second
+  // time on that already-closed server: Node registers the callback as a one-time
+  // 'close' listener for an event that already fired, so it never runs and shutdown
+  // hangs forever — the real cause of the reconcile "stopping apps" hang.
+  await withGrace('Socket.IO', 3000, (finish) =>
+    io.close((err) => finish(err ? `⚠️ Error closing Socket.IO: ${err.message}` : '✅ Socket.IO closed', !!err)));
+  // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
+  // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
+  // the bounded backstop in closeServer guarantees neither can hang shutdown even
+  // if a future socket.io version changes which server it owns.
+  await Promise.all([
+    closeServer(httpServer, 'HTTP server'),
+    closeServer(localHttpServer, 'Local HTTP mirror')
+  ]);
 
   const { close } = await import('./lib/db.js');
   if (typeof close === 'function') {
-    await close();
-    console.log('✅ DB pool closed');
+    // Bound the DB pool close: pool.end() waits for every checked-out client to
+    // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
+    // otherwise stall shutdown until the force-exit timer.
+    await withGrace('DB pool', 3000, (finish) =>
+      close().then(() => finish('✅ DB pool closed'), (err) => finish(`⚠️ DB pool close failed: ${err.message}`, true)));
   } else {
     console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
   }
