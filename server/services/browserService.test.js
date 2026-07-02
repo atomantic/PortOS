@@ -55,3 +55,63 @@ describe('browserService config persistence', () => {
     expect(reloaded.headless).toBe(false);
   });
 });
+
+describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
+  // Pure helper: no data-root proxy needed, import the real module directly.
+  let pickMainFrameHops;
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ pickMainFrameHops } = await import('./browserService.js'));
+  });
+
+  // A main-document navigation: requestId === loaderId marks the top frame.
+  const docRequest = (requestId, url, remoteIPAddress, redirectResponse) => ({
+    method: 'Network.requestWillBeSent',
+    params: { requestId, loaderId: requestId, type: 'Document', request: { url }, ...(redirectResponse ? { redirectResponse } : {}) },
+  });
+  const docResponse = (requestId, url, remoteIPAddress) => ({
+    method: 'Network.responseReceived',
+    params: { requestId, type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+  });
+
+  it('captures the single-hop main document response IP', () => {
+    const { hops, finalUrl, mainRequestId } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+    ]);
+    expect(mainRequestId).toBe('R1');
+    expect(finalUrl).toBe('https://ex.com/a');
+    expect(hops).toEqual([{ url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 200 }]);
+  });
+
+  it('captures EVERY redirect hop IP plus the final response (per-hop pin)', () => {
+    const { hops } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      // redirect: the response that caused the redirect rides on the NEXT request
+      docRequest('R1', 'http://127.0.0.1:5555/secret', '', { url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 302 }),
+      docResponse('R1', 'http://127.0.0.1:5555/secret', '127.0.0.1'),
+    ]);
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34', '127.0.0.1']);
+  });
+
+  it('ignores sub-resource requests (requestId !== loaderId)', () => {
+    const { hops, mainRequestId } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      // A sub-resource: different requestId/loaderId, type Image — must be excluded.
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R1', type: 'Image', request: { url: 'http://169.254.169.254/latest' } } },
+      { method: 'Network.responseReceived', params: { requestId: 'R2', type: 'Image', response: { url: 'http://169.254.169.254/latest', remoteIPAddress: '169.254.169.254', status: 200 } } },
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+    ]);
+    expect(mainRequestId).toBe('R1');
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
+  });
+
+  it('returns no hops when no main-frame document load is present', () => {
+    const { hops, mainRequestId, finalUrl } = pickMainFrameHops([
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R1', type: 'Image', request: { url: 'https://cdn/x.png' } } },
+    ]);
+    expect(mainRequestId).toBeNull();
+    expect(hops).toEqual([]);
+    expect(finalUrl).toBeNull();
+  });
+});

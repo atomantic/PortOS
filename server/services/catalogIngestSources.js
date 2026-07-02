@@ -31,8 +31,7 @@ import * as brainStorage from './brainStorage.js';
 import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
-  navigateToUrl,
-  listCdpPages,
+  navigateToUrlPinned,
   evaluateOnPage,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
@@ -98,32 +97,36 @@ async function assertIngestUrlSafe(target) {
  * resolve correctly — a bare `fetch()` would only see the server-rendered
  * HTML shell of an SPA.
  *
+ * SSRF pin: Chrome re-resolves DNS independently of our pre-check, so a rebinding
+ * DNS answer could steer Chrome's connection to a blocked address after
+ * `assertIngestUrlSafe` vetted the hostname (a TOCTOU). `navigateToUrlPinned`
+ * closes that window by verifying, against Chrome's OWN reported
+ * `remoteIPAddress`, that every main-frame hop (initial + each redirect)
+ * connected to an allowed address — refusing (and tearing the tab down) before
+ * the DOM is read otherwise. The `isBlockedIngestHost` blocklist is the SAME
+ * criterion `assertIngestUrlSafe` vets with, so the pin and the pre-check agree.
+ *
  * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
 export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) {
   await assertIngestUrlSafe(url);
 
-  // `navigateToUrl` opens a fresh tab at the exact URL and returns it; we drive
-  // and read that tab below. (Don't call findOrOpenPage first — it would open a
-  // SECOND, orphaned tab per ingest, since navigateToUrl never reuses one.)
-  const opened = await navigateToUrl(url);
+  // Navigate in a fresh tab and PIN: verify Chrome's actual per-hop connection
+  // IP is not a blocked (loopback / link-local / metadata) address — closing the
+  // rebinding gap between our dns.lookup above and Chrome's own resolution. Fails
+  // closed (tab torn down, throws) if any hop dialed a disallowed address.
+  const page = await navigateToUrlPinned(url, {
+    verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+  });
   await sleep(settleMs);
 
-  // Re-list to get the live webSocketDebuggerUrl for the tab we just drove.
-  // Match strictly by the id (then the exact url) navigateToUrl returned —
-  // never fall back to an arbitrary `pages[0]`, which could be an unrelated
-  // open tab and would ingest the wrong (possibly sensitive) page.
-  const pages = await listCdpPages();
-  const page = pages.find((p) => p.id === opened.id)
-    || pages.find((p) => p.url === opened.url);
-  if (!page) throw new Error('could not match the navigated tab after navigation (refusing to read an arbitrary tab)');
-
-  // Re-run the FULL gate (scheme + DNS) against the FINAL url before reading the
-  // DOM: a server-controlled redirect could have sent Chrome to a blocked
-  // target, or to a hostname that itself resolves to one. The first-hop gate
-  // doesn't cover the landed page.
-  const landedUrl = page.url || opened.url || url;
+  // Defense in depth: re-run the scheme+DNS gate against the FINAL landed url.
+  // The remoteIP pin above already proved Chrome dialed an allowed address for
+  // every hop; this additionally rejects a landed hostname that is itself a
+  // blocked literal (e.g. an in-page/JS redirect after load that the network-hop
+  // pin didn't cover).
+  const landedUrl = page.url || url;
   await assertIngestUrlSafe(landedUrl);
 
   // Prefer the page's own <article>/<main> if present (skips nav/footer
