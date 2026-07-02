@@ -303,7 +303,7 @@ export default function CharacterSheet() {
                 <button
                   onClick={handleGenerateAvatar}
                   disabled={generatingAvatar}
-                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-0"
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-0"
                   title="Generate avatar"
                   aria-label="Generate avatar"
                 >

@@ -425,7 +425,7 @@ ${prompt.trim()}`;
               <button
                 aria-label="Remove screenshot"
                 onClick={() => removeScreenshot(s.id)}
-                className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
+                className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
               >
                 <X size={12} />
               </button>

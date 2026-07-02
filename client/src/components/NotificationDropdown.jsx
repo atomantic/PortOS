@@ -182,7 +182,7 @@ export default function NotificationDropdown({
                               e.stopPropagation();
                               onRemove(notification.id);
                             }}
-                            className="p-1 rounded hover:bg-port-border transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                            className="p-1 rounded hover:bg-port-border transition-colors opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
                             aria-label={`Remove notification: ${notification.title}`}
                           >
                             <X className="w-3 h-3 text-gray-500" aria-hidden="true" />
