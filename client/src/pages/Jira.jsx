@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import api from '../services/api';
 
 const TOKEN_LIFETIME_DAYS = 30;
@@ -176,11 +177,7 @@ export default function Jira() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading JIRA instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-52" cards={2} />;
   }
 
   return (
