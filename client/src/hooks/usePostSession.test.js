@@ -126,3 +126,132 @@ describe('usePostSession — memory drill task shape', () => {
     expect(payload.tasks[0].memoryItemId).toBe('song-1');
   });
 });
+
+// Covers issue #2016: a memory-sequence/memory-element-flash question's
+// chunkId/element must survive into the submitted answer so the server can
+// merge chunk/element mastery (mergeMasteryFromSession), not just advance the
+// SR schedule. Deferred out of #2010 because the answer-building in
+// submitAnswer used to strip the question down to a fixed field set.
+
+describe('usePostSession — memory drill chunk/element attribution (#2016)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('preserves chunkId onto the answer for a memory-sequence question', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'memory-sequence',
+      memoryItemId: 'song-1',
+      config: {},
+      questions: [
+        { prompt: 'line one', promptLabel: 'What comes next?', expected: 'line two', chunkId: 'verse-1' },
+      ],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('line two');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0].chunkId).toBe('verse-1');
+    expect(task.questions[0].element).toBeUndefined();
+  });
+
+  it('preserves element onto the answer for a memory-element-flash question', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'memory-element-flash',
+      memoryItemId: 'elements-song',
+      config: {},
+      questions: [{ prompt: 'H', promptLabel: 'Element name?', expected: 'Hydrogen', element: 'H' }],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-element-flash', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('Hydrogen');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0].element).toBe('H');
+    expect(task.questions[0].chunkId).toBeUndefined();
+  });
+
+  it('does not attach chunkId/element to a math drill answer', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain',
+      config: { startValue: 2, steps: 1 },
+      questions: [{ prompt: '2 x 2', expected: 4 }],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('4');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0].chunkId).toBeUndefined();
+    expect(task.questions[0].element).toBeUndefined();
+  });
+
+  it('omits chunkId when a question carries a null chunkId (no matching chunk found)', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'memory-sequence',
+      memoryItemId: 'song-1',
+      config: {},
+      questions: [{ prompt: 'line one', expected: 'line two', chunkId: null }],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('line two');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0]).not.toHaveProperty('chunkId');
+  });
+
+  it('preserves chunkId on a timed-out (skipped) question via timeExpired', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'memory-sequence',
+      memoryItemId: 'song-1',
+      config: {},
+      questions: [
+        { prompt: 'line one', expected: 'line two', chunkId: 'verse-1' },
+        { prompt: 'line two', expected: 'line three', chunkId: 'verse-1' },
+      ],
+    });
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-sequence', config: {}, timeLimitSec: 60 }]);
+    });
+    // Time expires before any answer is submitted — both questions become
+    // unanswered/incorrect but should still carry chunkId for mastery merge.
+    act(() => {
+      result.current.timeExpired();
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions).toHaveLength(2);
+    expect(task.questions[0].chunkId).toBe('verse-1');
+    expect(task.questions[1].chunkId).toBe('verse-1');
+    expect(task.questions[0].correct).toBe(false);
+  });
+});

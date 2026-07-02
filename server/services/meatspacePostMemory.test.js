@@ -18,6 +18,7 @@ import {
   deleteMemoryItem,
   submitPractice,
   advanceScheduleFromSession,
+  mergeMasteryFromSession,
   getMastery,
   generateMemoryDrill,
   getDueMemoryItems,
@@ -327,6 +328,125 @@ describe('advanceScheduleFromSession', () => {
 
     expect(schedule.intervalDays).toBe(0);
     expect(schedule.nextReview).toBe(now.toISOString());
+  });
+});
+
+describe('mergeMasteryFromSession', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null and writes nothing when memoryItemId is absent', async () => {
+    const result = await mergeMasteryFromSession(undefined, [{ chunkId: 'verse-1', correct: true }], now);
+    expect(result).toBeNull();
+    expect(readJSONFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns null and writes nothing when questions is empty or absent', async () => {
+    expect(await mergeMasteryFromSession('elements-song', [], now)).toBeNull();
+    expect(await mergeMasteryFromSession('elements-song', undefined, now)).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns null and writes nothing when the item id does not match any item', async () => {
+    readJSONFile.mockResolvedValueOnce({ items: [{ ...ELEMENTS_SONG }] });
+    const result = await mergeMasteryFromSession('does-not-exist', [{ chunkId: 'verse-1', correct: true }], now);
+    expect(result).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('buckets per-question chunk attribution (memory-sequence) into chunk mastery', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+
+    const result = await mergeMasteryFromSession('elements-song', [
+      { chunkId: 'verse-1', correct: true },
+      { chunkId: 'verse-1', correct: false },
+      { chunkId: 'verse-2', correct: true },
+    ], now);
+
+    expect(result.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: now.toISOString() });
+    expect(result.chunks['verse-2']).toEqual({ correct: 1, attempts: 1, lastPracticed: now.toISOString() });
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('buckets per-question element attribution (memory-element-flash) into element mastery', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+
+    const result = await mergeMasteryFromSession('elements-song', [
+      { element: 'H', correct: true },
+      { element: 'H', correct: true },
+      { element: 'He', correct: false },
+    ], now);
+
+    expect(result.elements.H).toEqual({ correct: 2, attempts: 2 });
+    expect(result.elements.He).toEqual({ correct: 0, attempts: 1 });
+  });
+
+  it('accumulates onto existing mastery counts rather than overwriting them', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: {
+          overallPct: 0,
+          chunks: { 'verse-1': { correct: 2, attempts: 3, lastPracticed: '2026-06-01T00:00:00.000Z' } },
+          elements: {},
+        },
+      }],
+    });
+
+    const result = await mergeMasteryFromSession('elements-song', [
+      { chunkId: 'verse-1', correct: true },
+    ], now);
+
+    expect(result.chunks['verse-1']).toEqual({ correct: 3, attempts: 4, lastPracticed: now.toISOString() });
+  });
+
+  it('ignores questions with neither chunkId nor element', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+
+    const result = await mergeMasteryFromSession('elements-song', [
+      { correct: true },
+    ], now);
+
+    expect(result.chunks).toEqual({});
+    expect(result.elements).toEqual({});
+  });
+
+  it('recomputes overallPct after merging', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+
+    // 3 correct/3 attempts >= 0.8 accuracy threshold with >=3 attempts marks
+    // element mastered per computeOverallMastery's elements-song branch.
+    const result = await mergeMasteryFromSession('elements-song', [
+      { element: 'H', correct: true },
+      { element: 'H', correct: true },
+      { element: 'H', correct: true },
+    ], now);
+
+    expect(result.overallPct).toBeGreaterThan(0);
   });
 });
 

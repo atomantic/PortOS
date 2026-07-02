@@ -29,7 +29,14 @@ const questionResultSchema = z.object({
   responseMs: z.number().min(0),
   // Reaction-time drill only: player pressed before the stimulus appeared.
   // Always scored wrong server-side regardless of any client-supplied correct.
-  falseStart: z.boolean().optional()
+  falseStart: z.boolean().optional(),
+  // Memory drill questions only: which chunk (memory-sequence) / element
+  // (memory-element-flash) this answer attributes to, so submitPostSession can
+  // merge per-chunk/per-element mastery (mergeMasteryFromSession in
+  // meatspacePostMemory.js) the same way MemoryBuilder's submitPractice does.
+  // Absent for math/LLM/cognitive drills.
+  chunkId: z.string().nullable().optional(),
+  element: z.string().nullable().optional()
 });
 
 // LLM drill response (text-based)

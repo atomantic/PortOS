@@ -489,6 +489,59 @@ export async function advanceScheduleFromSession(memoryItemId, ratio, now = new 
 }
 
 /**
+ * Merge a POST session's per-question memory drill results into an item's
+ * chunk/element mastery (`item.mastery.chunks`/`item.mastery.elements`) —
+ * the mastery half of what `submitPractice` does, deferred out of #2010
+ * (schedule-only) into #2016 because POST-session answers didn't carry
+ * chunk/element attribution until `usePostSession.js`'s `submitAnswer` started
+ * preserving `q.chunkId` / `q.element` onto each answer.
+ *
+ * Unlike `submitPractice` (one `chunkId` for the whole batch — a dedicated
+ * chunk-practice session), a POST-session memory-sequence drill can span
+ * several chunks and a memory-element-flash drill spans several elements, so
+ * this buckets PER-QUESTION by whichever attribution that question carries.
+ * Questions with neither `chunkId` nor `element` (e.g. an unsupported/legacy
+ * shape) are counted toward correctness of nothing — they simply don't shift
+ * `item.mastery`.
+ *
+ * Returns the updated mastery, or `null` when `memoryItemId`/`questions` are
+ * absent or the id doesn't match a known item.
+ */
+export async function mergeMasteryFromSession(memoryItemId, questions, now = new Date()) {
+  if (!memoryItemId || !Array.isArray(questions) || !questions.length) return null;
+  const items = await loadMemoryItems();
+  const item = items.find(i => i.id === memoryItemId);
+  if (!item) return null;
+
+  const nowIso = now.toISOString();
+  for (const q of questions) {
+    if (q.chunkId) {
+      if (!item.mastery.chunks[q.chunkId]) {
+        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
+      }
+      const chunk = item.mastery.chunks[q.chunkId];
+      chunk.attempts += 1;
+      if (q.correct) chunk.correct += 1;
+      chunk.lastPracticed = nowIso;
+    }
+    if (q.element) {
+      if (!item.mastery.elements[q.element]) {
+        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
+      }
+      item.mastery.elements[q.element].attempts += 1;
+      if (q.correct) item.mastery.elements[q.element].correct += 1;
+    }
+  }
+
+  item.mastery.overallPct = computeOverallMastery(item);
+  item.updatedAt = nowIso;
+  await saveMemoryItems(items);
+
+  console.log(`🧠 POST session mastery merged: "${item.title}" ${questions.length} answers → ${item.mastery.overallPct}% overall`);
+  return item.mastery;
+}
+
+/**
  * List memory items currently due for review (`nextReview <= now`), sorted by
  * how overdue they are (most overdue first).
  */
