@@ -121,6 +121,21 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
   });
 
+  it('flags a top-level navigation that started but has no response yet (in-flight → pending)', () => {
+    // R1 completed clean; R2 (a client-side nav) STARTED during settle but the
+    // socket closed before its responseReceived — its final IP is unverified, so
+    // the caller must fail closed rather than read a possibly-private page.
+    const { hops, mainRequestIds, pendingMainRequestIds } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      docRequest('R2', 'https://evil.example/x', ''),
+    ]);
+    expect(mainRequestIds).toEqual(['R1', 'R2']);
+    expect(pendingMainRequestIds).toEqual(['R2']);
+    // R2 contributed no hop (no response captured), so its IP was never checked.
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
+  });
+
   it('returns no hops when no main-frame document load is present', () => {
     const { hops, mainRequestIds, finalUrl } = pickMainFrameHops([
       { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R1', type: 'Image', request: { url: 'https://cdn/x.png' } } },

@@ -300,10 +300,16 @@ export async function navigateToUrl(url) {
  *
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
  * browser. Returns `{ hops: [{ url, remoteIPAddress, status }], finalUrl,
- * mainRequestIds: string[] }`.
+ * mainRequestIds: string[], pendingMainRequestIds: string[] }`.
+ * `pendingMainRequestIds` are top-level navigations that STARTED but produced no
+ * `responseReceived` in the captured window — i.e. a navigation still in flight
+ * whose final connection IP was never observed. The caller must fail closed on a
+ * non-empty pending set: Chrome could complete that navigation (to a private /
+ * metadata target) right after we stop capturing, leaving it unpinned.
  */
 export function pickMainFrameHops(messages) {
   const mainRequestIds = new Set();
+  const respondedIds = new Set();
   const hops = [];
   let finalUrl = null;
   for (const msg of messages) {
@@ -324,6 +330,7 @@ export function pickMainFrameHops(messages) {
       }
     } else if (msg.method === 'Network.responseReceived') {
       if (mainRequestIds.has(p.requestId) && p.response) {
+        respondedIds.add(p.requestId);
         hops.push({
           url: p.response.url || null,
           remoteIPAddress: p.response.remoteIPAddress || '',
@@ -333,7 +340,8 @@ export function pickMainFrameHops(messages) {
       }
     }
   }
-  return { hops, finalUrl, mainRequestIds: [...mainRequestIds] };
+  const pendingMainRequestIds = [...mainRequestIds].filter((id) => !respondedIds.has(id));
+  return { hops, finalUrl, mainRequestIds: [...mainRequestIds], pendingMainRequestIds };
 }
 
 // Close a CDP tab by target id (best-effort). Used to fail closed after an
@@ -430,7 +438,7 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, n
     ws.on('error', () => finish({ ok: false, reason: 'CDP websocket error during navigation' }));
   });
 
-  const { hops, finalUrl } = pickMainFrameHops(messages);
+  const { hops, finalUrl, pendingMainRequestIds } = pickMainFrameHops(messages);
 
   const fail = async (reason) => {
     await closeCdpPage(target.id);
@@ -443,6 +451,12 @@ export async function navigateToUrlPinned(url, { verifyRemoteIp, settleMs = 0, n
     if (!hop.remoteIPAddress || !verifyRemoteIp(hop.remoteIPAddress)) {
       await fail(`refusing to ingest: Chrome connected to a disallowed address ${hop.remoteIPAddress || '(unknown)'} for ${hop.url || url}`);
     }
+  }
+  // Fail closed if a top-level navigation was still in flight when the settle
+  // window ended: its final connection IP was never observed, so Chrome could be
+  // mid-connect to a private/metadata target the DOM reader would then see.
+  if (pendingMainRequestIds.length) {
+    await fail('refusing to ingest: a top-level navigation was still in flight at read time (unpinned)');
   }
 
   return { id: target.id, url: finalUrl || url, title: '', webSocketDebuggerUrl: target.webSocketDebuggerUrl };
