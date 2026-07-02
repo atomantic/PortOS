@@ -9,17 +9,19 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import {
   listPeople,
   createPerson,
   normalizeTags,
+  normalizeEmails,
   isoDate,
   isoDateTime,
   rowToPerson,
   rowToTouchpoint,
   personCadenceStatus,
   getCareSummary,
+  autoLogTouchpoints,
   DEFAULT_RING_CADENCE,
 } from './tribe.js';
 
@@ -251,9 +253,103 @@ describe('tribe service — createPerson', () => {
 
     const [, params] = query.mock.calls[0];
     // INSERT param order: id,name,relationship,ring,cadence_days,last_contact,
-    // channel,energy,tags,next_move,notes
+    // channel,energy,tags,emails,next_move,notes
     expect(params[3]).toBe('core');
     expect(params[4]).toBe(DEFAULT_RING_CADENCE.core); // 21, not the flat SQL default
     expect(params[8]).toEqual(['a', 'b']);
+  });
+
+  it('normalizes emails to a lowercased de-duplicated array on insert', async () => {
+    query.mockResolvedValue({ rows: [{ id: 'p1', name: 'Ada', ring: 'tribe', cadence_days: 45 }] });
+    await createPerson({ name: 'Ada', emails: [' Ada@Work.com ', 'ada@work.com', 'GRACE@x.io'] });
+    const [, params] = query.mock.calls[0];
+    expect(params[9]).toEqual(['ada@work.com', 'grace@x.io']); // emails at $10
+  });
+});
+
+describe('tribe service — normalizeEmails', () => {
+  it('lowercases, trims, splits a comma string, and de-dupes', () => {
+    expect(normalizeEmails('A@x.com, a@x.com , ,B@Y.io')).toEqual(['a@x.com', 'b@y.io']);
+  });
+  it('handles an array and drops empties', () => {
+    expect(normalizeEmails([' A@x.com ', '', 'a@X.com'])).toEqual(['a@x.com']);
+  });
+  it('returns [] for nullish', () => {
+    expect(normalizeEmails(null)).toEqual([]);
+    expect(normalizeEmails(undefined)).toEqual([]);
+  });
+});
+
+describe('tribe service — rowToPerson emails', () => {
+  it('maps the emails array and defaults to []', () => {
+    expect(rowToPerson({ id: 'p', name: 'N', ring: 'tribe', cadence_days: 45, emails: ['a@x.com'] }).emails)
+      .toEqual(['a@x.com']);
+    expect(rowToPerson({ id: 'p', name: 'N', ring: 'tribe', cadence_days: 45 }).emails).toEqual([]);
+  });
+});
+
+describe('tribe service — autoLogTouchpoints', () => {
+  beforeEach(() => {
+    query.mockReset();
+    withTransaction.mockReset();
+  });
+
+  // One tracked person "Ada" with a known email; listPeople() is the first query.
+  function mockPeople() {
+    query.mockResolvedValue({ rows: [
+      { id: 'ada', name: 'Ada', ring: 'tribe', cadence_days: 45, emails: ['ada@work.com'] },
+    ] });
+  }
+
+  it('matches identities and inserts one deduped touchpoint per matched person', async () => {
+    mockPeople();
+    // INSERT returns a row (new); UPDATE returns nothing.
+    withTransaction.mockImplementation(async (fn) => fn({
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: 't1', person_id: 'ada', source: 'calendar' }] })
+        .mockResolvedValueOnce({ rows: [] }),
+    }));
+
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], source: 'calendar', dedupeKey: 'cal:a:e1', happenedAt: '2026-06-01T10:00:00Z' },
+      { identities: [{ email: 'nobody@x.com' }], source: 'calendar', dedupeKey: 'cal:a:e2' },
+    ]);
+
+    expect(result).toEqual({ created: 1, matched: 1 });
+  });
+
+  it('counts a matched-but-duplicate insert (ON CONFLICT no row) as matched, not created', async () => {
+    mockPeople();
+    // INSERT returns no row → duplicate; UPDATE must not run.
+    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], source: 'message', dedupeKey: 'msg:a:t:2026-06-01' },
+    ]);
+
+    expect(result).toEqual({ created: 0, matched: 1 });
+    expect(clientQuery).toHaveBeenCalledTimes(1); // no last_contact_on UPDATE on a dup
+  });
+
+  it('skips candidates without a dedupeKey (idempotency required)', async () => {
+    mockPeople();
+    const result = await autoLogTouchpoints([{ identities: [{ email: 'ada@work.com' }], source: 'calendar' }]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when nothing is tracked', async () => {
+    query.mockResolvedValue({ rows: [] });
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], dedupeKey: 'cal:a:e1' },
+    ]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+  });
+
+  it('returns zeros for an empty batch without touching the DB', async () => {
+    const result = await autoLogTouchpoints([]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+    expect(query).not.toHaveBeenCalled();
   });
 });

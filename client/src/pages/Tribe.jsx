@@ -53,6 +53,7 @@ const emptyDraft = () => ({
   channel: '',
   energy: 'steady',
   tags: '',
+  emails: '',
   nextMove: '',
   notes: '',
 });
@@ -301,6 +302,18 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
           />
         </label>
         <label className="block sm:col-span-2">
+          <span className="text-xs text-gray-500">Emails &amp; handles</span>
+          <input
+            value={draft.emails}
+            onChange={(event) => update('emails', event.target.value)}
+            className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
+            placeholder="jane@work.com, jane@home.com"
+          />
+          <span className="mt-1 block text-[11px] text-gray-600">
+            Auto-logs a touchpoint when this person appears in a synced calendar event or message.
+          </span>
+        </label>
+        <label className="block sm:col-span-2">
           <span className="text-xs text-gray-500">Next Move</span>
           <textarea
             value={draft.nextMove}
@@ -452,6 +465,26 @@ function MemoryLinksPanel({ personId }) {
   );
 }
 
+// Icon + label per touchpoint source so an auto-logged calendar/message
+// touchpoint is visually distinct from a hand-logged one (#2033).
+const SOURCE_BADGES = {
+  calendar: { Icon: Calendar, label: 'Calendar' },
+  message: { Icon: MessageCircle, label: 'Message' },
+  import: { Icon: Users, label: 'Import' },
+  user: { Icon: UserRound, label: 'Manual' },
+};
+
+function TouchpointSource({ source }) {
+  const badge = SOURCE_BADGES[source] || SOURCE_BADGES.user;
+  const { Icon, label } = badge;
+  return (
+    <span className="inline-flex items-center gap-1" title={`Source: ${label}`}>
+      <Icon size={12} aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
 function TouchpointsPanel({ personId }) {
   const [touchpoints, setTouchpoints] = useState([]);
 
@@ -474,7 +507,7 @@ function TouchpointsPanel({ personId }) {
           <div key={touchpoint.id} className="rounded border border-port-border bg-port-bg p-3">
             <div className="flex items-center justify-between gap-3 text-xs text-gray-500">
               <span>{touchpoint.happenedAt?.slice(0, 10)}</span>
-              <span>{touchpoint.source}</span>
+              <TouchpointSource source={touchpoint.source} />
             </div>
             <p className="mt-1 text-sm text-gray-300">{touchpoint.summary || touchpoint.channel || 'Touchpoint'}</p>
           </div>
@@ -728,6 +761,7 @@ export default function Tribe() {
     ...emptyDraft(),
     ...contact,
     tags: tagsToInput(contact.tags),
+    emails: tagsToInput(contact.emails),
     cadenceDays: contact.cadenceDays || ringFor(contact.ring).cadenceDays,
   });
 
@@ -744,6 +778,7 @@ export default function Tribe() {
       channel: draft.channel.trim(),
       energy: draft.energy,
       tags: tagsToArray(draft.tags),
+      emails: tagsToArray(draft.emails),
       nextMove: draft.nextMove.trim(),
       notes: draft.notes.trim(),
     };

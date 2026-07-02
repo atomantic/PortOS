@@ -48,7 +48,10 @@ export async function apiSyncAccount(accountId, io) {
         end: item.end,
         location: item.location || '',
         description: item.description || '',
-        status: item.status || 'confirmed'
+        status: item.status || 'confirmed',
+        // Attendee/organizer identities feed Tribe touchpoint auto-logging (#2033).
+        organizer: item.organizer || null,
+        attendees: item.attendees || []
       })));
       pageToken = response.data.nextPageToken;
     } while (pageToken);
