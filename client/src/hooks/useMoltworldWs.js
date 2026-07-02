@@ -48,10 +48,12 @@ export default function useMoltworldWs() {
       addFeedItem(data.type || data.event || 'event', data);
     };
     const handlePresence = (data) => {
-      const agents = data.agents ?? data.nearby ?? [];
-      // Validate shape, not length: an empty array is a legitimate
-      // "nobody nearby" snapshot that must clear a previously-populated
-      // panel — gating on `.length > 0` drops it and leaves phantoms.
+      // No `?? []` fallback: a payload missing both keys (`{}`) is malformed /
+      // absent, NOT a confirmed-empty snapshot, and must preserve prior state.
+      // Validate shape, not length: an empty array IS a legitimate "nobody
+      // nearby" snapshot that must clear a previously-populated panel —
+      // gating on `.length > 0` drops it and leaves phantoms.
+      const agents = data.agents ?? data.nearby;
       if (Array.isArray(agents)) setPresence(agents);
       addFeedItem('presence', { ...data, content: `${Array.isArray(agents) ? agents.length : 0} agents nearby` });
     };
@@ -65,7 +67,7 @@ export default function useMoltworldWs() {
       addFeedItem('interaction', data);
     };
     const handleNearby = (data) => {
-      const agents = data.agents ?? data.nearby ?? [];
+      const agents = data.agents ?? data.nearby;
       if (Array.isArray(agents)) setPresence(agents);
       addFeedItem('nearby', { ...data, content: `${Array.isArray(agents) ? agents.length : 0} agents` });
     };

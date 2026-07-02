@@ -62,4 +62,16 @@ describe('useMoltworldWs — presence empty-event transition (#2022)', () => {
     fire('moltworld:presence', { agents: 'oops' });
     expect(result.current.presence).toHaveLength(1);
   });
+
+  it('ignores a payload missing both keys ({}), preserving prior state', () => {
+    const { result } = renderHook(() => useMoltworldWs());
+
+    fire('moltworld:presence', { agents: [{ id: 'a1', name: 'Alice' }] });
+    expect(result.current.presence).toHaveLength(1);
+
+    // Absent/malformed (no agents AND no nearby) is not a confirmed-empty
+    // snapshot — it must NOT clear the panel.
+    fire('moltworld:presence', {});
+    expect(result.current.presence).toHaveLength(1);
+  });
 });
