@@ -57,7 +57,7 @@ Scaffold a new project from template:
 | POST /api/apps | Register existing app |
 | POST /api/scaffold | Create new app from template |
 | GET /api/scaffold/templates | List available templates |
-| POST /api/detect/ports | Detect process on port |
+| POST /api/detect/port | Detect process on port |
 | POST /api/detect/repo | Validate repo path, detect type |
 
 ## Related Features

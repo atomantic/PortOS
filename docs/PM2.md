@@ -28,7 +28,6 @@ module.exports = {
       script: 'server/index.js',
       cwd: __dirname,
       interpreter: 'node',
-      ports: { api: 5570 },
       env: {
         NODE_ENV: 'development',
         PORT: 5570,
@@ -56,7 +55,6 @@ module.exports = {
 | Field | Description | Default |
 |-------|-------------|---------|
 | `interpreter` | Node interpreter path | `'node'` |
-| `ports` | Port allocation object (PortOS convention) | - |
 | `env` | Environment variables | `{}` |
 | `watch` | Enable file watching | `false` |
 | `max_memory_restart` | Restart if memory exceeds threshold | - |
@@ -83,18 +81,26 @@ For services that should auto-recover from failures:
 
 ## Port Allocation Convention
 
-Define all ports in a `ports` object for documentation and PortOS integration:
+Define all ports once in a top-level `PORTS` constant and reference it from each app's `env` — a single source of truth instead of magic numbers scattered through the config (this is the pattern PortOS's own `ecosystem.config.cjs` uses):
 
 ```javascript
-{
-  name: 'my-app',
-  // PortOS convention: define all ports used by this process
-  ports: { api: 5570, health: 5571 },
-  env: {
-    PORT: 5570,
-    HEALTH_PORT: 5571
-  }
-}
+const PORTS = {
+  API: 5570,     // REST API server
+  HEALTH: 5571,  // Health check endpoint
+};
+
+module.exports = {
+  PORTS, // exported so other configs/scripts can reference it
+  apps: [
+    {
+      name: 'my-app',
+      env: {
+        PORT: PORTS.API,
+        HEALTH_PORT: PORTS.HEALTH
+      }
+    }
+  ]
+};
 ```
 
 ### Common Port Labels
@@ -117,7 +123,6 @@ See `PORTS.md` for the full port allocation guide.
   script: 'server/index.js',
   cwd: __dirname,
   interpreter: 'node',
-  ports: { api: 5570 },
   env: {
     NODE_ENV: 'development',
     PORT: 5570,
@@ -136,7 +141,6 @@ See `PORTS.md` for the full port allocation guide.
   script: 'node_modules/.bin/vite',
   cwd: `${__dirname}/client`,
   args: '--host 0.0.0.0 --port 5571',
-  ports: { ui: 5571 },
   env: {
     NODE_ENV: 'development'
   },
@@ -152,7 +156,6 @@ See `PORTS.md` for the full port allocation guide.
   script: 'worker/index.js',
   cwd: __dirname,
   interpreter: 'node',
-  ports: {},  // No ports if internal-only
   env: {
     NODE_ENV: 'development'
   },
@@ -172,7 +175,6 @@ See `PORTS.md` for the full port allocation guide.
   script: '.browser/server.js',
   cwd: __dirname,
   interpreter: 'node',
-  ports: { cdp: 5572, health: 5573 },
   env: {
     NODE_ENV: 'development',
     CDP_PORT: 5572,
@@ -242,7 +244,6 @@ module.exports = {
       script: 'server/index.js',
       cwd: __dirname,
       interpreter: 'node',
-      ports: { api: 5570 },
       env: {
         NODE_ENV: 'development',
         PORT: 5570,
@@ -256,7 +257,6 @@ module.exports = {
       script: 'node_modules/.bin/vite',
       cwd: `${__dirname}/client`,
       args: '--host 0.0.0.0 --port 5571',
-      ports: { ui: 5571 },
       env: {
         NODE_ENV: 'development'
       },
@@ -267,7 +267,6 @@ module.exports = {
       script: 'worker/index.js',
       cwd: __dirname,
       interpreter: 'node',
-      ports: {},
       env: {
         NODE_ENV: 'development'
       },

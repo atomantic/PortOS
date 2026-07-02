@@ -8,6 +8,10 @@ PortOS exposes a REST API on port 5555 and WebSocket events via Socket.IO.
 http://localhost:5555/api
 ```
 
+When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS instead and a loopback-only HTTP mirror runs on `http://127.0.0.1:5553` for local scripts. See [PORTS.md](./PORTS.md).
+
+This document covers the most commonly used endpoints plus a [complete route-domain index](#route-domain-index). A machine-readable OpenAPI 3.1 spec for the public API surface is served at `GET /api/api-docs/openapi.json` and rendered in the UI at `/api-access`.
+
 ## Security Model
 
 PortOS is designed for personal/developer use on trusted networks. It implements the following security measures:
@@ -99,18 +103,19 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/detect/ports` | Detect process on port |
+| POST | `/detect/port` | Detect process on port |
 | POST | `/detect/repo` | Validate repo path |
+| POST | `/detect/pm2` | Detect PM2 processes for a repo |
 | POST | `/detect/ai` | AI-powered app detection |
 
-### Templates
+### Scaffold (App Templates)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/templates` | List available templates |
-| POST | `/templates` | Add custom template |
-| POST | `/templates/create` | Create app from template |
-| DELETE | `/templates/:id` | Delete custom template |
+| GET | `/scaffold/directories` | List candidate parent directories |
+| GET | `/scaffold/templates` | List available templates |
+| POST | `/scaffold/templates/create` | Create app from template |
+| POST | `/scaffold` | Scaffold a new app |
 
 ### Prompts
 
@@ -150,20 +155,24 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | GET | `/cos/learning/durations` | Get task duration estimates by type |
 | POST | `/cos/learning/backfill` | Backfill learning data from history |
 
-### CoS Scheduled Scripts
+### CoS Jobs (Autonomous Jobs)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/cos/scripts` | List all scheduled scripts |
-| POST | `/cos/scripts` | Create a new script |
-| GET | `/cos/scripts/presets` | Get available schedule presets |
-| GET | `/cos/scripts/allowed-commands` | Get allowed commands for scripts |
-| GET | `/cos/scripts/jobs` | Get scheduled job info |
-| GET | `/cos/scripts/:id` | Get a specific script |
-| PUT | `/cos/scripts/:id` | Update a script |
-| DELETE | `/cos/scripts/:id` | Delete a script |
-| POST | `/cos/scripts/:id/run` | Execute a script immediately |
-| GET | `/cos/scripts/:id/runs` | Get script run history |
+| GET | `/cos/jobs` | List all jobs |
+| GET | `/cos/jobs/due` | List jobs due to run |
+| GET | `/cos/jobs/intervals` | Get available interval options |
+| GET | `/cos/jobs/allowed-commands` | Get allowed commands for shell jobs |
+| GET | `/cos/jobs/gates` | Get job gate status |
+| GET | `/cos/jobs/:id` | Get a specific job |
+| POST | `/cos/jobs` | Create a new job |
+| PUT | `/cos/jobs/:id` | Update a job |
+| DELETE | `/cos/jobs/:id` | Delete a job |
+| POST | `/cos/jobs/:id/toggle` | Toggle job on/off |
+| POST | `/cos/jobs/:id/trigger` | Run a job immediately |
+| POST | `/cos/jobs/:id/gate-check` | Evaluate a job's gates |
+
+(`GET /cos/scripts` still exists but now lists generated scripts only; scheduling lives in `/cos/jobs` and `/cos/schedule`.)
 
 ### CoS Weekly Digest
 
@@ -321,46 +330,47 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/agent-personalities` | List all agent personalities |
-| GET | `/agent-personalities/:id` | Get personality details |
-| POST | `/agent-personalities` | Create personality |
-| PUT | `/agent-personalities/:id` | Update personality |
-| DELETE | `/agent-personalities/:id` | Delete personality |
-| POST | `/agent-personalities/generate` | AI-generate personality |
-| POST | `/agent-personalities/:id/toggle` | Toggle personality active state |
+| GET | `/agents/personalities` | List all agent personalities |
+| GET | `/agents/personalities/:id` | Get personality details |
+| POST | `/agents/personalities` | Create personality |
+| PUT | `/agents/personalities/:id` | Update personality |
+| DELETE | `/agents/personalities/:id` | Delete personality |
+| POST | `/agents/personalities/generate` | AI-generate personality |
+| POST | `/agents/personalities/:id/toggle` | Toggle personality active state |
 
 ### Platform Accounts
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/platform-accounts` | List linked platform accounts |
-| POST | `/platform-accounts` | Link new account |
-| PUT | `/platform-accounts/:id` | Update account |
-| DELETE | `/platform-accounts/:id` | Unlink account |
-| POST | `/platform-accounts/:id/test` | Test account connection |
+| GET | `/agents/accounts` | List linked platform accounts |
+| GET | `/agents/accounts/:id` | Get account details |
+| POST | `/agents/accounts` | Link new account |
+| DELETE | `/agents/accounts/:id` | Unlink account |
+| POST | `/agents/accounts/:id/test` | Test account connection |
+| POST | `/agents/accounts/:id/claim` | Claim account for an agent |
 
 ### Automation Schedules
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/automation-schedules` | List all schedules |
-| GET | `/automation-schedules/stats` | Get schedule statistics |
-| GET | `/automation-schedules/:id` | Get schedule details |
-| POST | `/automation-schedules` | Create schedule |
-| PUT | `/automation-schedules/:id` | Update schedule |
-| DELETE | `/automation-schedules/:id` | Delete schedule |
-| POST | `/automation-schedules/:id/toggle` | Toggle schedule on/off |
-| POST | `/automation-schedules/:id/run` | Run schedule immediately |
+| GET | `/agents/schedules` | List all schedules |
+| GET | `/agents/schedules/stats` | Get schedule statistics |
+| GET | `/agents/schedules/:id` | Get schedule details |
+| POST | `/agents/schedules` | Create schedule |
+| PUT | `/agents/schedules/:id` | Update schedule |
+| DELETE | `/agents/schedules/:id` | Delete schedule |
+| POST | `/agents/schedules/:id/toggle` | Toggle schedule on/off |
+| POST | `/agents/schedules/:id/run` | Run schedule immediately |
 
 ### Agent Activity
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/agent-activity` | List activity logs |
-| GET | `/agent-activity/timeline` | Get activity timeline |
-| GET | `/agent-activity/agent/:agentId` | Get agent's activity |
-| GET | `/agent-activity/agent/:agentId/stats` | Get agent statistics |
-| POST | `/agent-activity/cleanup` | Clean up old activity logs |
+| GET | `/agents/activity` | List activity logs |
+| GET | `/agents/activity/timeline` | Get activity timeline |
+| GET | `/agents/activity/agent/:agentId` | Get agent's activity |
+| GET | `/agents/activity/agent/:agentId/stats` | Get agent statistics |
+| POST | `/agents/activity/cleanup` | Clean up old activity logs |
 
 ### Notifications
 
@@ -434,6 +444,77 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | POST | `/agents/tools/moltworld/say` | Send chat message |
 | GET | `/agents/tools/moltworld/status` | Get world status |
 
+## Route Domain Index
+
+Every mounted API prefix (see `server/index.js` for the authoritative list). Domains documented in detail above are omitted. Each prefix corresponds to a router in `server/routes/`.
+
+| Prefix | Domain |
+|--------|--------|
+| `/api/auth` | Optional password gate |
+| `/api/alerts` | System alerts |
+| `/api/avatar` | Avatar rendering/config |
+| `/api/system` | System health metrics |
+| `/api/capabilities` | Feature capability flags |
+| `/api/workspace-contexts` | Workspace context management |
+| `/api/apps/:appId/reference-repos` | Per-app reference repos |
+| `/api/network-exposure` | Network exposure checks |
+| `/api/git` | Git operations for managed apps |
+| `/api/screenshots` | Screenshot capture |
+| `/api/search` | Global search |
+| `/api/palette` | ⌘K command palette manifest + actions |
+| `/api/dashboard/layouts` | Dashboard widget layouts |
+| `/api/media/collections`, `/api/media/annotations` | Media library collections/annotations |
+| `/api/client-errors` | Client-side error reporting |
+| `/api/backup` | Backup snapshots + restore |
+| `/api/legacy-export` | Legacy data export |
+| `/api/database` | Postgres introspection |
+| `/api/image-clean` | Image metadata cleaning |
+| `/api/city` | CyberCity snapshots/introspection |
+| `/api/cos/gsd` | CoS GSD workflow |
+| `/api/feature-agents` | Feature agent runs |
+| `/api/feeds` | RSS/content feeds |
+| `/api/catalog` | Creative ingredients catalog |
+| `/api/tribe` | Tribe relationship graph |
+| `/api/notes` | Notes |
+| `/api/calendar` | Calendar integration |
+| `/api/messages` | Messages (email) integration |
+| `/api/digital-twin/social-accounts`, `/identity`, `/autobiography` | Digital-twin sub-domains |
+| `/api/meatspace` | MeatSpace (health, POST, genome) |
+| `/api/lmstudio`, `/api/local-llm` | Local LLM backends |
+| `/api/code-review` | Code review runs |
+| `/api/voice`, `/api/voice/public` | Voice assistant |
+| `/api/api-docs` | OpenAPI 3.1 spec |
+| `/api/data` | Data manager/sync |
+| `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
+| `/api/health` | Health check |
+| `/api/insights` | Cross-domain insights |
+| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync |
+| `/api/mortalloom` | MortalLoom |
+| `/api/review` | Review queue |
+| `/api/settings` | App settings |
+| `/api/update` | Self-update flow |
+| `/api/loops` | Loops |
+| `/api/character` | Character management |
+| `/api/tools` | Agent tool registry |
+| `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
+| `/api/devtools/video-download` | Video download |
+| `/api/video-timeline` | Video timeline editor |
+| `/api/media-jobs` | Async media job queue |
+| `/api/creative-director` | Creative Director projects |
+| `/api/music-video` | Music video projects |
+| `/api/mood-boards` | Mood boards |
+| `/api/writers-room` | Writers Room |
+| `/api/universe-builder` | Universe Builder |
+| `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |
+| `/api/pipeline` | Series/comic pipeline |
+| `/api/conflict-journal` | Sync conflict journal |
+| `/api/importer` | Story importer |
+| `/api/story-builder` | Story Builder |
+| `/api/loras`, `/api/lora-datasets`, `/api/lora-training` | LoRA management/training |
+| `/api/openclaw` | OpenClaw operator chat |
+| `/api/rounds` | Rounds (music + Morse training) |
+| `/api/ask` | Ask (LLM Q&A) |
+
 ## WebSocket Events
 
 Connect to Socket.IO at `http://localhost:5555`.
@@ -455,76 +536,51 @@ socket.emit('logs:unsubscribe', { processName: 'portos-server' });
 
 ### Error Notifications
 
-```javascript
-// Subscribe to errors
-socket.emit('errors:subscribe');
+Server errors are broadcast to all connected sockets — no subscription handshake is needed.
 
+```javascript
 // Receive error events
 socket.on('error:occurred', (error) => {
   console.error('Server error:', error.message, error.code);
 });
-
-// Unsubscribe
-socket.emit('errors:unsubscribe');
 ```
 
 ### Chief of Staff Events
 
 ```javascript
-// CoS status updates
-socket.on('cos:status', (status) => {
-  console.log('CoS running:', status.running);
+// Join the CoS room to receive agent lifecycle events
+socket.emit('cos:subscribe');
+
+socket.on('cos:agent:spawned', (agent) => {
+  console.log('Agent spawned:', agent.id, agent.task);
 });
 
-// Agent activity
-socket.on('cos:agent:started', (agent) => {
-  console.log('Agent started:', agent.id, agent.task);
+socket.on('cos:agent:updated', (agent) => {
+  console.log('Agent updated:', agent.id, agent.status);
 });
 
 socket.on('cos:agent:completed', (agent) => {
   console.log('Agent completed:', agent.id, agent.success);
 });
 
-// Task updates
-socket.on('cos:task:updated', (task) => {
-  console.log('Task updated:', task.id, task.status);
-});
-
-// Logs from CoS
-socket.on('cos:log', (entry) => {
-  console.log(`[CoS] ${entry.level}: ${entry.message}`);
+socket.on('cos:agent:output', ({ agentId, lines }) => {
+  console.log('Agent output:', agentId, lines);
 });
 ```
 
 ### Memory Events
 
 ```javascript
-socket.on('cos:memory:created', (memory) => {
+socket.on('memory:created', (memory) => {
   console.log('Memory created:', memory.id);
 });
 
-socket.on('cos:memory:updated', (memory) => {
+socket.on('memory:updated', (memory) => {
   console.log('Memory updated:', memory.id);
 });
-```
 
-### Script Events
-
-```javascript
-socket.on('script:created', (script) => {
-  console.log('Script created:', script.id, script.name);
-});
-
-socket.on('script:started', ({ scriptId, name }) => {
-  console.log('Script started:', scriptId);
-});
-
-socket.on('script:completed', ({ scriptId, exitCode, duration }) => {
-  console.log('Script completed:', scriptId, exitCode);
-});
-
-socket.on('script:error', ({ scriptId, error }) => {
-  console.error('Script error:', scriptId, error);
+socket.on('memory:deleted', ({ id }) => {
+  console.log('Memory deleted:', id);
 });
 ```
 
@@ -532,7 +588,7 @@ socket.on('script:error', ({ scriptId, error }) => {
 
 ```javascript
 // Start streaming detection
-socket.emit('detect:stream', { path: '/path/to/repo' });
+socket.emit('detect:start', { path: '/path/to/repo' });
 
 // Receive discovery steps
 socket.on('detect:step', (step) => {

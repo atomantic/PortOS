@@ -1,4 +1,6 @@
-# Security Hardening Audit (2025-02-19)
+# Security Hardening Audit (2026-02-19)
+
+> **Historical record.** This is a point-in-time audit from February 2026 (v1.14 era, before the PostgreSQL migration). It is kept as a record of the hardening pass, not maintained as a living document.
 
 PortOS is an internal/VPN app so auth, CORS, rate limiting, and HTTPS are out of scope. These items address real bugs, crash risks, and secret leaks that matter regardless of network posture.
 

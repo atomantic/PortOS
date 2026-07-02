@@ -4,7 +4,8 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 
 ## Architecture
 
-- **Memory Service** (`server/services/memory.js`): Core CRUD, search, and lifecycle operations
+- **Memory Backend** (`server/services/memoryBackend.js`): Selects the storage backend — `memoryDB.js` (PostgreSQL + pgvector) for real installs; `memory.js` (JSON files) is a test-only escape hatch (`MEMORY_BACKEND=file` / `NODE_ENV=test`), not a supported deployment mode
+- **Memory DB Service** (`server/services/memoryDB.js`): Primary CRUD, search, and lifecycle operations against PostgreSQL
 - **Embeddings Service** (`server/services/memoryEmbeddings.js`): LM Studio integration for vector generation
 - **Memory Extractor** (`server/services/memoryExtractor.js`): Extract memories from agent output
 - **Memory Classifier** (`server/services/memoryClassifier.js`): LLM-based quality filtering
@@ -48,6 +49,10 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 ```
 
 ## Data Storage
+
+Memories and links live in PostgreSQL — the `memories` and `memory_links` tables, with pgvector columns for embeddings (see [docs/STORAGE.md](../STORAGE.md)).
+
+The test-only file backend (`MEMORY_BACKEND=file` / `NODE_ENV=test`) uses this JSON layout instead:
 
 ```
 ./data/cos/memory/
@@ -130,6 +135,11 @@ Before agent task execution:
 | POST /api/memory/decay | Apply importance decay |
 | DELETE /api/memory/expired | Clear expired memories |
 | GET /api/memory/embeddings/status | LM Studio connection status |
+| GET /api/memory/backend/status | Active storage backend status |
+| GET /api/memory/sync | File↔DB sync status |
+| POST /api/memory/sync | Trigger file↔DB sync |
+| POST /api/memory/:id/approve | Approve a pending memory |
+| POST /api/memory/:id/reject | Reject a pending memory |
 
 ## WebSocket Events
 
@@ -172,7 +182,9 @@ memory: {
 |------|---------|
 | `server/lib/memoryValidation.js` | Zod schemas for memory operations |
 | `server/lib/vectorMath.js` | Cosine similarity, clustering helpers |
-| `server/services/memory.js` | Core CRUD, search, lifecycle |
+| `server/services/memoryBackend.js` | Backend switcher (Postgres primary, file test-only) |
+| `server/services/memoryDB.js` | Core CRUD, search, lifecycle (PostgreSQL + pgvector) |
+| `server/services/memory.js` | File-backed CRUD (test-only backend) |
 | `server/services/memoryEmbeddings.js` | LM Studio embedding generation |
 | `server/services/memoryExtractor.js` | Extract memories from agent output |
 | `server/services/memoryClassifier.js` | LLM-based classification service |

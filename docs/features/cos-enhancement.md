@@ -1,5 +1,7 @@
 # Chief of Staff Enhancement (M35)
 
+> **Status:** This M35 milestone spec shipped, except the Phase 5 agent-architecture services (`agentGateway.js`, `errorRecovery.js`, `agentRunCache.js`, `contextUpgrader.js`) and `sessionDelta.js`, which were never built under those names. Their rows below are marked "(not built)" and kept for historical legibility.
+
 Comprehensive upgrade from reactive task executor to proactive autonomous agent with hybrid memory, missions, local model integration, and dynamic thinking levels.
 
 ## Architecture
@@ -10,18 +12,18 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 |---------|---------|
 | `server/lib/bm25.js` | BM25 algorithm with IDF weighting |
 | `server/services/memoryBM25.js` | BM25 index manager for memory search |
-| `server/services/sessionDelta.js` | Session delta tracking for pending bytes/messages |
+| `server/services/sessionDelta.js` | Session delta tracking for pending bytes/messages (not built) |
 | `server/services/toolStateMachine.js` | Tool execution state machine |
-| `server/services/agentGateway.js` | Request deduplication and caching |
-| `server/services/errorRecovery.js` | Error analysis and recovery strategies |
-| `server/services/agentRunCache.js` | Agent output caching with TTL |
+| `server/services/agentGateway.js` | Request deduplication and caching (not built) |
+| `server/services/errorRecovery.js` | Error analysis and recovery strategies (not built) |
+| `server/services/agentRunCache.js` | Agent output caching with TTL (not built) |
 | `server/services/eventScheduler.js` | Cron-based event scheduling |
 | `server/services/executionLanes.js` | Concurrent execution lane management |
 | `server/services/missions.js` | Long-term goal and mission management |
 | `server/services/lmStudioManager.js` | LM Studio model discovery and health |
 | `server/services/localThinking.js` | Local model completions |
 | `server/services/thinkingLevels.js` | Dynamic model selection |
-| `server/services/contextUpgrader.js` | Complexity analysis for model upgrade |
+| `server/services/contextUpgrader.js` | Complexity analysis for model upgrade (not built) |
 
 ## Features
 
@@ -114,8 +116,8 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 | `server/services/toolStateMachine.test.js` | Tool State Machine |
 | `server/services/thinkingLevels.test.js` | Thinking Levels |
 | `server/services/executionLanes.test.js` | Execution Lanes |
-| `server/services/errorRecovery.test.js` | Error Recovery |
-| `server/services/agentRunCache.test.js` | Agent Run Cache |
+| `server/services/errorRecovery.test.js` | Error Recovery (not built) |
+| `server/services/agentRunCache.test.js` | Agent Run Cache (not built) |
 | `server/services/missions.test.js` | Missions Service |
 
 ## Related Features

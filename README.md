@@ -81,8 +81,12 @@ A full creative studio for taking an idea from blank page to finished media. Eac
   - **Image** — FLUX.1, FLUX.2 (klein), Z-Image via MFLUX/diffusers locally; A1111 / external endpoints; OpenAI Codex `gpt-image` mode
   - **Video** — LTX models via `mlx_video` on macOS, diffusers on Windows. Modes: text-to-video, image-to-video, first/last-frame, extend, audio-to-video
   - **Creative Director** — Treatment → scene plan → render orchestration for short films, with a media job queue serializing local GPU work
+  - **Music Video** — Track-driven storyboard and render pipeline for music videos
   - **Timeline Editor** — Stitch clips, scenes, and audio into longer videos
   - **Collections / History / Models / LoRAs** — Browse generated assets, install Civitai LoRAs by URL, and manage installed model weights
+- **Music Studio** — Artists, albums, and tracks with AI music generation, plus Rounds (musical rounds / quodlibets)
+- **Mood Boards** — Collect reference imagery into shareable boards that feed generation work
+- **Catalog** — The creative-ingredients graph (characters, places, objects, lore) shared across every Create surface
 - **Importer** — Drop in an external manuscript (short story, novel, screenplay, comic script). The importer analyzes the text, suggests an arc shape, classifies characters/locations/scenes, and commits the result as either a new Writers Room work or a Pipeline series with a pre-filled bible
 - **Sharing** — Cross-network share buckets via cloud-synced folders (Dropbox / iCloud / etc.). Register a bucket, pick `auto-merge` or `inbox` mode, and outgoing PortOS records (universes, series, characters, media) propagate to friends running their own PortOS instance. Live subscription indicators surface when the sender is actively editing
 - **Image Cleaner** — Strip backgrounds, remove unwanted elements, and prep stills for downstream renders
@@ -121,6 +125,7 @@ A thought capture and knowledge management system — your offline-first externa
 - **Insights** — Cross-domain narratives (genome↔health correlations, taste↔identity themes) generated from captured data
 - **Daily/Weekly Digest** — AI-curated summaries of captured knowledge (< 150 / 250 words)
 - **Trust Scoring** — Rate data source reliability for better knowledge hygiene
+- **Tribe** — Relationship graph of the people in your life, connected to Brain people records
 - **Import** — Pull in data from external sources into the Brain pipeline
 - **JSONL Audit Trail** — Full provenance tracking for every classified item
 
@@ -156,6 +161,7 @@ A gamified daily cognitive self-test in ~5 minutes across 5 domains. ([Full docs
 - **Wordplay** — Language analysis and verbal reasoning exercises
 - **Verbal Agility** — Communication skill challenges
 - **Imagination** — Creative thinking exercises scored by LLM
+- **Morse Code (CW)** — Adaptive Morse sending/receiving trainer
 - **Progress Tracking** — Streaks, rolling averages, and performance history
 
 ### Developer Tools
@@ -275,8 +281,8 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 |-------|-------------|
 | **Frontend** | React 18, Vite, Tailwind CSS, Three.js, xterm.js |
 | **Backend** | Express.js, Socket.IO, PM2, Zod validation |
-| **Data** | PostgreSQL, JSON file persistence, vector embeddings |
-| **AI** | Claude Code, Codex, Antigravity CLI, Ollama, LM Studio (via [portos-ai-toolkit](https://www.npmjs.com/package/portos-ai-toolkit)) |
+| **Data** | PostgreSQL + pgvector (primary datastore — mandatory), JSON files for binary assets and synced/ephemeral state ([storage contract](./docs/STORAGE.md)) |
+| **AI** | Claude Code, Codex, Antigravity CLI, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
 
 ## Project Structure
 
@@ -321,9 +327,11 @@ Configure AI providers for the runner and Chief of Staff:
 
 ## Documentation
 
+Full catalog (including design plans, ADRs, and research notes): [docs/README.md](./docs/README.md)
+
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
-- [API Reference](./docs/API.md) — 50+ REST endpoints and WebSocket events
+- [API Reference](./docs/API.md) — REST endpoints, full route-domain index, and WebSocket events
 - [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
 - [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
 - [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5561) and allocation guide
@@ -333,14 +341,17 @@ Configure AI providers for the runner and Chief of Staff:
 - [Contributing Guide](./docs/CONTRIBUTING.md) — Development setup and code conventions
 - [GitHub Actions](./docs/GITHUB_ACTIONS.md) — CI/CD workflow patterns
 - [Versioning & Releases](./docs/VERSIONING.md) — Semantic versioning and release process
-- [Security Audit](./docs/SECURITY_AUDIT.md) — Hardening audit (10/10 items resolved)
+- [Dependency Audit](./docs/DEPS.md) — Every third-party dependency and why it stays
+- [Security Audit](./docs/SECURITY_AUDIT.md) — Historical hardening audit (2026-02, 10/10 items resolved)
 - [Troubleshooting](./docs/TROUBLESHOOTING.md) — Common issues and solutions
 
 ### Feature Deep Dives
 
 - [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
 - [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
+- [Operational Goals](./docs/GOALS_OPERATIONAL.md) — Runtime priorities the CoS reads when generating work
 - [Agent Skills](./docs/features/agent-skills.md) — Task-type-specific agent prompts
+- [Claude on Ollama](./docs/features/claude-ollama.md) — Run agent tasks on a local model
 - [CoS Agent Runner](./docs/features/cos-agent-runner.md) — Isolated agent process architecture
 - [CoS Enhancement](./docs/features/cos-enhancement.md) — Hybrid search, proactive execution, error recovery
 - [Memory System](./docs/features/memory-system.md) — Semantic memory with vector search and importance decay
@@ -365,7 +376,7 @@ Pull requests are welcome. This is a personal project, so:
 
 - **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant `.changelog/vX.Y.Z.md` for what changed.
 - **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the changelog: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
-- **Opinionated by design.** Architecture decisions (single-user, no auth, JSON files over a full ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support, HTTPS-by-default, or general-purpose hardening will not be merged.
+- **Opinionated by design.** Architecture decisions (single-user, no auth, PostgreSQL + flat files over a heavy ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support or general-purpose hardening will not be merged.
 - **Style.** Match the existing conventions in [CLAUDE.md](./CLAUDE.md) before opening a PR — especially the no-try/catch route convention, emoji-prefixed logging, and Zod validation on all inputs.
 
 ## License

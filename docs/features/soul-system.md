@@ -8,7 +8,7 @@ LLMs can embody specific personas, but creating comprehensive identity documents
 
 ## Architecture
 
-- **Digital Twin Service** (`server/services/digitalTwin.js`): Document management, testing, enrichment
+- **Digital Twin Service** (`server/services/digital-twin.js` plus the `digital-twin-*.js` module family): Document management, testing, enrichment
 - **Digital Twin Routes** (`server/routes/digital-twin.js`): REST API endpoints mounted under `/api/digital-twin/*`
 - **Digital Twin Page** (`client/src/pages/DigitalTwin.jsx`): Overview, Documents, Test, Enrich, Export tabs
 
