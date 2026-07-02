@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 
 // Human labels for the adaptive difficulty knob each math drill tunes.
@@ -283,8 +284,7 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
       {enabled && (
         <div className="grid grid-cols-2 gap-3">
           {meta.fields.map(field => (
-            <div key={field.key}>
-              <label className="text-xs text-gray-500 mb-1 block">{field.label}</label>
+            <FormField key={field.key} label={field.label} labelClassName="text-xs text-gray-500 mb-1 block">
               {field.type === 'select' ? (
                 <select
                   value={drillConfig[field.key] ?? field.options?.[0]?.value ?? ''}
@@ -305,7 +305,7 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
                 />
               )}
-            </div>
+            </FormField>
           ))}
         </div>
       )}
@@ -627,8 +627,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           <div className="bg-port-card border border-port-accent-2/30 rounded-lg p-4">
             <h4 className="text-sm font-medium text-gray-400 mb-3">AI Provider</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-gray-500 mb-1 block">Provider</label>
+              <FormField label="Provider" labelClassName="text-xs text-gray-500 mb-1 block">
                 <select
                   value={llmProviderId}
                   onChange={e => { setLlmProviderId(e.target.value); setLlmModel(''); }}
@@ -639,9 +638,8 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="text-xs text-gray-500 mb-1 block">Model</label>
+              </FormField>
+              <FormField label="Model" labelClassName="text-xs text-gray-500 mb-1 block">
                 <select
                   value={llmModel}
                   onChange={e => setLlmModel(e.target.value)}
@@ -652,7 +650,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
-              </div>
+              </FormField>
             </div>
           </div>
 
