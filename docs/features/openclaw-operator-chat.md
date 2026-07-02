@@ -20,7 +20,7 @@ PortOS talks to the OpenClaw runtime through a thin adapter — it does not reim
 
 - **Integration module** — `server/integrations/openclaw/api.js` is the entire runtime client: config loading, auth headers, upstream calls, session/message/status normalization, and error translation. It reaches the runtime through two upstream paths: a tool-invoke endpoint (`/tools/invoke`, for `sessions_list` / `sessions_history`) and an OpenAI-Responses-style endpoint (`/v1/responses`, for send + stream with `model: openclaw:<agentId>`).
 - **Routes** — `server/routes/openclaw.js`, mounted at `/api/openclaw`.
-- **Client service** — `client/src/services/apiOpenclaw.js` (status, sessions, messages, non-streaming send, SSE streaming send).
+- **Client service** — `client/src/services/apiOpenClaw.js` (status, sessions, messages, non-streaming send, SSE streaming send).
 - **Page** — `client/src/pages/OpenClaw.jsx` at `/openclaw` (registered in `App.jsx` and in `NAV_COMMANDS` under the Brain section, so it is reachable from ⌘K and voice nav).
 
 Responsibility split: PortOS owns the operator UI, session list, message history, attachment/context UX, and runtime connection status. OpenClaw owns the session runtime, message handling, tool execution, orchestration, response generation, and runtime-side policy enforcement.

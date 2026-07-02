@@ -12,7 +12,7 @@ Six drill domains, each individually enable/disable-able (`client/src/components
 `doubling-chain` (sequential doubling from a seed), `serial-subtraction` (countdown by a fixed subtrahend), `multiplication` (random N-digit problems), `powers` (base^exponent), `estimation` (approximate large arithmetic within tolerance).
 
 ### Memory (~90s)
-Memory Builder drills drawn from the user's memory items: `memory-sequence` and `memory-element-flash` inside scored sessions (`memory-fill-blank` exists for standalone practice). See Memory Builder below.
+Memory Builder drills drawn from the user's memory items: `memory-sequence`, `memory-element-flash`, and `memory-fill-blank`, practiced in the standalone Memory Builder (see below). The server's scored-session rescoring accepts `memory-sequence`/`memory-element-flash` (`POST_SUPPORTED_MEMORY_TYPES`), but the session launcher currently composes scored sessions from the math, wordplay/verbal/imagination (LLM), and cognitive domains only — memory training runs separately.
 
 ### Wordplay (~60s)
 `pun-wordplay` and `word-association`, plus the cacheable wordplay set: `compound-chain`, `bridge-word`, `double-meaning`, `idiom-twist`. All LLM-scored.
