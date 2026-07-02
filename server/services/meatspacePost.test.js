@@ -24,6 +24,8 @@ import {
   computeExpectedFromPrompt,
   computePostStreaks,
   submitPostSession,
+  updatePostConfig,
+  postConfigEvents,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -539,5 +541,61 @@ describe('submitPostSession — memory drill schedule advance', () => {
 
     const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
     expect(memoryWrite).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// UPDATE CONFIG — postConfigEvents (issue #2015)
+//
+// updatePostConfig() emits `post-config:updated` on its own EventEmitter
+// (postConfigEvents) after every successful write, carrying both the merged
+// config and the raw `updates` patch. meatspacePostReminder.js subscribes to
+// this to reschedule the daily reminder — this is what centralizes
+// reschedule-on-save so ANY caller of updatePostConfig gets it for free,
+// instead of each route handler having to remember to bolt one on.
+// =============================================================================
+
+describe('updatePostConfig — postConfigEvents', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => Promise.resolve(defaultValue));
+    atomicWrite.mockResolvedValue(undefined);
+  });
+
+  it('emits post-config:updated with the merged config and the raw updates patch', async () => {
+    const handler = vi.fn();
+    postConfigEvents.once('post-config:updated', handler);
+
+    const merged = await updatePostConfig({ reminder: { enabled: true, time: '09:00' } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual({
+      config: merged,
+      updates: { reminder: { enabled: true, time: '09:00' } },
+    });
+    expect(merged.reminder).toEqual({ enabled: true, time: '09:00' });
+  });
+
+  it('still emits for updates unrelated to the reminder — subscribers decide what to react to', async () => {
+    const handler = vi.fn();
+    postConfigEvents.once('post-config:updated', handler);
+
+    await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].updates).toEqual({ adaptive: { enabled: true } });
+  });
+
+  it('only emits after the config write has persisted, not before', async () => {
+    let writeResolved = false;
+    atomicWrite.mockImplementationOnce(async () => { writeResolved = true; });
+    const handler = vi.fn(() => {
+      expect(writeResolved).toBe(true);
+    });
+    postConfigEvents.once('post-config:updated', handler);
+
+    await updatePostConfig({ adaptive: { enabled: true } });
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

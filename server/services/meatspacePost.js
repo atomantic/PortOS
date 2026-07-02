@@ -7,6 +7,7 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
@@ -17,6 +18,15 @@ import { advanceScheduleFromSession } from './meatspacePostMemory.js';
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
 const CONFIG_FILE = join(MEATSPACE_DIR, 'post-config.json');
+
+// Tiny pub/sub (mirrors settingsEvents in server/services/settings.js) so
+// features that react to a specific config slice — e.g. meatspacePostReminder.js
+// rescheduling its cron when `reminder` changes — can subscribe without
+// meatspacePost.js importing back into them (which would create a service
+// cycle). This is what makes updatePostConfig() the single place ANY current
+// or future caller gets slice-specific side effects "for free", instead of
+// each route handler having to remember to bolt one on (#2015).
+export const postConfigEvents = new EventEmitter();
 
 const DEFAULT_CONFIG = {
   mentalMath: {
@@ -92,6 +102,11 @@ export async function updatePostConfig(updates) {
   await ensureMeatspaceDir();
   await atomicWrite(CONFIG_FILE, merged);
   console.log(`🧪 POST config updated`);
+  // Emit AFTER the write succeeds so a subscriber (reminder rescheduler, etc.)
+  // never reacts to a config change that didn't actually persist. `updates` is
+  // included (not just `merged`) so subscribers can gate on which slice was
+  // touched rather than re-evaluating on every unrelated save.
+  postConfigEvents.emit('post-config:updated', { config: merged, updates });
   return merged;
 }
 

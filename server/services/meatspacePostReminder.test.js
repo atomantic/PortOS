@@ -2,15 +2,38 @@
  * Tests for meatspacePostReminder — the opt-in (default OFF) daily reminder
  * for POST sessions. Covers: the pure HH:MM -> cron conversion, that the
  * scheduler only registers when enabled, that it reschedules (not
- * double-registers) on repeated calls, and that the fired handler only sends
- * a notification when today's session is genuinely incomplete.
+ * double-registers) on repeated calls, that the fired handler only sends a
+ * notification when today's session is genuinely incomplete AND it hasn't
+ * already notified today, the missed-slot catch-up on server restart, the
+ * timezone-change refresh via settingsEvents, and the centralized
+ * reschedule-on-save via meatspacePost.js's postConfigEvents (#2015).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Minimal EventEmitter stubs so `<emitter>.on(...)` at module-load time works
+// and tests can `.emit(...)` to drive the subscription paths directly —
+// mirrors sharing/annotationIdentity.test.js's settingsEvents stub.
+const settingsEventEmitter = vi.hoisted(() => {
+  const listeners = {};
+  return {
+    on(event, fn) { (listeners[event] ||= []).push(fn); },
+    emit(event, ...args) { (listeners[event] || []).forEach(fn => fn(...args)); },
+  };
+});
+
+const postConfigEventEmitter = vi.hoisted(() => {
+  const listeners = {};
+  return {
+    on(event, fn) { (listeners[event] ||= []).push(fn); },
+    emit(event, ...args) { (listeners[event] || []).forEach(fn => fn(...args)); },
+  };
+});
 
 vi.mock('./eventScheduler.js', () => ({
   schedule: vi.fn(),
-  cancel: vi.fn()
+  cancel: vi.fn(),
+  parseCronToPrevRun: vi.fn()
 }));
 
 vi.mock('../lib/timezone.js', () => ({
@@ -22,19 +45,25 @@ vi.mock('../lib/timezone.js', () => ({
 
 vi.mock('./meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
-  getPostSessions: vi.fn()
+  getPostSessions: vi.fn(),
+  postConfigEvents: postConfigEventEmitter
 }));
 
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn().mockResolvedValue({ id: 'n1' }),
+  getNotifications: vi.fn().mockResolvedValue([]),
   NOTIFICATION_TYPES: { DAILY_POST_REMINDER: 'daily_post_reminder' },
   PRIORITY_LEVELS: { LOW: 'low' }
 }));
 
-import { schedule, cancel } from './eventScheduler.js';
+vi.mock('./settings.js', () => ({
+  settingsEvents: settingsEventEmitter
+}));
+
+import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
 import { getUserTimezone, getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions } from './meatspacePost.js';
-import { addNotification } from './notifications.js';
+import { addNotification, getNotifications } from './notifications.js';
 import {
   reminderTimeToCron,
   registerPostReminderSchedule,
@@ -62,6 +91,8 @@ describe('reminderTimeToCron', () => {
 describe('registerPostReminderSchedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getUserTimezone.mockResolvedValue('UTC');
+    parseCronToPrevRun.mockReturnValue(null);
   });
 
   it('cancels the schedule and does not register when disabled (default off)', async () => {
@@ -105,6 +136,138 @@ describe('registerPostReminderSchedule', () => {
     expect(schedule).toHaveBeenCalledTimes(2);
     expect(schedule.mock.calls[1][0]).toMatchObject({ id: POST_REMINDER_EVENT_ID, cron: '30 18 * * *' });
   });
+
+  it('does not check for a missed slot unless catchUpMissedSlot is requested', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    await registerPostReminderSchedule();
+    expect(parseCronToPrevRun).not.toHaveBeenCalled();
+    expect(getPostSessions).not.toHaveBeenCalled();
+  });
+
+  // Missed-slot catch-up (finding 2): mirrors taskSchedule.js's
+  // parseCronToPrevRun-based recovery — a slot that already elapsed while
+  // the server was down fires immediately instead of waiting for tomorrow.
+  describe('catchUpMissedSlot: true (boot-time recovery)', () => {
+    // Pin the clock so "prevRunMs <= now" comparisons in catchUpMissedSlot
+    // are deterministic regardless of what time of day the suite runs.
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-01T12:00:00.000Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fires the reminder immediately when the most recent cron slot already elapsed today', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      getPostSessions.mockResolvedValue([]);
+      todayInTimezone.mockReturnValue('2026-07-01');
+      const missedSlot = new Date('2026-07-01T09:00:00.000Z');
+      const dayBefore = new Date('2026-06-30T09:00:00.000Z');
+      parseCronToPrevRun.mockReturnValueOnce(missedSlot).mockReturnValueOnce(dayBefore);
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not fire when there is no elapsed occurrence within the lookback bound', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      parseCronToPrevRun.mockReturnValue(null);
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+      expect(getPostSessions).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent — firePostReminderIfIncomplete still skips when today is already complete', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getPostSessions.mockResolvedValue([{ startedAt: '2026-07-01T15:00:00.000Z' }]);
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      const missedSlot = new Date('2026-07-01T09:00:00.000Z');
+      const dayBefore = new Date('2026-06-30T09:00:00.000Z');
+      parseCronToPrevRun.mockReturnValueOnce(missedSlot).mockReturnValueOnce(dayBefore);
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+    });
+  });
+
+  // Timezone refresh (finding 1): a global timezone change elsewhere (not
+  // through POST config) must reschedule the cron at the new offset.
+  describe('timezone refresh via settingsEvents', () => {
+    it('reschedules when the global timezone changes', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      getUserTimezone.mockResolvedValue('UTC');
+      await registerPostReminderSchedule();
+      expect(schedule).toHaveBeenCalledTimes(1);
+
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      settingsEventEmitter.emit('settings:updated', { timezone: 'America/Los_Angeles' });
+
+      await vi.waitFor(() => {
+        expect(schedule).toHaveBeenCalledTimes(2);
+      });
+      expect(schedule.mock.calls[1][0]).toMatchObject({ timezone: 'America/Los_Angeles' });
+    });
+
+    it('does not reschedule when the effective timezone is unchanged', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      getUserTimezone.mockResolvedValue('UTC');
+      await registerPostReminderSchedule();
+      expect(schedule).toHaveBeenCalledTimes(1);
+
+      settingsEventEmitter.emit('settings:updated', { timezone: 'UTC' });
+      // Flush any pending microtasks from the (no-op) listener before asserting.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(schedule).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not reschedule when the reminder is disabled', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: false, time: '09:00' } });
+      settingsEventEmitter.emit('settings:updated', { timezone: 'America/Los_Angeles' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(schedule).not.toHaveBeenCalled();
+    });
+  });
+
+  // Centralized reschedule-on-save (finding 3): meatspacePost.js's
+  // updatePostConfig() emits postConfigEvents on every save; this module
+  // reschedules whenever the `reminder` slice was part of the patch,
+  // regardless of which caller invoked updatePostConfig.
+  describe('reschedule via meatspacePost.js postConfigEvents', () => {
+    it('reschedules when the saved patch includes a reminder block', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+
+      postConfigEventEmitter.emit('post-config:updated', {
+        config: { reminder: { enabled: true, time: '09:00' } },
+        updates: { reminder: { enabled: true, time: '09:00' } }
+      });
+
+      await vi.waitFor(() => {
+        expect(schedule).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('does not reschedule when the saved patch has no reminder key', async () => {
+      postConfigEventEmitter.emit('post-config:updated', {
+        config: { adaptive: { enabled: true } },
+        updates: { adaptive: { enabled: true } }
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(schedule).not.toHaveBeenCalled();
+      expect(getPostConfig).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('stopPostReminderSchedule', () => {
@@ -119,6 +282,7 @@ describe('firePostReminderIfIncomplete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPostSessions.mockResolvedValue([]);
+    getNotifications.mockResolvedValue([]);
     getUserTimezone.mockResolvedValue('UTC');
     todayInTimezone.mockReturnValue('2026-07-01');
     // Default: getLocalParts on any session's startedAt resolves to "today" —
@@ -175,6 +339,31 @@ describe('firePostReminderIfIncomplete', () => {
 
     expect(addNotification).not.toHaveBeenCalled();
     expect(getPostSessions).not.toHaveBeenCalled();
+  });
+
+  // De-dupe guard backing the missed-slot catch-up: a second evaluation of
+  // the same local day (e.g. catch-up re-running after the normal cron tick
+  // already fired earlier) must not send a second notification.
+  it('does not nag again if a reminder notification already exists for today', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    getPostSessions.mockResolvedValue([]);
+    getNotifications.mockResolvedValue([{ timestamp: '2026-07-01T09:00:05.000Z' }]);
+    getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+
+    await firePostReminderIfIncomplete();
+
+    expect(addNotification).not.toHaveBeenCalled();
+  });
+
+  it('nags when the only existing reminder notification is from a different local day', async () => {
+    getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+    getPostSessions.mockResolvedValue([]);
+    getNotifications.mockResolvedValue([{ timestamp: '2026-06-30T09:00:05.000Z' }]);
+    getLocalParts.mockReturnValue({ year: 2026, month: 6, day: 30 }); // yesterday
+
+    await firePostReminderIfIncomplete();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
   });
 
   // Regression (finding 1 + its follow-up): the reminder cron fires on the
