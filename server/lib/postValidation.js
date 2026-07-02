@@ -48,7 +48,9 @@ const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-elem
 const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
 // Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
 // Sourced from meatspacePostCognitive.js so the type list has one owner.
-const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
+// Morse trainer drill types (client-side scoring — exact-match copy/send comparison).
+const MORSE_DRILL_TYPES = ['morse-copy', 'morse-head-copy', 'morse-send'];
+const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES, ...MORSE_DRILL_TYPES];
 
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
@@ -249,4 +251,4 @@ export const trainingEntrySchema = z.object({
   totalMs: z.number().min(0),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };
