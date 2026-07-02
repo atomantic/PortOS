@@ -4,6 +4,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import NicotineChart from '../NicotineChart';
 import NicotineHealthCorrelation from '../NicotineHealthCorrelation';
@@ -331,8 +332,7 @@ export default function NicotineTab() {
 
             {/* Custom entry + date — single row */}
             <form onSubmit={handleCustomAdd} className="flex flex-wrap items-end gap-2 pt-2 border-t border-port-border/50">
-              <div className="flex-1 min-w-[100px]">
-                <label className="block text-xs text-gray-500 mb-1">Product</label>
+              <FormField label="Product" className="flex-1 min-w-[100px]" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="text"
                   value={product}
@@ -340,9 +340,8 @@ export default function NicotineTab() {
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white placeholder-gray-600"
                   placeholder="e.g. Stokes Pick"
                 />
-              </div>
-              <div className="w-16">
-                <label className="block text-xs text-gray-500 mb-1">mg</label>
+              </FormField>
+              <FormField label="mg" className="w-16" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={mgPerUnit}
@@ -353,9 +352,8 @@ export default function NicotineTab() {
                   min="0.1"
                   required
                 />
-              </div>
-              <div className="w-14">
-                <label className="block text-xs text-gray-500 mb-1">Qty</label>
+              </FormField>
+              <FormField label="Qty" className="w-14" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={count}
@@ -363,16 +361,15 @@ export default function NicotineTab() {
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
                   min="1"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Date</label>
+              </FormField>
+              <FormField label="Date" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="date"
                   value={date}
                   onChange={e => setDate(e.target.value)}
                   className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-white"
                 />
-              </div>
+              </FormField>
               {date !== today && (
                 <button
                   type="button"

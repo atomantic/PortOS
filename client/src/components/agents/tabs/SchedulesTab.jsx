@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import { FormField } from '../../ui/FormField';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
 import { formatDateTime } from '../../../utils/formatters';
 
@@ -150,8 +151,7 @@ export default function SchedulesTab({ agentId }) {
           <h3 className="text-md font-semibold text-white mb-4">Create Schedule</h3>
 
           <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Account</label>
+            <FormField label="Account">
               <select
                 value={formData.accountId}
                 onChange={(e) => {
@@ -170,9 +170,8 @@ export default function SchedulesTab({ agentId }) {
                   </option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Action Type</label>
+            </FormField>
+            <FormField label="Action Type">
               <select
                 value={formData.action.type}
                 onChange={(e) => setFormData({ ...formData, action: { type: e.target.value, params: {} } })}
@@ -187,11 +186,10 @@ export default function SchedulesTab({ agentId }) {
               <p className="text-xs text-gray-500 mt-1">
                 {ACTION_TYPES.find(a => a.value === formData.action.type)?.description}
               </p>
-            </div>
+            </FormField>
           </div>
 
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-1">Schedule Type</label>
+          <FormField label="Schedule Type" className="mb-4">
             <select
               value={formData.schedule.type}
               onChange={(e) => handleScheduleTypeChange(e.target.value)}
@@ -203,11 +201,10 @@ export default function SchedulesTab({ agentId }) {
                 </option>
               ))}
             </select>
-          </div>
+          </FormField>
 
           {formData.schedule.type === 'cron' && (
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Cron Expression</label>
+            <FormField label="Cron Expression" className="mb-4">
               <select
                 value={formData.schedule.cron}
                 onChange={(e) => setFormData({ ...formData, schedule: { ...formData.schedule, cron: e.target.value } })}
@@ -219,12 +216,11 @@ export default function SchedulesTab({ agentId }) {
                   </option>
                 ))}
               </select>
-            </div>
+            </FormField>
           )}
 
           {formData.schedule.type === 'interval' && (
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Interval</label>
+            <FormField label="Interval" className="mb-4">
               <select
                 value={formData.schedule.intervalMs}
                 onChange={(e) => setFormData({ ...formData, schedule: { ...formData.schedule, intervalMs: parseInt(e.target.value, 10) } })}
@@ -236,13 +232,12 @@ export default function SchedulesTab({ agentId }) {
                   </option>
                 ))}
               </select>
-            </div>
+            </FormField>
           )}
 
           {formData.schedule.type === 'random' && (
             <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Min Interval</label>
+              <FormField label="Min Interval">
                 <select
                   value={formData.schedule.randomWindow?.minMs}
                   onChange={(e) => setFormData({
@@ -260,9 +255,8 @@ export default function SchedulesTab({ agentId }) {
                     </option>
                   ))}
                 </select>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Max Interval</label>
+              </FormField>
+              <FormField label="Max Interval">
                 <select
                   value={formData.schedule.randomWindow?.maxMs}
                   onChange={(e) => setFormData({
@@ -280,12 +274,11 @@ export default function SchedulesTab({ agentId }) {
                     </option>
                   ))}
                 </select>
-              </div>
+              </FormField>
             </div>
           )}
 
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-1">Max Per Day (rate limit)</label>
+          <FormField label="Max Per Day (rate limit)" className="mb-4">
             <input
               type="number"
               value={formData.rateLimit.maxPerDay || 50}
@@ -294,7 +287,7 @@ export default function SchedulesTab({ agentId }) {
               min="1"
               max="1000"
             />
-          </div>
+          </FormField>
 
           <div className="flex gap-2">
             <button

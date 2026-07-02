@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const TYPE_ICONS = { gmail: Mail, outlook: Globe, teams: MessageSquare };
@@ -275,8 +276,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
         {showForm && (
           <div className="p-4 bg-port-card rounded-lg border border-port-border space-y-3 mb-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Name</label>
+            <FormField label="Name">
               <input
                 type="text"
                 value={form.name}
@@ -284,9 +284,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 placeholder="e.g. Work Gmail"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
               />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Type</label>
+            </FormField>
+            <FormField label="Type">
               <select
                 value={form.type}
                 onChange={(e) => setForm(f => ({ ...f, type: e.target.value }))}
@@ -296,9 +295,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 <option value="outlook">Outlook (Playwright)</option>
                 <option value="teams">Teams (Playwright)</option>
               </select>
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Email</label>
+            </FormField>
+            <FormField label="Email">
               <input
                 type="email"
                 value={form.email}
@@ -306,7 +304,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 placeholder="user@example.com"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
               />
-            </div>
+            </FormField>
             <div className="flex gap-2">
               <button
                 onClick={handleCreate}
@@ -469,24 +467,30 @@ export default function ConfigTab({ accounts, setAccounts }) {
           <RefreshCw size={16} className="text-port-accent animate-spin" />
         ) : (
           <div className="space-y-4">
-            <div className="p-4 bg-port-card rounded-lg border border-port-border">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Reply Template</label>
+            <FormField
+              label="Reply Template"
+              className="p-4 bg-port-card rounded-lg border border-port-border"
+              labelClassName="block text-sm font-medium text-gray-300 mb-2"
+            >
               <textarea
                 value={config.replyTemplate}
                 onChange={(e) => updateTemplate('replyTemplate', e.target.value)}
                 rows={8}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white font-mono placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
               />
-            </div>
-            <div className="p-4 bg-port-card rounded-lg border border-port-border">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Forward Template</label>
+            </FormField>
+            <FormField
+              label="Forward Template"
+              className="p-4 bg-port-card rounded-lg border border-port-border"
+              labelClassName="block text-sm font-medium text-gray-300 mb-2"
+            >
               <textarea
                 value={config.forwardTemplate}
                 onChange={(e) => updateTemplate('forwardTemplate', e.target.value)}
                 rows={6}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white font-mono placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
               />
-            </div>
+            </FormField>
             <div className="flex items-center gap-3">
               <button
                 onClick={handleSaveConfig}
