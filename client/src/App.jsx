@@ -42,6 +42,7 @@ const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaAnnotate = lazyWithReload(() => import('./pages/MediaAnnotate'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
@@ -273,6 +274,8 @@ export default function App() {
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="history" element={<MediaHistory />} />
+            <Route path="annotate" element={<MediaAnnotate />} />
+            <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />
             <Route path="collections" element={<MediaCollections />} />
             <Route path="collections/:id" element={<MediaCollectionDetail />} />
             <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
