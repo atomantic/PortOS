@@ -185,7 +185,14 @@ export async function submitPostSession(sessionData) {
   // drilled item's spaced-repetition schedule, so it reschedules and clears
   // from "Due Today" just like a direct MemoryBuilder practice session would.
   // Ratio comes from raw correctness (not `score`, which also folds in a speed
-  // bonus) to match the accuracy signal `advanceSchedule` expects.
+  // bonus) to match the accuracy signal `advanceSchedule` expects. (Chunk/element
+  // MASTERY is not updated here — POST-session answers don't carry that
+  // granularity yet; tracked as a follow-up in #2016.)
+  // Sequential, not Promise.all: advanceScheduleFromSession does a full
+  // read-modify-write of the shared memory-items file with no write queue, so
+  // two tasks referencing items resolved concurrently could race and drop an
+  // update (last write wins). A session rarely has more than 1-2 memory tasks,
+  // so the latency cost of awaiting each is negligible.
   for (const task of rescoredTasks) {
     if (!POST_SUPPORTED_MEMORY_TYPES.includes(task.type) || !task.memoryItemId) continue;
     const total = task.questions?.length || 0;
