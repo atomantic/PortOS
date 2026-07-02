@@ -7,7 +7,7 @@
  */
 
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -78,7 +78,7 @@ export async function getBodyHistory() {
 }
 
 export async function addBodyEntry({ date, ...body }) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
 
   if (await isMortalLoomEnabled()) {
     const stored = await mlPush('bodyEntries', { date: targetDate, ...body });
@@ -191,7 +191,7 @@ export async function getWorkouts() {
 }
 
 export async function addWorkout({ date, type, durationMinutes, intensity, notes } = {}) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
   const trimmedType = typeof type === 'string' ? type.trim() : '';
   if (!trimmedType) throw new Error('workout type is required');
   const entry = {
@@ -229,7 +229,7 @@ export async function getBloodPressureHistory() {
 }
 
 export async function addBloodPressureReading({ date, systolic, diastolic }) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
   const patch = { bloodPressureSystolic: systolic, bloodPressureDiastolic: diastolic };
 
   if (await isMortalLoomEnabled()) {

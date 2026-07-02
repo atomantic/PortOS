@@ -101,7 +101,7 @@ const FETCH_ERROR = 'Could not fetch feed — check the URL';
 describe('getFeeds / getFeedStats — empty state', () => {
   it('returns empty arrays before any subscriptions', async () => {
     expect(await feeds.getFeeds()).toEqual([]);
-    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 0, totalItems: 0, unreadItems: 0 });
+    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 0, totalItems: 0, unreadItems: 0, topUnread: [] });
   });
 });
 
@@ -449,7 +449,27 @@ describe('getFeeds — unread counts', () => {
 
 describe('getFeedStats', () => {
   it('aggregates totals across feeds', async () => {
-    await seedTwoFeeds();
-    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 2, totalItems: 4, unreadItems: 4 });
+    const { feedA, feedB } = await seedTwoFeeds();
+    const stats = await feeds.getFeedStats();
+    expect(stats.totalFeeds).toBe(2);
+    expect(stats.totalItems).toBe(4);
+    expect(stats.unreadItems).toBe(4);
+    // Every feed with unread items is surfaced, sorted by unread count desc.
+    expect(stats.topUnread).toHaveLength(2);
+    expect(stats.topUnread.map(f => f.id).sort()).toEqual([feedA.id, feedB.id].sort());
+    expect(stats.topUnread.every(f => f.unread === 2)).toBe(true);
+  });
+
+  it('excludes fully-read feeds and ranks by unread count', async () => {
+    const { feedA } = await seedTwoFeeds();
+    // Mark every item in feedA read so it drops out of topUnread entirely.
+    for (const item of await feeds.getItems({ feedId: feedA.id })) {
+      await feeds.markItemRead(item.id);
+    }
+    const stats = await feeds.getFeedStats();
+    expect(stats.unreadItems).toBe(2);
+    expect(stats.topUnread).toHaveLength(1);
+    expect(stats.topUnread[0].id).not.toBe(feedA.id);
+    expect(stats.topUnread[0].unread).toBe(2);
   });
 });

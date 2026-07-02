@@ -376,10 +376,22 @@ export async function markAllRead(feedId) {
 
 export async function getFeedStats() {
   const data = await store.load();
+  // Single-pass per-feed unread tally (O(I)) — mirrors getFeeds()'s approach so
+  // the widget can surface top unread feed names without a second computation.
+  const unreadCounts = new Map();
+  for (const item of data.items) {
+    if (!item.read) unreadCounts.set(item.feedId, (unreadCounts.get(item.feedId) || 0) + 1);
+  }
+  const topUnread = data.feeds
+    .map(feed => ({ id: feed.id, title: feed.title, unread: unreadCounts.get(feed.id) || 0 }))
+    .filter(f => f.unread > 0)
+    .sort((a, b) => b.unread - a.unread)
+    .slice(0, 5);
   return {
     totalFeeds: data.feeds.length,
     totalItems: data.items.length,
-    unreadItems: data.items.filter(i => !i.read).length
+    unreadItems: data.items.filter(i => !i.read).length,
+    topUnread
   };
 }
 
