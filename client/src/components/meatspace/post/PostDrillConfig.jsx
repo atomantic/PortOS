@@ -204,9 +204,13 @@ const COGNITIVE_DRILL_META = {
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
       { key: 'minDelayMs', label: 'Min Delay (ms)', type: 'number', min: 300, max: 5000 },
       { key: 'maxDelayMs', label: 'Max Delay (ms)', type: 'number', min: 300, max: 8000 },
+      // Only meaningful in Choice mode (the generator ignores it for Simple),
+      // but shown unconditionally — DrillCard has no per-field conditional
+      // visibility and this mirrors how other fields already behave.
+      { key: 'choices', label: 'Choices (Choice mode)', type: 'number', min: 2, max: 4 },
       { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, timeLimitSec: 90 },
+    defaults: { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3, timeLimitSec: 90 },
   },
 };
 

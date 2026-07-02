@@ -50,7 +50,7 @@ const DEFAULT_CONFIG = {
       'stroop': { enabled: true, count: 15, timeLimitSec: 60 },
       'schulte-table': { enabled: true, size: 5, timeLimitSec: 120 },
       'mental-rotation': { enabled: true, count: 8, timeLimitSec: 120 },
-      'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, timeLimitSec: 90 }
+      'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3, timeLimitSec: 90 }
     }
   },
   sessionModules: ['mental-math'],

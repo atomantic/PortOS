@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   COGNITIVE_DRILL_TYPES,
   STROOP_COLORS,
+  ROTATION_SHAPES,
   generateNBack,
   generateDigitSpan,
   generateStroop,
@@ -10,6 +11,9 @@ import {
   generateReactionTime,
   generateCognitiveDrill,
   scoreCognitiveDrill,
+  rotateCells,
+  mirrorCells,
+  cellsKey,
 } from './meatspacePostCognitive.js';
 
 describe('cognitive drill generators', () => {
@@ -107,6 +111,23 @@ describe('cognitive drill generators', () => {
       // Every option's cell count matches the base shape's (rotation/mirroring
       // preserve cell count) — a cheap sanity check that nothing was corrupted.
       for (const opt of trial.options) expect(opt.length).toBe(trial.target.length);
+    }
+  });
+
+  it('ROTATION_SHAPES chirality invariant: every rotation is distinct, every mirrored-rotation is distinct, and no rotation ever equals a mirrored-rotation', () => {
+    // This is the invariant generateMentalRotation's distractor-fill loop relies
+    // on: without it, a base shape could silently yield fewer than 3 distinct
+    // mirrored distractors (an infinite-guard exhaustion) or a "distractor" that
+    // is secretly a true rotation of the reference shape (a broken drill).
+    for (const [shapeName, baseCells] of Object.entries(ROTATION_SHAPES)) {
+      const rotationKeys = [0, 1, 2, 3].map(steps => cellsKey(rotateCells(baseCells, steps)));
+      const mirrorKeys = [0, 1, 2, 3].map(steps => cellsKey(mirrorCells(rotateCells(baseCells, steps))));
+
+      expect(new Set(rotationKeys).size, `${shapeName}: all 4 rotations must be distinct`).toBe(4);
+      expect(new Set(mirrorKeys).size, `${shapeName}: all 4 mirrored-rotations must be distinct`).toBe(4);
+      for (const mirrorK of mirrorKeys) {
+        expect(rotationKeys, `${shapeName}: a mirrored-rotation must never equal any rotation`).not.toContain(mirrorK);
+      }
     }
   });
 

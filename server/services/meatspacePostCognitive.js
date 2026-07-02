@@ -78,14 +78,17 @@ function shuffle(arr) {
 }
 
 // --- Mental rotation: grid-cell shape helpers -------------------------------
-// Four chiral pentomino footprints, each within a 4x4 box. Verified (see
-// meatspacePostCognitive.test.js) that every rotation is distinct from every
-// mirrored-rotation, AND all 4 rotations of each are themselves distinct —
-// so "rotated match" vs "mirrored distractor" is always unambiguous and there
-// are always 3 distinct mirrored candidates to fill the distractor slots.
-// (The classic Z/S-pentomino was excluded: it has 180deg rotational symmetry,
-// leaving only 2 distinct mirrored variants — not enough for 3 distractors.)
-const ROTATION_SHAPES = {
+// Four chiral pentomino footprints, each within a 4x4 box. Verified (see the
+// "ROTATION_SHAPES chirality invariant" test in meatspacePostCognitive.test.js,
+// which exercises this exact set via the exported ROTATION_SHAPES) that every
+// rotation is distinct from every mirrored-rotation, AND all 4 rotations of
+// each are themselves distinct — so "rotated match" vs "mirrored distractor"
+// is always unambiguous and there are always 3 distinct mirrored candidates
+// to fill the distractor slots. (The classic Z/S-pentomino was excluded: it
+// has 180deg rotational symmetry, leaving only 2 distinct mirrored variants —
+// not enough for 3 distractors.) Exported so the test can assert the
+// invariant directly against the real shape set, not a hand-copied one.
+export const ROTATION_SHAPES = {
   F: [[1, 0], [2, 0], [0, 1], [1, 1], [1, 2]],
   L: [[0, 0], [0, 1], [0, 2], [0, 3], [1, 3]],
   N: [[0, 0], [0, 1], [1, 1], [1, 2], [1, 3]],
@@ -99,8 +102,9 @@ function normalizeCells(cells) {
 }
 
 // Rotate 90deg clockwise `times` times (0-3) around the origin, then
-// re-normalize into the non-negative quadrant.
-function rotateCells(cells, times) {
+// re-normalize into the non-negative quadrant. Exported so tests can verify
+// the ROTATION_SHAPES chirality invariant directly (see meatspacePostCognitive.test.js).
+export function rotateCells(cells, times) {
   let pts = cells;
   for (let t = 0; t < ((times % 4) + 4) % 4; t++) {
     pts = pts.map(([x, y]) => [y, -x]);
@@ -110,11 +114,11 @@ function rotateCells(cells, times) {
 
 // Mirror across the vertical axis (flip x) — same footprint size, opposite
 // chirality, so it looks similar but is not reachable by rotation alone.
-function mirrorCells(cells) {
+export function mirrorCells(cells) {
   return normalizeCells(cells.map(([x, y]) => [-x, y]));
 }
 
-function cellsKey(cells) {
+export function cellsKey(cells) {
   return cells.map(([x, y]) => `${x},${y}`).join('|');
 }
 
