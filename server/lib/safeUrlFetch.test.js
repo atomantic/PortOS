@@ -71,6 +71,23 @@ describe('isPublicHttpUrlSafe — strict blockPrivate posture', () => {
   it('rejects an IPv6 ULA literal under blockPrivate', async () => {
     expect(await isPublicHttpUrlSafe('http://[fd12:3456:789a::1]/x', { blockPrivate: true })).toBe(false);
   });
+  it('rejects a CGNAT 100.64/10 literal (Tailscale) under blockPrivate', async () => {
+    expect(await isPublicHttpUrlSafe('http://100.100.100.200/x', { blockPrivate: true })).toBe(false);
+    expect(await isPublicHttpUrlSafe('http://100.64.0.1/x', { blockPrivate: true })).toBe(false);
+    // 100.63.x / 100.128.x are public — must NOT be blocked (literal, no resolve).
+    expect(await isPublicHttpUrlSafe('http://100.63.0.1/x', { blockPrivate: true })).toBe(true);
+    expect(await isPublicHttpUrlSafe('http://100.128.0.1/x', { blockPrivate: true })).toBe(true);
+  });
+  it('rejects a CGNAT/private address a hostname RESOLVES to under blockPrivate', async () => {
+    lookupMock.mockResolvedValue({ address: '100.100.42.7', family: 4 });
+    expect(await isPublicHttpUrlSafe('https://tailnet.example.com/x', { blockPrivate: true })).toBe(false);
+  });
+  it('rejects the deprecated IPv4-compatible IPv6 form of a private v4 under blockPrivate', async () => {
+    // new URL('http://[::192.168.1.1]') normalizes to hostname [::c0a8:101] —
+    // the ffff-less compatible form. It must still decode to 192.168.1.1.
+    expect(await isPublicHttpUrlSafe('http://[::192.168.1.1]/x', { blockPrivate: true })).toBe(false);
+    expect(await isPublicHttpUrlSafe('http://[::10.0.0.1]/x', { blockPrivate: true })).toBe(false);
+  });
   it('rejects a hostname that RESOLVES to a private address under blockPrivate', async () => {
     lookupMock.mockResolvedValue({ address: '10.0.0.42', family: 4 });
     expect(await isPublicHttpUrlSafe('https://home.example.com/x', { blockPrivate: true })).toBe(false);

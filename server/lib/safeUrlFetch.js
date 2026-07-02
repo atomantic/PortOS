@@ -44,15 +44,22 @@ function isPrivateAddress(ip) {
   const lower = ip.toLowerCase();
   if (lower.includes(':')) {
     if (lower === '::1' || lower === '::') return true;
-    // IPv4-mapped IPv6 — both ::ffff:a.b.c.d (raw dns.resolve form) and
-    // ::ffff:wxyz:wxyz (the hex form URL parsing normalizes to).
-    const mappedDotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mappedDotted) return isPrivateAddress(mappedDotted[1]);
-    const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (mappedHex) {
-      const high = parseInt(mappedHex[1], 16);
-      const low = parseInt(mappedHex[2], 16);
-      return isPrivateAddress(`${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`);
+    // Embedded IPv4 — IPv4-mapped (::ffff:…) OR the deprecated IPv4-compatible
+    // (::…) form, either dotted (::ffff:1.2.3.4) or the two-hextet form URL
+    // parsing normalizes to (::ffff:c0a8:101 AND the ffff-less ::c0a8:101 that
+    // `new URL('http://[::192.168.1.1]')` yields). Decode and re-check as IPv4 so
+    // a private v4 embedded in an IPv6 literal can't slip past. Mirrors the
+    // embedded-v4 handling in catalogValidation.isBlockedIngestHost.
+    const embedded = /^::(?:ffff:)?(.+)$/i.exec(lower);
+    if (embedded) {
+      const tail = embedded[1];
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return isPrivateAddress(tail);
+      const parts = tail.split(':');
+      if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+        const hi = parseInt(parts[0], 16);
+        const lo = parseInt(parts[1], 16);
+        return isPrivateAddress(`${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`);
+      }
     }
     const firstGroup = lower.split(':')[0];
     if (firstGroup) {
@@ -69,6 +76,7 @@ function isPrivateAddress(ip) {
     if (parts[0] === 10) return true;
     if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
     if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // CGNAT 100.64/10 (Tailscale et al.)
     if (parts[0] === 169 && parts[1] === 254) return true;
     if (parts[0] === 127) return true;
     if (parts[0] === 0) return true;
