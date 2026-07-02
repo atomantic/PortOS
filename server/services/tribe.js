@@ -404,13 +404,17 @@ async function autoCreateTouchpoint(personId, data) {
     );
     if (!result.rows[0]) return null; // duplicate — already logged for this key
 
+    // Advance last_contact_on only. Unlike a manual touchpoint, an auto-log must
+    // NOT overwrite the person's curated `channel` (their preferred way to
+    // connect): it fires silently on every sync and would otherwise churn the
+    // preference to the last meeting location / account type. The synced
+    // channel is still preserved on the touchpoint row itself.
     await client.query(
       `UPDATE tribe_people
        SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
-           channel = CASE WHEN $3::text = '' THEN channel ELSE $3::text END,
            updated_at = NOW()
        WHERE id = $1`,
-      [personId, happenedAt, data.channel || ''],
+      [personId, happenedAt],
     );
     return rowToTouchpoint(result.rows[0]);
   });

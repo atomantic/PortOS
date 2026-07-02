@@ -185,9 +185,13 @@ export async function syncAccount(accountId, io, options = {}) {
     await saveCache(accountId, cache);
     await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
 
-    // Auto-log Tribe touchpoints from newly synced messages (#2033) — secondary
-    // effect, must not fail the sync; deduped per thread + day so re-syncs are safe.
-    await logMessageTouchpoints(account, uniqueNew).catch((err) =>
+    // Auto-log Tribe touchpoints from the cached messages (#2033) — secondary
+    // effect, must not fail the sync. Scans the full (maxMessages-capped) cache
+    // rather than only the newly-added batch, mirroring the calendar path: so
+    // adding a person's email AFTER their messages synced still backfills, and a
+    // prior auto-log failure self-heals on the next sync. Deduped per thread+day
+    // (partial unique index), so re-scanning already-logged messages is a no-op.
+    await logMessageTouchpoints(account, cache.messages).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
@@ -349,8 +353,14 @@ export async function logMessageTouchpoints(account, messages = []) {
     const participants = [message.from, ...(message.to || []), ...(message.cc || [])];
     const identities = participants
       .map(toIdentity)
-      .filter((identity) => identity && identity.email
-        && identity.email.trim().toLowerCase() !== selfEmail);
+      .filter((identity) => {
+        if (!identity) return false;
+        const email = (identity.email || '').trim().toLowerCase();
+        if (email && email === selfEmail) return false; // exclude the account owner
+        // Keep name-only participants too so the matcher's unique-name fallback
+        // still applies (mirrors the calendar path, which passes every identity).
+        return Boolean(email || identity.name);
+      });
     if (identities.length === 0) continue;
     const when = message.date || new Date().toISOString();
     const day = new Date(safeDate(when)).toISOString().slice(0, 10);

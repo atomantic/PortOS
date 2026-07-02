@@ -615,6 +615,15 @@ describe('logMessageTouchpoints — candidate building (#2033)', () => {
     expect(candidates[0].dedupeKey).toBe(`msg:${VALID_UUID}:m2:2026-06-02`);
   });
 
+  it('keeps a name-only participant so the matcher unique-name fallback applies', async () => {
+    await logMessageTouchpoints(account, [{
+      id: 'm4', subject: 'Hi', date: '2026-06-01T00:00:00Z',
+      from: { name: 'Ada Lovelace', email: '' }, to: [], cc: [],
+    }]);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates[0].identities).toEqual([{ email: '', name: 'Ada Lovelace' }]);
+  });
+
   it('skips a message with no counterpart beyond the account owner', async () => {
     await logMessageTouchpoints(account, [{
       id: 'm3', date: '2026-06-01T00:00:00Z',
