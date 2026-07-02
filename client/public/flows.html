@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PortOS Integration Flows</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --card: #1a1a1a;
+    --border: #2a2a2a;
+    --accent: #3b82f6;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  /* The scroll containers below re-declare the body background because some
+     browsers paint composited scroll regions white when they inherit none. */
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header h1 { font-size: 16px; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  body.embed header { display: none; }
+  #app { flex: 1; display: flex; min-height: 0; }
+
+  /* Sidebar */
+  #sidebar {
+    width: 300px;
+    flex: none;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg);
+    color: var(--text);
+  }
+  #flowList { overflow-y: auto; padding: 8px; flex: none; max-height: 45%; background: var(--bg); }
+  .cat { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; margin: 10px 6px 4px; }
+  .flow-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 8px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .flow-btn:hover { background: var(--card); }
+  .flow-btn.active { background: var(--card); border-color: var(--accent); }
+  .flow-btn .n { color: var(--muted); font-size: 11px; }
+  #detail {
+    flex: 1;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    padding: 10px;
+    min-height: 0;
+    background: var(--bg);
+  }
+  #detail .desc { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  #detail h2 { font-size: 14px; margin-bottom: 4px; }
+  .step {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 8px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    background: var(--card);
+  }
+  .step.hl { border-color: var(--accent); }
+  .step .route { font-size: 12.5px; font-weight: 600; }
+  .step .route .num {
+    display: inline-block;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    margin-right: 6px;
+  }
+  .step .label { font-size: 12px; margin-top: 2px; }
+  .step .payload { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .chip {
+    display: inline-block;
+    font-size: 10px;
+    border-radius: 4px;
+    padding: 0 5px;
+    margin-left: 6px;
+    border: 1px solid;
+    vertical-align: 1px;
+  }
+  .node-info { font-size: 12.5px; }
+  .node-info .file { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; margin: 4px 0 8px; }
+  .node-info ul { margin: 4px 0 0 16px; }
+  .node-info li a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  #resetBtn {
+    margin: 8px;
+    flex: none;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px;
+    cursor: pointer;
+    font: inherit;
+  }
+  #resetBtn:hover { border-color: var(--accent); }
+  #mobileSelect { display: none; }
+
+  /* Diagram */
+  #diagramWrap { flex: 1; overflow: auto; position: relative; min-width: 0; background: var(--bg); }
+  #diagram { position: relative; }
+  #edges { position: absolute; inset: 0; }
+  .colhead {
+    position: absolute;
+    top: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: center;
+  }
+  .node {
+    position: absolute;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity 0.15s, border-color 0.15s;
+  }
+  .node:hover { border-color: var(--muted); }
+  .node.dim { opacity: 0.22; }
+  .node.hl { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .node.selected { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+  path.edge { fill: none; opacity: 0.14; transition: opacity 0.15s; }
+  path.edge.hl { opacity: 1; }
+  path.edge.hidden { opacity: 0; }
+  path.edge.focus { stroke-width: 3; }
+  .badge { pointer-events: none; }
+  .badge circle { fill: var(--accent); }
+  .badge text { fill: #fff; font-size: 10px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+
+  /* Legend */
+  #legend {
+    position: sticky;
+    left: 0;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  #legend svg { vertical-align: middle; margin-right: 4px; }
+  #err { padding: 24px; color: var(--error); }
+
+  @media (max-width: 700px) {
+    #app { flex-direction: column; }
+    #sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); max-height: 45%; }
+    #flowList, #resetBtn { display: none; }
+    #mobileSelect {
+      display: block;
+      margin: 8px;
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px;
+      font: inherit;
+    }
+    #detail { border-top: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>PortOS Integration Flows</h1>
+  <span class="sub">click a flow to trace it across the system &middot; click a node for details &middot; Esc to reset</span>
+</header>
+<div id="app">
+  <div id="sidebar">
+    <select id="mobileSelect" aria-label="Select flow"></select>
+    <div id="flowList"></div>
+    <button id="resetBtn" type="button">Show all</button>
+    <div id="detail"></div>
+  </div>
+  <div id="diagramWrap">
+    <div id="diagram"></div>
+    <div id="legend"></div>
+  </div>
+</div>
+<script>
+(async () => {
+  const EMBED = new URLSearchParams(location.search).get('embed') === '1';
+  if (EMBED) document.body.classList.add('embed');
+
+  let data;
+  try {
+    const res = await fetch('/flows.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    document.getElementById('app').innerHTML = `<div id="err">Failed to load /flows.json: ${err.message}</div>`;
+    return;
+  }
+
+  const nodesById = new Map(data.nodes.map((n) => [n.id, n]));
+  const transportsById = new Map(data.transports.map((t) => [t.id, t]));
+  const groupsSorted = [...data.groups].sort((a, b) => a.column - b.column);
+
+  // ---- layout ----
+  const COL_W = 200, COL_GAP = 56, NODE_H = 30, NODE_GAP = 12, TOP = 42, PAD = 16;
+  const colNodes = groupsSorted.map((g) => data.nodes.filter((n) => n.group === g.id));
+  const pos = new Map(); // id -> {x, y, w, h}
+  groupsSorted.forEach((g, ci) => {
+    const x = PAD + ci * (COL_W + COL_GAP);
+    colNodes[ci].forEach((n, ri) => {
+      pos.set(n.id, { x, y: TOP + ri * (NODE_H + NODE_GAP), w: COL_W, h: NODE_H });
+    });
+  });
+  const width = PAD * 2 + groupsSorted.length * COL_W + (groupsSorted.length - 1) * COL_GAP;
+  const height = TOP + Math.max(...colNodes.map((c) => c.length)) * (NODE_H + NODE_GAP) + PAD;
+
+  const diagram = document.getElementById('diagram');
+  diagram.style.width = width + 'px';
+  diagram.style.height = height + 'px';
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('id', 'edges');
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  diagram.appendChild(svg);
+
+  groupsSorted.forEach((g, ci) => {
+    const head = document.createElement('div');
+    head.className = 'colhead';
+    head.textContent = g.label;
+    head.style.left = (PAD + ci * (COL_W + COL_GAP)) + 'px';
+    head.style.width = COL_W + 'px';
+    diagram.appendChild(head);
+  });
+
+  const nodeEls = new Map();
+  for (const n of data.nodes) {
+    const p = pos.get(n.id);
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.textContent = n.label;
+    el.title = n.file ? `${n.label} — ${n.file}` : n.label;
+    el.style.left = p.x + 'px';
+    el.style.top = p.y + 'px';
+    el.style.width = p.w + 'px';
+    el.style.height = p.h + 'px';
+    el.addEventListener('click', () => showNode(n.id));
+    diagram.appendChild(el);
+    nodeEls.set(n.id, el);
+  }
+
+  // ---- edges ----
+  // Deduplicate edges shared by multiple flows; curve parallel edges apart.
+  const edgeKey = (s) => `${s.from}|${s.to}|${s.transport}`;
+  const edges = new Map(); // key -> SVG path element
+  const pairCount = new Map();
+  const allSteps = data.flows.flatMap((f) => f.steps);
+  for (const s of allSteps) {
+    const key = edgeKey(s);
+    if (edges.has(key)) continue;
+    const pairKey = [s.from, s.to].sort().join('|');
+    const idx = pairCount.get(pairKey) || 0;
+    pairCount.set(pairKey, idx + 1);
+    const a = pos.get(s.from), b = pos.get(s.to);
+    const forward = a.x < b.x;
+    const x1 = forward ? a.x + a.w : a.x;
+    const x2 = forward ? b.x : b.x + b.w;
+    const y1 = a.y + a.h / 2, y2 = b.y + b.h / 2;
+    const bend = Math.max(36, Math.abs(x2 - x1) * 0.35) * (forward ? 1 : -1);
+    const lift = idx * 14 * (idx % 2 ? 1 : -1); // spread parallel edges
+    const d = `M ${x1} ${y1} C ${x1 + bend} ${y1 + lift}, ${x2 - bend} ${y2 + lift}, ${x2} ${y2}`;
+    const t = transportsById.get(s.transport);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'edge');
+    path.setAttribute('stroke', t.color);
+    path.setAttribute('stroke-width', '2');
+    if (t.dash) path.setAttribute('stroke-dasharray', t.dash);
+    svg.appendChild(path);
+    edges.set(key, path);
+  }
+
+  let badgeLayer = null;
+
+  // ---- legend ----
+  const legend = document.getElementById('legend');
+  legend.innerHTML = data.transports.map((t) =>
+    `<span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="${t.color}" stroke-width="2"${t.dash ? ` stroke-dasharray="${t.dash}"` : ''}/></svg>${t.label}</span>`
+  ).join('');
+
+  // ---- sidebar flow list ----
+  const flowList = document.getElementById('flowList');
+  const mobileSelect = document.getElementById('mobileSelect');
+  const detail = document.getElementById('detail');
+  const DEFAULT_DETAIL = '<div class="desc">Select a flow to see each hop annotated with its transport and payload, or click any node to see what it is and which flows pass through it.</div>';
+  detail.innerHTML = DEFAULT_DETAIL;
+  const flowBtns = [];
+  const categories = [...new Set(data.flows.map((f) => f.category))];
+  mobileSelect.innerHTML = '<option value="">Overview (all flows)</option>';
+  for (const cat of categories) {
+    const h = document.createElement('div');
+    h.className = 'cat';
+    h.textContent = cat;
+    flowList.appendChild(h);
+    const og = document.createElement('optgroup');
+    og.label = cat;
+    for (const f of data.flows.filter((x) => x.category === cat)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'flow-btn';
+      btn.dataset.flow = f.id;
+      btn.innerHTML = `${f.label} <span class="n">· ${f.steps.length} hops</span>`;
+      btn.addEventListener('click', () => selectFlow(f.id));
+      flowList.appendChild(btn);
+      flowBtns.push(btn);
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = f.label;
+      og.appendChild(opt);
+    }
+    mobileSelect.appendChild(og);
+  }
+  mobileSelect.addEventListener('change', () => selectFlow(mobileSelect.value || null));
+  document.getElementById('resetBtn').addEventListener('click', () => selectFlow(null));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') selectFlow(null); });
+
+  // ---- selection ----
+  let activeFlowId = null;
+
+  function syncUrl(flowId) {
+    if (EMBED) {
+      // The host page's ?flow= param is the source of truth in embed mode.
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'flows:select', flow: flowId }, location.origin);
+      }
+      return;
+    }
+    const params = new URLSearchParams(location.search);
+    if (flowId) params.set('flow', flowId); else params.delete('flow');
+    history.replaceState(null, '', `${location.pathname}${params.size ? '?' + params : ''}`);
+  }
+
+  function clearHighlights() {
+    for (const el of nodeEls.values()) el.classList.remove('dim', 'hl', 'selected');
+    for (const path of edges.values()) path.classList.remove('hl', 'hidden', 'focus');
+    if (badgeLayer) { badgeLayer.remove(); badgeLayer = null; }
+  }
+
+  function selectFlow(flowId, { fromUrl = false } = {}) {
+    activeFlowId = flowId;
+    clearHighlights();
+    flowBtns.forEach((b) => b.classList.toggle('active', b.dataset.flow === flowId));
+    mobileSelect.value = flowId || '';
+    if (!fromUrl) syncUrl(flowId);
+
+    const flow = data.flows.find((f) => f.id === flowId);
+    if (!flow) {
+      activeFlowId = null;
+      detail.innerHTML = DEFAULT_DETAIL;
+      return;
+    }
+
+    const usedNodes = new Set(flow.steps.flatMap((s) => [s.from, s.to]));
+    const usedEdges = new Set(flow.steps.map(edgeKey));
+    for (const [id, el] of nodeEls) {
+      const on = usedNodes.has(id);
+      el.classList.toggle('dim', !on);
+      el.classList.toggle('hl', on);
+    }
+    for (const [key, path] of edges) {
+      const on = usedEdges.has(key);
+      path.classList.toggle('hidden', !on);
+      path.classList.toggle('hl', on);
+    }
+
+    // numbered hop badges at each highlighted edge's midpoint
+    badgeLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    flow.steps.forEach((s, i) => {
+      const path = edges.get(edgeKey(s));
+      const mid = path.getPointAtLength(path.getTotalLength() * (0.42 + (i % 3) * 0.08));
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('class', 'badge');
+      g.innerHTML = `<circle cx="${mid.x}" cy="${mid.y}" r="9"/><text x="${mid.x}" y="${mid.y}">${i + 1}</text>`;
+      badgeLayer.appendChild(g);
+    });
+    svg.appendChild(badgeLayer);
+
+    // bring the flow's nodes into view
+    const wrap = document.getElementById('diagramWrap');
+    const xs = [...usedNodes].map((id) => pos.get(id).x);
+    const ys = [...usedNodes].map((id) => pos.get(id).y);
+    wrap.scrollTo({
+      left: Math.max(0, (Math.min(...xs) + Math.max(...xs) + COL_W) / 2 - wrap.clientWidth / 2),
+      top: Math.max(0, (Math.min(...ys) + Math.max(...ys) + NODE_H) / 2 - wrap.clientHeight / 2),
+      behavior: 'smooth'
+    });
+
+    // step panel
+    detail.innerHTML = `<h2>${flow.label}</h2><div class="desc">${flow.description}</div>` +
+      flow.steps.map((s, i) => {
+        const t = transportsById.get(s.transport);
+        return `<div class="step" data-i="${i}">
+          <div class="route"><span class="num">${i + 1}</span>${nodesById.get(s.from).label} → ${nodesById.get(s.to).label}<span class="chip" style="color:${t.color};border-color:${t.color}">${t.label}</span></div>
+          <div class="label">${s.label}</div>
+          <div class="payload">${s.payload}</div>
+        </div>`;
+      }).join('');
+    detail.querySelectorAll('.step').forEach((el) => {
+      const step = flow.steps[Number(el.dataset.i)];
+      const path = edges.get(edgeKey(step));
+      const fromEl = nodeEls.get(step.from), toEl = nodeEls.get(step.to);
+      const focusEdge = (on) => {
+        el.classList.toggle('hl', on);
+        path.classList.toggle('focus', on);
+        fromEl.classList.toggle('selected', on);
+        toEl.classList.toggle('selected', on);
+      };
+      el.addEventListener('mouseenter', () => focusEdge(true));
+      el.addEventListener('mouseleave', () => focusEdge(false));
+      el.addEventListener('click', () => {
+        fromEl.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+      });
+    });
+    detail.scrollTop = 0;
+  }
+
+  function showNode(nodeId) {
+    const n = nodesById.get(nodeId);
+    if (activeFlowId) selectFlow(null); else clearHighlights();
+    nodeEls.get(nodeId).classList.add('selected');
+    const inFlows = data.flows.filter((f) => f.steps.some((s) => s.from === nodeId || s.to === nodeId));
+    detail.innerHTML = `<div class="node-info">
+      <h2>${n.label}</h2>
+      ${n.file ? `<div class="file">${n.file}</div>` : ''}
+      <div class="desc">${n.desc || ''}</div>
+      ${inFlows.length ? `Appears in:<ul>${inFlows.map((f) => `<li><a data-flow="${f.id}">${f.label}</a></li>`).join('')}</ul>` : 'Not part of any documented flow yet.'}
+    </div>`;
+    detail.querySelectorAll('a[data-flow]').forEach((a) =>
+      a.addEventListener('click', () => selectFlow(a.dataset.flow))
+    );
+  }
+
+  // embed mode: the host page pushes selection changes (⌘K, in-app links) here
+  if (EMBED) {
+    window.addEventListener('message', (event) => {
+      if (event.origin !== location.origin) return;
+      if (event.data?.type !== 'flows:select') return;
+      const id = event.data.flow || null;
+      if (id !== activeFlowId) selectFlow(id, { fromUrl: true });
+    });
+  }
+
+  // deep link: ?flow=<id>, stale ids degrade to the overview inside selectFlow
+  const initial = new URLSearchParams(location.search).get('flow');
+  if (initial) selectFlow(initial, { fromUrl: true });
+})();
+</script>
+</body>
+</html>
