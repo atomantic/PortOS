@@ -41,6 +41,20 @@ describe('postConfigUpdateSchema llmDrills', () => {
     expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '25:00' } })).toThrow();
     expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: 'nine am' } })).toThrow();
   });
+
+  // Regression: the native <input type="time"> can be cleared to '' by the
+  // user (backspace/keyboard). Without this, an empty time rejected the WHOLE
+  // config PUT — including unrelated mentalMath/adaptive/cognitive/llmDrills
+  // edits sent in the same request — instead of just leaving the reminder
+  // time unchanged.
+  it('treats an empty reminder time as absent rather than rejecting the whole request', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      adaptive: { enabled: true },
+      reminder: { enabled: true, time: '' }
+    });
+    expect(parsed.reminder).toEqual({ enabled: true });
+    expect(parsed.adaptive).toEqual({ enabled: true });
+  });
 });
 
 describe('postLlmScoreRequestSchema', () => {

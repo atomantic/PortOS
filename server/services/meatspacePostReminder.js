@@ -19,13 +19,11 @@
  */
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getLocalParts, todayInTimezone, HHMM_STRICT_RE } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions } from './meatspacePost.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 export const POST_REMINDER_EVENT_ID = 'post-daily-reminder';
-
-const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /**
  * Convert an "HH:MM" time-of-day into a daily cron expression ("M H * * *").
@@ -33,7 +31,7 @@ const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
  * so callers can skip scheduling rather than register a bad cron string.
  */
 export function reminderTimeToCron(time) {
-  if (typeof time !== 'string' || !HHMM_RE.test(time)) return null;
+  if (typeof time !== 'string' || !HHMM_STRICT_RE.test(time)) return null;
   const [hour, minute] = time.split(':').map(Number);
   return `${minute} ${hour} * * *`;
 }

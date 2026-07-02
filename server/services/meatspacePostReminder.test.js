@@ -16,7 +16,8 @@ vi.mock('./eventScheduler.js', () => ({
 vi.mock('../lib/timezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
   getLocalParts: vi.fn(),
-  todayInTimezone: vi.fn()
+  todayInTimezone: vi.fn(),
+  HHMM_STRICT_RE: /^([01]\d|2[0-3]):[0-5]\d$/
 }));
 
 vi.mock('./meatspacePost.js', () => ({
