@@ -6,6 +6,7 @@
 <title>PortOS Integration Flows</title>
 <style>
   :root {
+    color-scheme: dark; /* dark UA scrollbars + form controls to match the page */
     --bg: #0f0f0f;
     --card: #1a1a1a;
     --border: #2a2a2a;
@@ -17,6 +18,12 @@
     --muted: #9ca3af;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3f3f3f; }
+  ::-webkit-scrollbar-corner { background: transparent; }
   html, body { height: 100%; }
   /* The scroll containers below re-declare the body background because some
      browsers paint composited scroll regions white when they inherit none. */
