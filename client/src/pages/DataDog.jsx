@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import api from '../services/api';
 
 const SITE_OPTIONS = [
@@ -182,11 +183,7 @@ export default function DataDog() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading DataDog instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-56" cards={2} />;
   }
 
   return (

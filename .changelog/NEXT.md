@@ -8,6 +8,10 @@
 
 - **Config form labels now focus their field when clicked and read correctly to screen readers.** Many settings/config forms (AI Providers, DataDog, feature-agent config, message & calendar account setup, scheduled-task provider/model pickers, the agent world/schedule tabs, MeatSpace nicotine + POST drills, and more) rendered the label as a plain sibling of its input with no association, so clicking the label did nothing and assistive tech couldn't announce the pairing. These fields now flow through a shared `FormField` wrapper that generates a stable id and wires `htmlFor`/`id` automatically, keeping the exact same styling (#2027). Remaining forms are tracked for a follow-up sweep (#2051).
 
+## Loading states
+
+- **The DataDog, Jira, and GitHub integration pages now show a layout-shaped skeleton on first paint instead of a centered "Loading…" line.** Each page previously rendered a bare full-screen text message sized with `h-screen`, which mis-sized under mobile browser chrome and jumped when the real content arrived. They now share a `PageSkeleton` that reserves the header + card-grid dimensions (matching the loaded layout, using the `port-*` design tokens like the dashboard's `WidgetSkeleton`), so there's no post-load layout jump and no full-height wrapper fighting Layout's scroll (#2029).
+
 ## Internal
 
 - Consolidated five component-local duration/uptime/time-until formatters onto the shared `utils/formatters.js` helpers (`formatDurationMs`, `timeUntil`), per the "do not re-define formatters inside components" convention (#2028). `formatDurationMs` gained a day bucket (`2d 3h`) so long uptimes no longer render as an unbounded hours count; ProcessesTab, CityHud, Shell session ages, the CoS QuickSummary "next job" countdown, and the Loops interval label now all route through the shared helpers, and a `console.log` in `memoryClassifier.js` was collapsed to a single interpolated line.
