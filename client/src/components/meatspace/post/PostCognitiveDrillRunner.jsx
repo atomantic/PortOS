@@ -537,6 +537,11 @@ function SchulteTableRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   const stepStartRef = useRef(Date.now());
   const startedAtRef = useRef(Date.now());
   const flashTimeoutRef = useRef(null);
+  // Mirrors `target` synchronously so a double-tap/double-click that fires two
+  // handleClick calls before React commits the setTarget update can't both read
+  // the same stale `target` and both advance — the second call sees the bumped
+  // ref and is treated as a miss instead of a duplicate correct answer.
+  const targetRef = useRef(target);
 
   useEffect(() => () => clearTimeout(flashTimeoutRef.current), []);
 
@@ -556,23 +561,27 @@ function SchulteTableRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   finishRef.current = finish;
 
   const handleClick = useCallback((value) => {
-    if (value !== target) {
+    const current = targetRef.current;
+    if (value !== current) {
       setFlash(value);
       clearTimeout(flashTimeoutRef.current);
       flashTimeoutRef.current = setTimeout(() => setFlash(null), 200);
       return;
     }
+    // Advance the ref immediately (synchronously) so a second handleClick call
+    // racing in before this render commits sees the bumped value, not `current`.
+    targetRef.current = current + 1;
     questionsRef.current.push({
-      prompt: `${target}`,
-      index: target - 1,
-      answered: target,
+      prompt: `${current}`,
+      index: current - 1,
+      answered: current,
       correct: true,
       responseMs: Date.now() - stepStartRef.current,
     });
     stepStartRef.current = Date.now();
-    if (target >= total) finishRef.current();
-    else setTarget(t => t + 1);
-  }, [target, total]);
+    if (current >= total) finishRef.current();
+    else setTarget(current + 1);
+  }, [total]);
 
   const found = Math.min(target - 1, total);
   const progressPct = total > 0 ? (found / total) * 100 : 0;

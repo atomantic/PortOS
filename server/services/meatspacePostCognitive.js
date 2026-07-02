@@ -274,7 +274,10 @@ export function generateReactionTime(config = {}) {
   const count = clampInt(config.count, 5, 40, 15);
   const minDelayMs = clampInt(config.minDelayMs, 300, 5000, 1000);
   const maxDelayMs = Math.max(minDelayMs, clampInt(config.maxDelayMs, 300, 8000, 3000));
-  const choices = mode === 'choice' ? clampInt(config.choices, 2, 4, 3) : 1;
+  // `choices` is only meaningful (and only schema-valid, min 2) in choice mode —
+  // simple mode omits it entirely rather than persisting an out-of-range value
+  // like 1, which session submission's `choices: min(2)` schema would reject.
+  const choices = mode === 'choice' ? clampInt(config.choices, 2, 4, 3) : undefined;
 
   const trials = [];
   for (let i = 0; i < count; i++) {
@@ -283,7 +286,9 @@ export function generateReactionTime(config = {}) {
     if (mode === 'choice') trial.target = Math.floor(Math.random() * choices);
     trials.push(trial);
   }
-  return { type: 'reaction-time', config: { mode, count, minDelayMs, maxDelayMs, choices }, trials };
+  const trialConfig = { mode, count, minDelayMs, maxDelayMs };
+  if (choices !== undefined) trialConfig.choices = choices;
+  return { type: 'reaction-time', config: trialConfig, trials };
 }
 
 export function generateCognitiveDrill(type, config = {}) {
