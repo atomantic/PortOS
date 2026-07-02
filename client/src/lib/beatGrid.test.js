@@ -284,6 +284,23 @@ describe('computeDragSpan', () => {
     const result = computeDragSpan({ kind: 'right', startSpan: { startSec: 2, endSec: 4 }, deltaSec: -10, gridPoints: [], minSceneSec: 0.5 });
     expect(result.endSec).toBeCloseTo(2.5, 5);
   });
+
+  it('does not let a snap target below the minSceneSec floor commit a too-short span', () => {
+    // Dragging the out-point almost onto the start floors the end at
+    // startSec + minSceneSec (10.3). A beat at 10.2 sits within tolerance of
+    // that floored end, so pre-fix the snap overwrote 10.3 -> 10.2, committing a
+    // 0.2s span below the 0.3 minimum. The floor must survive the snap.
+    const result = computeDragSpan({
+      kind: 'right',
+      startSpan: { startSec: 10, endSec: 12 },
+      deltaSec: -11.7,
+      gridPoints: [10.2],
+      toleranceSec: 0.15,
+      minSceneSec: 0.3,
+    });
+    expect(result.endSec - result.startSec).toBeGreaterThanOrEqual(0.3 - 1e-9);
+    expect(result.endSec).toBeCloseTo(10.3, 5);
+  });
 });
 
 describe('shouldMarkBeatAligned', () => {

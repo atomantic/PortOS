@@ -260,7 +260,10 @@ export function computeDragSpan({ kind, startSpan, deltaSec, gridPoints, toleran
     if (snap) { nextEnd = snap.t + (nextEnd - nextStart); nextStart = snap.t; snapped = true; }
   } else {
     const snap = snapTimeToGrid(nextEnd, gridPoints, toleranceSec);
-    if (snap) { nextEnd = snap.t; snapped = true; }
+    // Re-apply the minSceneSec floor after snapping: a beat sitting just below
+    // the floored out-point would otherwise commit a span shorter than the
+    // minimum (the earlier Math.max at line 255 is on the pre-snap value).
+    if (snap) { nextEnd = Math.max(startSpan.startSec + minSceneSec, snap.t); snapped = true; }
   }
   return { startSec: Number(nextStart.toFixed(3)), endSec: Number(nextEnd.toFixed(3)), snapped };
 }
