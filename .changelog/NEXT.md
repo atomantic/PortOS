@@ -1,3 +1,7 @@
+## Self-Update
+
+- **The in-app update/reconcile no longer strands PortOS stopped.** `updateExecutor` launched `update.sh` with a plain `spawn(..., { detached: true })`, assuming it would survive the restart phase — but PM2's TreeKill walks PPID, not the process group, so the moment the script's own `pm2-stop` step ran `pm2 delete ecosystem.config.cjs`, the script (still a PPID-child of portos-server) was killed along with the server. Every app was stopped and the only process that would have run the final `pm2 start` was dead — the "update/reconcile shuts everything down but never comes back" failure. On POSIX the script now launches through `spawnDetached()`'s double-fork (the same reparent-to-init machinery LoRA training uses to survive PM2 restarts, #1332), with `STEP:` progress streamed via the control-dir log tailer, so the update runs to completion and restarts PortOS even after the server dies mid-script. Windows keeps its prior plain-spawn behavior (PM2 there is taskkill-based; detached survival is a POSIX-only guarantee). (`server/services/updateExecutor.js`)
+
 ## CI
 
 - **CI and release workflows now run Node 24.x** (matching `.nvmrc`, which has pinned 24 while the workflows still ran 20.x). Also removed the stale v1.14-era GSD planning workspace (`.planning/`, `.plan-questions.md`) from the repo root — the milestone it tracked shipped in February and GSD is no longer in use for PortOS itself (the GSD feature for managed apps is unaffected; it simply no longer lists PortOS).
