@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Security
+
+- **RSS feed fetches now pin the connection to the SSRF-vetted IP, closing a DNS-rebinding TOCTOU.** `feeds.js` previously resolved a feed hostname, verified it wasn't private, then made a *separate, unpinned* fetch — undici re-resolved at connect time, so an attacker's DNS could answer public during validation and private (home-network / cloud-metadata) at the actual connect. Feed fetches now route through the shared `safeUrlFetch` guard (the same one moodBoard/Pinterest uses since #1859): the hostname is resolved once and the connection is pinned to that exact vetted address, re-validated and re-pinned on every redirect hop. `safeUrlFetch` gained a strict `blockPrivate` mode so feeds keep their historical block-all-private posture (an arbitrary user-added feed URL still can't be aimed at the LAN) while gaining the pin, and a `throwOnUnsafe: false` option so the feeds path returns its existing friendly "Could not fetch feed" result instead of a bubbled 400 (#2046). The catalog URL-ingest path (Chrome/CDP) has a residual rebinding gap tracked separately.
+
 ## Workspace Contexts
 
 - **Switch project workspaces from ⌘K and voice, and CoS now auto-snapshots the workspace it leaves.** A new `workspace_switch` action ("switch workspace to BookLoom", "restore my PortOS context") saves a snapshot of the workspace you're leaving, then reconciles the target project's saved context — git branch, in-repo shell sessions, scoped tasks — and reports what's still live to re-attach; it appears in the ⌘K palette and resolves by voice. When CoS dispatches a coding agent against a different app/repo than it was last working in, it now silently snapshots the previous workspace's context first (snapshot-only — no auto-restore, no LLM calls), so switching between repos preserves what each project looked like, visible on the Workspace Contexts page (#2035).

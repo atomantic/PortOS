@@ -56,6 +56,47 @@ describe('isPublicHttpUrlSafe', () => {
   });
 });
 
+describe('isPublicHttpUrlSafe — strict blockPrivate posture', () => {
+  it('allows a private/LAN host by default but rejects it under blockPrivate', async () => {
+    lookupMock.mockResolvedValue({ address: '192.168.1.50', family: 4 });
+    expect(await isPublicHttpUrlSafe('https://nas.local/feed')).toBe(true);
+    expect(await isPublicHttpUrlSafe('https://nas.local/feed', { blockPrivate: true })).toBe(false);
+  });
+  it('rejects a private IPv4 LITERAL under blockPrivate (no resolve)', async () => {
+    expect(await isPublicHttpUrlSafe('http://192.168.1.5/x')).toBe(true); // LAN allowed by default
+    expect(await isPublicHttpUrlSafe('http://192.168.1.5/x', { blockPrivate: true })).toBe(false);
+    expect(await isPublicHttpUrlSafe('http://10.1.2.3/x', { blockPrivate: true })).toBe(false);
+    expect(lookupMock).not.toHaveBeenCalled();
+  });
+  it('rejects an IPv6 ULA literal under blockPrivate', async () => {
+    expect(await isPublicHttpUrlSafe('http://[fd12:3456:789a::1]/x', { blockPrivate: true })).toBe(false);
+  });
+  it('rejects a hostname that RESOLVES to a private address under blockPrivate', async () => {
+    lookupMock.mockResolvedValue({ address: '10.0.0.42', family: 4 });
+    expect(await isPublicHttpUrlSafe('https://home.example.com/x', { blockPrivate: true })).toBe(false);
+  });
+  it('still allows a genuinely public host under blockPrivate', async () => {
+    lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
+    expect(await isPublicHttpUrlSafe('https://example.com/x', { blockPrivate: true })).toBe(true);
+  });
+});
+
+describe('fetchPublicText — strict blockPrivate + throwOnUnsafe:false (RSS feed path)', () => {
+  it('returns null (no fetch, no throw) for a host that resolves private', async () => {
+    lookupMock.mockResolvedValue({ address: '10.0.0.5', family: 4 });
+    fetchMock.mockResolvedValue(res({ text: 'secret' }));
+    // The feeds path opts out of the 400 throw so its caller can show a friendly
+    // "couldn't fetch" message; the request must still never leave the box.
+    expect(await fetchPublicText('https://home.example.com/feed', { blockPrivate: true, throwOnUnsafe: false })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it('still THROWS a 400 for an unsafe first hop by default (route contract)', async () => {
+    lookupMock.mockResolvedValue({ address: '10.0.0.5', family: 4 });
+    await expect(fetchPublicText('https://home.example.com/feed', { blockPrivate: true }))
+      .rejects.toMatchObject({ status: 400, code: 'UNSAFE_URL' });
+  });
+});
+
 describe('assertPublicHttpUrl', () => {
   it('throws a 400 UNSAFE_URL for a blocked target', async () => {
     await expect(assertPublicHttpUrl('http://localhost/x')).rejects.toMatchObject({ status: 400, code: 'UNSAFE_URL' });
