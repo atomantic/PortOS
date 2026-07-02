@@ -437,6 +437,25 @@ export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, c
 }
 
 /**
+ * Is the control dir's job still running (live PID, no exit sentinel)? Lets a
+ * caller that REUSES a fixed control dir (e.g. the update executor) refuse to
+ * spawn while a prior detached job is alive — spawnDetached's setup truncates
+ * the pid/exit files, so the old supervisor's late `exit` write would satisfy
+ * the NEW tailer's sentinel check and prematurely close the new handle with
+ * the old job's status (the stale-late-write race reapDetached guards against).
+ *
+ * @param {string} controlDir - the job's spawnDetached control dir
+ * @returns {Promise<boolean>}
+ */
+export async function isDetachedRunning(controlDir) {
+  const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
+  const pid = Number.parseInt(pidRaw, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  const exitWritten = (await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')).length > 0;
+  return !exitWritten && isAlive(pid);
+}
+
+/**
  * Reap a detached job that outlived the server (boot recovery). Because
  * spawnDetached children reparent to init, a `pm2 restart` leaves them running
  * with no in-process handle — and the boot reconcile then marks their run/job

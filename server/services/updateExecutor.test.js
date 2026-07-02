@@ -11,7 +11,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../lib/detachedSpawn.js', () => ({
-  spawnDetached: vi.fn()
+  spawnDetached: vi.fn(),
+  isDetachedRunning: vi.fn().mockResolvedValue(false)
 }));
 
 vi.mock('fs/promises', () => ({
@@ -24,16 +25,18 @@ vi.mock('./updateChecker.js', () => ({
 }));
 
 import { spawn } from 'child_process';
-import { spawnDetached } from '../lib/detachedSpawn.js';
+import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { readFile } from 'fs/promises';
 import { recordUpdateResult } from './updateChecker.js';
 import { executeUpdate } from './updateExecutor.js';
 
+// The spawnDetached handle deliberately has NO unref (its launcher already
+// unref'd) — executeUpdate must use `child.unref?.()`. Only the win32
+// plain-spawn test adds a real ChildProcess-style unref to its mock.
 function createMockChild() {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.unref = vi.fn();
   child.pid = 12345;
   return child;
 }
@@ -55,6 +58,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Default: marker file not found (tests that need it override this)
   readFile.mockRejectedValue(new Error('ENOENT'));
+  // Default: no prior update script still running
+  isDetachedRunning.mockResolvedValue(false);
 });
 
 describe('executeUpdate', () => {
@@ -63,6 +68,7 @@ describe('executeUpdate', () => {
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
       const child = createMockChild();
+      child.unref = vi.fn();
       spawn.mockReturnValue(child);
 
       const { promise } = await startUpdate('v1.0.0', () => {});
@@ -104,6 +110,27 @@ describe('executeUpdate', () => {
         controlDir: expect.stringContaining('update-detached')
       })
     );
+  });
+
+  // Reusing the fixed control dir while the prior update script is still
+  // alive would let the old supervisor's late `exit` write prematurely close
+  // the new handle with the old script's status — so a still-running script
+  // must refuse the new update instead of spawning over it.
+  it('refuses to spawn while a prior update script is still running', async () => {
+    isDetachedRunning.mockResolvedValue(true);
+
+    const emits = [];
+    const { promise } = await startUpdate('v1.0.0', (...args) => emits.push(args));
+    const result = await promise;
+
+    expect(result.success).toBe(false);
+    expect(result.failedStep).toBe('starting');
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(recordUpdateResult).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, log: expect.stringContaining('still running') })
+    );
+    expect(emits.some(e => e[0] === 'starting' && e[1] === 'error')).toBe(true);
   });
 
   it('parses STEP markers from stdout', async () => {

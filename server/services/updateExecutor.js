@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
-import { spawnDetached } from '../lib/detachedSpawn.js';
+import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { recordUpdateResult } from './updateChecker.js';
 
 const UPDATE_SH = join(PATHS.root, 'update.sh');
@@ -66,6 +66,25 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   // progress parsing below works unchanged. The control dir is reused across
   // updates (spawnDetached truncates stale files) and kept afterward as the
   // post-mortem record of the launch.
+  const controlDir = join(PATHS.data, 'update-detached');
+
+  // Refuse to reuse the control dir while a prior update script is still
+  // running (survival path: the old script outlives the server restart it
+  // triggers, and its supervisor's late `exit` write into a truncated control
+  // dir would prematurely close the new handle with the OLD script's status).
+  // A still-running script also means a second update is wrong regardless.
+  if (!isWindows && await isDetachedRunning(controlDir)) {
+    const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
+    await recordUpdateResult({
+      version: tag.replace(/^v/, ''),
+      success: false,
+      completedAt: new Date().toISOString(),
+      log: errorMessage
+    }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+    emit('starting', 'error', errorMessage);
+    return { success: false, failedStep: 'starting', errorMessage };
+  }
+
   const child = isWindows
     ? spawn(cmd, args, {
         detached: true,
@@ -76,7 +95,7 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
     : await spawnDetached(cmd, args, {
         cwd: PATHS.root,
         env: childEnv,
-        controlDir: join(PATHS.data, 'update-detached')
+        controlDir
       });
 
   return new Promise((resolve) => {
