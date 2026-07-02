@@ -182,6 +182,7 @@ import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
+import { registerPostReminderSchedule } from './services/meatspacePostReminder.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
 import { verifyCollectionVersions } from './lib/collectionStore.js';
@@ -579,6 +580,9 @@ initBrainMemoryBridge();
 // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
 // cache fill only happens on explicit user request (see meatspacePostRoutes.js).
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
+// Register the optional daily POST reminder (opt-in, off by default) if the
+// user has enabled it — deterministic cron nudge, no LLM calls.
+registerPostReminderSchedule().catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames

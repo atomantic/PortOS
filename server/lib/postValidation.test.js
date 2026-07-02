@@ -28,6 +28,33 @@ describe('postConfigUpdateSchema llmDrills', () => {
     // Additive + optional — a config with no adaptive key stays valid.
     expect(postConfigUpdateSchema.parse({}).adaptive).toBeUndefined();
   });
+
+  it('accepts the opt-in daily reminder block with a well-formed HH:MM time', () => {
+    const parsed = postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '09:30' } });
+    expect(parsed.reminder).toEqual({ enabled: true, time: '09:30' });
+    // Additive + optional — a config with no reminder key stays valid.
+    expect(postConfigUpdateSchema.parse({}).reminder).toBeUndefined();
+  });
+
+  it('rejects a malformed reminder time', () => {
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '9:30' } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: '25:00' } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ reminder: { enabled: true, time: 'nine am' } })).toThrow();
+  });
+
+  // Regression: the native <input type="time"> can be cleared to '' by the
+  // user (backspace/keyboard). Without this, an empty time rejected the WHOLE
+  // config PUT — including unrelated mentalMath/adaptive/cognitive/llmDrills
+  // edits sent in the same request — instead of just leaving the reminder
+  // time unchanged.
+  it('treats an empty reminder time as absent rather than rejecting the whole request', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      adaptive: { enabled: true },
+      reminder: { enabled: true, time: '' }
+    });
+    expect(parsed.reminder).toEqual({ enabled: true });
+    expect(parsed.adaptive).toEqual({ enabled: true });
+  });
 });
 
 describe('postLlmScoreRequestSchema', () => {

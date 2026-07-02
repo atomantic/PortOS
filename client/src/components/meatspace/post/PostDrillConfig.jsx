@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Brain, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ArrowLeft, Save, Brain, Bell, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
@@ -141,6 +141,12 @@ function seedLlmDrillTypes(saved) {
 // clamps in server/services/meatspacePostCognitive.js and the Zod bounds in
 // server/lib/postValidation.js. `defaults` mirror the server DEFAULT_CONFIG so
 // the launcher and generators agree.
+//
+// No Time Limit field here (unlike the math/LLM drill meta above) — cognitive
+// drills are self-paced/stimulus-driven and never enforce a countdown (see
+// PostCognitiveDrillRunner.jsx). A `timeLimitSec` knob was previously
+// surfaced/validated for these drills without ever being consumed, which
+// promised behavior that didn't happen (issue #2008).
 const COGNITIVE_DRILL_META = {
   'n-back': {
     label: 'N-Back',
@@ -148,9 +154,8 @@ const COGNITIVE_DRILL_META = {
     fields: [
       { key: 'n', label: 'N (steps back)', type: 'number', min: 1, max: 3 },
       { key: 'length', label: 'Sequence Length', type: 'number', min: 6, max: 60 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
+    defaults: { enabled: true, n: 2, length: 20 },
   },
   'digit-span': {
     label: 'Digit Span',
@@ -162,18 +167,16 @@ const COGNITIVE_DRILL_META = {
       ] },
       { key: 'startLength', label: 'Start Length', type: 'number', min: 3, max: 9 },
       { key: 'maxLength', label: 'Max Length', type: 'number', min: 3, max: 12 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
+    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
   },
   'stroop': {
     label: 'Stroop',
     desc: 'Name the ink color of a color-word — attention & inhibition',
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
-      { key: 'timeLimitSec', label: 'Time Limit (sec)', type: 'number', min: 10, max: 300 },
     ],
-    defaults: { enabled: true, count: 15, timeLimitSec: 60 },
+    defaults: { enabled: true, count: 15 },
   },
 };
 
@@ -304,6 +307,13 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     () => config?.adaptive?.enabled === true
   );
   const [adaptivePreview, setAdaptivePreview] = useState(null);
+  // Opt-in daily reminder — off by default; see server/services/meatspacePostReminder.js.
+  const [reminderEnabled, setReminderEnabled] = useState(
+    () => config?.reminder?.enabled === true
+  );
+  const [reminderTime, setReminderTime] = useState(
+    () => config?.reminder?.time || '09:00'
+  );
   const [providers, setProviders] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -386,6 +396,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     const updated = await updatePostConfig({
       mentalMath: { drillTypes },
       adaptive: { enabled: adaptiveEnabled },
+      reminder: { enabled: reminderEnabled, time: reminderTime },
       cognitive: {
         enabled: cognitiveEnabled,
         drillTypes: cognitiveDrillTypes
@@ -424,6 +435,47 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           <Save size={14} />
           {saving ? 'Saving...' : 'Save'}
         </button>
+      </div>
+
+      {/* Daily Reminder Section — opt-in, off by default; no LLM calls */}
+      <div className="p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Bell size={16} className="text-port-accent" />
+            <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Daily Reminder</h3>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={reminderEnabled}
+            aria-label="Daily reminder"
+            onClick={() => setReminderEnabled(v => !v)}
+            className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
+              reminderEnabled ? 'bg-port-accent' : 'bg-port-border'
+            }`}
+          >
+            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+              reminderEnabled ? 'translate-x-5' : 'translate-x-0.5'
+            }`} />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Off by default. When enabled, you'll get an in-app nudge at the chosen time if today's POST is still incomplete — nothing fires once you've done a session, and no AI calls are involved.
+        </p>
+        {reminderEnabled && (
+          <div>
+            <label htmlFor="postReminderTime" className="block text-xs text-gray-400 mb-1">
+              Remind me at
+            </label>
+            <input
+              id="postReminderTime"
+              type="time"
+              value={reminderTime}
+              onChange={e => setReminderTime(e.target.value)}
+              className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
+            />
+          </div>
+        )}
       </div>
 
       {/* Mental Math Section */}

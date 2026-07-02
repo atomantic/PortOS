@@ -41,20 +41,27 @@ const DEFAULT_CONFIG = {
     }
   },
   // Deterministic cognitive drills (working-memory / attention / inhibition).
-  // No provider calls — enabled by default since they're free to run.
+  // No provider calls — enabled by default since they're free to run. No
+  // timeLimitSec — these drills are self-paced/stimulus-driven and never
+  // enforce a countdown (see client PostCognitiveDrillRunner.jsx / issue #2008).
   cognitive: {
     enabled: true,
     drillTypes: {
-      'n-back': { enabled: true, n: 2, length: 20, timeLimitSec: 90 },
-      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8, timeLimitSec: 120 },
-      'stroop': { enabled: true, count: 15, timeLimitSec: 60 }
+      'n-back': { enabled: true, n: 2, length: 20 },
+      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
+      'stroop': { enabled: true, count: 15 }
     }
   },
   sessionModules: ['mental-math'],
   scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0, 'cognitive': 1.0 } },
   // Opt-in adaptive difficulty (default OFF). When enabled, math drills are
   // nudged harder/easier at generation time from recent scored performance.
-  adaptive: { enabled: false }
+  adaptive: { enabled: false },
+  // Opt-in daily reminder (default OFF, off-by-default per CLAUDE.md's
+  // single-user/no-surprise-background-behavior convention). When enabled,
+  // meatspacePostReminder.js fires a deterministic (no-LLM) in-app notification
+  // at `time` (HH:MM, user's configured timezone) if today's POST is incomplete.
+  reminder: { enabled: false, time: '09:00' }
 };
 
 // Math tasks are logged under this coarse module in scored sessions, so the

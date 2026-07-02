@@ -43,14 +43,17 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     : [];
 
   // Only the fields each cognitive generator reads; extras are harmless.
+  // stimulusMs/showMs are intentionally NOT forwarded here — no UI field ever
+  // sets them (PostDrillConfig.jsx exposes no such control), so this config
+  // never carries them; the generators always fall back to their own internal
+  // defaults (server/services/meatspacePostCognitive.js). Forwarding them
+  // would have been dead pass-through (issue #2008).
   const cognitiveDrillConfig = (cfg) => ({
     n: cfg.n,
     length: cfg.length,
-    stimulusMs: cfg.stimulusMs,
     direction: cfg.direction,
     startLength: cfg.startLength,
     maxLength: cfg.maxLength,
-    showMs: cfg.showMs,
     count: cfg.count,
   });
 
@@ -88,8 +91,9 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
     const cognitiveConfigs = enabledCognitiveDrills.map(([type, cfg]) => ({
       type,
-      config: cognitiveDrillConfig(cfg),
-      timeLimitSec: cfg.timeLimitSec || 90
+      config: cognitiveDrillConfig(cfg)
+      // No timeLimitSec — cognitive drills are self-paced/stimulus-driven and
+      // never enforce a countdown (see PostCognitiveDrillRunner.jsx).
     }));
 
     const drillConfigs = [...mathConfigs, ...llmConfigs, ...cognitiveConfigs];
@@ -485,7 +489,6 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                     <span className="text-white">{DRILL_LABELS[type] || type}</span>
                     <span className="text-gray-500">
                       {type === 'n-back' ? `${cfg.n ?? 2}-back` : type === 'digit-span' ? `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}` : cfg.count ? `${cfg.count} trials` : ''}
-                      {cfg.timeLimitSec ? ` · ${cfg.timeLimitSec}s` : ''}
                     </span>
                   </div>
                 ))}

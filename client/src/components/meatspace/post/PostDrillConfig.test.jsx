@@ -176,4 +176,31 @@ describe('PostDrillConfig', () => {
     await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
     expect(updatePostConfig.mock.calls[0][0].adaptive).toEqual({ enabled: true });
   });
+
+  it('defaults the Daily Reminder toggle to off, hides the time picker, and persists off on save', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Daily reminder' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByLabelText('Remind me at')).toBeNull();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].reminder).toEqual({ enabled: false, time: '09:00' });
+  });
+
+  it('enabling the Daily Reminder reveals the time picker and persists the chosen time', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Daily reminder' }));
+    const timeInput = screen.getByLabelText('Remind me at');
+    fireEvent.change(timeInput, { target: { value: '18:30' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].reminder).toEqual({ enabled: true, time: '18:30' });
+  });
+
+  it('reflects a saved reminder.enabled=true with its stored time', () => {
+    const withReminder = { ...config, reminder: { enabled: true, time: '20:15' } };
+    render(<PostDrillConfig config={withReminder} onSaved={vi.fn()} onBack={vi.fn()} />);
+    expect(screen.getByRole('switch', { name: 'Daily reminder' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByLabelText('Remind me at').value).toBe('20:15');
+  });
 });
