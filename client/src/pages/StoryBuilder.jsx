@@ -302,7 +302,7 @@ function StoryBuilderIndex() {
               key={s.id} to={`/story-builder/${s.id}/${s.currentStep || 'idea'}`}
               className="flex items-center justify-between gap-2 bg-port-card border border-port-border rounded-lg px-4 py-3 hover:border-port-accent"
             >
-              <span className="font-medium truncate">{s.title}</span>
+              <span className="font-medium truncate min-w-0">{s.title}</span>
               <span className="text-xs text-gray-500 whitespace-nowrap">at “{s.currentStep}” <ChevronRight className="w-4 h-4 inline" /></span>
             </Link>
           ))}
