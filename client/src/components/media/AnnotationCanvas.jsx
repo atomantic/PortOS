@@ -16,6 +16,7 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const drawingRef = useRef(null); // in-progress (uncommitted) stroke
+  const activePointerIdRef = useRef(null); // the single pointer we're tracking
   const [dims, setDims] = useState(null); // { w, h } in natural pixels
   const [inProgress, setInProgress] = useState(null);
 
@@ -54,8 +55,11 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
   }, []);
 
   const handlePointerDown = useCallback((e) => {
-    if (!dims) return;
+    // Track exactly one pointer — a second finger/palm mid-draw is ignored so
+    // it can't hijack or garble the in-progress stroke on touch devices.
+    if (!dims || activePointerIdRef.current !== null) return;
     e.preventDefault();
+    activePointerIdRef.current = e.pointerId;
     // Capture so strokes continue smoothly even when the pointer leaves the
     // canvas bounds mid-draw. Auto-releases on pointerup/cancel.
     canvasRef.current?.setPointerCapture?.(e.pointerId);
@@ -66,7 +70,7 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
   }, [dims, tool, toNatural]);
 
   const handlePointerMove = useCallback((e) => {
-    if (!drawingRef.current) return;
+    if (e.pointerId !== activePointerIdRef.current || !drawingRef.current) return;
     e.preventDefault();
     const { x, y } = toNatural(e);
     const next = appendPoint(drawingRef.current, x, y);
@@ -74,7 +78,9 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
     setInProgress(next);
   }, [toNatural]);
 
-  const finishStroke = useCallback(() => {
+  const finishStroke = useCallback((e) => {
+    if (e && e.pointerId !== activePointerIdRef.current) return;
+    activePointerIdRef.current = null;
     const stroke = drawingRef.current;
     if (!stroke) return;
     drawingRef.current = null;

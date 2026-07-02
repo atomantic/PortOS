@@ -38,10 +38,16 @@ export default function MediaAnnotate() {
   const [loading, setLoading] = useState(true);
   const [imageError, setImageError] = useState(false);
 
-  // Load any previously-saved strokes for this media key.
+  // Load any previously-saved strokes for this media key. React Router reuses
+  // this component instance across :mediaKey changes (no remount), so reset all
+  // transient view state synchronously before fetching — otherwise the previous
+  // key's strokes / imageError / dims leak onto the new image.
   useEffect(() => {
     if (!isImage) { setLoading(false); return; }
     let active = true;
+    setStrokes([]);
+    setDims(null);
+    setImageError(false);
     setLoading(true);
     getMediaSketch(mediaKey, { silent: true })
       .then((res) => {
