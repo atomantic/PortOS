@@ -52,6 +52,24 @@ export async function getUserTimezone() {
 }
 
 /**
+ * Get the UTC-ms timestamp at which the user's `timezone` setting last actually
+ * changed, or null when it has never been recorded. Stamped by settings.js's
+ * write path (`save()`) only when the `timezone` value genuinely differs from
+ * the prior on-disk value. Timezone-dependent schedulers use this to avoid
+ * replaying a slot that "occurred" under a timezone that was no longer active —
+ * see catchUpMissedSlot in meatspacePostReminder.js (#2040).
+ *
+ * Sentinel discipline: null (not a number, ≤ 0) means "never changed / unset",
+ * so callers must NOT treat absence as a floor — an unset value gates nothing.
+ * @returns {Promise<number|null>} UTC ms, or null when unset.
+ */
+export async function getTimezoneUpdatedAt() {
+  const settings = await getSettings()
+  const ts = settings.timezoneUpdatedAt
+  return typeof ts === 'number' && ts > 0 ? ts : null
+}
+
+/**
  * Get local date/time parts for a UTC Date in the given timezone.
  * @param {Date} utcDate - Date object (interpreted as UTC since TZ=UTC)
  * @param {string} timezone - IANA timezone string

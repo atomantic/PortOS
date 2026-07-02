@@ -24,7 +24,7 @@
  */
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts, todayInTimezone, HHMM_STRICT_RE } from '../lib/timezone.js';
+import { getUserTimezone, getTimezoneUpdatedAt, getLocalParts, todayInTimezone, HHMM_STRICT_RE } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions, postConfigEvents } from './meatspacePost.js';
 import { addNotification, getNotifications, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { settingsEvents } from './settings.js';
@@ -147,18 +147,20 @@ export async function firePostReminderIfIncomplete() {
  * already-notified-today guards), so calling it here is safe even on a rare
  * false-positive gate.
  *
- * KNOWN LIMITATION (tracked in #2040, deliberately out of scope here): this
- * only guards against the reminder's OWN config changing, not the user's
- * GLOBAL timezone changing. If the effective timezone changes such that
+ * `timezoneUpdatedAt` (from getTimezoneUpdatedAt(), stamped by settings.js
+ * whenever the user's GLOBAL timezone actually changes) closes the parallel
+ * gap #2040 tracked: if the user switches their global timezone such that
  * today's slot newly appears to have already passed under the new zone, and
- * the server then restarts before the next natural tick, this can still fire
- * a catch-up for a slot that was never scheduled under the timezone active
- * when it "occurred." Fixing that generally requires a timezone-change
- * timestamp in the shared settings layer (server/services/settings.js), used
- * by every timezone-dependent scheduler — not just this one — so it's
- * tracked separately rather than folded into this issue's narrower scope.
+ * the server then restarts before the next natural tick, the most recent
+ * occurrence still falls on today's local day — but it was never scheduled
+ * under the timezone active when it "occurred." The effective floor is the
+ * LATER of (reminder config last saved, timezone last changed): a slot that
+ * predates EITHER wasn't genuinely owned by the configuration active at that
+ * moment. Both are sentinel-guarded — an absent/unset value (null, 0, missing)
+ * contributes no floor, preserving backward-compatible catch-up for installs
+ * that never recorded them.
  */
-async function catchUpMissedSlot(cron, timezone, reminderUpdatedAt) {
+async function catchUpMissedSlot(cron, timezone, reminderUpdatedAt, timezoneUpdatedAt) {
   const now = Date.now();
   const prevRun = parseCronToPrevRun(cron, new Date(now), timezone);
   if (!prevRun) return;
@@ -167,7 +169,19 @@ async function catchUpMissedSlot(cron, timezone, reminderUpdatedAt) {
   const todayStr = todayInTimezone(timezone);
   if (!isOnLocalDay(prevRunMs, timezone, todayStr)) return;
 
-  if (reminderUpdatedAt && prevRunMs < new Date(reminderUpdatedAt).getTime()) return;
+  // Normalize either cutoff (ISO string reminderUpdatedAt, numeric-ms
+  // timezoneUpdatedAt) to a valid UTC-ms floor, treating unset/invalid as 0 so
+  // it never gates. The effective cutoff is the later of the two.
+  const toMs = (v) => {
+    if (!v) return 0;
+    const t = typeof v === 'number' ? v : new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const cutoff = Math.max(toMs(reminderUpdatedAt), toMs(timezoneUpdatedAt));
+  if (cutoff && prevRunMs < cutoff) {
+    console.log(`🔔 POST reminder: missed slot (${prevRun.toISOString()}) predates last config/timezone change — skipping catch-up`);
+    return;
+  }
 
   console.log(`🔔 POST reminder: missed slot detected (${prevRun.toISOString()}) — catching up now`);
   await firePostReminderIfIncomplete();
@@ -216,7 +230,8 @@ export async function registerPostReminderSchedule({ catchUpMissedSlot: shouldCa
   console.log(`🔔 POST reminder: registered daily at ${time} (${timezone})`);
 
   if (shouldCatchUp) {
-    await catchUpMissedSlot(cron, timezone, updatedAt);
+    const timezoneUpdatedAt = await getTimezoneUpdatedAt();
+    await catchUpMissedSlot(cron, timezone, updatedAt, timezoneUpdatedAt);
   }
 }
 

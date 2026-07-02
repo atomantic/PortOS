@@ -250,6 +250,60 @@ describe('settings.js', () => {
     });
   });
 
+  describe('timezoneUpdatedAt stamping (#2040)', () => {
+    it('stamps timezoneUpdatedAt when the timezone value actually changes', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ timezone: 'UTC', theme: 'dark' }));
+
+      const before = Date.now();
+      const result = await updateSettings({ timezone: 'Asia/Tokyo' });
+
+      expect(result.timezone).toBe('Asia/Tokyo');
+      expect(typeof result.timezoneUpdatedAt).toBe('number');
+      expect(result.timezoneUpdatedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('stamps on first-ever set (unset → value)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark' }));
+
+      const result = await updateSettings({ timezone: 'UTC' });
+
+      expect(typeof result.timezoneUpdatedAt).toBe('number');
+    });
+
+    it('does NOT stamp when an unrelated setting is saved (timezone unchanged)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ timezone: 'UTC', theme: 'dark' }));
+
+      const result = await updateSettings({ theme: 'light' });
+
+      expect(result.timezone).toBe('UTC');
+      expect(result.timezoneUpdatedAt).toBeUndefined();
+    });
+
+    it('does NOT stamp when the timezone is re-saved with the same value', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ timezone: 'UTC' }));
+
+      const result = await updateSettings({ timezone: 'UTC' });
+
+      expect(result.timezoneUpdatedAt).toBeUndefined();
+    });
+
+    it('preserves an existing timezoneUpdatedAt across an unrelated save (does not clear it)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ timezone: 'UTC', timezoneUpdatedAt: 1234567890 }));
+
+      const result = await updateSettings({ theme: 'dark' });
+
+      expect(result.timezoneUpdatedAt).toBe(1234567890);
+    });
+
+    it('re-stamps (overwrites the old timestamp) when the timezone changes again', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ timezone: 'UTC', timezoneUpdatedAt: 1 }));
+
+      const result = await updateSettings({ timezone: 'Europe/Paris' });
+
+      expect(result.timezoneUpdatedAt).toBeGreaterThan(1);
+    });
+  });
+
   describe('MortalLoom store key pollution guard', () => {
     it('strips MortalLoom-store top-level keys on read', async () => {
       // Simulates the historical corruption: settings.json contains both
@@ -306,6 +360,10 @@ describe('settings.js', () => {
 
       const [, content] = atomicWrite.mock.calls[0];
       const written = JSON.parse(content);
+      // Setting the timezone (undefined → 'UTC' here) stamps timezoneUpdatedAt;
+      // strip it before comparing the rest of the cleaned shape.
+      expect(typeof written.timezoneUpdatedAt).toBe('number');
+      delete written.timezoneUpdatedAt;
       expect(written).toEqual({ theme: 'dark', timezone: 'UTC' });
     });
 
