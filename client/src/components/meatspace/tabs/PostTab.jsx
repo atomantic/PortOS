@@ -129,7 +129,6 @@ export default function PostTab({ tab = 'launcher', subtab }) {
         return (
           <PostCognitiveDrillRunner
             drill={session.currentDrill}
-            timeLimitSec={session.currentDrill?.timeLimitSec}
             drillIndex={session.currentDrillIndex}
             drillCount={session.drillCount}
             onComplete={session.completeCognitiveDrill}

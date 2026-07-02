@@ -34,8 +34,12 @@ export const STROOP_COLORS = [
 
 function clampInt(value, min, max, fallback) {
   const n = Math.round(Number(value));
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
+  // Clamp the fallback into [min,max] too — a fallback that sits outside the
+  // range (e.g. maxLength's fallback 8 when startLength has clamped up to 9)
+  // would otherwise slip through un-clamped and, for digit-span, make
+  // maxLength < startLength → an empty drill.
+  const v = Number.isFinite(n) ? n : fallback;
+  return Math.min(max, Math.max(min, v));
 }
 
 function pick(arr) {
