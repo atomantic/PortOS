@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare, Pencil } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
@@ -31,6 +31,7 @@ export default function MediaCard({
   starred = false,
   hasNote = false,
   onToggleStar,
+  onAnnotate,
 }) {
   const { kind, prompt, modelId, previewUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
@@ -144,6 +145,17 @@ export default function MediaCard({
                 aria-label="Send to image-to-image"
               >
                 <Wand2 className="w-3 h-3" />
+              </button>
+            )}
+            {!isVideo && onAnnotate && (
+              <button
+                type="button"
+                onClick={() => onAnnotate(item)}
+                className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center"
+                title="Annotate (draw over this image)"
+                aria-label="Annotate image"
+              >
+                <Pencil className="w-3 h-3" />
               </button>
             )}
             {!isVideo && onSendToVideo && (
