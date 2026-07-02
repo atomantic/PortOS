@@ -455,10 +455,10 @@ export default function Security() {
                   style={{
                     width: `${audioLevel * 100}%`,
                     backgroundColor: audioLevel > 0.7
-                      ? '#ef4444'
+                      ? 'rgb(var(--port-error))'
                       : audioLevel > 0.4
-                        ? '#f59e0b'
-                        : '#22c55e'
+                        ? 'rgb(var(--port-warning))'
+                        : 'rgb(var(--port-success))'
                   }}
                 />
               </div>

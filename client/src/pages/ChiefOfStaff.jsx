@@ -57,6 +57,9 @@ const CANVAS_AVATAR_STYLES = new Set([
   'miniMaleC', 'miniFemaleD',
 ]);
 
+// Shared brand gradient for the "CoS" wordmark headings (clipped to text).
+const COS_TITLE_GRADIENT = 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)';
+
 export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -601,7 +604,7 @@ export default function ChiefOfStaff() {
                 <h1
                   className="text-base font-bold"
                   style={{
-                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                    background: COS_TITLE_GRADIENT,
                     WebkitBackgroundClip: 'text',
                     WebkitTextFillColor: 'transparent',
                     backgroundClip: 'text'
@@ -652,7 +655,7 @@ export default function ChiefOfStaff() {
               <h1
                 className="text-base font-bold"
                 style={{
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                  background: COS_TITLE_GRADIENT,
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                   backgroundClip: 'text'
@@ -704,7 +707,7 @@ export default function ChiefOfStaff() {
               <h1
                 className="hidden lg:block text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold mb-2 lg:mb-4"
                 style={{
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
+                  background: COS_TITLE_GRADIENT,
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                   backgroundClip: 'text'
