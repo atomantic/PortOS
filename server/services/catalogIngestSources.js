@@ -31,12 +31,10 @@ import * as brainStorage from './brainStorage.js';
 import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import {
-  navigateToUrl,
-  listCdpPages,
-  evaluateOnPage,
+  navigateToUrlPinned,
 } from './browserService.js';
 import { lookup } from 'dns/promises';
-import { PATHS, ensureDir, sleep, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
@@ -98,45 +96,49 @@ async function assertIngestUrlSafe(target) {
  * resolve correctly — a bare `fetch()` would only see the server-rendered
  * HTML shell of an SPA.
  *
+ * SSRF pin: Chrome re-resolves DNS independently of our pre-check, so a rebinding
+ * DNS answer could steer Chrome's connection to a blocked address after
+ * `assertIngestUrlSafe` vetted the hostname (a TOCTOU). `navigateToUrlPinned`
+ * closes that window by verifying, against Chrome's OWN reported
+ * `remoteIPAddress`, that EVERY main-frame hop — the initial navigation, each
+ * HTTP redirect, AND any client-side navigation during the `settleMs` window
+ * before the DOM is read — connected to an allowed address, refusing (and
+ * tearing the tab down) otherwise. The `isBlockedIngestHost` blocklist is the
+ * SAME criterion `assertIngestUrlSafe` vets with, so the pin and the pre-check
+ * agree. The pin owns the settle wait, so there is no separate stale-DNS re-vet
+ * (which would itself be rebindable) after it returns.
+ *
  * Returns `{ text, title, finalUrl }`. Throws when the browser can't reach
  * the page or extracts nothing usable, so the route surfaces a clean 4xx/5xx.
  */
 export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) {
   await assertIngestUrlSafe(url);
 
-  // `navigateToUrl` opens a fresh tab at the exact URL and returns it; we drive
-  // and read that tab below. (Don't call findOrOpenPage first — it would open a
-  // SECOND, orphaned tab per ingest, since navigateToUrl never reuses one.)
-  const opened = await navigateToUrl(url);
-  await sleep(settleMs);
-
-  // Re-list to get the live webSocketDebuggerUrl for the tab we just drove.
-  // Match strictly by the id (then the exact url) navigateToUrl returned —
-  // never fall back to an arbitrary `pages[0]`, which could be an unrelated
-  // open tab and would ingest the wrong (possibly sensitive) page.
-  const pages = await listCdpPages();
-  const page = pages.find((p) => p.id === opened.id)
-    || pages.find((p) => p.url === opened.url);
-  if (!page) throw new Error('could not match the navigated tab after navigation (refusing to read an arbitrary tab)');
-
-  // Re-run the FULL gate (scheme + DNS) against the FINAL url before reading the
-  // DOM: a server-controlled redirect could have sent Chrome to a blocked
-  // target, or to a hostname that itself resolves to one. The first-hop gate
-  // doesn't cover the landed page.
-  const landedUrl = page.url || opened.url || url;
-  await assertIngestUrlSafe(landedUrl);
-
-  // Prefer the page's own <article>/<main> if present (skips nav/footer
-  // chrome), falling back to document body text. Runs in the page; returns a
-  // plain string so evaluateOnPage's returnByValue marshals it cleanly.
+  // Prefer the page's own <article>/<main> if present (skips nav/footer chrome),
+  // falling back to document body text. Runs in the page; returns a plain string
+  // so returnByValue marshals it cleanly.
   const expression = `(() => {
     const pick = document.querySelector('article') || document.querySelector('main') || document.body;
     const title = (document.title || '').trim();
     const text = (pick && pick.innerText ? pick.innerText : '').trim();
     return JSON.stringify({ title, text });
   })()`;
-  const raw = await evaluateOnPage(page, expression);
-  const parsed = raw ? safeJSONParse(raw, null) : null;
+
+  // Navigate in a fresh tab and PIN: verify Chrome's actual per-hop connection
+  // IP is not a blocked (loopback / link-local / metadata) address for the
+  // initial nav, every redirect, and any client-side nav during the settle
+  // window — closing the rebinding gap between our dns.lookup above and Chrome's
+  // own resolution. The DOM read runs on the SAME pinned CDP session (via
+  // evaluateExpression), re-verified after the read, so no late navigation slips
+  // between "stop monitoring" and "read". Fails closed (tab torn down, throws)
+  // on any disallowed hop.
+  const page = await navigateToUrlPinned(url, {
+    verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+    settleMs,
+    evaluateExpression: expression,
+  });
+
+  const parsed = page.evalResult ? safeJSONParse(page.evalResult, null) : null;
   const text = clampText(parsed?.text || '');
   if (!text.trim()) throw new Error('no readable text extracted from page');
   return { text, title: parsed?.title || page.title || '', finalUrl: page.url || url };
