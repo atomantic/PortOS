@@ -57,7 +57,7 @@ Configurable memory training for songs, poems, sequences, speeches, or any order
 - **Math**: server-rescored — the server strips client-provided correctness and re-derives expected answers (`meatspacePost.js`, "never trust client-provided expected"); estimation compares within tolerance. Accuracy plus speed bonus.
 - **Cognitive**: deterministic server-side rescoring per drill type.
 - **Wordplay/Verbal/Imagination**: LLM-scored against per-drill rubrics (e.g. wit-comeback: humor 40% / cleverness 30% / relevance 30%), blended as quality 80% + speed bonus 20% (`server/services/meatspacePostLlm.js`).
-- **Session score**: weighted average across completed drills.
+- **Session score**: plain arithmetic mean across completed drills (`computeSessionScore`).
 
 ## Adaptive Difficulty
 
