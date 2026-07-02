@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, WandSparkles, ImagePlus, Layers } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { useArmedAction } from '../../../hooks/useArmedAction';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import {
   generatePipelineVisualImage,
   generatePipelineComicPage,
@@ -114,18 +114,19 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     onStageUpdate?.('comicPages', result.stage, result.issue);
     toast.success(`Extracted ${result.pageCount} page${result.pageCount === 1 ? '' : 's'} / ${result.panelCount} panel${result.panelCount === 1 ? '' : 's'}`);
   };
-  const [extractArmed, fireExtract] = useArmedAction(runExtract);
+  const [confirmingExtract, setConfirmingExtract] = useState(false);
   const onExtractClick = () => {
-    // Nothing to clobber on a fresh stage — extract immediately. The two-click
-    // arm exists only to guard a destructive replace of existing pages.
+    // Nothing to clobber on a fresh stage — extract immediately. The inline
+    // confirm only guards a destructive replace of existing pages.
     if (pages.length === 0) {
       runExtract();
       return;
     }
-    if (!extractArmed) {
-      toast.warning(`This will replace ${pages.length} existing page${pages.length === 1 ? '' : 's'}. Click again to confirm.`);
-    }
-    fireExtract();
+    setConfirmingExtract(true);
+  };
+  const confirmExtract = () => {
+    setConfirmingExtract(false);
+    runExtract();
   };
 
   const handleGeneratePage = async (pi) => {
@@ -276,7 +277,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {extracting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-            {extractArmed ? 'Click again to replace' : 'From comic script'}
+            From comic script
           </button>
           <PromptCountInput id="comic-prompt-count" value={promptCount} onChange={setPromptCount} />
           <button
@@ -288,6 +289,16 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
           </button>
         </div>
       </div>
+
+      {confirmingExtract && (
+        <InlineConfirmRow
+          tone="warning"
+          question={`Replace ${pages.length} existing page${pages.length === 1 ? '' : 's'} with a fresh extract from the comic script?`}
+          confirmText="Replace"
+          onConfirm={confirmExtract}
+          onCancel={() => setConfirmingExtract(false)}
+        />
+      )}
 
       {pages.length === 0 ? (
         <p className="text-xs text-gray-600 italic">No pages yet. Start with one and add panels.</p>

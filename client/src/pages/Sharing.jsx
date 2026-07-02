@@ -13,6 +13,7 @@ import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { formatDateTime } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import FolderPicker from '../components/FolderPicker';
@@ -108,7 +109,7 @@ function SharingBuckets() {
   const [inboxByBucket, setInboxByBucket] = useState({}); // bucketId → items[]
   const [activityByBucket, setActivityByBucket] = useState({});
 
-  const { isConfirming: isRemoveArmed, requestDelete: armRemove, confirmDelete: confirmRemove } = useConfirmDelete();
+  const { isConfirming: isRemoveArmed, requestDelete: armRemove, cancelDelete: cancelRemove, confirmDelete: confirmRemove } = useConfirmDelete();
 
   // Load buckets + settings on mount.
   useEffect(() => {
@@ -198,21 +199,15 @@ function SharingBuckets() {
     toast.success(`Registered bucket "${result.bucket.name}"`);
   };
 
-  const handleDelete = async (bucket) => {
-    if (!isRemoveArmed(bucket.id)) {
-      armRemove(bucket.id);
-      return;
-    }
-    await confirmRemove(() => {
-      const prior = buckets;
-      setBuckets((prev) => prev.filter((b) => b.id !== bucket.id));
-      if (selectedId === bucket.id) setSelectedId(prior[0]?.id !== bucket.id ? prior[0]?.id : (prior[1]?.id || null));
-      return deleteShareBucket(bucket.id).catch((err) => {
-        toast.error(err.message || 'Failed to remove bucket');
-        setBuckets(prior);
-      });
+  const handleDelete = (bucket) => confirmRemove(() => {
+    const prior = buckets;
+    setBuckets((prev) => prev.filter((b) => b.id !== bucket.id));
+    if (selectedId === bucket.id) setSelectedId(prior[0]?.id !== bucket.id ? prior[0]?.id : (prior[1]?.id || null));
+    return deleteShareBucket(bucket.id).catch((err) => {
+      toast.error(err.message || 'Failed to remove bucket');
+      setBuckets(prior);
     });
-  };
+  });
 
   const handleModeToggle = async (bucket) => {
     const nextMode = bucket.mode === 'auto-merge' ? 'inbox' : 'auto-merge';
@@ -501,7 +496,9 @@ function SharingBuckets() {
                 <SettingsPanel
                   bucket={selected}
                   onToggleMode={() => handleModeToggle(selected)}
-                  onDelete={() => handleDelete(selected)}
+                  onRequestDelete={() => armRemove(selected.id)}
+                  onConfirmDelete={() => handleDelete(selected)}
+                  onCancelDelete={cancelRemove}
                   armed={isRemoveArmed(selected.id)}
                 />
               )}
@@ -633,7 +630,7 @@ function ActivityList({ manifests }) {
   );
 }
 
-function SettingsPanel({ bucket, onToggleMode, onDelete, armed }) {
+function SettingsPanel({ bucket, onToggleMode, onRequestDelete, onConfirmDelete, onCancelDelete, armed }) {
   return (
     <div className="space-y-4">
       <div className="p-4 bg-port-card border border-port-border rounded-lg">
@@ -666,14 +663,23 @@ function SettingsPanel({ bucket, onToggleMode, onDelete, armed }) {
         <p className="text-[11px] text-gray-500 mb-3">
           Stops watching the folder for new shares and drops the bucket from PortOS. Files inside the folder are not deleted — your cloud-sync app keeps the data.
         </p>
-        <button
-          type="button"
-          onClick={onDelete}
-          className={`inline-flex items-center gap-2 px-3 py-2 rounded text-xs ${armed ? 'bg-port-error text-white' : 'bg-port-bg text-port-error border border-port-error/40 hover:bg-port-error/10'}`}
-        >
-          <Trash2 size={12} />
-          {armed ? 'Click again to confirm' : 'Remove bucket'}
-        </button>
+        {armed ? (
+          <InlineConfirmRow
+            question="Remove this bucket?"
+            confirmText="Remove"
+            onConfirm={onConfirmDelete}
+            onCancel={onCancelDelete}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={onRequestDelete}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded text-xs bg-port-bg text-port-error border border-port-error/40 hover:bg-port-error/10"
+          >
+            <Trash2 size={12} />
+            Remove bucket
+          </button>
+        )}
       </div>
     </div>
   );
