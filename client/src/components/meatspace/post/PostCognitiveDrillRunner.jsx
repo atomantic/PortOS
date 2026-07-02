@@ -29,6 +29,12 @@ export default function PostCognitiveDrillRunner({ drill, drillIndex, drillCount
       return <DigitSpanRunner {...shared} />;
     case 'stroop':
       return <StroopRunner {...shared} />;
+    case 'schulte-table':
+      return <SchulteTableRunner {...shared} />;
+    case 'mental-rotation':
+      return <MentalRotationRunner {...shared} />;
+    case 'reaction-time':
+      return <ReactionTimeRunner {...shared} />;
     default:
       return <div className="text-port-error text-center py-8">Unsupported cognitive drill: {drill.type}</div>;
   }
@@ -52,6 +58,26 @@ export function localAccuracyScore(questions) {
   if (!questions.length) return 0;
   const correct = questions.filter(q => q.correct).length;
   return Math.round((correct / questions.length) * 100);
+}
+
+// Renders a `[x, y]` cell list (mental-rotation shapes) as a small filled-cell
+// grid within a `size x size` box — no images/canvas, just CSS grid squares.
+function ShapeGrid({ cells, size = 4, cellPx = 14 }) {
+  const filled = new Set((cells || []).map(([x, y]) => `${x},${y}`));
+  return (
+    <div
+      className="grid gap-0.5"
+      style={{ gridTemplateColumns: `repeat(${size}, ${cellPx}px)`, gridTemplateRows: `repeat(${size}, ${cellPx}px)` }}
+    >
+      {Array.from({ length: size * size }, (_, i) => {
+        const x = i % size;
+        const y = Math.floor(i / size);
+        return (
+          <div key={i} className={`rounded-sm ${filled.has(`${x},${y}`) ? 'bg-rose-400' : 'bg-port-border/30'}`} />
+        );
+      })}
+    </div>
+  );
 }
 
 // Shared result-assembly shape every sub-runner hands to `onComplete`. The
@@ -128,6 +154,20 @@ export function scoreStroopTrial({ trial, index, colorName, responseMs }) {
     index,
     answered: colorName,
     correct: colorName === trial.inkColor,
+    responseMs,
+  };
+}
+
+// MENTAL ROTATION — pure scoring for one trial: correct iff the picked option
+// index is the option that's the SAME shape (just rotated), not a mirror or
+// distractor. Mirrors `scoreStroopTrial`'s shape so both trial-based drills
+// share one testable pattern.
+export function scoreMentalRotationTrial({ trial, index, optionIndex, responseMs }) {
+  return {
+    prompt: `shape ${trial.shape || ''}`,
+    index,
+    answered: optionIndex,
+    correct: optionIndex === trial.correctIndex,
     responseMs,
   };
 }
@@ -514,6 +554,434 @@ function StroopRunner({ drill, drillIndex, drillCount, onComplete, isTraining })
           ))}
         </div>
       )}
+
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-gray-500">
+          <span>Trial {Math.min(trialIdx + 1, trials.length)} of {trials.length}</span>
+          <span>{Math.round(progressPct)}%</span>
+        </div>
+        <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
+          <div className="h-full bg-rose-400/60 transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// SCHULTE TABLE — scan a shuffled grid and tap 1, 2, 3... in sequence
+// =============================================================================
+function SchulteTableRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) {
+  const cells = drill.cells || [];
+  const size = drill.config?.size || 5;
+  const total = cells.length;
+
+  const [target, setTarget] = useState(1);
+  const [flash, setFlash] = useState(null); // value of a just-missed (wrong) click
+  const questionsRef = useRef([]);
+  const stepStartRef = useRef(Date.now());
+  const startedAtRef = useRef(Date.now());
+  const flashTimeoutRef = useRef(null);
+  // Mirrors `target` synchronously so a double-tap/double-click that fires two
+  // handleClick calls before React commits the setTarget update can't both read
+  // the same stale `target` and both advance — the second call sees the bumped
+  // ref and is treated as a miss instead of a duplicate correct answer.
+  const targetRef = useRef(target);
+
+  useEffect(() => () => clearTimeout(flashTimeoutRef.current), []);
+
+  const finish = useCallback(() => {
+    onComplete(buildCognitiveResult({
+      type: 'schulte-table',
+      drill,
+      questions: questionsRef.current,
+      totalMs: Date.now() - startedAtRef.current,
+    }));
+  }, [drill, onComplete]);
+
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  const handleClick = useCallback((value) => {
+    const current = targetRef.current;
+    if (value !== current) {
+      setFlash(value);
+      clearTimeout(flashTimeoutRef.current);
+      flashTimeoutRef.current = setTimeout(() => setFlash(null), 200);
+      return;
+    }
+    // Advance the ref immediately (synchronously) so a second handleClick call
+    // racing in before this render commits sees the bumped value, not `current`.
+    targetRef.current = current + 1;
+    questionsRef.current.push({
+      prompt: `${current}`,
+      index: current - 1,
+      answered: current,
+      correct: true,
+      responseMs: Date.now() - stepStartRef.current,
+    });
+    stepStartRef.current = Date.now();
+    if (current >= total) finishRef.current();
+    else setTarget(current + 1);
+  }, [total]);
+
+  const found = Math.min(target - 1, total);
+  const progressPct = total > 0 ? (found / total) * 100 : 0;
+
+  return (
+    <div className="max-w-lg mx-auto space-y-6">
+      <DrillHeader type="schulte-table" isTraining={isTraining} drillIndex={drillIndex} drillCount={drillCount} />
+
+      <p className="text-center text-sm text-gray-400">
+        Tap the numbers in order — <span className="text-rose-400 font-semibold">1, 2, 3...</span> — as fast as you can.
+      </p>
+
+      <div className="flex items-center justify-center gap-2 text-sm text-gray-400">
+        <span>Find:</span>
+        <span className="text-2xl font-mono font-bold text-white">{Math.min(target, total)}</span>
+      </div>
+
+      <div
+        className="grid gap-1.5 mx-auto w-full"
+        style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`, maxWidth: `${size * 3.5}rem` }}
+      >
+        {cells.map((value, i) => {
+          const isDone = value < target;
+          const isFlashing = flash === value;
+          return (
+            <button
+              key={i}
+              type="button"
+              onClick={() => handleClick(value)}
+              disabled={isDone}
+              className={`aspect-square flex items-center justify-center rounded-md font-mono font-semibold text-sm border transition-colors ${
+                isDone
+                  ? 'bg-port-success/10 border-port-success/30 text-port-success/50'
+                  : isFlashing
+                  ? 'bg-port-error/30 border-port-error/60 text-white'
+                  : 'bg-port-card border-port-border text-white hover:bg-port-bg'
+              }`}
+            >
+              {value}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-gray-500">
+          <span>{found} / {total} found</span>
+          <span>{Math.round(progressPct)}%</span>
+        </div>
+        <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
+          <div className="h-full bg-rose-400/60 transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// MENTAL ROTATION — pick the shape that's the SAME, just rotated (not mirrored)
+// =============================================================================
+function MentalRotationRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) {
+  const trials = drill.trials || [];
+  const gridSize = drill.config?.gridSize || 4;
+
+  const [trialIdx, setTrialIdx] = useState(0);
+  const [feedback, setFeedback] = useState(null); // { correct, expected, isLast } training reveal
+  const answersRef = useRef([]);
+  const trialStartRef = useRef(Date.now());
+  const startedAtRef = useRef(Date.now());
+  const advancingRef = useRef(false);
+
+  const finish = useCallback(() => {
+    const questions = answersRef.current.filter(Boolean);
+    onComplete(buildCognitiveResult({ type: 'mental-rotation', drill, questions, totalMs: Date.now() - startedAtRef.current }));
+  }, [drill, onComplete]);
+
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  useEffect(() => { trialStartRef.current = Date.now(); advancingRef.current = false; }, [trialIdx]);
+
+  const answer = useCallback((optionIndex) => {
+    if (advancingRef.current || feedback) return;
+    const trial = trials[trialIdx];
+    if (!trial) return;
+    const question = scoreMentalRotationTrial({ trial, index: trialIdx, optionIndex, responseMs: Date.now() - trialStartRef.current });
+    answersRef.current[trialIdx] = question;
+    const isLast = trialIdx + 1 >= trials.length;
+    if (isTraining) {
+      setFeedback({ correct: question.correct, expected: trial.correctIndex, isLast });
+    } else {
+      advancingRef.current = true;
+      if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
+    }
+  }, [feedback, trials, trialIdx, isTraining]);
+
+  const acknowledge = useCallback(() => {
+    const isLast = feedback?.isLast;
+    setFeedback(null);
+    if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
+  }, [feedback]);
+
+  // Number keys 1..N pick the matching option.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (feedback) { if (e.key === 'Enter') { e.preventDefault(); acknowledge(); } return; }
+      const optionCount = trials[trialIdx]?.options?.length || 0;
+      const idx = parseInt(e.key, 10) - 1;
+      if (Number.isInteger(idx) && idx >= 0 && idx < optionCount) {
+        e.preventDefault();
+        answer(idx);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [feedback, trials, trialIdx, answer, acknowledge]);
+
+  const trial = trials[trialIdx];
+  const progressPct = trials.length > 0 ? (trialIdx / trials.length) * 100 : 0;
+
+  return (
+    <div className="max-w-lg mx-auto space-y-6">
+      <DrillHeader type="mental-rotation" isTraining={isTraining} drillIndex={drillIndex} drillCount={drillCount} />
+
+      <p className="text-center text-sm text-gray-400">
+        Which shape below is the <span className="text-white font-medium">SAME</span> shape, just rotated — not mirrored?
+      </p>
+
+      {trial ? (
+        <>
+          <div className="flex justify-center py-4">
+            <ShapeGrid cells={trial.target} size={gridSize} />
+          </div>
+
+          {feedback ? (
+            <div className="space-y-4">
+              <div className={`flex items-center justify-center gap-2 ${feedback.correct ? 'text-port-success' : 'text-port-error'}`}>
+                {feedback.correct ? <Check size={24} /> : <X size={24} />}
+                <span className="text-sm">{feedback.correct ? 'Correct' : `Option ${feedback.expected + 1} was the match`}</span>
+              </div>
+              <button
+                onClick={acknowledge}
+                autoFocus
+                className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {trial.options.map((cells, i) => (
+                <button
+                  key={i}
+                  onClick={() => answer(i)}
+                  className="flex flex-col items-center gap-1 px-4 py-4 bg-port-card hover:bg-port-bg border border-port-border rounded-lg transition-colors"
+                >
+                  <ShapeGrid cells={cells} size={gridSize} />
+                  <span className="text-xs text-gray-600">{i + 1}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="text-gray-500 text-center py-8">Done</div>
+      )}
+
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-gray-500">
+          <span>Trial {Math.min(trialIdx + 1, trials.length)} of {trials.length}</span>
+          <span>{Math.round(progressPct)}%</span>
+        </div>
+        <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
+          <div className="h-full bg-rose-400/60 transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// REACTION TIME — simple (react ASAP) or choice (react to the lit target) RT
+// =============================================================================
+function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) {
+  const trials = drill.trials || [];
+  const mode = drill.config?.mode === 'choice' ? 'choice' : 'simple';
+  const choices = drill.config?.choices || 3;
+
+  const [trialIdx, setTrialIdx] = useState(0);
+  const [phase, setPhase] = useState('waiting'); // 'waiting' | 'go' | 'result'
+  const [lastResult, setLastResult] = useState(null);
+  const answersRef = useRef([]);
+  const stimulusShownRef = useRef(false);
+  const goStartRef = useRef(0);
+  const startedAtRef = useRef(Date.now());
+  const mountedRef = useRef(true);
+  // Separate refs: the "reveal the stimulus" timer (armed per trial) and the
+  // "advance to the next trial" timer (armed on response) must never share one
+  // ref — overwriting a shared ref on response leaves the reveal timer's
+  // callback un-cancelled, so a false start can leak a stale setPhase('go')
+  // into a later trial once the ref no longer points at it.
+  const armTimeoutRef = useRef(null);
+  const advanceTimeoutRef = useRef(null);
+  const advancingRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(armTimeoutRef.current);
+      clearTimeout(advanceTimeoutRef.current);
+    };
+  }, []);
+
+  const finish = useCallback(() => {
+    const questions = answersRef.current.filter(Boolean);
+    onComplete(buildCognitiveResult({ type: 'reaction-time', drill, questions, totalMs: Date.now() - startedAtRef.current }));
+  }, [drill, onComplete]);
+
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  // Arm each trial: wait `delayMs` (randomized server-side so onset can't be
+  // anticipated), then reveal the stimulus. Capture the timer in a local
+  // variable so this effect's cleanup always cancels ITS OWN timer, even if
+  // `armTimeoutRef.current` was reassigned in the meantime.
+  useEffect(() => {
+    if (trialIdx >= trials.length) { finishRef.current(); return; }
+    advancingRef.current = false;
+    stimulusShownRef.current = false;
+    setPhase('waiting');
+    setLastResult(null);
+    const delay = trials[trialIdx]?.delayMs || 1000;
+    const revealTimer = setTimeout(() => {
+      if (!mountedRef.current) return;
+      stimulusShownRef.current = true;
+      goStartRef.current = Date.now();
+      setPhase('go');
+    }, delay);
+    armTimeoutRef.current = revealTimer;
+    return () => clearTimeout(revealTimer);
+  }, [trialIdx]);
+
+  const recordAndAdvance = useCallback((result) => {
+    if (advancingRef.current) return;
+    advancingRef.current = true;
+    // A false start fires this before the reveal timer elapses — cancel it so
+    // it can't flip `phase`/`stimulusShownRef` on a later trial.
+    clearTimeout(armTimeoutRef.current);
+    answersRef.current[trialIdx] = {
+      prompt: mode === 'choice' ? `target ${trials[trialIdx]?.target ?? ''}` : 'react',
+      index: trialIdx,
+      ...result,
+    };
+    setLastResult(result);
+    setPhase('result');
+    const isLast = trialIdx + 1 >= trials.length;
+    advanceTimeoutRef.current = setTimeout(() => {
+      if (!mountedRef.current) return;
+      if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
+    }, isTraining ? 900 : 500);
+  }, [trialIdx, trials, mode, isTraining]);
+
+  const respond = useCallback((choiceIndex) => {
+    if (advancingRef.current) return;
+    if (!stimulusShownRef.current) {
+      recordAndAdvance({ answered: null, correct: false, responseMs: 0, falseStart: true });
+      return;
+    }
+    const responseMs = Date.now() - goStartRef.current;
+    if (mode === 'choice') {
+      const target = trials[trialIdx]?.target;
+      recordAndAdvance({ answered: choiceIndex, correct: choiceIndex === target, responseMs, falseStart: false });
+    } else {
+      recordAndAdvance({ answered: 'react', correct: true, responseMs, falseStart: false });
+    }
+  }, [mode, trialIdx, trials, recordAndAdvance]);
+
+  // Space (simple mode) or number keys 1..N (choice mode) register a response.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (phase === 'result') return;
+      if (mode === 'simple') {
+        if (e.code === 'Space' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); respond(0); }
+      } else {
+        const idx = parseInt(e.key, 10) - 1;
+        if (Number.isInteger(idx) && idx >= 0 && idx < choices) { e.preventDefault(); respond(idx); }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [phase, mode, choices, respond]);
+
+  const progressPct = trials.length > 0 ? (trialIdx / trials.length) * 100 : 0;
+
+  return (
+    <div className="max-w-lg mx-auto space-y-6">
+      <DrillHeader type="reaction-time" isTraining={isTraining} drillIndex={drillIndex} drillCount={drillCount} />
+
+      <p className="text-center text-sm text-gray-400">
+        {mode === 'choice'
+          ? <>Wait for a target box to light up, then press its number — <span className="text-rose-400 font-semibold">as fast as you can</span>.</>
+          : <>Wait for the signal, then press <span className="text-white font-medium">Space</span> (or tap) — <span className="text-rose-400 font-semibold">as fast as you can</span>.</>}
+      </p>
+
+      <div className="py-8 min-h-[10rem] flex flex-col items-center justify-center gap-4">
+        {phase === 'waiting' && (
+          <button
+            type="button"
+            onClick={() => respond(0)}
+            aria-label="Wait for the signal"
+            className="w-32 h-32 rounded-full bg-port-border/30 text-gray-500 text-sm flex items-center justify-center"
+          >
+            Wait…
+          </button>
+        )}
+
+        {phase === 'go' && mode === 'simple' && (
+          <button
+            type="button"
+            onClick={() => respond(0)}
+            className="w-32 h-32 rounded-full bg-port-success/80 hover:bg-port-success text-white font-bold text-lg transition-colors"
+          >
+            GO!
+          </button>
+        )}
+
+        {phase === 'go' && mode === 'choice' && (
+          <div className="grid grid-cols-2 gap-3 w-full">
+            {Array.from({ length: choices }, (_, i) => {
+              const isTarget = i === trials[trialIdx]?.target;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => respond(i)}
+                  className={`flex items-center justify-center gap-2 px-4 py-6 rounded-lg border font-semibold transition-colors ${
+                    isTarget
+                      ? 'bg-port-success/80 hover:bg-port-success border-port-success text-white'
+                      : 'bg-port-card border-port-border text-gray-500'
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {phase === 'result' && lastResult && (
+          <div className={`flex flex-col items-center gap-2 ${lastResult.correct ? 'text-port-success' : 'text-port-error'}`}>
+            {lastResult.correct ? <Check size={32} /> : <X size={32} />}
+            <div className="text-sm">
+              {lastResult.falseStart ? 'Too soon!' : lastResult.correct ? `${lastResult.responseMs}ms` : 'Wrong'}
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="space-y-1">
         <div className="flex justify-between text-xs text-gray-500">

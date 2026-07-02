@@ -2,11 +2,18 @@ import { describe, it, expect } from 'vitest';
 import {
   COGNITIVE_DRILL_TYPES,
   STROOP_COLORS,
+  ROTATION_SHAPES,
   generateNBack,
   generateDigitSpan,
   generateStroop,
+  generateSchulteTable,
+  generateMentalRotation,
+  generateReactionTime,
   generateCognitiveDrill,
   scoreCognitiveDrill,
+  rotateCells,
+  mirrorCells,
+  cellsKey,
 } from './meatspacePostCognitive.js';
 
 describe('cognitive drill generators', () => {
@@ -67,11 +74,83 @@ describe('cognitive drill generators', () => {
     expect(generateCognitiveDrill('n-back').type).toBe('n-back');
     expect(generateCognitiveDrill('digit-span').type).toBe('digit-span');
     expect(generateCognitiveDrill('stroop').type).toBe('stroop');
+    expect(generateCognitiveDrill('schulte-table').type).toBe('schulte-table');
+    expect(generateCognitiveDrill('mental-rotation').type).toBe('mental-rotation');
+    expect(generateCognitiveDrill('reaction-time').type).toBe('reaction-time');
     expect(generateCognitiveDrill('nope')).toBeNull();
   });
 
-  it('exposes exactly the three shipped cognitive types', () => {
-    expect(COGNITIVE_DRILL_TYPES).toEqual(['n-back', 'digit-span', 'stroop']);
+  it('exposes exactly the six shipped cognitive types', () => {
+    expect(COGNITIVE_DRILL_TYPES).toEqual(['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time']);
+  });
+
+  it('schulte-table shuffles 1..size*size into every cell exactly once', () => {
+    const drill = generateSchulteTable({ size: 4 });
+    expect(drill.type).toBe('schulte-table');
+    expect(drill.config.size).toBe(4);
+    expect(drill.cells).toHaveLength(16);
+    expect([...drill.cells].sort((a, b) => a - b)).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+  });
+
+  it('schulte-table clamps out-of-range size', () => {
+    const drill = generateSchulteTable({ size: 100 });
+    expect(drill.config.size).toBeLessThanOrEqual(7);
+    const drill2 = generateSchulteTable({ size: 0 });
+    expect(drill2.config.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it('mental-rotation produces 4 options per trial with a valid correctIndex', () => {
+    const drill = generateMentalRotation({ count: 6 });
+    expect(drill.type).toBe('mental-rotation');
+    expect(drill.trials).toHaveLength(6);
+    for (const trial of drill.trials) {
+      expect(trial.options).toHaveLength(4);
+      expect(trial.correctIndex).toBeGreaterThanOrEqual(0);
+      expect(trial.correctIndex).toBeLessThan(4);
+      expect(Array.isArray(trial.target)).toBe(true);
+      // Every option's cell count matches the base shape's (rotation/mirroring
+      // preserve cell count) — a cheap sanity check that nothing was corrupted.
+      for (const opt of trial.options) expect(opt.length).toBe(trial.target.length);
+    }
+  });
+
+  it('ROTATION_SHAPES chirality invariant: every rotation is distinct, every mirrored-rotation is distinct, and no rotation ever equals a mirrored-rotation', () => {
+    // This is the invariant generateMentalRotation's distractor-fill loop relies
+    // on: without it, a base shape could silently yield fewer than 3 distinct
+    // mirrored distractors (an infinite-guard exhaustion) or a "distractor" that
+    // is secretly a true rotation of the reference shape (a broken drill).
+    for (const [shapeName, baseCells] of Object.entries(ROTATION_SHAPES)) {
+      const rotationKeys = [0, 1, 2, 3].map(steps => cellsKey(rotateCells(baseCells, steps)));
+      const mirrorKeys = [0, 1, 2, 3].map(steps => cellsKey(mirrorCells(rotateCells(baseCells, steps))));
+
+      expect(new Set(rotationKeys).size, `${shapeName}: all 4 rotations must be distinct`).toBe(4);
+      expect(new Set(mirrorKeys).size, `${shapeName}: all 4 mirrored-rotations must be distinct`).toBe(4);
+      for (const mirrorK of mirrorKeys) {
+        expect(rotationKeys, `${shapeName}: a mirrored-rotation must never equal any rotation`).not.toContain(mirrorK);
+      }
+    }
+  });
+
+  it('reaction-time defaults to simple mode with no per-trial target', () => {
+    const drill = generateReactionTime({ count: 5 });
+    expect(drill.type).toBe('reaction-time');
+    expect(drill.config.mode).toBe('simple');
+    expect(drill.trials).toHaveLength(5);
+    for (const trial of drill.trials) {
+      expect(trial.target).toBeUndefined();
+      expect(trial.delayMs).toBeGreaterThanOrEqual(drill.config.minDelayMs);
+      expect(trial.delayMs).toBeLessThanOrEqual(drill.config.maxDelayMs);
+    }
+  });
+
+  it('reaction-time choice mode assigns a target index within range', () => {
+    const drill = generateReactionTime({ mode: 'choice', count: 8, choices: 4 });
+    expect(drill.config.mode).toBe('choice');
+    expect(drill.config.choices).toBe(4);
+    for (const trial of drill.trials) {
+      expect(trial.target).toBeGreaterThanOrEqual(0);
+      expect(trial.target).toBeLessThan(4);
+    }
   });
 });
 
@@ -141,5 +220,59 @@ describe('cognitive drill scorers (recompute the answer key, never trust client)
     const result = scoreCognitiveDrill('mystery', {}, [{ index: 0 }]);
     expect(result.score).toBe(0);
     expect(result.questions).toHaveLength(1);
+  });
+
+  it('schulte-table grades each "find the next number" step by expected position', () => {
+    const drillData = { type: 'schulte-table', config: { size: 3 } };
+    const { score, questions } = scoreCognitiveDrill('schulte-table', drillData, [
+      { index: 0, answered: 1, responseMs: 500 }, // correct: expects 1
+      { index: 1, answered: 3, responseMs: 500 }, // wrong: expects 2
+    ]);
+    expect(questions[0].correct).toBe(true);
+    expect(questions[1].correct).toBe(false);
+    expect(questions[1].expected).toBe(2);
+    expect(score).toBeGreaterThan(0);
+    expect(score).toBeLessThan(100);
+  });
+
+  it('mental-rotation recomputes the answer from trials[index].correctIndex, not client claims', () => {
+    const drillData = {
+      type: 'mental-rotation',
+      trials: [
+        { shape: 'F', correctIndex: 2 },
+        { shape: 'L', correctIndex: 0 },
+      ],
+    };
+    const { questions } = scoreCognitiveDrill('mental-rotation', drillData, [
+      { index: 0, answered: 2, correct: false, responseMs: 3000 }, // client lied "false"; actually correct
+      { index: 1, answered: 1, correct: true, responseMs: 3000 }, // client lied "true"; actually wrong
+    ]);
+    expect(questions[0].correct).toBe(true);
+    expect(questions[1].correct).toBe(false);
+  });
+
+  it('reaction-time simple mode marks a false start wrong even with a fast responseMs', () => {
+    const drillData = { type: 'reaction-time', config: { mode: 'simple' }, trials: [{ delayMs: 1000 }, { delayMs: 1000 }] };
+    const { questions, score } = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 'react', responseMs: 220, falseStart: false },
+      { index: 1, answered: null, responseMs: 0, falseStart: true, correct: true }, // client lied "true"
+    ]);
+    expect(questions[0].correct).toBe(true);
+    expect(questions[1].correct).toBe(false);
+    expect(score).toBeGreaterThan(0);
+  });
+
+  it('reaction-time choice mode requires the answered index to match the trial target', () => {
+    const drillData = { type: 'reaction-time', config: { mode: 'choice', choices: 3 }, trials: [{ delayMs: 800, target: 1 }] };
+    const { questions } = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 1, responseMs: 400 },
+    ]);
+    expect(questions[0].correct).toBe(true);
+    expect(questions[0].expected).toBe('1');
+
+    const wrong = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 0, responseMs: 400 },
+    ]);
+    expect(wrong.questions[0].correct).toBe(false);
   });
 });

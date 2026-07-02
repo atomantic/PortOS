@@ -55,7 +55,22 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     startLength: cfg.startLength,
     maxLength: cfg.maxLength,
     count: cfg.count,
+    size: cfg.size,
+    mode: cfg.mode,
+    minDelayMs: cfg.minDelayMs,
+    maxDelayMs: cfg.maxDelayMs,
+    choices: cfg.choices,
   });
+
+  // Short "at a glance" summary chip per cognitive drill type, shown next to
+  // its label in the launcher sidebar.
+  function cognitiveSummary(type, cfg) {
+    if (type === 'n-back') return `${cfg.n ?? 2}-back`;
+    if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
+    if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
+    if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
+    return cfg.count ? `${cfg.count} trials` : '';
+  }
 
   function buildCleanTags() {
     const cleanTags = {};
@@ -488,7 +503,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                   <div key={type} className="flex items-center justify-between text-sm">
                     <span className="text-white">{DRILL_LABELS[type] || type}</span>
                     <span className="text-gray-500">
-                      {type === 'n-back' ? `${cfg.n ?? 2}-back` : type === 'digit-span' ? `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}` : cfg.count ? `${cfg.count} trials` : ''}
+                      {cognitiveSummary(type, cfg)}
                     </span>
                   </div>
                 ))}
