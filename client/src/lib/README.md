@@ -92,6 +92,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `mediaSearch.js` | `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack`, `filterByQuery` — client-side AND-token search over normalized media items (prompt/model/seed/LoRA/universe tags). Shared by MediaHistory + the Image Gen gallery picker. |
 | `moodBoardItemSrc.js` | `moodBoardItemSrc(item)` resolves a mood-board item to a display image src (`imageUrl` → served `image:<file>` bytes → null). Shared by MoodBoardDetail + MoodBoardReferenceStrip. |
 | `sameJsonShape.js` | `sameJsonShape(prev, next)` — JSON.stringify-based equality for `useAutoRefetch`'s `compare` option on small, deterministically-shaped poll payloads. |
+| `sketchCanvas.js` | Pure stroke model + 2D-context renderer for the media annotation canvas (`createStroke`, `appendPoint`, `undoStrokes`, `drawStrokes`, `clampSize`). Points stored in natural-pixel space; erase strokes use `destination-out`. Used by `AnnotationCanvas.jsx` / `MediaAnnotate.jsx` (#2036). |
 | `unsorted.js` | Synthetic "Unsorted" collection from media not filed in any real collection. |
 | `upsertByIdPrepend.js` | Newest-first upsert into an id-keyed list. |
 | `voiceLabel.js` | `formatVoiceLabel(v, engine?)` — display label for a TTS voice record. Engine-specific formatters plug into a lookup table; new engines extend that map. |
