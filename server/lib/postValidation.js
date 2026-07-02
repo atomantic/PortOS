@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
 import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
+import { HHMM_STRICT_RE } from './timezone.js';
 
 // =============================================================================
 // POST (Power On Self Test) VALIDATION SCHEMAS
@@ -8,6 +9,10 @@ import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
 
 // Tags for session conditions (sleep, caffeine, stress, etc.)
 export const postTagsSchema = z.record(z.string().max(200));
+
+// 24h "HH:MM" time-of-day — HHMM_STRICT_RE is timezone.js's single source of
+// truth for this exact zero-padded pattern (shared with dashboardLayouts.js's
+// activateWindow validator); don't re-derive a local copy.
 
 // Individual question result (math + memory drills)
 // Math: server recomputes expected/correct via scoreDrill (numeric values)
@@ -138,6 +143,19 @@ export const postConfigUpdateSchema = z.object({
   // Default OFF so existing installs are unchanged — additive, no migration.
   adaptive: z.object({
     enabled: z.boolean().optional()
+  }).optional(),
+  // Opt-in daily reminder (default OFF, off by default). `time` is a 24h
+  // "HH:MM" string interpreted in the user's configured timezone. The native
+  // <input type="time"> can be cleared to '' by the user; treat that as
+  // "no change" (absent) rather than a validation failure that would reject
+  // the whole config PUT — same UI-sentinel-tolerance pattern CLAUDE.md
+  // documents for CLI provider endpoints.
+  reminder: z.object({
+    enabled: z.boolean().optional(),
+    time: z.preprocess(
+      v => (v === '' ? undefined : v),
+      z.string().regex(HHMM_STRICT_RE, 'Must be HH:MM format').optional()
+    )
   }).optional()
 }).partial();
 
