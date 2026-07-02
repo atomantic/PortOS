@@ -9,6 +9,7 @@ import { useThemeContext } from '../components/ThemeContext';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot, Maximize2, Minimize2 } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
+import { formatDurationMs } from '../utils/formatters';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
@@ -66,15 +67,6 @@ const readTerminalTheme = () => {
     success: parseCssColorToHex(css('--port-success')),
     warning: parseCssColorToHex(css('--port-warning')),
   }, mode);
-};
-
-const formatAge = (createdAt) => {
-  const seconds = Math.floor((Date.now() - createdAt) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h${minutes % 60}m`;
 };
 
 const shortId = (id) => id?.slice(0, 6) ?? '';
@@ -959,12 +951,12 @@ export default function Shell() {
                       : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
-                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
+                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatDurationMs(Date.now() - s.createdAt)} old`}
               >
                 <TabIcon size={12} className="shrink-0" />
                 <span className="min-w-0 break-all">{label}</span>
                 {isRun && <span className="w-1.5 h-1.5 rounded-full bg-port-accent animate-pulse shrink-0" title="Live" />}
-                <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
+                <span className="text-[10px] opacity-60 shrink-0">{formatDurationMs(Date.now() - s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}
                   className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${

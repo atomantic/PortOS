@@ -282,9 +282,11 @@ export function parseTimeoutMs(raw) {
 }
 
 /**
- * Format a duration in milliseconds as a human-readable string
+ * Format a duration in milliseconds as a human-readable string. Buckets down
+ * from days so multi-day uptimes read as "2d 3h" rather than an unbounded
+ * hours count ("51h 0m").
  * @param {number} ms - Duration in milliseconds
- * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m")
+ * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m", "2d 3h")
  */
 export function formatDurationMs(ms) {
   if (ms == null) return '-';
@@ -293,7 +295,9 @@ export function formatDurationMs(ms) {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
 }
 
 /**
