@@ -37,8 +37,8 @@ export const getAgentActivityStats = (agentId, days = 7) =>
 
 // Chief of Staff
 export const getCosStatus = () => request('/cos');
-export const startCos = () => request('/cos/start', { method: 'POST' });
-export const stopCos = () => request('/cos/stop', { method: 'POST' });
+export const startCos = (options = {}) => request('/cos/start', { method: 'POST', ...options });
+export const stopCos = (options = {}) => request('/cos/stop', { method: 'POST', ...options });
 export const pauseCos = (reason) => request('/cos/pause', {
   method: 'POST',
   body: JSON.stringify({ reason })
@@ -71,34 +71,36 @@ export const enhanceCosTaskPrompt = (data) => request('/cos/tasks/enhance', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateCosTask = (id, updates) => request(`/cos/tasks/${id}`, {
+export const updateCosTask = (id, updates, options = {}) => request(`/cos/tasks/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(updates)
+  body: JSON.stringify(updates),
+  ...options
 });
-export const deleteCosTask = (id, taskType = 'user') => request(`/cos/tasks/${id}?type=${taskType}`, { method: 'DELETE' });
+export const deleteCosTask = (id, taskType = 'user', options = {}) => request(`/cos/tasks/${id}?type=${taskType}`, { method: 'DELETE', ...options });
 export const reorderCosTasks = (taskIds) => request('/cos/tasks/reorder', {
   method: 'POST',
   body: JSON.stringify({ taskIds })
 });
-export const approveCosTask = (id) => request(`/cos/tasks/${id}/approve`, { method: 'POST' });
-export const forceCosEvaluate = () => request('/cos/evaluate', { method: 'POST' });
-export const forceSpawnTask = (taskId) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST' });
+export const approveCosTask = (id, options = {}) => request(`/cos/tasks/${id}/approve`, { method: 'POST', ...options });
+export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
+export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
 export const getCosHealth = () => request('/cos/health');
-export const forceHealthCheck = () => request('/cos/health/check', { method: 'POST' });
+export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = () => request('/cos/agents');
 export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
-export const pauseCosAgent = (id, reason) => request(`/cos/agents/${id}/pause`, {
+export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
-  body: JSON.stringify({ reason })
+  body: JSON.stringify({ reason }),
+  ...options
 });
-export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });
+export const killCosAgent = (id, options = {}) => request(`/cos/agents/${id}/kill`, { method: 'POST', ...options });
 export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stats`, options);
 export const getCosAgentPrompt = (id) => request(`/cos/agents/${id}/prompt`);
-export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
-export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
+export const deleteCosAgent = (id, options = {}) => request(`/cos/agents/${id}`, { method: 'DELETE', ...options });
+export const clearCompletedCosAgents = (options = {}) => request('/cos/agents/completed', { method: 'DELETE', ...options });
 export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${id}/feedback`, {
   method: 'POST',
   body: JSON.stringify(feedback)
@@ -235,22 +237,24 @@ export const addCosScheduleTemplate = (template) => request('/cos/schedule/templ
 export const deleteCosScheduleTemplate = (templateId) => request(`/cos/schedule/templates/${templateId}`, { method: 'DELETE' });
 
 // Autonomous Jobs
-export const getCosJobs = () => request('/cos/jobs');
+export const getCosJobs = (options = {}) => request('/cos/jobs', options);
 export const getCosJobsDue = () => request('/cos/jobs/due');
 export const getCosJobIntervals = () => request('/cos/jobs/intervals');
 export const getCosJobAllowedCommands = () => request('/cos/jobs/allowed-commands');
 export const getCosJob = (id) => request(`/cos/jobs/${id}`);
-export const createCosJob = (data) => request('/cos/jobs', {
+export const createCosJob = (data, options = {}) => request('/cos/jobs', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateCosJob = (id, data) => request(`/cos/jobs/${id}`, {
+export const updateCosJob = (id, data, options = {}) => request(`/cos/jobs/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 'POST' });
-export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
-export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
+export const toggleCosJob = (id, options = {}) => request(`/cos/jobs/${id}/toggle`, { method: 'POST', ...options });
+export const triggerCosJob = (id, options = {}) => request(`/cos/jobs/${id}/trigger`, { method: 'POST', ...options });
+export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
 export const getCosWorkflow = () => request('/cos/workflow');

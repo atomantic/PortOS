@@ -52,15 +52,17 @@ export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inb
 // Brain - People
 export const getBrainPeople = () => request('/brain/people');
 export const getBrainPerson = (id) => request(`/brain/people/${id}`);
-export const createBrainPerson = (data) => request('/brain/people', {
+export const createBrainPerson = (data, options = {}) => request('/brain/people', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainPerson = (id, data) => request(`/brain/people/${id}`, {
+export const updateBrainPerson = (id, data, options = {}) => request(`/brain/people/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainPerson = (id) => request(`/brain/people/${id}`, { method: 'DELETE' });
+export const deleteBrainPerson = (id, options = {}) => request(`/brain/people/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Projects
 export const getBrainProjects = (filters) => {
@@ -199,18 +201,21 @@ export const scanBrainLink = (id) => request(`/brain/links/${id}/scan`, { method
 
 // Brain - Buckets (bookmark groups for links)
 export const getBrainBuckets = (options = {}) => request('/brain/buckets', options);
-export const createBrainBucket = (data) => request('/brain/buckets', {
+export const createBrainBucket = (data, options = {}) => request('/brain/buckets', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainBucket = (id, data) => request(`/brain/buckets/${id}`, {
+export const updateBrainBucket = (id, data, options = {}) => request(`/brain/buckets/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainBucket = (id) => request(`/brain/buckets/${id}`, { method: 'DELETE' });
-export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
+export const deleteBrainBucket = (id, options = {}) => request(`/brain/buckets/${id}`, { method: 'DELETE', ...options });
+export const reorderBrainBuckets = (ids, options = {}) => request('/brain/buckets/reorder', {
   method: 'POST',
-  body: JSON.stringify({ ids })
+  body: JSON.stringify({ ids }),
+  ...options
 });
 
 // Brain - Goals (identity system, read-only view for the graph detail panel)
