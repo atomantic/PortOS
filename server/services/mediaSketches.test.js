@@ -52,6 +52,16 @@ describe('mediaSketches service', () => {
     expect(png.toString()).toBe('fake-png-bytes');
   });
 
+  it('re-saving with strokes but no PNG drops the stale flattened export', async () => {
+    await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes, png: PNG_DATA_URL });
+    expect(await svc.getSketchPng(KEY)).not.toBeNull();
+    // Second save carries vectors only — the old PNG must be removed so hasPng
+    // (false) agrees with what /png serves.
+    const resaved = await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes });
+    expect(resaved.hasPng).toBe(false);
+    expect(await svc.getSketchPng(KEY)).toBeNull();
+  });
+
   it('saveSketch with empty strokes removes the sidecar', async () => {
     await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes, png: PNG_DATA_URL });
     expect(await svc.getSketch(KEY)).not.toBeNull();

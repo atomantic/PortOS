@@ -128,6 +128,10 @@ export async function saveSketch(key, input) {
 
   const hasPng = !!clean.png;
   if (hasPng) await atomicWrite(pngPathFor(key), clean.png);
+  // A re-save that carries only vectors (no PNG) must drop any prior flattened
+  // export, otherwise `hasPng:false` in the JSON disagrees with a stale
+  // `<id>.png` that getSketchPng() would keep streaming.
+  else await unlink(pngPathFor(key)).catch(() => {});
   const record = {
     key,
     width: clean.width,
