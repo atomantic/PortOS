@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Workspace Contexts
+
+- **Switch project workspaces from ⌘K and voice, and CoS now auto-snapshots the workspace it leaves.** A new `workspace_switch` action ("switch workspace to BookLoom", "restore my PortOS context") saves a snapshot of the workspace you're leaving, then reconciles the target project's saved context — git branch, in-repo shell sessions, scoped tasks — and reports what's still live to re-attach; it appears in the ⌘K palette and resolves by voice. When CoS dispatches a coding agent against a different app/repo than it was last working in, it now silently snapshots the previous workspace's context first (snapshot-only — no auto-restore, no LLM calls), so switching between repos preserves what each project looked like, visible on the Workspace Contexts page (#2035).
+
 ## Delete confirmations
 
 - **Destructive actions now show a clear "Delete? / Cancel" prompt instead of a hidden second click.** Deleting a round, universe, series, share bucket, issue/episode, or a Writers Room work/folder — and removing an Ask conversation or deleting a world in the Universe Builder — used to silently re-arm the same button on the first click, with nothing on screen telling you a second click was needed. Each of these now pops an explicit inline confirm/cancel affordance right where you clicked, so it's obvious what will happen and easy to back out. The pipeline's "replace existing scenes / pages / audio lines" extract buttons got the same treatment (an inline "Replace? / Cancel" row) instead of arming via a fleeting toast. Delete/confirm controls in the Writers Room library were also enlarged to a comfortable 44px touch target for mobile.
