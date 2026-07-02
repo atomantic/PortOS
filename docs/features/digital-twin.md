@@ -41,7 +41,7 @@ Gap recommendations identify the lowest-confidence aspects, generate specific qu
 
 ## Behavioral Feedback Loop
 
-`server/services/feedbackLoop.js` captures "sounds like me" / "doesn't sound like me" validations on twin responses, tracks feedback patterns, and adjusts per-document weights used in confidence scoring and context assembly. Feedback persists in `feedback.json` (peer-synced). Routes: `POST /feedback`, `GET /feedback/stats`, `POST /feedback/recalculate`, `GET /feedback/recent`.
+`server/services/feedbackLoop.js` captures "sounds like me" / "doesn't sound like me" validations on twin responses, tracks feedback patterns, and computes suggested per-document weight adjustments (`documentWeightAdjustments`), surfaced through the feedback stats routes. The adjustments are recorded and reported — they do not yet feed automatically into the document weights that context assembly sorts by (those come from each document's user-set weight). Feedback persists in `feedback.json` (peer-synced). Routes: `POST /feedback`, `GET /feedback/stats`, `POST /feedback/recalculate`, `GET /feedback/recent`.
 
 ## External Data Import
 

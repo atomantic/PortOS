@@ -90,7 +90,7 @@ Selecting prose highlights the mapped script and media; media cards show provena
 
 ## Federation
 
-Writers Room content syncs across peers: record kinds `writersRoomWork`, `writersRoomFolder`, and `writersRoomExercise` (`syncLogic.js`) map to the sync categories `writersRoomWorks`/`writersRoomFolders`/`writersRoomExercises` registered in `server/lib/schemaVersions.js`, with per-record peer-sync push (#1565/#1645). `local.js` emits record events through `sharing/recordEvents.js`; draft `.md` bodies and scene-image assets ride the peer-sync body/asset lanes, and conflict-restore handlers cover exercises and bodyless records.
+Writers Room content syncs across peers: record kinds `writersRoomWork`, `writersRoomFolder`, and `writersRoomExercise` (`syncLogic.js`) map to the sync categories `writersRoomWorks`/`writersRoomFolders`/`writersRoomExercises` registered in `server/lib/schemaVersions.js`, with per-record peer-sync push (#1565/#1645). `local.js` emits record events through `sharing/recordEvents.js`; draft `.md` bodies ride a dedicated `draftBodyManifest` lane on work pushes (SHA256 per draft), while scene images sync through the work's linked media collection's asset path rather than the Writers Room records themselves. Conflict-restore handlers cover exercises and bodyless records.
 
 ## API Surface
 
