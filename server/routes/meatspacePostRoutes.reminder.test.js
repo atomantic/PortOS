@@ -2,25 +2,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
-// Scoped to PUT /post/config's reminder-rescheduling wiring — only the two
-// services that route touches (postService.updatePostConfig and
-// meatspacePostReminder.registerPostReminderSchedule) are mocked. Mirrors the
-// scoping rationale in meatspacePostRoutes.drillCache.test.js.
+// PUT /post/config no longer wires the reminder reschedule itself (#2015) —
+// that now lives centrally inside meatspacePost.js's updatePostConfig(), via
+// its postConfigEvents emitter, so any current or future caller of
+// updatePostConfig gets the reschedule for free. See:
+//   - server/services/meatspacePost.test.js for updatePostConfig emitting
+//     postConfigEvents on every save.
+//   - server/services/meatspacePostReminder.test.js for the subscription
+//     that reschedules when the `reminder` slice is part of the patch.
+// This file is now a lean smoke test for the route itself: it validates the
+// body, delegates to postService.updatePostConfig, and returns the result.
 vi.mock('../services/meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
   updatePostConfig: vi.fn(),
 }));
 
-vi.mock('../services/meatspacePostReminder.js', () => ({
-  // Real implementation is async (always returns a Promise) — the route
-  // chains `.catch()` onto the call, so the mock must resolve rather than
-  // return `undefined` synchronously (clearAllMocks in beforeEach clears call
-  // history, not the configured resolution, so this default is safe to set once).
-  registerPostReminderSchedule: vi.fn().mockResolvedValue(undefined),
-}));
-
 import * as postService from '../services/meatspacePost.js';
-import { registerPostReminderSchedule } from '../services/meatspacePostReminder.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 
@@ -32,7 +29,7 @@ function makeApp() {
   return app;
 }
 
-describe('PUT /api/meatspace/post/config — reminder rescheduling', () => {
+describe('PUT /api/meatspace/post/config', () => {
   let app;
   beforeEach(() => {
     app = makeApp();
@@ -40,31 +37,20 @@ describe('PUT /api/meatspace/post/config — reminder rescheduling', () => {
     postService.updatePostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
   });
 
-  it('reschedules the reminder when the payload includes a reminder block', async () => {
+  it('delegates to postService.updatePostConfig and returns the saved config', async () => {
     const r = await request(app)
       .put('/api/meatspace/post/config')
       .send({ reminder: { enabled: true, time: '09:00' } });
     expect(r.status).toBe(200);
-    expect(registerPostReminderSchedule).toHaveBeenCalledTimes(1);
+    expect(postService.updatePostConfig).toHaveBeenCalledWith({ reminder: { enabled: true, time: '09:00' } });
+    expect(r.body).toEqual({ reminder: { enabled: true, time: '09:00' } });
   });
 
-  it('does not touch the reminder schedule when the payload has no reminder key', async () => {
+  it('accepts a payload with no reminder key', async () => {
     const r = await request(app)
       .put('/api/meatspace/post/config')
       .send({ adaptive: { enabled: true } });
     expect(r.status).toBe(200);
-    expect(registerPostReminderSchedule).not.toHaveBeenCalled();
-  });
-
-  // Regression: a rescheduling failure must not mask a config write that
-  // already succeeded — the client shouldn't be told "save failed" when the
-  // new value was in fact persisted.
-  it('still returns the saved config with a 200 when rescheduling itself throws', async () => {
-    registerPostReminderSchedule.mockRejectedValueOnce(new Error('timezone settings unreadable'));
-    const r = await request(app)
-      .put('/api/meatspace/post/config')
-      .send({ reminder: { enabled: true, time: '09:00' } });
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual({ reminder: { enabled: true, time: '09:00' } });
+    expect(postService.updatePostConfig).toHaveBeenCalledWith({ adaptive: { enabled: true } });
   });
 });
