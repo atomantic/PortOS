@@ -52,15 +52,16 @@ describe('FormField', () => {
     expect(screen.getByText('One per line').id).toBe('');
   });
 
-  it('does not override an explicit id on the child', () => {
+  it('binds the label to an explicit child id (association still holds)', () => {
     render(
       <FormField label="Custom">
         <input id="my-fixed-id" defaultValue="" />
       </FormField>
     );
-    // With a fixed child id but a generated label htmlFor, the association
-    // is not made — but the caller-provided id must be preserved.
-    expect(document.getElementById('my-fixed-id')).toBeTruthy();
+    // The caller-provided id is preserved AND the label points at it, so the
+    // association is made without clobbering the explicit id.
+    const input = screen.getByLabelText('Custom');
+    expect(input.id).toBe('my-fixed-id');
   });
 
   it('applies caller-provided wrapper and label classes', () => {
