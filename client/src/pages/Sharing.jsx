@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
@@ -77,7 +77,7 @@ function SharingHeader({ active }) {
 }
 
 export default function Sharing() {
-  const { section = 'buckets' } = useParams();
+  const { section = 'buckets', bucketId } = useParams();
   if (section === 'duplicates' || section === 'conflicts') {
     return (
       <div>
@@ -86,14 +86,16 @@ export default function Sharing() {
       </div>
     );
   }
-  return <SharingBuckets />;
+  return <SharingBuckets selectedId={bucketId || null} />;
 }
 
-function SharingBuckets() {
+// The selected bucket lives in the URL (`/sharing/buckets/:bucketId`) so it's
+// deep-linkable and reload-safe. `selectedId` is the route param.
+function SharingBuckets({ selectedId }) {
+  const navigate = useNavigate();
   const [buckets, setBuckets] = useState([]);
   const [, setLocalSchemaVersion] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
@@ -120,7 +122,9 @@ function SharingBuckets() {
       const list = bResp?.buckets || [];
       setBuckets(list);
       setLocalSchemaVersion(bResp?.localSchemaVersion ?? null);
-      if (list.length > 0) setSelectedId(list[0].id);
+      // Auto-select the first bucket when the URL doesn't already name one, so a
+      // bare /sharing lands on a populated detail panel (replace: no history spam).
+      if (!selectedId && list.length > 0) navigate(`/sharing/buckets/${encodeURIComponent(list[0].id)}`, { replace: true });
       const display = settings?.sharingDisplayName || '';
       const bio = settings?.sharingBio || '';
       setSharingDisplayName(display);
@@ -193,7 +197,7 @@ function SharingBuckets() {
     setCreating(false);
     if (!result?.bucket) return;
     setBuckets((prev) => [...prev, result.bucket].sort((a, b) => a.name.localeCompare(b.name)));
-    setSelectedId(result.bucket.id);
+    navigate(`/sharing/buckets/${encodeURIComponent(result.bucket.id)}`);
     setForm(emptyForm());
     setShowAdd(false);
     toast.success(`Registered bucket "${result.bucket.name}"`);
@@ -202,7 +206,12 @@ function SharingBuckets() {
   const handleDelete = (bucket) => confirmRemove(() => {
     const prior = buckets;
     setBuckets((prev) => prev.filter((b) => b.id !== bucket.id));
-    if (selectedId === bucket.id) setSelectedId(prior[0]?.id !== bucket.id ? prior[0]?.id : (prior[1]?.id || null));
+    // If the open bucket was removed, fall back to the next remaining one (or the
+    // index when none are left).
+    if (selectedId === bucket.id) {
+      const next = prior.find((b) => b.id !== bucket.id);
+      navigate(next ? `/sharing/buckets/${encodeURIComponent(next.id)}` : '/sharing');
+    }
     return deleteShareBucket(bucket.id).catch((err) => {
       toast.error(err.message || 'Failed to remove bucket');
       setBuckets(prior);
@@ -258,6 +267,8 @@ function SharingBuckets() {
   };
 
   const selected = buckets.find((b) => b.id === selectedId) || null;
+  // A bucketId in the URL that isn't in the loaded list (removed / bad deep link).
+  const bucketNotFound = !!selectedId && !loading && !selected;
   const displayNameDirty = sharingDisplayName !== savedDisplayName || sharingBio !== savedBio;
 
   return (
@@ -432,7 +443,7 @@ function SharingBuckets() {
                   <li key={b.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedId(b.id)}
+                      onClick={() => navigate(`/sharing/buckets/${encodeURIComponent(b.id)}`)}
                       className={`w-full text-left p-3 rounded-lg border ${isSelected ? 'bg-port-card border-port-accent/40' : 'bg-port-card border-port-border'} hover:border-port-accent/30 transition-colors`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -468,7 +479,14 @@ function SharingBuckets() {
 
         {/* Detail panel */}
         <section>
-          {!selected ? (
+          {bucketNotFound ? (
+            <div className="p-6 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
+              That bucket could not be found — it may have been removed.{' '}
+              <button type="button" onClick={() => navigate('/sharing')} className="text-port-accent hover:underline">
+                Back to buckets
+              </button>
+            </div>
+          ) : !selected ? (
             <div className="p-6 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
               Pick a bucket on the left to see its inbox + activity.
             </div>

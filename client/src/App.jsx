@@ -326,14 +326,23 @@ export default function App() {
           <Route path="writers-room/guide" element={<WritersRoomGuide />} />
           <Route path="sharing" element={<Sharing />} />
           <Route path="sharing/:section" element={<Sharing />} />
+          <Route path="sharing/:section/:bucketId" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
           <Route path="start-story" element={<StartStory />} />
           <Route path="story-builder" element={<StoryBuilder />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
+          {/* Authors is a single master-detail page: the index + editor share one
+              component, so selection rides `:authorId` (which also captures the
+              `new` create-mode sentinel — author ids are UUIDs, so it can't
+              collide). A bare `/authors` is the idle index. */}
           <Route path="authors" element={<Authors />} />
+          <Route path="authors/:authorId" element={<Authors />} />
+          {/* Music is tabbed (`:tab`); each tab's master-detail selection lives
+              at `/music/:tab/:id` (`new` = create sentinel). */}
           <Route path="music" element={<Music />} />
           <Route path="music/:tab" element={<Music />} />
+          <Route path="music/:tab/:id" element={<Music />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
           <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />

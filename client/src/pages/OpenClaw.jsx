@@ -1,3 +1,21 @@
+/**
+ * OpenClaw — operator chat surface (streaming, context, attachments).
+ *
+ * Deep-linking exemption (issue #2025): `selectedSessionId` is intentionally
+ * NOT encoded in the URL as a routable record. Unlike the master-detail record
+ * views (Authors/Music/Sharing/Prompts) that this issue converts to id'd routes,
+ * an OpenClaw session is ephemeral runtime state, not a user-owned record:
+ *  - The session list is discovered from an external OpenClaw runtime and can
+ *    change on every Refresh; sessions come and go with the runtime.
+ *  - Selection is runtime-managed, not user-owned: `loadRuntime` auto-picks a
+ *    `preferredSessionId` (last selection → runtime `defaultSession` → first
+ *    session) on every load/reconnect, so the runtime — not a pasted URL — is
+ *    the source of truth for "what's open."
+ *  - The active session is wired into live SSE streaming state (useOpenClawStream)
+ *    with in-flight refs; driving it from a URL param would fight that lifecycle.
+ * This mirrors the transient-session rationale for other socket/stream surfaces.
+ * If OpenClaw ever gains a persistent, user-owned session registry, revisit this.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
