@@ -146,6 +146,17 @@ export async function firePostReminderIfIncomplete() {
  * `firePostReminderIfIncomplete` itself is idempotent (completedToday +
  * already-notified-today guards), so calling it here is safe even on a rare
  * false-positive gate.
+ *
+ * KNOWN LIMITATION (tracked in #2040, deliberately out of scope here): this
+ * only guards against the reminder's OWN config changing, not the user's
+ * GLOBAL timezone changing. If the effective timezone changes such that
+ * today's slot newly appears to have already passed under the new zone, and
+ * the server then restarts before the next natural tick, this can still fire
+ * a catch-up for a slot that was never scheduled under the timezone active
+ * when it "occurred." Fixing that generally requires a timezone-change
+ * timestamp in the shared settings layer (server/services/settings.js), used
+ * by every timezone-dependent scheduler — not just this one — so it's
+ * tracked separately rather than folded into this issue's narrower scope.
  */
 async function catchUpMissedSlot(cron, timezone, reminderUpdatedAt) {
   const now = Date.now();
