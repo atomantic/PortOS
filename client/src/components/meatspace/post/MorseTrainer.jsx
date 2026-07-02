@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Radio, Headphones, Hand, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 
-const MORSE_TABLE = {
+export const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
   G: '--.',    H: '....',   I: '..',     J: '.---',   K: '-.-',    L: '.-..',
   M: '--',     N: '-.',     O: '---',    P: '.--.',   Q: '--.-',   R: '.-.',
@@ -24,6 +24,8 @@ const MORSE_BY_LENGTH = MORSE_ENTRIES.reduce((acc, [ch, code]) => {
 
 // Binary tree: walk left for `-` (DAH), right for `.` (DIT). Each node's path
 // from the root spells its morse code; missing paths are nulls (e.g. `----`).
+// Morse is timing-decoded rather than prefix-free, so a node can carry both a
+// letter (e.g. E, T, A) AND have children for longer codes that extend it.
 const MORSE_TREE = (() => {
   const root = { char: '·', code: '', dah: null, dit: null };
   for (const [ch, code] of MORSE_ENTRIES) {
@@ -37,6 +39,48 @@ const MORSE_TREE = (() => {
   }
   return root;
 })();
+
+// Tidy tree layout: true leaves (nodes with no dah/dit children) get
+// sequential x-slots in left-to-right (dah-then-dit) order; every internal
+// node's x is the midpoint of its children. This replaces nested equal-split
+// `flex-1` divs — which gave a missing branch the same width as a populated
+// one at every depth, so a lightly-populated subtree several levels down
+// could visually squeeze/shift everything above it, including the root —
+// with positions derived from each subtree's real size. The root always
+// lands at the midpoint of its two top branches and every node keeps a
+// stable, non-overlapping slot regardless of how deep/sparse its subtree is.
+function layoutMorseTree(root) {
+  const nodes = [];
+  const edges = [];
+  let nextLeafX = 0;
+
+  function visit(node, depth) {
+    if (!node) return null;
+    let x;
+    const dahPos = visit(node.dah, depth + 1);
+    const ditPos = visit(node.dit, depth + 1);
+    const childXs = [dahPos, ditPos].filter(Boolean).map((p) => p.x);
+    if (childXs.length === 0) {
+      x = nextLeafX;
+      nextLeafX += 1;
+    } else {
+      x = childXs.reduce((a, b) => a + b, 0) / childXs.length;
+    }
+    if (dahPos) edges.push({ x1: x, y1: depth, x2: dahPos.x, y2: depth + 1, childCode: node.dah.code });
+    if (ditPos) edges.push({ x1: x, y1: depth, x2: ditPos.x, y2: depth + 1, childCode: node.dit.code });
+    const pos = { x, depth, node };
+    nodes.push(pos);
+    return pos;
+  }
+
+  visit(root, 0);
+  const maxDepth = nodes.reduce((max, n) => Math.max(max, n.depth), 0);
+  return { nodes, edges, width: Math.max(1, nextLeafX), maxDepth };
+}
+
+const MORSE_TREE_LAYOUT = layoutMorseTree(MORSE_TREE);
+const TREE_SLOT_W = 26;
+const TREE_ROW_H = 34;
 
 const KOCH_ORDER = ['K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'P', 'T', 'L', 'W', 'I', '.', 'J', 'Z', '=', 'F', 'O', 'Y', ',', 'V', 'G', '5', '/', 'Q', '9', '2', 'H', '3', '8', 'B', '?', '4', '7', 'C', '1', 'D', '6', '0', 'X'];
 
@@ -491,36 +535,39 @@ function ReferenceWidget({ keying, mode }) {
   );
 }
 
-function TreeNode({ node, currentPath }) {
-  if (!node) return <div className="flex-1" />;
-  const matched = !!node.char && currentPath === node.code;
+export function isNodeOnPath(node, currentPath) {
+  // Root's placeholder char ('·') is truthy but isn't a real decoded
+  // character — gate on `currentPath.length > 0` too so an idle/empty path
+  // (reference-only view, or before the first key press) never lights up
+  // the root as if it were the live-keyed match.
+  const matched = !!node.char && currentPath.length > 0 && currentPath === node.code;
   const onPath = currentPath.length > 0 && currentPath.startsWith(node.code) && node.code !== currentPath;
-  const hasChildren = node.dah || node.dit;
-  const display = node.char || (node.code === '' ? '·' : '');
+  return { matched, onPath };
+}
 
+function TreeNodeLabel({ x, depth, node, currentPath }) {
+  const { matched, onPath } = isNodeOnPath(node, currentPath);
+  const display = node.char || (node.code === '' ? '·' : '');
   return (
-    <div className="flex flex-col items-center min-w-0 flex-1">
-      <div
-        className={`text-[11px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-          matched ? 'bg-port-accent text-white font-bold' :
-          onPath ? 'text-port-accent' :
-          display ? 'text-gray-300' : 'text-gray-700'
-        }`}
-        title={node.code || 'start'}
-      >
-        {display || '·'}
-      </div>
-      {hasChildren && (
-        <div className={`flex gap-0.5 mt-0.5 w-full border-t ${onPath || matched ? 'border-port-accent/40' : 'border-port-border'}`}>
-          <TreeNode node={node.dah} currentPath={currentPath} />
-          <TreeNode node={node.dit} currentPath={currentPath} />
-        </div>
-      )}
+    <div
+      className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+        matched ? 'bg-port-accent text-white font-bold' :
+        onPath ? 'text-port-accent bg-port-bg' :
+        display ? 'text-gray-300 bg-port-bg' : 'text-gray-700 bg-port-bg'
+      }`}
+      style={{ left: x * TREE_SLOT_W + TREE_SLOT_W / 2, top: depth * TREE_ROW_H + TREE_ROW_H / 2 }}
+      title={node.code || 'start'}
+    >
+      {display || '·'}
     </div>
   );
 }
 
 function TreeView({ currentPath, mode }) {
+  const { nodes, edges, width, maxDepth } = MORSE_TREE_LAYOUT;
+  const pixelWidth = width * TREE_SLOT_W;
+  const pixelHeight = (maxDepth + 1) * TREE_ROW_H;
+
   return (
     <div>
       <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-gray-500 mb-2">
@@ -529,8 +576,26 @@ function TreeView({ currentPath, mode }) {
         <span>dit →</span>
       </div>
       <div className="overflow-x-auto pb-1">
-        <div className="min-w-[36rem]">
-          <TreeNode node={MORSE_TREE} currentPath={currentPath} />
+        <div className="relative mx-auto" style={{ width: pixelWidth, height: pixelHeight }}>
+          <svg className="absolute inset-0 overflow-visible" width={pixelWidth} height={pixelHeight}>
+            {edges.map((e, i) => {
+              const highlighted = currentPath.length > 0 && currentPath.startsWith(e.childCode);
+              return (
+                <line
+                  key={i}
+                  x1={e.x1 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                  y1={e.y1 * TREE_ROW_H + TREE_ROW_H / 2}
+                  x2={e.x2 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                  y2={e.y2 * TREE_ROW_H + TREE_ROW_H / 2}
+                  className={highlighted ? 'stroke-port-accent' : 'stroke-port-border'}
+                  strokeWidth={highlighted ? 2 : 1}
+                />
+              );
+            })}
+          </svg>
+          {nodes.map(({ x, depth, node }) => (
+            <TreeNodeLabel key={node.code} x={x} depth={depth} node={node} currentPath={currentPath} />
+          ))}
         </div>
       </div>
       <p className="text-[10px] text-gray-500 mt-3">

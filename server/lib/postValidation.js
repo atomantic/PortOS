@@ -69,7 +69,10 @@ const drillTypeConfigSchema = z.object({
   tolerancePct: z.number().min(1).max(50).optional(),
   // --- Cognitive drill knobs (n-back / digit-span / stroop) ---
   // Bounds match the generator clamps in meatspacePostCognitive.js so the UI /
-  // API can't accept a value the generator will silently narrow.
+  // API can't accept a value the generator will silently narrow. Exception:
+  // `length`'s effective floor is `n + 5` (dynamic, up to 8) inside the
+  // generator — Zod can't express a cross-field minimum here, so this schema
+  // keeps a conservative fixed floor of 6 and lets the generator clamp up.
   // (timeLimitSec above is validated but NOT enforced for these drill types —
   // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
   // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
