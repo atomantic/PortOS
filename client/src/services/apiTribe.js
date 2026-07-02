@@ -8,6 +8,13 @@ export const getTribePeople = (options = {}) => {
   return request(`/tribe/people${qs ? `?${qs}` : ''}`, { silent: options.silent });
 };
 
+export const getTribeCareSummary = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  return request(`/tribe/care${qs ? `?${qs}` : ''}`, { silent: options.silent });
+};
+
 export const createTribePerson = (data) => request('/tribe/people', {
   method: 'POST',
   body: JSON.stringify(data),

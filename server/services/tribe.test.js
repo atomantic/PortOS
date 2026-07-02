@@ -18,8 +18,17 @@ import {
   isoDateTime,
   rowToPerson,
   rowToTouchpoint,
+  personCadenceStatus,
+  getCareSummary,
   DEFAULT_RING_CADENCE,
 } from './tribe.js';
+
+// ISO date (YYYY-MM-DD) `n` whole days before local today.
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 describe('tribe service — pure helpers', () => {
   describe('normalizeTags', () => {
@@ -153,6 +162,79 @@ describe('tribe service — listPeople query builder', () => {
     expect(sql).toContain('ring = $1');
     expect(sql).toContain('ILIKE $2');
     expect(params).toEqual(['core', '%ada%']);
+  });
+});
+
+describe('tribe service — personCadenceStatus', () => {
+  it('external people are never overdue', () => {
+    expect(personCadenceStatus({ ring: 'external', lastContact: daysAgo(999), cadenceDays: 7 }))
+      .toMatchObject({ state: 'external', daysOverdue: 0 });
+  });
+
+  it('no touchpoint → missing with null daysOverdue', () => {
+    const s = personCadenceStatus({ ring: 'core', lastContact: null, cadenceDays: 21 });
+    expect(s.state).toBe('missing');
+    expect(s.daysOverdue).toBeNull();
+  });
+
+  it('elapsed beyond cadence → overdue with positive daysOverdue', () => {
+    const s = personCadenceStatus({ ring: 'support', lastContact: daysAgo(10), cadenceDays: 7 });
+    expect(s.state).toBe('overdue');
+    expect(s.daysOverdue).toBe(3);
+  });
+
+  it('within a week of cadence → soon', () => {
+    expect(personCadenceStatus({ ring: 'core', lastContact: daysAgo(18), cadenceDays: 21 }).state).toBe('soon');
+  });
+
+  it('comfortably inside cadence → steady', () => {
+    expect(personCadenceStatus({ ring: 'village', lastContact: daysAgo(2), cadenceDays: 90 }).state).toBe('steady');
+  });
+});
+
+describe('tribe service — getCareSummary', () => {
+  beforeEach(() => {
+    query.mockReset();
+  });
+
+  // listPeople maps DB rows via rowToPerson, so mock rows use snake_case columns.
+  const row = (over) => ({
+    id: over.id, name: over.name, ring: over.ring,
+    cadence_days: over.cadence_days, last_contact_on: over.last_contact_on ?? null,
+    channel: '', tags: [], touchpoint_count: '0', linked_memory_count: '0',
+  });
+
+  it('excludes external people and sorts missing first, then most-overdue', async () => {
+    query.mockResolvedValue({ rows: [
+      row({ id: 'a', name: 'Overdue Small', ring: 'support', cadence_days: 7, last_contact_on: daysAgo(10) }), // 3d overdue
+      row({ id: 'b', name: 'Never', ring: 'core', cadence_days: 21, last_contact_on: null }),                  // missing
+      row({ id: 'c', name: 'Overdue Big', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(60) }),     // 39d overdue
+      row({ id: 'd', name: 'Steady', ring: 'village', cadence_days: 90, last_contact_on: daysAgo(1) }),        // steady
+      row({ id: 'e', name: 'Nemesis', ring: 'external', cadence_days: 7, last_contact_on: daysAgo(999) }),     // excluded
+    ] });
+
+    const summary = await getCareSummary();
+    expect(summary.hasPeople).toBe(true);
+    expect(summary.peopleCount).toBe(4); // external excluded
+    expect(summary.overdueCount).toBe(3); // missing + 2 overdue
+    expect(summary.overdue.map((p) => p.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('respects the limit while still reporting the full overdueCount', async () => {
+    query.mockResolvedValue({ rows: [
+      row({ id: 'a', name: 'A', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(60) }),
+      row({ id: 'b', name: 'B', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(50) }),
+    ] });
+    const summary = await getCareSummary(1);
+    expect(summary.overdueCount).toBe(2);
+    expect(summary.overdue).toHaveLength(1);
+  });
+
+  it('reports hasPeople false for an empty tribe', async () => {
+    query.mockResolvedValue({ rows: [] });
+    const summary = await getCareSummary();
+    expect(summary.hasPeople).toBe(false);
+    expect(summary.overdueCount).toBe(0);
   });
 });
 
