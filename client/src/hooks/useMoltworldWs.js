@@ -11,13 +11,16 @@ let idCounter = 0;
  * Subscribes to moltworld:* Socket.IO events and maintains:
  * - connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
  * - feedItems: ring buffer of last 200 events (newest first)
- * - presence: latest agent presence snapshot
+ * - presence: latest agent presence snapshot — `null` until the first
+ *   presence/nearby event arrives (not-yet-known), then a (possibly empty)
+ *   array. An empty array is a *confirmed-empty* snapshot that must clear the
+ *   panel, distinct from the not-yet-known `null` sentinel.
  * - connect(accountId) / disconnect(): control the server-side WS relay
  */
 export default function useMoltworldWs() {
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [feedItems, setFeedItems] = useState([]);
-  const [presence, setPresence] = useState([]);
+  const [presence, setPresence] = useState(null);
   const feedRef = useRef([]);
 
   const addFeedItem = useCallback((eventType, data) => {
@@ -45,9 +48,14 @@ export default function useMoltworldWs() {
       addFeedItem(data.type || data.event || 'event', data);
     };
     const handlePresence = (data) => {
-      const agents = data.agents || data.nearby || [];
-      if (agents.length > 0) setPresence(agents);
-      addFeedItem('presence', { ...data, content: `${agents.length} agents nearby` });
+      // No `?? []` fallback: a payload missing both keys (`{}`) is malformed /
+      // absent, NOT a confirmed-empty snapshot, and must preserve prior state.
+      // Validate shape, not length: an empty array IS a legitimate "nobody
+      // nearby" snapshot that must clear a previously-populated panel —
+      // gating on `.length > 0` drops it and leaves phantoms.
+      const agents = data.agents ?? data.nearby;
+      if (Array.isArray(agents)) setPresence(agents);
+      addFeedItem('presence', { ...data, content: `${Array.isArray(agents) ? agents.length : 0} agents nearby` });
     };
     const handleThinking = (data) => {
       addFeedItem('thinking', data);
@@ -59,9 +67,9 @@ export default function useMoltworldWs() {
       addFeedItem('interaction', data);
     };
     const handleNearby = (data) => {
-      const agents = data.agents || data.nearby || [];
-      if (agents.length > 0) setPresence(agents);
-      addFeedItem('nearby', { ...data, content: `${agents.length} agents` });
+      const agents = data.agents ?? data.nearby;
+      if (Array.isArray(agents)) setPresence(agents);
+      addFeedItem('nearby', { ...data, content: `${Array.isArray(agents) ? agents.length : 0} agents` });
     };
 
     socket.on('moltworld:status', handleStatus);
