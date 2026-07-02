@@ -1,5 +1,7 @@
 # OpenClaw Operator Chat
 
+> **Status: implemented.** See `server/routes/openclaw.js`, `server/integrations/openclaw/api.js`, `client/src/pages/OpenClaw.jsx`, and the client service `client/src/services/apiOpenclaw.js` (not the proposed `openclaw.js`). The shipped endpoint surface differs from this proposal: `GET /api/openclaw/status`, `GET /api/openclaw/sessions`, `GET/POST /api/openclaw/sessions/:id/messages`, and streaming `POST /api/openclaw/sessions/:id/messages/stream`. The proposed `POST /sessions`, `GET /jobs`, `GET /subagents`, and `POST /context/compose` were not built.
+
 A generic, first-party operator chat surface inside PortOS that allows a user to communicate with a local or privately reachable OpenClaw runtime without relying on third-party messaging providers like Telegram.
 
 ## Why this exists

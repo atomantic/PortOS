@@ -63,14 +63,21 @@ Track administrative tasks:
 
 ```
 ./data/brain/
-├── meta.json           # Settings and scheduler state
-├── inbox_log.jsonl     # All captured thoughts with classifications
-├── people.jsonl        # People records
-├── projects.jsonl      # Projects with status tracking
-├── ideas.jsonl         # Ideas and concepts
-├── admin.jsonl         # Administrative tasks
-├── digests.jsonl       # Daily digest history
-└── reviews.jsonl       # Weekly review history
+├── meta.json               # Settings and scheduler state
+├── inbox.json              # All captured thoughts with classifications
+├── people.json             # People records
+├── projects.json           # Projects with status tracking
+├── ideas.json              # Ideas and concepts
+├── admin.json              # Administrative tasks
+├── buckets.json            # Custom bucket definitions
+├── links.json              # Cross-record links
+├── memories.json           # Brain memories
+├── journals.json           # Daily Log entries
+├── memory-bridge-map.json  # Brain↔CoS memory bridge mapping
+├── obsidian-vaults.json    # Obsidian vault sync config
+├── sync_log.jsonl          # Obsidian sync history
+├── digests.jsonl           # Daily digest history
+└── reviews.jsonl           # Weekly review history
 ```
 
 ## AI Classification
@@ -151,7 +158,7 @@ Generated weekly (GTD-style):
 | `server/services/brain.js` | Core business logic |
 | `server/services/brainStorage.js` | JSONL/JSON file operations |
 | `server/services/brainScheduler.js` | Daily/weekly job scheduler |
-| `server/routes/brain.js` | API endpoints |
+| `server/routes/brain.js` | Aggregator router mounting brainCapture, brainCrud, brainDigest, brainSettings, brainLinks, brainGraph, brainSync, and brainDailyLog |
 | `client/src/pages/Brain.jsx` | Main page with tabs |
 | `client/src/components/brain/tabs/*.jsx` | Tab components |
 | `data/prompts/stages/brain-*.md` | Prompt templates |

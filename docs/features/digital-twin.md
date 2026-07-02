@@ -8,7 +8,7 @@ Transform the Digital Twin from a document capture system into a quantitative pe
 
 ## Architecture
 
-- **Digital Twin Service** (`server/services/digitalTwin.js`): Trait analysis, confidence scoring, gap recommendations
+- **Digital Twin Service** (`server/services/digital-twin.js`, with logic split across ~25 `digital-twin-*.js` modules): Trait analysis, confidence scoring, gap recommendations
 - **Digital Twin Routes** (`server/routes/digital-twin.js`): REST API endpoints
 - **Digital Twin Validation** (`server/lib/digitalTwinValidation.js`): Zod schemas for trait data
 
@@ -82,7 +82,6 @@ traits: {
 - `PersonalityMap.jsx` - Radar chart of Big Five with confidence coloring
 - `ConfidenceGauge.jsx` - Per-dimension confidence indicator
 - `GapRecommendations.jsx` - Prioritized enrichment suggestions
-- `TraitEditor.jsx` - Manual trait override interface
 
 ## API Endpoints
 
@@ -90,7 +89,7 @@ traits: {
 |-------|-------------|
 | GET /api/digital-twin/traits | Get all trait scores |
 | POST /api/digital-twin/traits/analyze | Analyze documents to extract traits |
-| PUT /api/digital-twin/traits/:category | Manual override trait scores |
+| PUT /api/digital-twin/traits | Manual override trait scores |
 | GET /api/digital-twin/confidence | Get confidence scores |
 | POST /api/digital-twin/confidence/calculate | Recalculate confidence |
 | GET /api/digital-twin/gaps | Get gap recommendations |

@@ -582,7 +582,10 @@ initBrainMemoryBridge();
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
 // Register the optional daily POST reminder (opt-in, off by default) if the
 // user has enabled it — deterministic cron nudge, no LLM calls.
-registerPostReminderSchedule().catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
+// catchUpMissedSlot: true so a reminder whose slot elapsed while the server
+// was down (or during a redeploy) still fires once we're back up, instead of
+// silently waiting for tomorrow's tick (#2015).
+registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames

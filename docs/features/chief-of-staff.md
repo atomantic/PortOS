@@ -114,7 +114,7 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 ## Related Features
 
 - [Memory System](./memory-system.md)
-- [Task Learning](./task-learning.md)
-- [Self-Improvement](./self-improvement.md)
+- Task Learning — see `server/services/taskLearning/` and the `/api/cos/learning` endpoints
+- [Self-Improvement](./cos-enhancement.md)
 - [Error Handling](./error-handling.md)
-- [Scheduled Scripts](./scheduled-scripts.md)
+- Scheduled Scripts — see the Schedule system (`server/services/taskSchedule.js`, `/api/cos/jobs`)

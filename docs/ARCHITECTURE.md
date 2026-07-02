@@ -22,8 +22,8 @@ PortOS is a monorepo application with a React frontend and Express.js backend, m
 │  │  └──────────────┘  │             │       |         └──────────────┘     │        │
 │  │       |            │             │       |              |               │        │
 │  │  ┌──────────────┐  │             │       |         ┌────v─────────┐     │        │
-│  │  │  api.js      │  │             │       |         │  JSON Files  │     │        │
-│  │  │  socket.js   │  │             │       |         │   (data/)    │     │        │
+│  │  │  api.js      │  │             │       |         │ Postgres +   │     │        │
+│  │  │  socket.js   │  │             │       |         │ data/ files  │     │        │
 │  │  └──────────────┘  │             │       |         └──────────────┘     │        │
 │  └────────────────────┘             └──────────────────────────────────────┘        │
 │                                                                                     │
@@ -47,6 +47,7 @@ PortOS is a monorepo application with a React frontend and Express.js backend, m
 
 Communication paths:
   Client <--HTTP/Socket.IO--> Server --PM2 API--> all satellite processes
+  Server --pg--> PostgreSQL + pgvector (system :5432 or Docker :5561) — mandatory primary datastore
   Server --browserService--> portos-browser (CDP :5556, health :5557)
   Server --apps.json--> portos-autofixer reads registered apps to monitor
   CoS agents --CDP WebSocket--> portos-browser for web automation tasks
@@ -93,7 +94,7 @@ PortOS/
 │   ├── server.js              # Crash detection daemon (polls PM2 every 15min)
 │   └── ui.js                  # Standalone Express UI with SSE log streaming
 │
-├── data/                      # Runtime data (gitignored)
+├── data/                      # Runtime file data (gitignored) — relational records live in PostgreSQL (see docs/STORAGE.md)
 │   ├── apps.json              # Registered apps (read by autofixer)
 │   ├── providers.json         # AI provider configs
 │   ├── history.jsonl          # Action history (JSON Lines)
@@ -103,20 +104,19 @@ PortOS/
 │   ├── COS-GOALS.md           # Mission and goals
 │   ├── cos/                   # CoS state and agents
 │   │   ├── state.json         # Daemon state
-│   │   ├── agents/            # Agent outputs
-│   │   └── memory/            # Memory storage
+│   │   └── agents/            # Agent outputs
 │   ├── autofixer/             # Autofixer session history
 │   │   ├── index.json         # Fix session index (max 100 entries)
 │   │   └── sessions/          # Per-session prompt, output, metadata
-│   ├── brain/                 # Brain second-brain data
+│   ├── brain/                 # Brain second-brain data (file-primary)
 │   │   ├── meta.json          # Settings
-│   │   ├── inbox_log.jsonl    # Captured thoughts
-│   │   ├── people.jsonl       # People records
-│   │   ├── projects.jsonl     # Project records
-│   │   ├── ideas.jsonl        # Ideas
-│   │   ├── admin.jsonl        # Admin tasks
-│   │   ├── links.json         # Saved links
-│   │   └── digests.jsonl      # Daily/weekly digests
+│   │   ├── inbox.json         # Captured thoughts
+│   │   ├── people.json        # People records
+│   │   ├── projects.json      # Project records
+│   │   ├── ideas.json         # Ideas
+│   │   ├── admin.json         # Admin tasks
+│   │   ├── links.json         # Saved links (+ buckets.json, journals.json, memories.json)
+│   │   └── digests.jsonl      # Daily/weekly digests (+ reviews.jsonl)
 │   ├── digital-twin/          # Digital twin identity documents
 │   │   ├── meta.json          # Settings and state
 │   │   └── documents/         # Markdown identity documents
@@ -138,7 +138,7 @@ Browser → React Page → api.js → Express Route → Service → Response
                                      │
                                      ├── Zod Validation
                                      ├── Service Logic
-                                     └── JSON File / PM2 API
+                                     └── PostgreSQL / data/ file / PM2 API
 ```
 
 ### WebSocket Event Flow
@@ -220,9 +220,9 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - MCP server integration
 - Usage tracking
 
-### Memory Service (`server/services/memory.js`)
-- Semantic memory storage
-- Vector embeddings via LM Studio
+### Memory Service (`server/services/memoryBackend.js`)
+- Backend switcher: PostgreSQL + pgvector (`memoryDB.js`) for real installs; the file backend (`memory.js`) is a test-only escape hatch
+- Semantic memory storage with vector embeddings via LM Studio
 - Memory retrieval for context injection
 
 ### Task Learning Service (`server/services/taskLearning.js`)
@@ -231,11 +231,10 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - Model tier effectiveness analysis
 - Actionable recommendations
 
-### Script Runner Service (`server/services/scriptRunner.js`)
-- Cron-based script scheduling
-- Command allowlist enforcement
-- Agent trigger integration
-- Run history tracking
+### Task Schedule Service (`server/services/taskSchedule.js`)
+- Interval/cron scheduling for CoS self-improvement and app tasks
+- Autonomous jobs (`/api/cos/jobs`) with command allowlist enforcement for shell jobs
+- Prompt-template versioning with auto-upgrade of unchanged defaults
 
 ### Brain Service (`server/services/brain.js`)
 - Thought capture and AI classification
@@ -305,12 +304,14 @@ Error severity levels:
 
 | Process | Port | Script | Purpose |
 |---------|------|--------|---------|
-| portos-client | 5554 | `client/` (Vite) | React frontend dev server |
+| portos-ui | 5554 | `client/node_modules/vite/bin/vite.js` | React frontend dev server (dev only) |
 | portos-server | 5555 | `server/index.js` | Main Express API server |
 | portos-browser | 5556 (CDP), 5557 (health) | `browser/server.js` | Persistent Chromium with CDP for web automation |
 | portos-cos | 5558 | `server/cos-runner/index.js` | Isolated CoS agent runner |
 | portos-autofixer | 5559 | `autofixer/server.js` | Autonomous crash detection and Claude CLI repair |
 | portos-autofixer-ui | 5560 | `autofixer/ui.js` | Standalone fix history dashboard with SSE logs |
+
+PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`) or the `docker-compose.yml` container (`:5561`), provisioned by `npm run setup:db`.
 
 ## Extension Points
 
