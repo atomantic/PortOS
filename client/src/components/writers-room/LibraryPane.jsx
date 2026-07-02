@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import {
   createWritersRoomFolder,
   deleteWritersRoomFolder,
@@ -9,6 +10,7 @@ import {
   deleteWritersRoomWork,
   updateWritersRoomWork,
 } from '../../services/apiWritersRoom';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { KIND_LABELS } from './labels';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
@@ -20,11 +22,9 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
   const [creatingWork, setCreatingWork] = useState(null); // folderId or 'unfiled'
   const [workTitle, setWorkTitle] = useState('');
   const [workKind, setWorkKind] = useState('short-story');
-  // Two-click confirm: first click arms the button, second deletes.
-  // Cleared automatically after 4s to avoid leaving a pending arm.
-  const [armedDelete, setArmedDelete] = useState(null);
-  const armTimerRef = useRef(null);
-  useEffect(() => () => clearTimeout(armTimerRef.current), []);
+  // Inline delete confirm (no two-click-arm, no toast re-arm) — one row armed at
+  // a time, keyed by `work:<id>` / `folder:<id>`.
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const grouped = useMemo(() => {
     const byFolder = new Map();
@@ -72,37 +72,16 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     onSelectWork?.(work.id);
   };
 
-  const armDelete = (key) => {
-    setArmedDelete(key);
-    clearTimeout(armTimerRef.current);
-    armTimerRef.current = setTimeout(
-      () => setArmedDelete((current) => (current === key ? null : current)),
-      4000,
-    );
-  };
-
-  const handleDeleteFolder = async (id, name) => {
-    if (armedDelete !== `folder:${id}`) {
-      armDelete(`folder:${id}`);
-      toast(`Click again to delete folder "${name}"`);
-      return;
-    }
-    setArmedDelete(null);
+  const handleDeleteFolder = (id) => confirmDelete(async () => {
     await deleteWritersRoomFolder(id).catch((err) => toast.error(`Delete failed: ${err.message}`));
     onRefresh?.();
-  };
+  });
 
-  const handleDeleteWork = async (id, title) => {
-    if (armedDelete !== `work:${id}`) {
-      armDelete(`work:${id}`);
-      toast(`Click again to delete "${title}"`);
-      return;
-    }
-    setArmedDelete(null);
+  const handleDeleteWork = (id) => confirmDelete(async () => {
     await deleteWritersRoomWork(id).catch((err) => toast.error(`Delete failed: ${err.message}`));
     if (activeWorkId === id) onSelectWork?.(null);
     onRefresh?.();
-  };
+  });
 
   // PointerSensor with a small activation distance so a quick click still
   // selects the work — only an actual drag gesture starts a DnD operation.
@@ -137,9 +116,11 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
       key={work.id}
       work={work}
       isActive={work.id === activeWorkId}
-      armedDelete={armedDelete === `work:${work.id}`}
+      confirming={isConfirming(`work:${work.id}`)}
       onSelect={() => onSelectWork?.(work.id)}
-      onDelete={() => handleDeleteWork(work.id, work.title)}
+      onRequestDelete={() => requestDelete(`work:${work.id}`)}
+      onConfirmDelete={() => handleDeleteWork(work.id)}
+      onCancelDelete={cancelDelete}
     />
   );
 
@@ -239,10 +220,12 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
               works={grouped.get(folder.id) || []}
               isOpen={!!openFolders[folder.id]}
               isDragging={!!draggingWork}
-              armedDelete={armedDelete === `folder:${folder.id}`}
+              confirming={isConfirming(`folder:${folder.id}`)}
               onToggle={() => toggleFolder(folder.id)}
               onCreateWork={() => { setCreatingWork(folder.id); setCreatingFolder(false); }}
-              onDelete={() => handleDeleteFolder(folder.id, folder.name)}
+              onRequestDelete={() => requestDelete(`folder:${folder.id}`)}
+              onConfirmDelete={() => handleDeleteFolder(folder.id)}
+              onCancelDelete={cancelDelete}
               renderWorkRow={renderWorkRow}
             />
           ))}
@@ -263,7 +246,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
 
 // ---------- DnD-aware subcomponents ----------
 
-function WorkRow({ work, isActive, armedDelete, onSelect, onDelete }) {
+function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConfirmDelete, onCancelDelete }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `work:${work.id}`,
     data: { work },
@@ -292,18 +275,25 @@ function WorkRow({ work, isActive, armedDelete, onSelect, onDelete }) {
           <span className="text-[10px] text-gray-500 uppercase">{work.wordCount} w</span>
         </button>
       </div>
-      <button
-        onClick={onDelete}
-        className={`absolute right-1 top-1.5 p-0.5 transition-opacity ${
-          armedDelete
-            ? 'opacity-100 text-port-error'
-            : 'opacity-40 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error'
-        }`}
-        aria-label={`Delete ${work.title}`}
-        title={armedDelete ? 'Click again to confirm' : 'Delete'}
-      >
-        <Trash2 size={12} />
-      </button>
+      {confirming ? (
+        <div className="absolute inset-0 flex items-center justify-end gap-2 pr-1 bg-port-bg/95 rounded">
+          <ConfirmButtonPair
+            prompt="Delete?"
+            ariaLabel={`Confirm delete ${work.title}`}
+            onConfirm={onConfirmDelete}
+            onCancel={onCancelDelete}
+          />
+        </div>
+      ) : (
+        <button
+          onClick={onRequestDelete}
+          className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
+          aria-label={`Delete ${work.title}`}
+          title="Delete"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
     </li>
   );
 }
@@ -331,7 +321,7 @@ function UnfiledZone({ works, renderWorkRow, showHeader, isDragging }) {
   );
 }
 
-function FolderRow({ folder, works, isOpen, isDragging, armedDelete, onToggle, onCreateWork, onDelete, renderWorkRow }) {
+function FolderRow({ folder, works, isOpen, isDragging, confirming, onToggle, onCreateWork, onRequestDelete, onConfirmDelete, onCancelDelete, renderWorkRow }) {
   const { setNodeRef, isOver } = useDroppable({ id: `folder:${folder.id}`, data: { folderId: folder.id } });
   return (
     <li className="group/folder">
@@ -350,26 +340,34 @@ function FolderRow({ folder, works, isOpen, isDragging, armedDelete, onToggle, o
           <span className="flex-1 text-left truncate">{folder.name}</span>
           <span className="text-[10px] text-gray-500">{works.length}</span>
         </button>
-        <button
-          onClick={onCreateWork}
-          className="p-1 text-gray-500 hover:text-port-accent transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
-          aria-label="Add work to folder"
-          title="New work in folder"
-        >
-          <FilePlus size={12} />
-        </button>
-        <button
-          onClick={onDelete}
-          className={`p-1 transition-opacity ${
-            armedDelete
-              ? 'opacity-100 text-port-error'
-              : 'opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error'
-          }`}
-          aria-label={`Delete folder ${folder.name}`}
-          title={armedDelete ? 'Click again to confirm' : 'Delete folder'}
-        >
-          <Trash2 size={12} />
-        </button>
+        {confirming ? (
+          <ConfirmButtonPair
+            prompt="Delete?"
+            className="shrink-0 pr-1"
+            ariaLabel={`Confirm delete folder ${folder.name}`}
+            onConfirm={onConfirmDelete}
+            onCancel={onCancelDelete}
+          />
+        ) : (
+          <>
+            <button
+              onClick={onCreateWork}
+              className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-500 hover:text-port-accent transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100"
+              aria-label="Add work to folder"
+              title="New work in folder"
+            >
+              <FilePlus size={14} />
+            </button>
+            <button
+              onClick={onRequestDelete}
+              className="flex items-center justify-center min-w-[44px] min-h-[44px] transition-opacity opacity-40 sm:opacity-0 group-hover/folder:opacity-100 focus:opacity-100 text-gray-500 hover:text-port-error"
+              aria-label={`Delete folder ${folder.name}`}
+              title="Delete folder"
+            >
+              <Trash2 size={14} />
+            </button>
+          </>
+        )}
       </div>
       {isOpen && (
         <ul className="space-y-0.5 pl-5 relative">

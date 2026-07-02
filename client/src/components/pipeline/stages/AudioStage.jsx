@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, Wand2, Mic, Music, Upload, Trash2, ListMusic } from 'lucide-react';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import VoicePicker from '../../voice/VoicePicker';
 import {
   extractPipelineAudioLines,
@@ -72,14 +73,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
   // outstanding at the moment of call.
   const pendingSavesRef = useRef(new Map());
 
-  // Two-click arm pattern (no window.confirm) for the destructive
-  // re-extract path. First click flips the label; second click within 5s
-  // commits the replace.
-  const [extractArmed, setExtractArmed] = useState(false);
-  const armTimerRef = useRef(null);
-  useEffect(() => () => {
-    if (armTimerRef.current) clearTimeout(armTimerRef.current);
-  }, []);
+  // Inline confirm (no window.confirm, no two-click-arm) for the destructive
+  // re-extract path — an explicit Replace/Cancel row renders near the button.
+  const [confirmingExtract, setConfirmingExtract] = useState(false);
 
   const [musicLibrary, setMusicLibrary] = useState(null);
   const [musicLibraryLoading, setMusicLibraryLoading] = useState(false);
@@ -490,24 +486,21 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const storyboardSceneCount = (issue.stages?.storyboards?.scenes || []).length;
   const canExtract = storyboardSceneCount > 0;
 
-  const handleExtract = async () => {
+  const handleExtract = () => {
     if (!canExtract) {
       toast.error('Generate Storyboards first — audio lines come from the dialogue extracted there.');
       return;
     }
-    const needsConfirm = lines.length > 0;
-    if (needsConfirm && !extractArmed) {
-      setExtractArmed(true);
-      toast.warning(`This will replace ${lines.length} existing line${lines.length === 1 ? '' : 's'} (rendered audio is preserved for unchanged lines). Click again to confirm.`);
-      if (armTimerRef.current) clearTimeout(armTimerRef.current);
-      armTimerRef.current = setTimeout(() => {
-        armTimerRef.current = null;
-        setExtractArmed(false);
-      }, 5000);
+    if (lines.length > 0) {
+      setConfirmingExtract(true);
       return;
     }
-    if (armTimerRef.current) { clearTimeout(armTimerRef.current); armTimerRef.current = null; }
-    setExtractArmed(false);
+    void runExtract();
+  };
+
+  const runExtract = async () => {
+    const needsConfirm = lines.length > 0;
+    setConfirmingExtract(false);
     setExtracting(true);
     const result = await extractPipelineAudioLines(issue.id, { force: needsConfirm }).catch((err) => {
       toast.error(err.message || 'Extract failed');
@@ -645,12 +638,20 @@ export default function AudioStage({ issue, onStageUpdate }) {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40"
           >
             {extracting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-            {extractArmed
-              ? 'Click again to replace'
-              : (lines.length > 0 ? 'Re-extract from storyboards' : 'Extract lines from storyboards')}
+            {lines.length > 0 ? 'Re-extract from storyboards' : 'Extract lines from storyboards'}
           </button>
         </div>
       </header>
+
+      {confirmingExtract && (
+        <InlineConfirmRow
+          tone="warning"
+          question={`Replace ${lines.length} existing line${lines.length === 1 ? '' : 's'} with a fresh extract? Rendered audio is preserved for unchanged lines.`}
+          confirmText="Replace"
+          onConfirm={() => void runExtract()}
+          onCancel={() => setConfirmingExtract(false)}
+        />
+      )}
 
       {/* Whole-episode audio mode (#863) — drives the episode's non-dialogue
           audio at stitch time. */}
