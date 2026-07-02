@@ -10,6 +10,10 @@ vi.mock('../../../services/api', () => ({
   getPostConfig: () => Promise.resolve(null),
   getPostSessions: () => Promise.resolve([]),
   getPostStats: () => Promise.resolve(null),
+  // MorseTrainer (rendered by the 'morse' tab) fetches/logs training stats on
+  // mount — stub both so its effects resolve without hitting the network.
+  getTrainingStats: () => Promise.resolve({ currentStreak: 0, byDrill: {} }),
+  submitTrainingEntry: () => Promise.resolve({}),
 }));
 
 vi.mock('../../../hooks/usePostSession', () => ({

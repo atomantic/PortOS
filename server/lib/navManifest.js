@@ -155,6 +155,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST', aliases: ['post-memory'] },
   { id: 'nav.post.morse', path: '/post/morse', label: 'Morse', section: 'POST', aliases: ['post-morse', 'morse', 'morse-code'], keywords: ['cw', 'ham', 'radio', 'koch', 'cognitive'] },
   { id: 'nav.post.morse.copy', path: '/post/morse/copy', label: 'Morse Copy', section: 'POST', aliases: ['morse-copy', 'morse copy', 'copy-morse', 'morse-listen'], keywords: ['cw', 'koch', 'listen', 'decode', 'receive', 'ear'] },
+  { id: 'nav.post.morse.head-copy', path: '/post/morse/head-copy', label: 'Morse Head Copy', section: 'POST', aliases: ['morse-head-copy', 'morse head copy', 'head-copy', 'head copy'], keywords: ['cw', 'koch', 'audio only', 'no reference', 'memory', 'recall'] },
   { id: 'nav.post.morse.send', path: '/post/morse/send', label: 'Morse Send', section: 'POST', aliases: ['morse-send', 'morse send', 'send-morse', 'morse-key', 'keying'], keywords: ['cw', 'key', 'straight key', 'transmit', 'dit', 'dah', 'spacebar'] },
   { id: 'nav.post.morse.tree', path: '/post/morse?ref=tree', label: 'Morse Tree', section: 'POST', aliases: ['morse-tree', 'morse tree', 'morse-chart', 'dichotomic'], keywords: ['cw', 'binary tree', 'chart', 'reference', 'dit dah'] },
   { id: 'nav.post.morse.length', path: '/post/morse?ref=length', label: 'Morse Length', section: 'POST', aliases: ['morse-length', 'morse length', 'morse-by-length'], keywords: ['cw', 'reference', 'symbol length', 'chart'] },

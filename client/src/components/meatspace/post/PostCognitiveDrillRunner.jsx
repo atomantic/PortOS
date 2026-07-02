@@ -54,7 +54,7 @@ function DrillHeader({ type, isTraining, drillIndex, drillCount }) {
   );
 }
 
-function localAccuracyScore(questions) {
+export function localAccuracyScore(questions) {
   if (!questions.length) return 0;
   const correct = questions.filter(q => q.correct).length;
   return Math.round((correct / questions.length) * 100);
@@ -80,6 +80,98 @@ function ShapeGrid({ cells, size = 4, cellPx = 14 }) {
   );
 }
 
+// Shared result-assembly shape every sub-runner hands to `onComplete`. The
+// server rescores deterministically from `drillData`/`questions` on save
+// (server/services/meatspacePostCognitive.js) — this is the client-side
+// mirror, and its `index`/`answered`/`responseMs` fields are what that
+// rescoring depends on.
+export function buildCognitiveResult({ type, drill, questions, totalMs }) {
+  return {
+    module: 'cognitive',
+    type,
+    config: drill.config,
+    drillData: drill,
+    questions,
+    score: localAccuracyScore(questions),
+    totalMs,
+  };
+}
+
+// N-BACK — pure result assembly: given the full letter sequence, the lag `n`,
+// and the parallel `answers` array (index-aligned with `seq`, each entry
+// `{ answered: 'match'|null, responseMs }`), build the scored `questions[]`.
+// Only positions `i >= n` have a defined target (there's no "n back" before
+// that), so the first `n` letters are excluded — the off-by-one this guards
+// against is including/excluding the boundary position `i === n` itself.
+export function buildNBackQuestions(seq, n, answers) {
+  return seq
+    .map((letter, i) => ({ letter, i }))
+    .filter(({ i }) => i >= n)
+    .map(({ letter, i }) => {
+      const a = answers[i] || {};
+      const isTarget = seq[i] === seq[i - n];
+      const answeredMatch = a.answered === 'match';
+      return {
+        prompt: letter,
+        index: i,
+        answered: a.answered ?? null,
+        correct: answeredMatch === isTarget,
+        responseMs: a.responseMs || 0,
+      };
+    });
+}
+
+// DIGIT SPAN — pure scoring for one recalled sequence. `direction` decides
+// whether the expected answer is the digits in shown order ('forward') or
+// reversed ('backward') — the bug this guards against is comparing the
+// typed answer against the wrong ordering. Returns both the persisted
+// `question` (what `finish()` assembles into the result) and the raw
+// `expected`/`answeredRaw` strings the training-mode feedback UI displays.
+export function scoreDigitSpanRecall({ digits, direction, index, answeredStr, responseMs }) {
+  const ordered = direction === 'backward' ? [...digits].reverse() : digits;
+  const expected = ordered.join('');
+  const answeredRaw = (answeredStr || '').replace(/\D/g, '');
+  return {
+    question: {
+      prompt: `${digits.length}-digit (${direction})`,
+      index,
+      answered: answeredRaw.length ? answeredRaw : null,
+      correct: answeredRaw.length > 0 && answeredRaw === expected,
+      responseMs,
+      length: digits.length,
+    },
+    expected,
+    answeredRaw,
+  };
+}
+
+// STROOP — pure scoring for one trial: correct iff the picked color name
+// matches the word's INK color (`trial.inkColor`), not the word text itself
+// — the bug this guards against is accidentally grading against the word.
+export function scoreStroopTrial({ trial, index, colorName, responseMs }) {
+  return {
+    prompt: trial.word,
+    index,
+    answered: colorName,
+    correct: colorName === trial.inkColor,
+    responseMs,
+  };
+}
+
+// MENTAL ROTATION — pure scoring for one trial: correct iff the picked option
+// index is the option that's the SAME shape (just rotated), not a mirror or
+// distractor. Mirrors `scoreStroopTrial`'s shape so both trial-based drills
+// share one testable pattern.
+export function scoreMentalRotationTrial({ trial, index, optionIndex, responseMs }) {
+  return {
+    prompt: `shape ${trial.shape || ''}`,
+    index,
+    answered: optionIndex,
+    correct: optionIndex === trial.correctIndex,
+    responseMs,
+  };
+}
+
 // =============================================================================
 // N-BACK — a letter stream; signal when the current letter matches N steps back
 // =============================================================================
@@ -97,30 +189,8 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
   const timeoutRef = useRef(null);
 
   const finish = useCallback(() => {
-    const questions = seq
-      .map((letter, i) => ({ letter, i }))
-      .filter(({ i }) => i >= n)
-      .map(({ letter, i }) => {
-        const a = answersRef.current[i] || {};
-        const isTarget = seq[i] === seq[i - n];
-        const answeredMatch = a.answered === 'match';
-        return {
-          prompt: letter,
-          index: i,
-          answered: a.answered ?? null,
-          correct: answeredMatch === isTarget,
-          responseMs: a.responseMs || 0,
-        };
-      });
-    onComplete({
-      module: 'cognitive',
-      type: 'n-back',
-      config: drill.config,
-      drillData: drill,
-      questions,
-      score: localAccuracyScore(questions),
-      totalMs: Date.now() - startedAtRef.current,
-    });
+    const questions = buildNBackQuestions(seq, n, answersRef.current);
+    onComplete(buildCognitiveResult({ type: 'n-back', drill, questions, totalMs: Date.now() - startedAtRef.current }));
   }, [drill, seq, n, onComplete]);
 
   const finishRef = useRef(finish);
@@ -234,15 +304,7 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
 
   const finish = useCallback(() => {
     const questions = answersRef.current.filter(Boolean);
-    onComplete({
-      module: 'cognitive',
-      type: 'digit-span',
-      config: drill.config,
-      drillData: drill,
-      questions,
-      score: localAccuracyScore(questions),
-      totalMs: Date.now() - startedAtRef.current,
-    });
+    onComplete(buildCognitiveResult({ type: 'digit-span', drill, questions, totalMs: Date.now() - startedAtRef.current }));
   }, [drill, onComplete]);
 
   const finishRef = useRef(finish);
@@ -279,19 +341,16 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
 
   const advance = useCallback((answeredStr) => {
     const digits = sequences[seqIdx].digits || [];
-    const ordered = direction === 'backward' ? [...digits].reverse() : digits;
-    const expected = ordered.join('');
-    const answered = (answeredStr || '').replace(/\D/g, '');
-    answersRef.current[seqIdx] = {
-      prompt: `${digits.length}-digit (${direction})`,
+    const { question, expected, answeredRaw } = scoreDigitSpanRecall({
+      digits,
+      direction,
       index: seqIdx,
-      answered: answered.length ? answered : null,
-      correct: answered.length > 0 && answered === expected,
+      answeredStr,
       responseMs: Date.now() - recallStartRef.current,
-      length: digits.length,
-    };
+    });
+    answersRef.current[seqIdx] = question;
     if (isTraining) {
-      setFeedback({ expected, answered, correct: answered.length > 0 && answered === expected });
+      setFeedback({ expected, answered: answeredRaw, correct: question.correct });
     } else {
       setSeqIdx(i => i + 1);
     }
@@ -402,15 +461,7 @@ function StroopRunner({ drill, drillIndex, drillCount, onComplete, isTraining })
 
   const finish = useCallback(() => {
     const questions = answersRef.current.filter(Boolean);
-    onComplete({
-      module: 'cognitive',
-      type: 'stroop',
-      config: drill.config,
-      drillData: drill,
-      questions,
-      score: localAccuracyScore(questions),
-      totalMs: Date.now() - startedAtRef.current,
-    });
+    onComplete(buildCognitiveResult({ type: 'stroop', drill, questions, totalMs: Date.now() - startedAtRef.current }));
   }, [drill, onComplete]);
 
   const finishRef = useRef(finish);
@@ -422,17 +473,11 @@ function StroopRunner({ drill, drillIndex, drillCount, onComplete, isTraining })
     if (advancingRef.current || feedback) return;
     const trial = trials[trialIdx];
     if (!trial) return;
-    const correct = colorName === trial.inkColor;
-    answersRef.current[trialIdx] = {
-      prompt: trial.word,
-      index: trialIdx,
-      answered: colorName,
-      correct,
-      responseMs: Date.now() - trialStartRef.current,
-    };
+    const question = scoreStroopTrial({ trial, index: trialIdx, colorName, responseMs: Date.now() - trialStartRef.current });
+    answersRef.current[trialIdx] = question;
     const isLast = trialIdx + 1 >= trials.length;
     if (isTraining) {
-      setFeedback({ correct, expected: trial.inkColor, isLast });
+      setFeedback({ correct: question.correct, expected: trial.inkColor, isLast });
     } else {
       advancingRef.current = true;
       if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
@@ -546,15 +591,12 @@ function SchulteTableRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   useEffect(() => () => clearTimeout(flashTimeoutRef.current), []);
 
   const finish = useCallback(() => {
-    onComplete({
-      module: 'cognitive',
+    onComplete(buildCognitiveResult({
       type: 'schulte-table',
-      config: drill.config,
-      drillData: drill,
+      drill,
       questions: questionsRef.current,
-      score: localAccuracyScore(questionsRef.current),
       totalMs: Date.now() - startedAtRef.current,
-    });
+    }));
   }, [drill, onComplete]);
 
   const finishRef = useRef(finish);
@@ -655,15 +697,7 @@ function MentalRotationRunner({ drill, drillIndex, drillCount, onComplete, isTra
 
   const finish = useCallback(() => {
     const questions = answersRef.current.filter(Boolean);
-    onComplete({
-      module: 'cognitive',
-      type: 'mental-rotation',
-      config: drill.config,
-      drillData: drill,
-      questions,
-      score: localAccuracyScore(questions),
-      totalMs: Date.now() - startedAtRef.current,
-    });
+    onComplete(buildCognitiveResult({ type: 'mental-rotation', drill, questions, totalMs: Date.now() - startedAtRef.current }));
   }, [drill, onComplete]);
 
   const finishRef = useRef(finish);
@@ -675,17 +709,11 @@ function MentalRotationRunner({ drill, drillIndex, drillCount, onComplete, isTra
     if (advancingRef.current || feedback) return;
     const trial = trials[trialIdx];
     if (!trial) return;
-    const correct = optionIndex === trial.correctIndex;
-    answersRef.current[trialIdx] = {
-      prompt: `shape ${trial.shape || ''}`,
-      index: trialIdx,
-      answered: optionIndex,
-      correct,
-      responseMs: Date.now() - trialStartRef.current,
-    };
+    const question = scoreMentalRotationTrial({ trial, index: trialIdx, optionIndex, responseMs: Date.now() - trialStartRef.current });
+    answersRef.current[trialIdx] = question;
     const isLast = trialIdx + 1 >= trials.length;
     if (isTraining) {
-      setFeedback({ correct, expected: trial.correctIndex, isLast });
+      setFeedback({ correct: question.correct, expected: trial.correctIndex, isLast });
     } else {
       advancingRef.current = true;
       if (isLast) finishRef.current(); else setTrialIdx(i => i + 1);
@@ -812,15 +840,7 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
 
   const finish = useCallback(() => {
     const questions = answersRef.current.filter(Boolean);
-    onComplete({
-      module: 'cognitive',
-      type: 'reaction-time',
-      config: drill.config,
-      drillData: drill,
-      questions,
-      score: localAccuracyScore(questions),
-      totalMs: Date.now() - startedAtRef.current,
-    });
+    onComplete(buildCognitiveResult({ type: 'reaction-time', drill, questions, totalMs: Date.now() - startedAtRef.current }));
   }, [drill, onComplete]);
 
   const finishRef = useRef(finish);

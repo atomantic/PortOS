@@ -1,7 +1,47 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+
+// Stub the training-log API so mount-time fetches (refreshTrainingStats) and
+// round-completion writes (logTraining) never hit the network — mirrors the
+// mocking convention used by PostDrillConfig.test.jsx / PostHistory.test.jsx.
+vi.mock('../../../services/api', () => ({
+  submitTrainingEntry: vi.fn(() => Promise.resolve({})),
+  getTrainingStats: vi.fn(() => Promise.resolve({
+    currentStreak: 3,
+    byDrill: { 'morse:morse-copy': { practiceCount: 4, accuracy: 80, totalMs: 1000, daysActive: 2 } },
+  })),
+}));
+
 import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, isNodeOnPath } from './MorseTrainer';
+import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
+
+// Minimal Web Audio mock so CopyDrill's round flow (which calls ensureCtx →
+// playMorse) can run in jsdom without a real AudioContext. No existing shared
+// mock exists for this in the repo (each audio-consuming test file rolls its
+// own) — mirrors that convention. `stop()` resolves playMorse's promise on
+// the next tick, matching the real oscillator's `onended` callback shape.
+class MockOscillator {
+  constructor() { this.onended = null; this.frequency = { value: 0 }; }
+  connect() { return this; }
+  start() {}
+  stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
+  disconnect() {}
+}
+class MockGainNode {
+  constructor() {
+    this.gain = { value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, cancelScheduledValues() {} };
+  }
+  connect() { return this; }
+  disconnect() {}
+}
+class MockAudioContext {
+  constructor() { this.currentTime = 0; this.destination = {}; this.state = 'running'; }
+  createOscillator() { return new MockOscillator(); }
+  createGain() { return new MockGainNode(); }
+  resume() {}
+  close() {}
+}
 
 // Surfaces the live URL (path + search) so tests can assert the reference tab
 // is encoded in the query string — the "URL is the source of truth" contract.
@@ -24,17 +64,24 @@ function renderMorse(props = {}, { route = '/post/morse' } = {}) {
 }
 
 describe('MorseTrainer deep-linking', () => {
+  beforeEach(() => {
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+  });
+
   it('exports the routed mode ids', () => {
-    expect(MORSE_MODE_IDS).toEqual(['copy', 'send']);
+    expect(MORSE_MODE_IDS).toEqual(['copy', 'head-copy', 'send']);
     expect(MODES.map((m) => m.id)).toEqual(MORSE_MODE_IDS);
   });
 
   it('shows the mode grid and routes on pick (mode=null)', () => {
     const onSelectMode = vi.fn();
     renderMorse({ mode: null, onSelectMode });
-    // Both mode cards render as pickable entries.
+    // All three mode cards render as pickable entries.
     fireEvent.click(screen.getByText('Copy'));
     expect(onSelectMode).toHaveBeenCalledWith('copy');
+    fireEvent.click(screen.getByText('Head Copy'));
+    expect(onSelectMode).toHaveBeenCalledWith('head-copy');
     fireEvent.click(screen.getByText('Send'));
     expect(onSelectMode).toHaveBeenCalledWith('send');
   });
@@ -62,6 +109,82 @@ describe('MorseTrainer deep-linking', () => {
     renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=list' });
     fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
     expect(screen.getByTestId('loc').textContent).toBe('/post/morse');
+  });
+});
+
+describe('MorseTrainer head-copy mode', () => {
+  beforeEach(() => {
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+  });
+
+  it('hides the reference cheat sheet and explains the audio-only rules', () => {
+    renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    // The Tree/Length/List reference tabs only render via ReferenceWidget,
+    // which head-copy mode suppresses entirely.
+    expect(screen.queryByRole('button', { name: 'Tree' })).not.toBeInTheDocument();
+    expect(screen.getByText(/No code hints on the results screen/)).toBeInTheDocument();
+  });
+
+  it('keeps the reference widget visible in plain copy mode (unchanged behavior)', () => {
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    expect(screen.getByRole('button', { name: 'Tree' })).toBeInTheDocument();
+  });
+});
+
+describe('MorseTrainer training log integration', () => {
+  beforeEach(() => {
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+  });
+
+  it('fetches 30-day training stats on mount and renders the streak summary', async () => {
+    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+    expect(getTrainingStats).toHaveBeenCalledWith(30);
+    await waitFor(() => {
+      expect(container.textContent).toContain('Training streak: 3d');
+    });
+    expect(container.textContent).toContain('Morse logged: 4');
+    expect(container.textContent).toContain('80% avg');
+  });
+
+  describe('round completion', () => {
+    // Scoped to just this test — install/teardown live in beforeEach/afterEach
+    // (not inline in the test body) so a failed assertion above the cleanup
+    // line can't leak the mock AudioContext onto `window` for later tests.
+    beforeEach(() => {
+      window.AudioContext = MockAudioContext;
+    });
+    afterEach(() => {
+      delete window.AudioContext;
+    });
+
+    it('logs a completed Head Copy round to the training log with the right payload shape', async () => {
+      renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+      fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+
+      // 10-question round (ROUND_SIZE): submit a deliberately wrong guess each
+      // time so correctCount is deterministic (0), then advance past feedback.
+      for (let i = 0; i < 10; i++) {
+        const input = await screen.findByPlaceholderText('????');
+        fireEvent.change(input, { target: { value: 'ZZZZZ' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        if (i < 9) {
+          const nextButton = await screen.findByRole('button', { name: /Next/i });
+          fireEvent.click(nextButton);
+        }
+      }
+
+      await waitFor(() => {
+        expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+          module: 'morse',
+          drillType: 'morse-head-copy',
+          questionCount: 10,
+          correctCount: 0,
+        }));
+      });
+    });
   });
 });
 

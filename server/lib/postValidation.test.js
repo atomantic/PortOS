@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { postLlmScoreRequestSchema, postConfigUpdateSchema, LLM_DRILL_TYPES } from './postValidation.js';
+import { postLlmScoreRequestSchema, postConfigUpdateSchema, postSessionSubmitSchema, postDrillRequestSchema, trainingEntrySchema, LLM_DRILL_TYPES } from './postValidation.js';
 
 describe('postConfigUpdateSchema llmDrills', () => {
   // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
@@ -54,6 +54,36 @@ describe('postConfigUpdateSchema llmDrills', () => {
     });
     expect(parsed.reminder).toEqual({ enabled: true });
     expect(parsed.adaptive).toEqual({ enabled: true });
+  });
+});
+
+describe('Morse drill types stay scoped to the training log', () => {
+  // Regression: MORSE_DRILL_TYPES must never be spliced into the shared
+  // DRILL_TYPES array — that array also backs the *scored* session submit
+  // schema (postSessionSubmitSchema.tasks[].type) and server-side drill
+  // generation (postDrillRequestSchema.type). meatspacePost.js's scoring
+  // dispatch only special-cases LLM/MEMORY/COGNITIVE types and falls through
+  // everything else to the math-expression scorer — a Morse type would pass
+  // validation there but silently mis-score as a failed math drill instead of
+  // being rejected. Morse only ever posts through trainingEntrySchema.
+  it('rejects a Morse type on the scored-session task schema', () => {
+    expect(() => postSessionSubmitSchema.parse({
+      modules: ['morse'],
+      tasks: [{ module: 'morse', type: 'morse-copy', totalMs: 1000 }]
+    })).toThrow();
+  });
+
+  it('rejects a Morse type on the server-side drill-generation request schema', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'morse-copy' })).toThrow();
+  });
+
+  it('accepts every Morse drill type on the training-log entry schema', () => {
+    for (const drillType of ['morse-copy', 'morse-head-copy', 'morse-send']) {
+      const parsed = trainingEntrySchema.parse({
+        module: 'morse', drillType, questionCount: 10, correctCount: 8, totalMs: 5000
+      });
+      expect(parsed.drillType).toBe(drillType);
+    }
   });
 });
 

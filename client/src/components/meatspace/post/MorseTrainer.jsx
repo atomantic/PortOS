@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ArrowLeft, Radio, Headphones, Hand, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
+import { ArrowLeft, Radio, Headphones, Hand, EyeOff, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
 import useDrawerTab from '../../../hooks/useDrawerTab';
+import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
 
 export const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
@@ -102,6 +103,15 @@ export const MODES = [
     example: 'Koch progression: K, M → add letters as you hit 90%',
   },
   {
+    id: 'head-copy',
+    label: 'Head Copy',
+    icon: EyeOff,
+    color: 'text-purple-400',
+    bgColor: 'bg-purple-500/20',
+    description: 'Audio-only — no on-screen code hints or cheat sheet',
+    example: 'Same Koch pool, pure recall — nothing to look at',
+  },
+  {
     id: 'send',
     label: 'Send',
     icon: Hand,
@@ -111,6 +121,15 @@ export const MODES = [
     example: 'Tap short for ·, hold long for —',
   },
 ];
+
+// Training log module name — passed as `module` on every submitTrainingEntry
+// call from this trainer so POST's training stats can group Morse practice
+// under one key regardless of which mode logged it.
+const TRAINING_MODULE = 'morse';
+
+// Mirrors the streakGlyph helper in PostSessionLauncher.jsx/DailyPostWidget.jsx
+// (small enough that a shared util would be more indirection than reuse).
+const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨');
 
 function loadPrefs() {
   const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PREFS_KEY) : null;
@@ -368,9 +387,14 @@ export const MORSE_MODE_IDS = MODES.map((m) => m.id);
 // source of truth for which drill is open, so there is no local mode state.
 export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, onBack }) {
   const [prefs, setPrefs] = useState(loadPrefs);
+  const [trainingStats, setTrainingStats] = useState(null);
   const ensureCtx = useAudioContext();
   const unitMs = 1.2 / prefs.wpm * 1000;
   const keying = useKeyingDecoder({ unitMs, hz: prefs.hz, ensureCtx, enabled: mode === 'send' });
+  // Head Copy reuses CopyDrill's whole pipeline (Koch pool, round scoring,
+  // level unlock) minus the on-screen morse hints and the reference cheat
+  // sheet — the only meaningful difference the issue asks for.
+  const showReference = mode !== 'head-copy';
 
   function updatePrefs(patch) {
     setPrefs((prev) => {
@@ -384,6 +408,35 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
   function resetProgress() {
     updatePrefs({ kochLevel: 2, bestAccuracy: 0 });
   }
+
+  // Fetches the training log's 30-day view and reduces it to what this trainer
+  // shows: overall training streak (shared across every POST training-mode
+  // drill, not Morse-exclusive) plus a Morse-only practice count/accuracy.
+  // byDrill only reports a per-drill-type accuracy%, not raw correct/question
+  // counts, so morseAccuracy is a session-count-weighted average across the
+  // morse-copy/morse-head-copy/morse-send buckets — not a true question-level average.
+  const refreshTrainingStats = useCallback(() => {
+    getTrainingStats(30)
+      .then((stats) => {
+        const morseEntries = Object.entries(stats?.byDrill || {}).filter(([key]) => key.startsWith(`${TRAINING_MODULE}:`));
+        const morseSessions = morseEntries.reduce((sum, [, d]) => sum + (d.practiceCount || 0), 0);
+        const weightedAccuracySum = morseEntries.reduce((sum, [, d]) => sum + (d.accuracy || 0) * (d.practiceCount || 0), 0);
+        const morseAccuracy = morseSessions > 0 ? Math.round(weightedAccuracySum / morseSessions) : null;
+        setTrainingStats({ currentStreak: stats?.currentStreak ?? 0, morseSessions, morseAccuracy });
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { refreshTrainingStats(); }, [refreshTrainingStats]);
+
+  // Fire-and-forget training-log write, mirroring the existing
+  // usePostSession.js training-mode pattern (silent — a failed background log
+  // shouldn't interrupt practice). Refreshes the displayed stats on success.
+  const logTraining = useCallback((patch) => {
+    submitTrainingEntry({ module: TRAINING_MODULE, ...patch })
+      .then(() => refreshTrainingStats())
+      .catch(() => {});
+  }, [refreshTrainingStats]);
 
   return (
     <div className="space-y-6">
@@ -402,24 +455,27 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_24rem] gap-6">
+      <div className={`grid grid-cols-1 ${showReference ? 'xl:grid-cols-[minmax(0,1fr)_24rem]' : ''} gap-6`}>
         <div className="space-y-6 min-w-0 max-w-2xl">
-          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} />
+          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} trainingStats={trainingStats} />
           {!mode && <ModeGrid onPick={onSelectMode} />}
           {mode === 'copy' && (
-            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} />
+            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} onSessionComplete={logTraining} />
+          )}
+          {mode === 'head-copy' && (
+            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} onSessionComplete={logTraining} headCopy />
           )}
           {mode === 'send' && (
-            <SendDrill keying={keying} onExit={onExitMode} />
+            <SendDrill keying={keying} onExit={onExitMode} onSessionComplete={logTraining} />
           )}
         </div>
-        <ReferenceWidget keying={keying} mode={mode} />
+        {showReference && <ReferenceWidget keying={keying} mode={mode} />}
       </div>
     </div>
   );
 }
 
-function SettingsPanel({ prefs, updatePrefs, onResetProgress }) {
+function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
       <SliderRow
@@ -448,11 +504,25 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress }) {
         onChange={(v) => updatePrefs({ hz: v })}
         suffix="Hz"
       />
-      <div className="sm:col-span-3 flex items-center justify-between text-xs text-gray-500 border-t border-port-border pt-3">
+      <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-xs text-gray-500 border-t border-port-border pt-3">
         <span>
           Koch level: <span className="text-white font-mono">{prefs.kochLevel}</span> /{' '}
           <span className="text-gray-400">{KOCH_ORDER.length}</span> ·{' '}
           Best round: <span className="text-white font-mono">{prefs.bestAccuracy}%</span>
+          {trainingStats && (
+            <>
+              {' '}· <span aria-hidden="true">{streakGlyph(trainingStats.currentStreak)}</span> Training streak:{' '}
+              <span className="text-white font-mono">{trainingStats.currentStreak}</span>d
+              {trainingStats.morseSessions > 0 && (
+                <>
+                  {' '}· Morse logged: <span className="text-white font-mono">{trainingStats.morseSessions}</span>
+                  {trainingStats.morseAccuracy != null && (
+                    <> (<span className="text-white font-mono">{trainingStats.morseAccuracy}%</span> avg)</>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </span>
         <button
           onClick={onResetProgress}
@@ -706,7 +776,7 @@ function ModeGrid({ onPick }) {
 
 const ROUND_SIZE = 10;
 
-function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
+function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, headCopy = false }) {
   const [prompt, setPrompt] = useState('');
   const [input, setInput] = useState('');
   const [results, setResults] = useState([]);
@@ -714,11 +784,13 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
   const [playing, setPlaying] = useState(false);
   const [done, setDone] = useState(false);
   const inputRef = useRef(null);
+  const roundStartRef = useRef(0);
 
   async function startRound() {
     setResults([]);
     setFeedback(null);
     setDone(false);
+    roundStartRef.current = Date.now();
     await playPrompt(true);
   }
 
@@ -762,6 +834,12 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
     }
     updatePrefs(patch);
     setDone(true);
+    onSessionComplete?.({
+      drillType: headCopy ? 'morse-head-copy' : 'morse-copy',
+      questionCount: rs.length,
+      correctCount,
+      totalMs: roundStartRef.current ? Date.now() - roundStartRef.current : 0,
+    });
   }
 
   function onKey(e) {
@@ -817,7 +895,11 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
           Koch level <span className="font-mono text-white">{prefs.kochLevel}</span> — pool: {' '}
           <span className="font-mono text-port-accent">{KOCH_ORDER.slice(0, prefs.kochLevel).join(' ')}</span>
         </p>
-        <p className="text-xs text-gray-500">Listen to a 10-question round. Hit 90% to unlock the next letter.</p>
+        <p className="text-xs text-gray-500">
+          {headCopy
+            ? 'Listen to a 10-question round. No code hints on the results screen — pure recall. Hit 90% to unlock the next letter.'
+            : 'Listen to a 10-question round. Hit 90% to unlock the next letter.'}
+        </p>
         <button
           onClick={startRound}
           className="px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white font-medium rounded-lg transition-colors inline-flex items-center gap-2"
@@ -853,9 +935,11 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
             <div className="text-3xl font-mono font-bold text-port-accent tracking-widest">
               {feedback.prompt}
             </div>
-            <div className="font-mono text-port-accent/70 text-base tracking-widest">
-              {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
-            </div>
+            {!headCopy && (
+              <div className="font-mono text-port-accent/70 text-base tracking-widest">
+                {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
+              </div>
+            )}
             {!feedback.correct && (
               <div className="text-gray-400 text-xs pt-1">
                 You typed <span className="font-mono text-white">{feedback.guess || '—'}</span>
@@ -890,9 +974,10 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
   );
 }
 
-function SendDrill({ keying, onExit }) {
+function SendDrill({ keying, onExit, onSessionComplete }) {
   const [prompt, setPrompt] = useState(() => pickSendPrompt());
   const [feedback, setFeedback] = useState(null);
+  const promptStartRef = useRef(Date.now());
 
   // Drop any stale keying state from a prior session so "Your sending" starts empty.
   const { clear: clearKeying } = keying;
@@ -903,13 +988,21 @@ function SendDrill({ keying, onExit }) {
   function decodeNow() {
     const target = prompt.toUpperCase();
     const got = keying.decoded.replace(/\s+/g, ' ').trim().toUpperCase();
-    setFeedback({ correct: got === target, decoded: got, target });
+    const correct = got === target;
+    setFeedback({ correct, decoded: got, target });
+    onSessionComplete?.({
+      drillType: 'morse-send',
+      questionCount: 1,
+      correctCount: correct ? 1 : 0,
+      totalMs: Date.now() - promptStartRef.current,
+    });
   }
 
   function nextPrompt() {
     keying.clear();
     setFeedback(null);
     setPrompt(pickSendPrompt());
+    promptStartRef.current = Date.now();
   }
 
   return (

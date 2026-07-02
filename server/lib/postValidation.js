@@ -57,6 +57,16 @@ const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
 // Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
 // Sourced from meatspacePostCognitive.js so the type list has one owner.
 const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
+// Morse trainer drill types (client-side scoring — exact-match copy/send comparison).
+// Deliberately NOT spliced into DRILL_TYPES: that array also backs
+// taskResultSchema.type (the *scored* full-session submit endpoint,
+// postSessionSubmitSchema) and postDrillRequestSchema.type (server-side drill
+// generation). meatspacePost.js's scoring dispatch only special-cases
+// LLM/MEMORY/COGNITIVE types and falls through everything else to scoreDrill's
+// math-expression parser (computeExpectedFromPrompt) — a Morse task type would
+// pass validation there but silently mis-score as a failed math drill instead
+// of being rejected. Morse only ever posts through trainingEntrySchema below.
+const MORSE_DRILL_TYPES = ['morse-copy', 'morse-head-copy', 'morse-send'];
 
 const drillTypeConfigSchema = z.object({
   enabled: z.boolean().optional(),
@@ -281,10 +291,14 @@ export const memoryDrillRequestSchema = z.object({
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
-  drillType: z.enum(DRILL_TYPES),
+  // Training log entries also cover Morse (client-side scored, never a scored
+  // POST session) — union in MORSE_DRILL_TYPES here rather than in the shared
+  // DRILL_TYPES so postSessionSubmitSchema/postDrillRequestSchema can't accept
+  // a Morse type (see the MORSE_DRILL_TYPES comment above).
+  drillType: z.enum([...DRILL_TYPES, ...MORSE_DRILL_TYPES]),
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };
