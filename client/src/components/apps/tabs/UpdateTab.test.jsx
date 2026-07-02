@@ -43,9 +43,10 @@ const fireDisconnectAndConfirm = async () => {
   // `updatingRef` via a separate effect (`useEffect(() => { updatingRef.current
   // = updating }, [updating])`), and handleDisconnect's guard reads that ref
   // synchronously. runUpdate() calls setUpdating(true) outside any act (after
-  // two awaits), so the "Reconciling..." button — driven directly by the
-  // `updating` state — can commit to the DOM (and satisfy the caller's waitFor)
-  // a scheduler tick before the ref-sync effect runs. Without this flush the
+  // awaiting the pre-update health check), so the "Reconciling..." button —
+  // driven directly by the `updating` state — can commit to the DOM (and
+  // satisfy the caller's waitFor) a scheduler tick before the ref-sync effect
+  // runs. Without this flush the
   // ref can still be stale-false when we fire 'disconnect', the confirmation
   // timer never arms, and "Restarting..." never appears: the intermittent CI
   // failure (#2065). Draining effects here syncs the ref to the state
