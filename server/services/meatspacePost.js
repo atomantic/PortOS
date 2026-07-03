@@ -12,6 +12,7 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
+import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
 import { advanceScheduleFromSession, mergeMasteryFromSession } from './meatspacePostMemory.js';
 
@@ -34,7 +35,12 @@ const DEFAULT_CONFIG = {
     drillTypes: {
       'doubling-chain': { enabled: true, steps: 8, timeLimitSec: 60 },
       'serial-subtraction': { enabled: true, steps: 10, subtrahend: 7, startRange: [100, 200], timeLimitSec: 90 },
-      'multiplication': { enabled: true, count: 10, maxDigits: 2, timeLimitSec: 120 },
+      // `progressive` (default ON) makes multiplication ramp up a mastery-gated
+      // difficulty ladder (server/lib/postMultiplicationLadder.js) starting at
+      // single-digit × single-digit, instead of jumping straight to the fixed
+      // `maxDigits` difficulty. `maxDigits` is retained as the fallback for when
+      // a user turns the progressive ladder off.
+      'multiplication': { enabled: true, count: 10, maxDigits: 2, progressive: true, timeLimitSec: 120 },
       'powers': { enabled: true, bases: [2, 3, 5], maxExponent: 10, count: 8, timeLimitSec: 90 },
       'estimation': { enabled: true, count: 5, tolerancePct: 10, timeLimitSec: 120 }
     }
@@ -366,16 +372,42 @@ export function generateSerialSubtraction(start, subtrahend = 7, steps = 10, sta
   return { type: 'serial-subtraction', config: { startValue: startVal, subtrahend, steps }, questions };
 }
 
-export function generateMultiplication(count = 10, maxDigits = 2) {
-  const maxVal = Math.pow(10, maxDigits) - 1;
-  const minVal = maxDigits > 1 ? Math.pow(10, maxDigits - 1) : 1;
+// Random integer with exactly `digits` digits (1 → 1-9, 2 → 10-99, …).
+function randInt(digits) {
+  const maxVal = Math.pow(10, digits) - 1;
+  const minVal = digits > 1 ? Math.pow(10, digits - 1) : 1;
+  return Math.floor(Math.random() * (maxVal - minVal + 1)) + minVal;
+}
+
+/**
+ * Generate a multiplication drill.
+ *
+ * Two shapes:
+ *  - Progressive ladder: pass `factors` (an array of per-factor digit counts,
+ *    e.g. `[1, 2]` or `[1, 1, 1]`) and, optionally, the `level` that produced it
+ *    (stamped into the returned config so scored history can bucket by level).
+ *  - Legacy: pass `maxDigits` for a symmetric two-factor problem (both factors
+ *    have `maxDigits` digits). Kept for when the progressive ladder is off.
+ */
+export function generateMultiplication(count = 10, maxDigits = 2, factors = null, level = null) {
+  const useFactors = Array.isArray(factors) && factors.length >= 2
+    ? factors.map(d => Math.max(1, Math.min(4, Math.trunc(d))))
+    : null;
+  const digitPlan = useFactors || [maxDigits, maxDigits];
   const questions = [];
   for (let i = 0; i < count; i++) {
-    const a = Math.floor(Math.random() * (maxVal - minVal + 1)) + minVal;
-    const b = Math.floor(Math.random() * (maxVal - minVal + 1)) + minVal;
-    questions.push({ prompt: `${a} x ${b}`, expected: a * b });
+    const nums = digitPlan.map(d => randInt(d));
+    const expected = nums.reduce((product, n) => product * n, 1);
+    questions.push({ prompt: nums.join(' x '), expected });
   }
-  return { type: 'multiplication', config: { count, maxDigits }, questions };
+  const config = { count };
+  if (useFactors) {
+    config.factors = useFactors;
+    if (Number.isInteger(level)) config.level = level;
+  } else {
+    config.maxDigits = maxDigits;
+  }
+  return { type: 'multiplication', config, questions };
 }
 
 export function generatePowers(bases, maxExponent = 10, count = 8) {
@@ -422,7 +454,7 @@ export function generateDrill(type, config = {}) {
     case 'serial-subtraction':
       return generateSerialSubtraction(config.startValue, config.subtrahend, config.steps, config.startRange);
     case 'multiplication':
-      return generateMultiplication(config.count, config.maxDigits);
+      return generateMultiplication(config.count, config.maxDigits, config.factors, config.level);
     case 'powers':
       return generatePowers(config.bases, config.maxExponent, config.count);
     case 'estimation':
@@ -457,15 +489,95 @@ async function getAdaptiveSignal(type) {
 }
 
 /**
- * Resolve the effective drill config for generation. When the Adaptive toggle
- * is off (default), the caller's manual config is returned unchanged. When on,
- * math drills are nudged from recent scored performance within clamped bounds.
- * Non-math (LLM/memory) types and unsupported math types pass through untouched.
+ * Aggregate multiplication performance per ladder level from scored history,
+ * so the progressive ladder can decide whether each level has been *speed*
+ * mastered. Only answered questions count as samples; each contributes its
+ * correctness and clamped response time.
  *
- * @returns {{ config: object, adaptive: object|null }}
+ * @returns {Promise<Record<number, {samples:number, accuracy:number, avgResponseMs:number}>>}
+ */
+async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowDays) {
+  const sessions = await getPostSessions();
+  let cutoffStr = null;
+  if (windowDays > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - windowDays);
+    cutoffStr = cutoff.toISOString().split('T')[0];
+  }
+
+  const byLevel = {};
+  for (const session of sessions) {
+    if (cutoffStr && session.date < cutoffStr) continue;
+    for (const task of session.tasks || []) {
+      if (task.type !== 'multiplication') continue;
+      const level = Number.isInteger(task.config?.level) ? task.config.level : null;
+      if (level == null) continue; // legacy maxDigits-only tasks carry no level
+      const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
+      for (const q of task.questions || []) {
+        if (q?.answered == null) continue;
+        bucket.samples += 1;
+        if (q.correct) bucket.correct += 1;
+        bucket.totalResponseMs += Math.max(0, q.responseMs || 0);
+      }
+    }
+  }
+
+  const stats = {};
+  for (const [level, b] of Object.entries(byLevel)) {
+    stats[level] = {
+      samples: b.samples,
+      accuracy: b.samples ? b.correct / b.samples : 0,
+      avgResponseMs: b.samples ? b.totalResponseMs / b.samples : 0,
+    };
+  }
+  return stats;
+}
+
+/**
+ * Resolve the current progressive-multiplication difficulty from history.
+ * Exposed for the config UI / route so it can show the ladder + mastery status.
+ */
+export async function getMultiplicationProgress() {
+  const levelStats = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
+  const progression = resolveMultiplicationLevel(levelStats);
+  return { ...progression, windowDays: MASTERY_DEFAULTS.windowDays, thresholds: { minSamples: MASTERY_DEFAULTS.minSamples, targetAccuracy: MASTERY_DEFAULTS.targetAccuracy } };
+}
+
+/**
+ * Resolve the effective drill config for generation.
+ *
+ * - Multiplication with the progressive ladder ON (default): factor structure
+ *   and difficulty come from mastery-gated level history, not the manual
+ *   `maxDigits`. Returns a `progression` explainer.
+ * - Adaptive toggle ON: math drill params are nudged from recent scored
+ *   performance within clamped bounds. Returns an `adaptive` explainer.
+ * - Otherwise (default): the caller's manual config passes through unchanged.
+ *
+ * @returns {{ config: object, adaptive: object|null, progression?: object|null }}
  */
 export async function resolveDrillConfig(type, requestedConfig = {}) {
   const config = await getPostConfig();
+
+  // Progressive multiplication ladder (default ON) — independent of the generic
+  // Adaptive toggle. Selects the factor structure by speed-gated mastery so a
+  // fresh user starts at single-digit × single-digit instead of a fixed hard
+  // difficulty. `maxDigits` is stripped so generation uses `factors`.
+  if (type === 'multiplication') {
+    const mulCfg = config?.mentalMath?.drillTypes?.multiplication || {};
+    if (mulCfg.progressive !== false) {
+      const levelStats = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
+      const progression = resolveMultiplicationLevel(levelStats);
+      const { maxDigits: _drop, ...rest } = requestedConfig || {};
+      const effective = {
+        ...rest,
+        count: rest.count ?? mulCfg.count ?? 10,
+        level: progression.level,
+        factors: progression.factors,
+      };
+      return { config: effective, adaptive: null, progression };
+    }
+  }
+
   if (!config?.adaptive?.enabled || !ADAPTIVE_SPECS[type]) {
     return { config: requestedConfig, adaptive: null };
   }
@@ -505,7 +617,15 @@ export async function getAdaptivePreview() {
 // =============================================================================
 
 export function computeExpectedFromPrompt(prompt) {
-  const match = prompt?.match(/^(-?\d+)\s*([+\-x^])\s*(-?\d+)$/);
+  const s = typeof prompt === 'string' ? prompt.trim() : '';
+  // Chained multiplication: "a x b" or "a x b x c x …" (progressive ladder can
+  // emit 3+ factors). Handled first so a single "a x b" also flows through here.
+  if (/^-?\d+(\s*x\s*-?\d+)+$/.test(s)) {
+    const factors = s.split(/\s*x\s*/).map(n => parseInt(n, 10));
+    if (factors.some(Number.isNaN)) return null;
+    return factors.reduce((product, n) => product * n, 1);
+  }
+  const match = s.match(/^(-?\d+)\s*([+\-^])\s*(-?\d+)$/);
   if (!match) return null;
   const [, aStr, op, bStr] = match;
   const a = parseInt(aStr, 10);
@@ -513,7 +633,6 @@ export function computeExpectedFromPrompt(prompt) {
   switch (op) {
     case '+': return a + b;
     case '-': return a - b;
-    case 'x': return a * b;
     case '^': return Math.pow(a, b);
     default: return null;
   }

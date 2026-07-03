@@ -26,6 +26,8 @@ import {
   submitPostSession,
   updatePostConfig,
   postConfigEvents,
+  resolveDrillConfig,
+  getMultiplicationProgress,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -136,6 +138,46 @@ describe('generateMultiplication', () => {
 });
 
 // =============================================================================
+// PROGRESSIVE MULTIPLICATION LADDER
+// =============================================================================
+
+describe('generateMultiplication — progressive factors', () => {
+  it('honors an asymmetric factors array (1×2-digit)', () => {
+    const result = generateMultiplication(20, 2, [1, 2], 1);
+    expect(result.config.factors).toEqual([1, 2]);
+    expect(result.config.level).toBe(1);
+    expect(result.config.maxDigits).toBeUndefined();
+    for (const q of result.questions) {
+      const [a, b] = q.prompt.split(' x ').map(Number);
+      expect(a).toBeGreaterThanOrEqual(1);
+      expect(a).toBeLessThanOrEqual(9);
+      expect(b).toBeGreaterThanOrEqual(10);
+      expect(b).toBeLessThanOrEqual(99);
+      expect(q.expected).toBe(a * b);
+    }
+  });
+
+  it('supports three single-digit factors (1×1×1)', () => {
+    const result = generateMultiplication(15, 2, [1, 1, 1], 2);
+    for (const q of result.questions) {
+      const nums = q.prompt.split(' x ').map(Number);
+      expect(nums).toHaveLength(3);
+      for (const n of nums) {
+        expect(n).toBeGreaterThanOrEqual(1);
+        expect(n).toBeLessThanOrEqual(9);
+      }
+      expect(q.expected).toBe(nums.reduce((p, n) => p * n, 1));
+    }
+  });
+
+  it('falls back to symmetric maxDigits when no factors given', () => {
+    const result = generateMultiplication(5, 3);
+    expect(result.config.maxDigits).toBe(3);
+    expect(result.config.factors).toBeUndefined();
+  });
+});
+
+// =============================================================================
 // POWERS TESTS
 // =============================================================================
 
@@ -235,6 +277,11 @@ describe('computeExpectedFromPrompt', () => {
 
   it('parses multiplication', () => {
     expect(computeExpectedFromPrompt('15 x 23')).toBe(345);
+  });
+
+  it('parses chained multiplication (3+ factors)', () => {
+    expect(computeExpectedFromPrompt('6 x 7 x 8')).toBe(336);
+    expect(computeExpectedFromPrompt('2 x 3 x 4 x 5')).toBe(120);
   });
 
   it('parses powers', () => {
@@ -667,5 +714,82 @@ describe('updatePostConfig — postConfigEvents', () => {
     await updatePostConfig({ adaptive: { enabled: true } });
 
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =============================================================================
+// PROGRESSIVE MULTIPLICATION — resolveDrillConfig / getMultiplicationProgress
+// =============================================================================
+
+describe('resolveDrillConfig — progressive multiplication', () => {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Build a session with `n` answered multiplication questions at `level`, all
+  // correct and fast (so the level clears the mastery bar).
+  function masteredSession(level, n = 14, responseMs = 2500) {
+    return {
+      date: today,
+      tasks: [{
+        module: 'mental-math',
+        type: 'multiplication',
+        config: { level },
+        questions: Array.from({ length: n }, () => ({ answered: 1, correct: true, responseMs })),
+      }],
+    };
+  }
+
+  function mockSessions(sessions, configOverride) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions });
+      if (p.includes('post-config')) return Promise.resolve(configOverride ?? defaultValue);
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('starts a fresh user at level 0 (single×single) and strips maxDigits', async () => {
+    mockSessions([]);
+    const { config, progression } = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+    expect(progression).toBeTruthy();
+    expect(progression.level).toBe(0);
+    expect(config.level).toBe(0);
+    expect(config.factors).toEqual([1, 1]);
+    expect(config.maxDigits).toBeUndefined();
+    expect(config.count).toBe(10);
+  });
+
+  it('advances to the next rung once the current one is speed-mastered', async () => {
+    mockSessions([masteredSession(0)]);
+    const { progression, config } = await resolveDrillConfig('multiplication', { count: 10 });
+    expect(progression.level).toBe(1);
+    expect(config.factors).toEqual([1, 2]);
+  });
+
+  it('does not advance when the level is accurate but too slow', async () => {
+    mockSessions([masteredSession(0, 14, 60000)]);
+    const { progression } = await resolveDrillConfig('multiplication', { count: 10 });
+    expect(progression.level).toBe(0);
+  });
+
+  it('passes config through unchanged when progressive is turned off', async () => {
+    mockSessions([], { mentalMath: { drillTypes: { multiplication: { progressive: false } } } });
+    const { config, progression } = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+    expect(progression == null).toBe(true);
+    expect(config.maxDigits).toBe(2);
+    expect(config.factors).toBeUndefined();
+  });
+
+  it('getMultiplicationProgress exposes the full ladder + thresholds', async () => {
+    mockSessions([masteredSession(0)]);
+    const progress = await getMultiplicationProgress();
+    expect(progress.level).toBe(1);
+    expect(Array.isArray(progress.levels)).toBe(true);
+    expect(progress.levels[0].mastered).toBe(true);
+    expect(progress.thresholds.minSamples).toBeGreaterThan(0);
+    expect(progress.windowDays).toBeGreaterThan(0);
   });
 });

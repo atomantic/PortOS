@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
@@ -253,7 +253,41 @@ function AdaptiveBadge({ info }) {
   );
 }
 
-function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo }) {
+// Compact ladder status for progressive multiplication: current rung, mastery
+// dots for every rung, and the speed/accuracy gate that unlocks the next one.
+function ProgressiveBadge({ info }) {
+  if (!info || !Array.isArray(info.levels)) return null;
+  const pct = Math.round((info.thresholds?.targetAccuracy ?? 0.9) * 100);
+  return (
+    <div className="mt-3 space-y-1.5">
+      <div className="flex items-center gap-1.5 text-xs text-port-accent">
+        <TrendingUp size={12} className="shrink-0" />
+        <span>
+          Level {info.level + 1} of {info.levels.length} · {info.label}
+          {info.atHardest && info.currentMastered ? ' (mastered)' : ''}
+        </span>
+      </div>
+      <div className="flex items-center gap-1" aria-hidden="true">
+        {info.levels.map(l => (
+          <span
+            key={l.level}
+            title={`${l.label}${l.mastered ? ' — mastered' : l.level === info.level ? ' — current' : ''}`}
+            className={`h-1.5 flex-1 rounded-full ${
+              l.mastered ? 'bg-port-success' : l.level === info.level ? 'bg-port-accent' : 'bg-port-border'
+            }`}
+          />
+        ))}
+      </div>
+      <p className="text-xs text-gray-500">
+        Advances to the next rung after ≥{pct}% accuracy and fast responses at this one. Max Digits is ignored while progressive is on.
+      </p>
+    </div>
+  );
+}
+
+function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo, progressive, onToggleProgressive, progressInfo }) {
+  const supportsProgressive = typeof progressive === 'boolean';
+  const hideMaxDigits = supportsProgressive && progressive;
   const activeBorder = accent === 'accent-2' ? 'border-port-accent-2/30' : 'border-port-border';
   const toggleBg = accent === 'accent-2' ? 'bg-port-accent-2' : 'bg-port-accent';
   return (
@@ -281,9 +315,32 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
         </button>
       </div>
 
+      {enabled && supportsProgressive && (
+        <div className="flex items-center justify-between mb-3 py-2 px-3 bg-port-bg/50 rounded">
+          <div>
+            <span className="text-sm text-white">Progressive difficulty</span>
+            <p className="text-xs text-gray-500">Ramp up from 1×1-digit as you master speed.</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={progressive}
+            aria-label="Progressive difficulty"
+            onClick={onToggleProgressive}
+            className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
+              progressive ? toggleBg : 'bg-port-border'
+            }`}
+          >
+            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+              progressive ? 'translate-x-5' : 'translate-x-0.5'
+            }`} />
+          </button>
+        </div>
+      )}
+
       {enabled && (
         <div className="grid grid-cols-2 gap-3">
-          {meta.fields.map(field => (
+          {meta.fields.filter(field => !(hideMaxDigits && field.key === 'maxDigits')).map(field => (
             <FormField key={field.key} label={field.label} labelClassName="text-xs text-gray-500 mb-1 block">
               {field.type === 'select' ? (
                 <select
@@ -310,7 +367,8 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
         </div>
       )}
 
-      {enabled && <AdaptiveBadge info={adaptiveInfo} />}
+      {enabled && supportsProgressive && progressive && <ProgressiveBadge info={progressInfo} />}
+      {enabled && !(supportsProgressive && progressive) && <AdaptiveBadge info={adaptiveInfo} />}
     </div>
   );
 }
@@ -341,6 +399,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     () => config?.adaptive?.enabled === true
   );
   const [adaptivePreview, setAdaptivePreview] = useState(null);
+  const [multiplicationProgress, setMultiplicationProgress] = useState(null);
   // Opt-in daily reminder — off by default; see server/services/meatspacePostReminder.js.
   const [reminderEnabled, setReminderEnabled] = useState(
     () => config?.reminder?.enabled === true
@@ -368,10 +427,30 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     return () => { cancelled = true; };
   }, [adaptiveEnabled]);
 
+  // Progressive multiplication ladder status — mirrors the drill runner's badge
+  // so the config page shows the current rung + mastery before a session.
+  // Progressive defaults ON (undefined → true), matching the server default.
+  const multiplicationProgressive = drillTypes.multiplication?.progressive !== false;
+  useEffect(() => {
+    if (!multiplicationProgressive) { setMultiplicationProgress(null); return; }
+    let cancelled = false;
+    getPostMultiplicationProgress()
+      .then(p => { if (!cancelled) setMultiplicationProgress(p); })
+      .catch(err => console.warn('⚠️ Failed to load multiplication progress: ' + err.message));
+    return () => { cancelled = true; };
+  }, [multiplicationProgressive]);
+
   function toggleDrill(type) {
     setDrillTypes(prev => ({
       ...prev,
       [type]: { ...prev[type], enabled: !(prev[type]?.enabled !== false) }
+    }));
+  }
+
+  function toggleProgressive() {
+    setDrillTypes(prev => ({
+      ...prev,
+      multiplication: { ...prev.multiplication, progressive: !(prev.multiplication?.progressive !== false) }
     }));
   }
 
@@ -542,6 +621,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
         <div className={CARD_GRID}>
           {Object.entries(DRILL_META).map(([type, meta]) => {
             const drillConfig = drillTypes[type] || {};
+            const isMultiplication = type === 'multiplication';
             return (
               <DrillCard
                 key={type}
@@ -552,6 +632,9 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 onToggle={() => toggleDrill(type)}
                 onUpdateField={(key, value) => updateField(type, key, value)}
                 adaptiveInfo={adaptiveEnabled ? adaptivePreview?.[type] : null}
+                progressive={isMultiplication ? multiplicationProgressive : undefined}
+                onToggleProgressive={isMultiplication ? toggleProgressive : undefined}
+                progressInfo={isMultiplication ? multiplicationProgress : null}
               />
             );
           })}
