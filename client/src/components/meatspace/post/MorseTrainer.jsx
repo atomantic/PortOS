@@ -252,17 +252,24 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   // depends on them, and re-running per keystroke would tear down the
   // just-scheduled flush timers and cut off the active tone mid-press.
   const pressingRef = useRef(false);
+  // Bumped once per beginPress so a startTone whose resume await settles after a
+  // newer press started can tell it's been superseded and bail.
+  const toneGenRef = useRef(0);
 
   const [pattern, setPattern] = useState('');
   const [decoded, setDecoded] = useState('');
   const [pressing, setPressing] = useState(false);
 
   const startTone = useCallback(async () => {
+    const gen = ++toneGenRef.current;
     const ctx = await ensureCtx();
-    // A fast tap can release (endPress → stopTone) before the first-press-only
-    // resume await settles. Bail so we don't spin up an orphan oscillator that
-    // has no matching stop and drones on.
-    if (!pressingRef.current) return;
+    // A fast tap can release (endPress → stopTone), or a newer press can start,
+    // before the first-press-only resume await settles. Bail if the key is no
+    // longer held (`!pressingRef.current`) OR a newer press superseded this one
+    // (`gen !== toneGenRef.current`) — a bare boolean can't distinguish the two,
+    // so two overlapping starts would both create an oscillator and orphan the
+    // first, leaving it droning with no matching stop.
+    if (!pressingRef.current || gen !== toneGenRef.current) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';

@@ -199,9 +199,15 @@ describe('MorseTrainer iOS audio unlock', () => {
   let createdWhileSuspended;
   class SuspendedAudioContext {
     constructor() { this.currentTime = 0; this.destination = {}; this.state = 'suspended'; }
-    // Resolve on a later microtask, mirroring the real async resume — the
-    // component must await this before touching createOscillator.
-    resume() { return Promise.resolve().then(() => { this.state = 'running'; }); }
+    // Resolve on a macrotask (setTimeout), NOT a microtask. iOS resume latency
+    // is real time, and the component must AWAIT it before touching
+    // createOscillator. A microtask-resolving mock would let the unawaited
+    // (buggy) path pass too — playPrompt's own `await ensureCtx()` yields a
+    // microtask, so a microtask state-flip always beats createOscillator
+    // regardless of the await. The macrotask makes the missing-await path
+    // schedule the oscillator while still 'suspended', so the test fails if the
+    // fix regresses.
+    resume() { return new Promise((resolve) => { setTimeout(() => { this.state = 'running'; resolve(); }, 0); }); }
     createOscillator() {
       if (this.state === 'suspended') createdWhileSuspended = true;
       return new MockOscillator();
