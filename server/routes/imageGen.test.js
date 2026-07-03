@@ -6,6 +6,9 @@ import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
 import * as mediaSketches from '../services/mediaSketches.js';
+import { writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join as pathJoin } from 'path';
 
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
@@ -1191,16 +1194,23 @@ describe('Image Gen Routes', () => {
         .send({ annotated: true, method: 'light' });
 
       expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
 
       resolveGallerySpy.mockRestore();
     });
 
-    it('seeds the annotated re-render init image from the sketch PNG at the higher default strength', async () => {
+    it('stages the flattened annotation into an init-image root the runner accepts, at the higher default strength', async () => {
+      // A real flattened-sketch file for the route to copy — the fix stages a
+      // snapshot into PATHS.imageRefs, and the runner's resolveImageInputPath
+      // must accept the staged path (media-sketches/ is NOT an approved root).
+      const srcSketch = pathJoin(tmpdir(), `annot-src-${Date.now()}.png`);
+      await writeFile(srcSketch, Buffer.from('89504e470d0a1a0a', 'hex'));
+
       const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
         .mockReturnValueOnce('/fake/gallery/source.png');
       const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath')
-        .mockResolvedValueOnce('/fake/data/media-sketches/abc.png');
+        .mockResolvedValueOnce(srcSketch);
       imageGen.local.readImageSidecar.mockResolvedValueOnce({
         path: '/fake/gallery/source.png.json',
         metadata: { modelId: 'flux-dev', prompt: 'a robot' },
@@ -1209,8 +1219,7 @@ describe('Image Gen Routes', () => {
         .mockResolvedValueOnce({ width: 1024, height: 1024 });
       const resolveBackendSpy = vi.spyOn(regen, 'resolveRegenBackend')
         .mockResolvedValueOnce({ available: true, model: { id: 'flux-dev' }, pythonPath: '/fake/venv/python' });
-      const buildParamsSpy = vi.spyOn(regen, 'buildRegenParams')
-        .mockReturnValueOnce({ kind: 'image', regenJob: true, filename: 'source.png' });
+      // buildRegenParams is NOT mocked — assert the REAL params the route enqueues.
       mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'annot-job-001', position: 1, status: 'queued' });
 
       const response = await request(app)
@@ -1219,17 +1228,21 @@ describe('Image Gen Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.jobId).toBe('annot-job-001');
-      expect(buildParamsSpy).toHaveBeenCalledWith(expect.objectContaining({
-        initImageAbsPath: '/fake/data/media-sketches/abc.png',
-        annotated: true,
-        strength: regen.REGEN_ANNOTATED_STRENGTH_DEFAULT,
-      }));
+      const [enqueued] = mediaJobQueue.enqueueJob.mock.calls;
+      const params = enqueued[0].params;
+      expect(params.annotatedRegen).toBe(true);
+      expect(params.initImageStrength).toBe(regen.REGEN_ANNOTATED_STRENGTH_DEFAULT);
+      // Regression guard for the silently-dropped-init-image bug: the staged
+      // path must resolve under an approved image-input root.
+      expect(params.initImagePath).toContain('image-refs');
+      expect(fileUtils.resolveImageInputPath(params.initImagePath)).not.toBeNull();
 
+      await rm(params.initImagePath, { force: true });
+      await rm(srcSketch, { force: true });
       resolveGallerySpy.mockRestore();
       sketchPathSpy.mockRestore();
       readDimsSpy.mockRestore();
       resolveBackendSpy.mockRestore();
-      buildParamsSpy.mockRestore();
     });
   });
 });

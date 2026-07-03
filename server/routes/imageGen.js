@@ -11,7 +11,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { unlink, stat } from 'fs/promises';
+import { unlink, stat, copyFile } from 'fs/promises';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
@@ -714,10 +714,20 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     if (!isValidSketchKey(key)) {
       throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    initImageAbsPath = await getSketchPngPath(key);
-    if (!initImageAbsPath) {
+    const sketchPngPath = await getSketchPngPath(key);
+    if (!sketchPngPath) {
       throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
     }
+    // The local runner re-validates initImagePath against its approved image
+    // roots (gallery / image-refs / visual-templates) and silently drops
+    // anything outside them — `data/media-sketches/` is NOT one, so passing the
+    // sidecar path directly would make the re-render ignore the annotation.
+    // Stage a snapshot of the flattened annotation into the image-refs root the
+    // runner accepts; the copy also freezes the markup at enqueue time so a
+    // later re-save can't change what this queued job renders from.
+    await ensureDir(PATHS.imageRefs);
+    initImageAbsPath = join(PATHS.imageRefs, `annot-${randomUUID()}.png`);
+    await copyFile(sketchPngPath, initImageAbsPath);
   }
 
   // Sidecar (for prompt/model) and the on-disk dimension probe have no data
