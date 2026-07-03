@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronLeft, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3 } from 'lucide-react';
+import { ChevronLeft, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem } from '../../../services/api';
+import { RapidReaderModal } from '../../RapidReader';
 
 // Standard periodic table layout: [row][col] = symbol or null
 const PERIODIC_TABLE = [
@@ -100,6 +101,13 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
   const [hoverPos, setHoverPos] = useState(null);
   const [selectedElement, setSelectedElement] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Speed-reading (RSVP): { text, title } while the rapid reader modal is open.
+  const [rapidRead, setRapidRead] = useState(null);
+
+  const songText = useMemo(
+    () => (item.content?.lines || []).map(l => l.text).join(' '),
+    [item]
+  );
 
   const elementVerseMap = useMemo(() => {
     const map = {};
@@ -130,20 +138,20 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors"><ChevronLeft size={20} /></button>
-        <h2 className="text-xl font-bold text-white">The Elements Song</h2>
-        <span className="text-gray-500 text-sm ml-auto">Tom Lehrer</span>
+        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors shrink-0"><ChevronLeft size={20} /></button>
+        <h2 className="text-lg sm:text-xl font-bold text-white leading-tight">The Elements Song</h2>
+        <span className="text-gray-500 text-xs sm:text-sm ml-auto shrink-0">Tom Lehrer</span>
       </div>
 
       {/* Mastery header */}
-      <div className="bg-port-card border border-port-border rounded-lg p-4 flex items-center justify-between">
+      <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-gray-400 text-sm">Overall Mastery</div>
           <div className={`text-2xl font-bold font-mono ${mastery.overallPct >= 80 ? 'text-port-success' : mastery.overallPct >= 40 ? 'text-port-warning' : 'text-gray-500'}`}>
             {mastery.overallPct}%
           </div>
         </div>
-        <div className="text-right text-sm text-gray-500">
+        <div className="text-left sm:text-right text-sm text-gray-500">
           <div>{Object.keys(mastery.elements || {}).filter(s => { const m = mastery.elements[s]; return m?.attempts >= 3 && m.correct / m.attempts >= 0.8; }).length} / {Object.keys(elementMap).length} elements mastered</div>
           <div>{Object.keys(elementMap).length} elements in song</div>
         </div>
@@ -151,33 +159,34 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
 
       {/* Periodic Table */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col gap-2 mb-3 sm:flex-row sm:items-center sm:justify-between">
           <h3 className="text-sm font-medium text-gray-400">Periodic Table</h3>
           <div className="flex items-center gap-2">
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-none">
               <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600" />
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..."
-                className="w-32 bg-port-bg border border-port-border rounded pl-7 pr-2 py-1 text-xs text-white placeholder-gray-600 focus:border-port-accent focus:outline-none" />
+                className="w-full sm:w-32 bg-port-bg border border-port-border rounded pl-7 pr-2 py-1.5 sm:py-1 text-xs text-white placeholder-gray-600 focus:border-port-accent focus:outline-none" />
             </div>
-            <div className="flex bg-port-bg rounded border border-port-border">
-              <button onClick={() => setTableView('mastery')} className={`flex items-center gap-1 px-2 py-1 text-xs rounded-l transition-colors ${tableView === 'mastery' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
+            <div className="flex bg-port-bg rounded border border-port-border shrink-0">
+              <button onClick={() => setTableView('mastery')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-l transition-colors ${tableView === 'mastery' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
                 <BarChart3 size={12} /> Mastery
               </button>
-              <button onClick={() => setTableView('category')} className={`flex items-center gap-1 px-2 py-1 text-xs rounded-r transition-colors ${tableView === 'category' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
+              <button onClick={() => setTableView('category')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-r transition-colors ${tableView === 'category' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
                 <Eye size={12} /> Category
               </button>
             </div>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <div className="inline-grid gap-[3px]" style={{ gridTemplateColumns: 'auto repeat(18, 1fr)', minWidth: '620px' }}>
+        <div className="relative">
+          <div className="overflow-x-auto pb-1">
+            <div className="inline-grid gap-[2px] sm:gap-[3px]" style={{ gridTemplateColumns: 'auto repeat(18, auto)' }}>
             {PERIODIC_TABLE.map((row, ri) => [
-              <div key={`label-${ri}`} className="w-[70px] h-[36px] flex items-center justify-end pr-1.5 text-[9px] text-gray-600 italic">
+              <div key={`label-${ri}`} className="w-[38px] sm:w-[70px] h-[30px] sm:h-[36px] flex items-center justify-end pr-1 sm:pr-1.5 text-[8px] sm:text-[9px] text-gray-600 italic leading-tight text-right">
                 {ROW_LABELS[ri] || ''}
               </div>,
               ...row.map((sym, ci) => {
-                if (!sym) return <div key={`${ri}-${ci}`} className="w-[36px] h-[36px]" />;
+                if (!sym) return <div key={`${ri}-${ci}`} className="w-[30px] sm:w-[36px] h-[30px] sm:h-[36px]" />;
                 const inSong = songElements.has(sym);
                 const m = mastery.elements?.[sym];
                 const masteryPct = m?.attempts > 0 ? m.correct / m.attempts : 0;
@@ -202,7 +211,7 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
 
                 return (
                   <div key={`${ri}-${ci}`}
-                    className={`relative w-[36px] h-[36px] flex flex-col items-center justify-center font-mono rounded-sm border cursor-pointer transition-all duration-150 ${bg} ${textColor} ${borderColor} ${catBorderStyle} ${dimmed ? 'opacity-30' : ''} ${isHovered ? 'scale-125 z-10 shadow-lg shadow-black/50 ring-1 ring-white/30' : ''} ${isSelected ? 'ring-2 ring-port-accent' : ''}`}
+                    className={`relative w-[30px] sm:w-[36px] h-[30px] sm:h-[36px] flex flex-col items-center justify-center font-mono rounded-sm border cursor-pointer transition-all duration-150 ${bg} ${textColor} ${borderColor} ${catBorderStyle} ${dimmed ? 'opacity-30' : ''} ${isHovered ? 'scale-125 z-10 shadow-lg shadow-black/50 ring-1 ring-white/30' : ''} ${isSelected ? 'ring-2 ring-port-accent' : ''}`}
                     onMouseEnter={(e) => {
                       setHoveredElement(sym);
                       const rect = e.currentTarget.getBoundingClientRect();
@@ -217,7 +226,10 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
                 );
               })
             ])}
+            </div>
           </div>
+          {/* Mobile scroll affordance — hints the table extends to the right */}
+          <div className="sm:hidden pointer-events-none absolute top-0 right-0 bottom-1 w-8 bg-gradient-to-l from-port-card to-transparent" />
         </div>
 
         {/* Legend */}
@@ -249,6 +261,16 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
       {/* Practice Modes */}
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-gray-400">Practice</h3>
+        {/* Rapid Read — RSVP speed-reading of the whole song to burn the element
+            order into memory one word at a time. */}
+        <button onClick={() => setRapidRead({ text: songText, title: 'The Elements Song' })}
+          className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors flex items-center gap-4">
+          <Gauge size={20} className="text-emerald-400 shrink-0" />
+          <div>
+            <div className="text-white font-medium">Rapid Read</div>
+            <div className="text-gray-500 text-sm">Speed-read the full lyrics one word at a time (RSVP)</div>
+          </div>
+        </button>
         {PRACTICE_MODES.map(m => (
           <button key={m.id} onClick={() => setMode(m.id)}
             className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors flex items-center gap-4">
@@ -273,10 +295,21 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
 
             return (
               <details key={chunk.id} className="group" open={isHighlighted}>
-                <summary className={`flex items-center justify-between cursor-pointer text-sm py-1 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
-                  <span>{chunk.label}{isHighlighted && <span className="text-xs text-port-accent/60 ml-2">contains {selectedElement}</span>}</span>
-                  <span className={`font-mono text-xs ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
-                    {pct > 0 ? `${pct}%` : '—'}
+                <summary className={`flex items-center gap-2 justify-between cursor-pointer text-sm py-1 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
+                  <span className="min-w-0 truncate">{chunk.label}{isHighlighted && <span className="text-xs text-port-accent/60 ml-2">contains {selectedElement}</span>}</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label }); }}
+                      className="flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
+                      title={`Rapid read ${chunk.label}`}
+                      aria-label={`Rapid read ${chunk.label}`}
+                    >
+                      <Gauge size={13} />
+                    </button>
+                    <span className={`font-mono text-xs ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
+                      {pct > 0 ? `${pct}%` : '—'}
+                    </span>
                   </span>
                 </summary>
                 <div className="mt-2 ml-2 space-y-1">
@@ -295,6 +328,16 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
           })}
         </div>
       </div>
+
+      {/* Speed-reading (RSVP) overlay — whole song or a single verse */}
+      <RapidReaderModal
+        open={!!rapidRead}
+        text={rapidRead?.text || ''}
+        title={rapidRead ? `Rapid Read — ${rapidRead.title}` : 'Rapid Read'}
+        focalColor="#34d399"
+        wpm={300}
+        onClose={() => setRapidRead(null)}
+      />
 
       {/* Fixed-position hover tooltip */}
       {hoveredElement && hoverPos && (
