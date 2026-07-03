@@ -12,9 +12,10 @@
  *   are untouched. Re-runs detect the widget is already present and skip.
  *   Mirrors migrations 070 / 145.
  *
- *   `feeds` → `default` ("Everything") layout; `meatspace-streak` → `health`.
- *   Both widgets are gated client-side (hidden until feeds/logs exist), so a
- *   fresh-but-persisted install seeing the id costs nothing until it has data.
+ *   `feeds` + `tribe-care` → `default` ("Everything") layout;
+ *   `meatspace-streak` → `health`. All three widgets are gated client-side
+ *   (hidden until feeds/tribe-people/logs exist), so a fresh-but-persisted
+ *   install seeing the id costs nothing until it has data.
  */
 
 import { readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
@@ -24,6 +25,7 @@ import { readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
 // must match that file or fresh installs + migrated installs diverge.
 const SEEDS = [
   { widgetId: 'feeds',            layoutId: 'default', slot: { x: 8, y: 29, w: 3, h: 4 } },
+  { widgetId: 'tribe-care',       layoutId: 'default', slot: { x: 4, y: 29, w: 4, h: 4 } },
   { widgetId: 'meatspace-streak', layoutId: 'health',  slot: { x: 0, y: 9,  w: 4, h: 4 } },
 ];
 
@@ -83,12 +85,12 @@ export default {
     }
 
     if (touched === 0) {
-      console.log(`📦 migration 156: feeds + meatspace-streak already present in target layouts.`);
+      console.log(`📦 migration 156: feeds + tribe-care + meatspace-streak already present in target layouts.`);
       return { updated: 0, reason: 'already-applied' };
     }
 
     await writeLayoutsDoc(path, doc);
-    console.log(`📦 migration 156: seeded feeds/meatspace-streak into ${touched} built-in layout(s).`);
+    console.log(`📦 migration 156: seeded feeds/tribe-care/meatspace-streak widget(s) into ${touched} built-in layout slot(s).`);
     return { updated: touched };
   },
 };

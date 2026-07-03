@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
+import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
@@ -348,6 +349,15 @@ function toIdentity(participant) {
 // a static import cycle. A no-op when nothing is tracked.
 export async function logMessageTouchpoints(account, messages = []) {
   const selfEmail = String(account?.email || '').trim().toLowerCase();
+  // Derive the dedupe "calendar day" in the user's LOCAL timezone (matching the
+  // Tribe cadence math in tribeCadence.daysSinceDate). Using the UTC day here
+  // would split one local evening of contact across two days whenever a thread
+  // straddles UTC midnight (common in the Americas), double-logging touchpoints.
+  const timezone = await getUserTimezone();
+  const localDay = (when) => {
+    const p = getLocalParts(new Date(safeDate(when)), timezone);
+    return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+  };
   const candidates = [];
   for (const message of messages) {
     const participants = [message.from, ...(message.to || []), ...(message.cc || [])];
@@ -363,7 +373,7 @@ export async function logMessageTouchpoints(account, messages = []) {
       });
     if (identities.length === 0) continue;
     const when = message.date || new Date().toISOString();
-    const day = new Date(safeDate(when)).toISOString().slice(0, 10);
+    const day = localDay(when);
     const threadKey = message.threadId || message.id;
     candidates.push({
       identities,

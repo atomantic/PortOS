@@ -52,6 +52,28 @@ vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: vi.fn().mockResolvedValue({ created: 0, matched: 0 }),
 }));
 
+// The dedupe day is derived in the user's LOCAL timezone. Mock the tz module
+// self-contained (getUserTimezone → mockTimezone, default UTC so the existing
+// UTC-day assertions hold; getLocalParts is a faithful Intl-based re-impl of the
+// real one) — importActual would load the real module against the mocked
+// fileUtils and fail on its settings read.
+let mockTimezone = 'UTC';
+vi.mock('../lib/timezone.js', () => ({
+  getUserTimezone: vi.fn(async () => mockTimezone),
+  getLocalParts: (utcDate, timezone) => {
+    const parts = {};
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    for (const { type, value } of fmt.formatToParts(utcDate)) parts[type] = value;
+    return {
+      year: parseInt(parts.year), month: parseInt(parts.month), day: parseInt(parts.day),
+      hour: parts.hour === '24' ? 0 : parseInt(parts.hour), minute: parseInt(parts.minute),
+    };
+  },
+}));
+
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
 import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, logMessageTouchpoints } from './messageSync.js';
@@ -580,6 +602,7 @@ describe('logMessageTouchpoints — candidate building (#2033)', () => {
   beforeEach(() => {
     autoLogTouchpoints.mockClear();
     autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
+    mockTimezone = 'UTC';
   });
 
   it('builds a message candidate keyed per thread + day, excluding the account owner', async () => {
@@ -630,5 +653,19 @@ describe('logMessageTouchpoints — candidate building (#2033)', () => {
       from: { name: 'Me', email: 'me@work.com' }, to: ['me@work.com'], cc: [],
     }]);
     expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it('derives the dedupe day in the user local timezone, not UTC', async () => {
+    // 03:00Z on Jun 2 is still Jun 1 (20:00) in America/Los_Angeles. The dedupe
+    // day must be the LOCAL day (2026-06-01) so a same-local-evening thread that
+    // straddles UTC midnight collapses to one touchpoint, matching cadence math.
+    mockTimezone = 'America/Los_Angeles';
+    await logMessageTouchpoints(account, [{
+      id: 'm5', threadId: 'thread-tz', subject: 'Evening',
+      date: '2026-06-02T03:00:00Z',
+      from: { name: 'Ada', email: 'ada@work.com' }, to: [], cc: [],
+    }]);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates[0].dedupeKey).toBe(`msg:${VALID_UUID}:thread-tz:2026-06-01`);
   });
 });

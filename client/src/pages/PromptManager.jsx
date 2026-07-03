@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -160,14 +160,23 @@ export default function PromptManager() {
     setPreview(data.preview);
   };
 
-  // Hydrate the variable editor from the URL-selected key. Keyed on selectedVar
-  // (+ variables so it fills in once the list loads) — no param means create mode.
+  // Hydrate the variable editor from the URL-selected key. Depends on `variables`
+  // so it fills in once the list loads, but a `varHydratedRef` guard keyed on the
+  // selected key ensures a later `variables` refresh (Reload, or deleting a
+  // *different* variable) does NOT re-hydrate — which would silently discard the
+  // open key's in-progress edits. Mirrors the hydratedRef pattern the Authors /
+  // Artists editors use. No param means create mode.
+  const varHydratedRef = useRef(null);
   useEffect(() => {
-    if (selectedVar && variables[selectedVar]) {
+    if (!selectedVar) {
+      varHydratedRef.current = null;
+      setVarForm({ key: '', name: '', category: '', content: '' });
+      return;
+    }
+    if (variables[selectedVar] && varHydratedRef.current !== selectedVar) {
       const v = variables[selectedVar];
       setVarForm({ key: selectedVar, name: v.name || '', category: v.category || '', content: v.content || '' });
-    } else if (!selectedVar) {
-      setVarForm({ key: '', name: '', category: '', content: '' });
+      varHydratedRef.current = selectedVar;
     }
   }, [selectedVar, variables]);
 

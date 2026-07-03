@@ -38,12 +38,14 @@ describe('migration 156 — seed feeds + meatspace-streak widgets', () => {
       ],
     });
     const result = await migration.up({ rootDir });
-    expect(result.updated).toBe(2);
+    expect(result.updated).toBe(3);
     const after = readJson(layoutsPath);
 
     const def = after.layouts.find((l) => l.id === 'default');
     expect(def.widgets).toContain('feeds');
     expect(def.grid.find((g) => g.id === 'feeds')).toEqual({ id: 'feeds', x: 8, y: 29, w: 3, h: 4 });
+    expect(def.widgets).toContain('tribe-care');
+    expect(def.grid.find((g) => g.id === 'tribe-care')).toEqual({ id: 'tribe-care', x: 4, y: 29, w: 4, h: 4 });
 
     const health = after.layouts.find((l) => l.id === 'health');
     expect(health.widgets).toContain('meatspace-streak');
@@ -54,7 +56,7 @@ describe('migration 156 — seed feeds + meatspace-streak widgets', () => {
     writeJson(layoutsPath, {
       activeLayoutId: 'default',
       layouts: [
-        { id: 'default', name: 'Everything', builtIn: true, widgets: ['feeds'], grid: [{ id: 'feeds', x: 8, y: 29, w: 3, h: 4 }] },
+        { id: 'default', name: 'Everything', builtIn: true, widgets: ['feeds', 'tribe-care'], grid: [{ id: 'feeds', x: 8, y: 29, w: 3, h: 4 }, { id: 'tribe-care', x: 4, y: 29, w: 4, h: 4 }] },
         { id: 'health', name: 'Health', builtIn: true, widgets: ['meatspace-streak'], grid: [{ id: 'meatspace-streak', x: 0, y: 9, w: 4, h: 4 }] },
       ],
     });
@@ -73,11 +75,13 @@ describe('migration 156 — seed feeds + meatspace-streak widgets', () => {
       ],
     });
     const result = await migration.up({ rootDir });
-    expect(result.updated).toBe(1);
+    // Two widgets seed into the built-in `default` layout (feeds + tribe-care).
+    expect(result.updated).toBe(2);
     const after = readJson(layoutsPath);
     expect(after.layouts.find((l) => l.id === 'focus').widgets).toEqual(['cos']);
     expect(after.layouts.find((l) => l.id === 'my-default').widgets).toEqual(['cos']);
     expect(after.layouts.find((l) => l.id === 'default').widgets).toContain('feeds');
+    expect(after.layouts.find((l) => l.id === 'default').widgets).toContain('tribe-care');
   });
 
   it('survives an unreadable JSON file', async () => {
