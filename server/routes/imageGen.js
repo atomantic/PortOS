@@ -40,8 +40,10 @@ import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
   REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
-  resolveRegenStrengthDefault,
+  resolveRegenStrengthDefault, REGEN_ANNOTATED_STRENGTH_DEFAULT,
 } from '../services/imageGen/regen.js';
+import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
+import { itemKey } from '../lib/mediaItemKey.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import * as characterService from '../services/character.js';
@@ -261,6 +263,11 @@ const regenerateSchema = z.object({
   // 'flux' (default) = GPU img2img round-trip; 'light' = CPU-only spatial pass
   // for installs without a FLUX runner (strength/steps/prompt ignored).
   method: z.enum(['flux', 'light']).optional(),
+  // Annotation re-render (issue #2036 phase 2): seed the img2img init image from
+  // the saved flattened sketch (source + drawn strokes) instead of the raw
+  // gallery file, so the marks reshape the render. GPU-only (light ignores the
+  // init image); defaults to a higher denoise so the strokes take effect.
+  annotated: z.boolean().optional(),
 });
 
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
@@ -694,6 +701,25 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   if (!sourceAbsPath) {
     throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
   }
+
+  // Annotation re-render (issue #2036 phase 2): use the saved flattened sketch
+  // (source + strokes) as the img2img init image. It's a whole-image denoise, so
+  // the light spatial pass can't honor the marks — GPU only.
+  let initImageAbsPath = null;
+  if (body.annotated) {
+    if (body.method === 'light') {
+      throw new ServerError('Annotation re-render needs the GPU img2img pass, not the light method.', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const key = itemKey({ kind: 'image', ref: filename });
+    if (!isValidSketchKey(key)) {
+      throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    initImageAbsPath = await getSketchPngPath(key);
+    if (!initImageAbsPath) {
+      throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
+    }
+  }
+
   // Sidecar (for prompt/model) and the on-disk dimension probe have no data
   // dependency — overlap the two reads.
   const [{ metadata: sourceMeta }, sourceDims] = await Promise.all([
@@ -714,9 +740,11 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   }
 
   // Provider-aware default (issue #912): SynthID-bearing sources keep the
-  // known-good 0.25; local FLUX sources use a lighter pass. The explicit
-  // `strength` override always wins.
-  const strength = body.strength ?? resolveRegenStrengthDefault(sourceMeta);
+  // known-good 0.25; local FLUX sources use a lighter pass. An annotation
+  // re-render instead defaults higher so the drawn marks reshape the render
+  // (issue #2036). The explicit `strength` override always wins.
+  const strength = body.strength
+    ?? (body.annotated ? REGEN_ANNOTATED_STRENGTH_DEFAULT : resolveRegenStrengthDefault(sourceMeta));
   const params = buildRegenParams({
     filename,
     sourceAbsPath,
@@ -727,9 +755,12 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     strength,
     steps: body.steps,
     promptOverride: body.prompt,
+    initImageAbsPath,
+    annotated: !!body.annotated,
   });
   const queued = enqueueJob({ kind: 'image', params });
-  console.log(`♻️ Regenerating ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
+  const via = body.annotated ? 'annotation re-render' : 'Regenerating';
+  console.log(`♻️ ${via} ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
 }));
 

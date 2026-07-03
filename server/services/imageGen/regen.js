@@ -63,6 +63,14 @@ export const REGEN_STRENGTH_MAX = 0.6;
 // fidelity when regenerated for other reasons.
 export const REGEN_LIGHT_STRENGTH_DEFAULT = 0.15;
 
+// Annotation re-render default (issue #2036 phase 2). Unlike a SynthID pass —
+// which wants the LOWEST denoise that still overwrites the watermark — an
+// annotation re-render exists to let the drawn marks actually reshape the image,
+// so it needs a much higher denoise. 0.5 (just under REGEN_STRENGTH_MAX) lets the
+// strokes meaningfully redraw while still anchoring on the source composition.
+// The API `strength` override and the [MIN, MAX] bounds are unaffected.
+export const REGEN_ANNOTATED_STRENGTH_DEFAULT = 0.5;
+
 // Provider-aware denoise default for a regen of `sourceMeta`. SynthID rides on
 // gpt-image (codex) / Imagen / Gemini / Nano-Banana output; those keep the
 // conservative 0.25. Local FLUX sources (a `modelId` with no external `mode`,
@@ -261,7 +269,12 @@ export async function readImageDimensions(absPath) {
 // clamping changes the dims, `upscaleTo` carries the source's exact dimensions
 // so `generateImage` resizes the result back up, delivering a watermark-free
 // copy at the original resolution.
-export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps, promptOverride }) {
+export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps, promptOverride, initImageAbsPath, annotated = false }) {
+  // The img2img base pixels normally come from the clicked source, but an
+  // annotation re-render (issue #2036 phase 2) points the init image at the
+  // flattened source+strokes PNG while STILL reading dimensions/metadata/lineage
+  // from the original source below.
+  const initPath = initImageAbsPath || sourceAbsPath;
   const src = sourceDims
     || (sourceMeta.width && sourceMeta.height ? { width: Math.round(sourceMeta.width), height: Math.round(sourceMeta.height) } : null);
   const trimmedPrompt = typeof promptOverride === 'string' ? promptOverride.trim() : '';
@@ -280,9 +293,10 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
     modelId: model.id,
     prompt: trimmedPrompt,
     negativePrompt: trimmedPrompt && typeof sourceMeta.negativePrompt === 'string' ? sourceMeta.negativePrompt : '',
-    initImagePath: sourceAbsPath,
+    initImagePath: initPath,
     initImageStrength: strength,
     regenOf: groupRoot,
+    ...(annotated ? { annotatedRegen: true } : {}),
   };
   if (src) {
     const render = clampRegenDimensions(src.width, src.height);

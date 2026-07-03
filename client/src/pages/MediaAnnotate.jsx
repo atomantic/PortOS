@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff } from 'lucide-react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Wand2, Loader2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { undoStrokes, clampSize, DEFAULT_COLOR, DEFAULT_SIZE, MIN_SIZE, MAX_SIZE } from '../lib/sketchCanvas';
-import { getMediaSketch, saveMediaSketch } from '../services/api';
+import { getMediaSketch, saveMediaSketch, getRegenAvailability, rerenderWithAnnotations } from '../services/api';
+
+// Default denoise for an annotation re-render — high enough that the drawn marks
+// actually reshape the image (mirrors the server's REGEN_ANNOTATED_STRENGTH_DEFAULT).
+// Clamped into the backend's advertised [min, max] bounds at render time.
+const DEFAULT_ANNOTATED_STRENGTH = 0.5;
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
 // Parse a media key `<kind>:<ref>` on the client (mirrors server/lib/mediaItemKey.js
 // rules loosely — the server re-validates authoritatively). Phase 1 only supports
@@ -24,6 +31,7 @@ const COLOR_SWATCHES = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '
 
 export default function MediaAnnotate() {
   const { mediaKey } = useParams();
+  const navigate = useNavigate();
   const parsed = useMemo(() => parseMediaKey(mediaKey), [mediaKey]);
   const isImage = parsed?.kind === 'image';
   // Images are served from /data/images/<filename>; the ref IS the filename.
@@ -37,6 +45,24 @@ export default function MediaAnnotate() {
   const [mode, setMode] = useState('draw'); // 'draw' | 'erase'
   const [loading, setLoading] = useState(true);
   const [imageError, setImageError] = useState(false);
+
+  // Re-render (issue #2036 phase 2). `regenInfo` is the same local-FLUX
+  // img2img availability the lightbox uses — it names the exact model a
+  // re-render would run, so the user sees the provider/model before any AI
+  // call (no cold-bootstrap). null until fetched; `available:false` gates it.
+  const [regenInfo, setRegenInfo] = useState(null);
+  const [rerenderOpen, setRerenderOpen] = useState(false);
+  const [rerenderPrompt, setRerenderPrompt] = useState('');
+  const [rerenderStrength, setRerenderStrength] = useState(DEFAULT_ANNOTATED_STRENGTH);
+
+  useEffect(() => {
+    if (!isImage) return;
+    let active = true;
+    getRegenAvailability()
+      .then((r) => { if (active) setRegenInfo(r || null); })
+      .catch(() => { if (active) setRegenInfo(null); });
+    return () => { active = false; };
+  }, [isImage]);
 
   // Load any previously-saved strokes for this media key. React Router reuses
   // this component instance across :mediaKey changes (no remount), so reset all
@@ -93,6 +119,39 @@ export default function MediaAnnotate() {
     a.click();
     document.body.removeChild(a);
   }, [parsed]);
+
+  const strengthMin = regenInfo?.strengthMin ?? 0.02;
+  const strengthMax = regenInfo?.strengthMax ?? 0.6;
+  const regenAvailable = !!regenInfo?.available;
+  const regenModelLabel = regenInfo?.modelId || 'local FLUX img2img';
+
+  const openRerender = useCallback(() => {
+    setRerenderStrength(clamp(DEFAULT_ANNOTATED_STRENGTH, strengthMin, strengthMax));
+    setRerenderPrompt('');
+    setRerenderOpen(true);
+  }, [strengthMin, strengthMax]);
+
+  // Persist the annotation (writes the flattened PNG sidecar the server uses as
+  // the img2img init image), then enqueue the re-render. Both API calls are
+  // silent so useAsyncAction owns the single error toast.
+  const [rerender, rerendering] = useAsyncAction(async () => {
+    if (!dims) throw new Error('Canvas not ready');
+    if (strokes.length === 0) throw new Error('Draw over the image before re-rendering');
+    const png = canvasApiRef.current?.exportPng?.() || undefined;
+    await saveMediaSketch(mediaKey, { width: dims.w, height: dims.h, strokes, png }, { silent: true });
+    return rerenderWithAnnotations(parsed.ref, {
+      strength: rerenderStrength,
+      prompt: rerenderPrompt.trim() || undefined,
+    });
+  }, { errorMessage: 'Failed to start re-render' });
+
+  const handleRerender = useCallback(async () => {
+    const res = await rerender();
+    if (!res) return;
+    setRerenderOpen(false);
+    toast.success('Re-rendering with your annotations — it’ll appear in Media History');
+    navigate('/media/history');
+  }, [rerender, navigate]);
 
   if (!isImage) {
     return (
@@ -208,10 +267,19 @@ export default function MediaAnnotate() {
             type="button"
             onClick={handleSave}
             disabled={saving || !dims}
-            className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+            className="px-3 py-1.5 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Save annotation"
           >
             <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            onClick={openRerender}
+            disabled={!dims || strokes.length === 0}
+            className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+            title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
+          >
+            <Wand2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Re-render</span>
           </button>
         </div>
       </div>
@@ -240,6 +308,88 @@ export default function MediaAnnotate() {
           </div>
         )}
       </div>
+
+      <Modal
+        open={rerenderOpen}
+        onClose={() => !rerendering && setRerenderOpen(false)}
+        size="sm"
+        closeOnBackdrop={!rerendering}
+        closeOnEsc={!rerendering}
+        ariaLabel="Re-render with annotations"
+        panelClassName="bg-port-card border border-port-border rounded-xl p-5 text-sm"
+      >
+        <h2 className="text-base font-semibold text-white flex items-center gap-2">
+          <Wand2 className="w-4 h-4 text-port-accent" /> Re-render with annotations
+        </h2>
+        <p className="text-gray-400 mt-1 text-xs">
+          Your drawing is flattened onto the image and fed back through img2img so the marks reshape the render.
+        </p>
+
+        {/* Provider/model visible before any AI call runs (no cold-bootstrap). */}
+        <div className="mt-3 rounded-lg bg-port-bg border border-port-border px-3 py-2 text-xs">
+          <span className="text-gray-500">Renders locally via </span>
+          <span className="text-gray-200 font-mono">{regenModelLabel}</span>
+        </div>
+
+        {!regenAvailable ? (
+          <div className="mt-3 text-xs text-port-warning">
+            {regenInfo?.reason || 'Local img2img isn’t available on this install. A local FLUX runner is required to re-render.'}
+          </div>
+        ) : (
+          <>
+            <div className="mt-4">
+              <label htmlFor="rerender-prompt" className="block text-xs text-gray-400 mb-1">
+                Prompt <span className="text-gray-600">(optional — steer the redraw)</span>
+              </label>
+              <textarea
+                id="rerender-prompt"
+                value={rerenderPrompt}
+                onChange={(e) => setRerenderPrompt(e.target.value)}
+                rows={2}
+                placeholder="Leave blank to let the annotations alone guide the redraw"
+                className="w-full rounded-lg bg-port-bg border border-port-border px-3 py-2 text-sm text-gray-200 resize-none focus:outline-none focus:border-port-accent"
+              />
+            </div>
+
+            <div className="mt-3">
+              <label htmlFor="rerender-strength" className="flex items-center justify-between text-xs text-gray-400 mb-1">
+                <span>Strength <span className="text-gray-600">(how much to change)</span></span>
+                <span className="text-gray-300 tabular-nums">{rerenderStrength.toFixed(2)}</span>
+              </label>
+              <input
+                id="rerender-strength"
+                type="range"
+                min={strengthMin}
+                max={strengthMax}
+                step={0.01}
+                value={rerenderStrength}
+                onChange={(e) => setRerenderStrength(clamp(parseFloat(e.target.value), strengthMin, strengthMax))}
+                className="w-full accent-port-accent"
+              />
+            </div>
+          </>
+        )}
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setRerenderOpen(false)}
+            disabled={rerendering}
+            className="px-3 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleRerender}
+            disabled={rerendering || !regenAvailable}
+            className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+          >
+            {rerendering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+            {rerendering ? 'Starting…' : 'Re-render'}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

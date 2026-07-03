@@ -5,6 +5,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
+import * as mediaSketches from '../services/mediaSketches.js';
 
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
@@ -1157,6 +1158,75 @@ describe('Image Gen Routes', () => {
       expect(buildParamsSpy).toHaveBeenCalledWith(expect.objectContaining({ strength: 0.25 }));
 
       resolveGallerySpy.mockRestore();
+      readDimsSpy.mockRestore();
+      resolveBackendSpy.mockRestore();
+      buildParamsSpy.mockRestore();
+    });
+
+    // Annotation re-render (issue #2036 phase 2)
+    it('400s an annotated re-render when no annotation has been saved', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath')
+        .mockResolvedValueOnce(null);
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('NO_ANNOTATION');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      resolveGallerySpy.mockRestore();
+      sketchPathSpy.mockRestore();
+    });
+
+    it('400s an annotated re-render on the light method (init image needs the GPU pass)', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true, method: 'light' });
+
+      expect(response.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      resolveGallerySpy.mockRestore();
+    });
+
+    it('seeds the annotated re-render init image from the sketch PNG at the higher default strength', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath')
+        .mockResolvedValueOnce('/fake/data/media-sketches/abc.png');
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '/fake/gallery/source.png.json',
+        metadata: { modelId: 'flux-dev', prompt: 'a robot' },
+      });
+      const readDimsSpy = vi.spyOn(regen, 'readImageDimensions')
+        .mockResolvedValueOnce({ width: 1024, height: 1024 });
+      const resolveBackendSpy = vi.spyOn(regen, 'resolveRegenBackend')
+        .mockResolvedValueOnce({ available: true, model: { id: 'flux-dev' }, pythonPath: '/fake/venv/python' });
+      const buildParamsSpy = vi.spyOn(regen, 'buildRegenParams')
+        .mockReturnValueOnce({ kind: 'image', regenJob: true, filename: 'source.png' });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'annot-job-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true }); // no explicit strength → annotated default
+
+      expect(response.status).toBe(200);
+      expect(response.body.jobId).toBe('annot-job-001');
+      expect(buildParamsSpy).toHaveBeenCalledWith(expect.objectContaining({
+        initImageAbsPath: '/fake/data/media-sketches/abc.png',
+        annotated: true,
+        strength: regen.REGEN_ANNOTATED_STRENGTH_DEFAULT,
+      }));
+
+      resolveGallerySpy.mockRestore();
+      sketchPathSpy.mockRestore();
       readDimsSpy.mockRestore();
       resolveBackendSpy.mockRestore();
       buildParamsSpy.mockRestore();

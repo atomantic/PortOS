@@ -75,6 +75,22 @@ export const regenerateGalleryImage = (filename, { strength, steps, prompt, meth
 // Whether the local FLUX regen backend is installed (hardware gate). Also carries
 // the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
 export const getRegenAvailability = () => request('/image-gen/regen/availability', { silent: true });
+// Annotation re-render (issue #2036 phase 2). Feeds the saved flattened sketch
+// (source image + drawn strokes) back through the local-FLUX img2img regen as the
+// init image; returns the queue ack ({ jobId, position, ... }). The annotation
+// must already be saved (the flattened PNG sidecar is the init image). `silent`
+// so the annotate page owns its own error toast (single-layer rule).
+export const rerenderWithAnnotations = (filename, { strength, steps, prompt } = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/regenerate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      annotated: true,
+      ...(strength != null ? { strength } : {}),
+      ...(steps != null ? { steps } : {}),
+      ...(prompt != null ? { prompt } : {}),
+    }),
+    silent: true,
+  });
 
 // HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;
 // reads fall back to HF_TOKEN env var and then ~/.cache/huggingface/token.

@@ -16,7 +16,7 @@
  */
 
 import { join } from 'path';
-import { unlink } from 'fs/promises';
+import { unlink, access } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { isValidKey, parseKey } from '../lib/mediaItemKey.js';
 
@@ -107,6 +107,17 @@ export async function getSketch(key) {
 export async function getSketchPng(key) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
   return tryReadFile(pngPathFor(key), null); // Buffer | null
+}
+
+/**
+ * Absolute path to a key's flattened PNG sidecar when it exists on disk, else
+ * null. Phase 2 (issue #2036) feeds this file to the img2img regen pipeline as
+ * the init image, so it needs the path (not the bytes) to hand off to the runner.
+ */
+export async function getSketchPngPath(key) {
+  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  const path = pngPathFor(key);
+  return access(path).then(() => path).catch(() => null);
 }
 
 /**
