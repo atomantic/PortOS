@@ -352,6 +352,19 @@ describe('tuiHandshake — review-loop idle suppression', () => {
     tracker.observe('');
     expect(tracker.active).toBe(true);
   });
+
+  // Regression for codex review [P2] (iteration 2): a real TUI can deliver
+  // the banner split across two onData chunks (token-by-token streaming),
+  // so checking only the current chunk in isolation would miss it.
+  it('createReviewLoopTracker latches on a marker split across two chunks', () => {
+    const tracker = createReviewLoopTracker();
+    // Split right before the '[' that anchors the pattern — neither half
+    // alone contains "review plan: [".
+    tracker.observe('Now starting the review loop. Review plan:');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe(' [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(tracker.active).toBe(true);
+  });
 });
 
 describe('tuiHandshake.inferTuiCommand', () => {

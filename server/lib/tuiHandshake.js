@@ -435,6 +435,13 @@ export function isReviewLoopSignal(strippedText) {
   return REVIEW_PLAN_PATTERN.test(strippedText) || REVIEW_PASS_BANNER_PATTERN.test(strippedText);
 }
 
+// Rolling tail cap for createReviewLoopTracker's cross-chunk buffer (below).
+// The banner text itself is well under 100 chars (e.g. "Review plan: [claude,
+// codex] (mode: series, stop-mode: all)" is ~62), so this is generous
+// headroom for intervening chrome without letting the buffer grow unbounded
+// over a long-running session.
+const REVIEW_LOOP_TAIL_CAP = 512;
+
 /**
  * Latching tracker for "this agent is waiting inside a multi-reviewer loop"
  * (do:release/do:pr/do:rpr). Feed it each ANSI-stripped post-submit chunk via
@@ -445,14 +452,26 @@ export function isReviewLoopSignal(strippedText) {
  * grace is needed). Once latched, the idle reaper uses
  * REVIEW_LOOP_IDLE_TIMEOUT_MS instead of the 3-minute default.
  *
+ * Keeps a small rolling buffer of the most recent REVIEW_LOOP_TAIL_CAP
+ * characters (codex review finding, iteration 2): a real TUI can deliver the
+ * one-shot `Review plan: [` / `Review pass N/M` banner split across two
+ * `onData` chunks — plausible during token-by-token streaming — so checking
+ * only the current chunk in isolation would miss it if the split lands
+ * mid-marker. Concatenating each new chunk onto the tail before testing means
+ * a marker split across a chunk boundary still appears whole on the very next
+ * observation.
+ *
  * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
  */
 export function createReviewLoopTracker() {
   let active = false;
+  let tail = '';
   return {
     observe(strippedText) {
       if (active) return true;
-      if (isReviewLoopSignal(strippedText)) active = true;
+      if (typeof strippedText !== 'string' || !strippedText) return active;
+      tail = (tail + strippedText).slice(-REVIEW_LOOP_TAIL_CAP);
+      if (isReviewLoopSignal(tail)) active = true;
       return active;
     },
     get active() { return active; },
