@@ -494,7 +494,14 @@ async function getAdaptiveSignal(type) {
  * mastered. Only answered questions count as samples; each contributes its
  * correctness and clamped response time.
  *
- * @returns {Promise<Record<number, {samples:number, accuracy:number, avgResponseMs:number}>>}
+ * Returns both the windowed per-level stats (for the mastery decision) and the
+ * `floorLevel` — the highest rung the user has EVER generated (all-time, NOT
+ * windowed). The floor is the anti-demotion signal: mastery is judged over a
+ * rolling window, so a rung's samples fall to 0 once its evidence ages out, but
+ * a user only reaches a higher rung by clearing the ones below it, so that
+ * earned progress must survive the window (see resolveMultiplicationLevel).
+ *
+ * @returns {Promise<{stats: Record<number, {samples,accuracy,avgResponseMs}>, floorLevel: number}>}
  */
 async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
@@ -506,18 +513,26 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
   }
 
   const byLevel = {};
+  let floorLevel = 0;
   for (const session of sessions) {
-    if (cutoffStr && session.date < cutoffStr) continue;
     for (const task of session.tasks || []) {
       if (task.type !== 'multiplication') continue;
       const level = Number.isInteger(task.config?.level) ? task.config.level : null;
       if (level == null) continue; // legacy maxDigits-only tasks carry no level
+      // All-time floor: any answered question at this level (regardless of the
+      // window) proves the user reached — and thus earned — this rung.
+      const anyAnswered = (task.questions || []).some(q => q?.answered != null);
+      if (anyAnswered && level > floorLevel) floorLevel = level;
+      // Mastery stats are windowed — skip out-of-window sessions for the buckets.
+      if (cutoffStr && session.date < cutoffStr) continue;
       const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
       for (const q of task.questions || []) {
         if (q?.answered == null) continue;
         bucket.samples += 1;
         if (q.correct) bucket.correct += 1;
-        bucket.totalResponseMs += Math.max(0, q.responseMs || 0);
+        // Clamp so one walked-away answer can't inflate avgResponseMs and block
+        // mastery (mirrors scoreDrill's per-question clamp).
+        bucket.totalResponseMs += Math.min(Math.max(0, q.responseMs || 0), MASTERY_DEFAULTS.responseMsCap);
       }
     }
   }
@@ -530,7 +545,7 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
       avgResponseMs: b.samples ? b.totalResponseMs / b.samples : 0,
     };
   }
-  return stats;
+  return { stats, floorLevel };
 }
 
 /**
@@ -538,8 +553,8 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
  * Exposed for the config UI / route so it can show the ladder + mastery status.
  */
 export async function getMultiplicationProgress() {
-  const levelStats = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
-  const progression = resolveMultiplicationLevel(levelStats);
+  const { stats, floorLevel } = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
+  const progression = resolveMultiplicationLevel(stats, {}, floorLevel);
   return { ...progression, windowDays: MASTERY_DEFAULTS.windowDays, thresholds: { minSamples: MASTERY_DEFAULTS.minSamples, targetAccuracy: MASTERY_DEFAULTS.targetAccuracy } };
 }
 
@@ -565,8 +580,8 @@ export async function resolveDrillConfig(type, requestedConfig = {}) {
   if (type === 'multiplication') {
     const mulCfg = config?.mentalMath?.drillTypes?.multiplication || {};
     if (mulCfg.progressive !== false) {
-      const levelStats = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
-      const progression = resolveMultiplicationLevel(levelStats);
+      const { stats, floorLevel } = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
+      const progression = resolveMultiplicationLevel(stats, {}, floorLevel);
       const { maxDigits: _drop, ...rest } = requestedConfig || {};
       const effective = {
         ...rest,

@@ -726,9 +726,9 @@ describe('resolveDrillConfig — progressive multiplication', () => {
 
   // Build a session with `n` answered multiplication questions at `level`, all
   // correct and fast (so the level clears the mastery bar).
-  function masteredSession(level, n = 14, responseMs = 2500) {
+  function masteredSession(level, n = 14, responseMs = 2500, date = today) {
     return {
-      date: today,
+      date,
       tasks: [{
         module: 'mental-math',
         type: 'multiplication',
@@ -737,6 +737,9 @@ describe('resolveDrillConfig — progressive multiplication', () => {
       }],
     };
   }
+
+  // A date well outside the mastery window (60 days ago).
+  const oldDate = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
 
   function mockSessions(sessions, configOverride) {
     readJSONFile.mockImplementation((path, defaultValue) => {
@@ -781,6 +784,17 @@ describe('resolveDrillConfig — progressive multiplication', () => {
     expect(progression == null).toBe(true);
     expect(config.maxDigits).toBe(2);
     expect(config.factors).toBeUndefined();
+  });
+
+  it('does not demote to level 0 when the earned rung aged out of the window', async () => {
+    // The user mastered level 2 sixty days ago and hasn't practiced since, so the
+    // windowed mastery buckets are empty — but the all-time floor keeps them at 2
+    // instead of snapping back to single-digit × single-digit.
+    mockSessions([masteredSession(2, 14, 2500, oldDate)]);
+    const { progression, config } = await resolveDrillConfig('multiplication', { count: 10 });
+    expect(progression.level).toBe(2);
+    expect(progression.floorLevel).toBe(2);
+    expect(config.factors).toEqual([1, 1, 1]);
   });
 
   it('getMultiplicationProgress exposes the full ladder + thresholds', async () => {

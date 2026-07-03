@@ -120,4 +120,28 @@ describe('resolveMultiplicationLevel', () => {
     const r = resolveMultiplicationLevel({ '0': mastered });
     expect(r.level).toBe(1);
   });
+
+  it('never demotes below the earned floor when window evidence has aged out', () => {
+    // Empty windowed stats (all reps aged past the window) but the user has
+    // earned up to rung 3 all-time — must stay at 3, not snap back to 0.
+    const r = resolveMultiplicationLevel({}, {}, 3);
+    expect(r.level).toBe(3);
+    expect(r.floorLevel).toBe(3);
+    // Rungs below the floor render as cleared (mastered) even with no samples.
+    expect(r.levels[0].mastered).toBe(true);
+    expect(r.levels[2].mastered).toBe(true);
+    expect(r.levels[3].mastered).toBe(false);
+  });
+
+  it('advances above the floor when the floor rung is freshly mastered', () => {
+    const mastered = { samples: 20, accuracy: 1, avgResponseMs: 3000 };
+    const r = resolveMultiplicationLevel({ 3: mastered }, {}, 3);
+    expect(r.level).toBe(4);
+  });
+
+  it('clamps an out-of-range floor into the ladder', () => {
+    const r = resolveMultiplicationLevel({}, {}, 999);
+    expect(r.level).toBe(MAX_MULTIPLICATION_LEVEL);
+    expect(r.floorLevel).toBe(MAX_MULTIPLICATION_LEVEL);
+  });
 });

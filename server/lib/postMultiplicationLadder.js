@@ -47,8 +47,15 @@ export const MASTERY_DEFAULTS = {
   // A [1,1] rung (2 total digits) targets ~4.4s but is floored at minTargetMs.
   baseMsPerFactorDigit: 2200,
   minTargetMs: 4000,
-  // Stats window (days) the mastery signal is read over.
+  // Stats window (days) the mastery signal is read over. Mastery is judged over
+  // this rolling window so "fast enough to advance" reflects recent performance,
+  // NOT stale reps — but earned rungs never age out (see `floorLevel` below).
   windowDays: 30,
+  // Answered questions slower than this are clamped before averaging, so one
+  // walked-away-from-the-tab answer can't inflate a rung's avgResponseMs and
+  // make it feel un-masterable. Mirrors scoreDrill's per-question clamp; set at
+  // the default multiplication time limit (120s).
+  responseMsCap: 120000,
 };
 
 export function clampMultiplicationLevel(level) {
@@ -101,16 +108,28 @@ export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
 /**
  * Resolve the user's current ladder level from per-level performance stats.
  *
- * Walks the ladder from the bottom and stops at the first rung the user has NOT
- * yet mastered — so they stay there accumulating fast-and-accurate reps until
- * the speed bar is cleared, then advance. Returns a transparent explainer with
- * every rung's status so the UI can show the ladder.
+ * Walks the ladder up from the earned `floorLevel` and stops at the first rung
+ * the user has NOT yet mastered (over the recent window) — so they stay there
+ * accumulating fast-and-accurate reps until the speed bar is cleared, then
+ * advance. Returns a transparent explainer with every rung's status so the UI
+ * can show the ladder.
+ *
+ * `floorLevel` is the highest rung the user has EVER generated (all-time, not
+ * windowed). It is the anti-demotion floor: because mastery is judged over a
+ * rolling window, a rung's samples fall to 0 once its evidence ages out — but
+ * you only ever reach a higher rung by having cleared the ones below it, so
+ * earned progress must not be lost when it ages out. Without this floor a user
+ * grinding level 3 would snap back to level 0 (`7 × 8`) the day their earliest
+ * level-0 sessions crossed the window cutoff.
  *
  * @param {Record<number|string, {samples:number, accuracy:number, avgResponseMs:number}>} levelStats
- * @returns {{level, factors, label, atHardest, currentMastered, levels}}
+ * @param {object} [opts] - override MASTERY_DEFAULTS thresholds
+ * @param {number} [floorLevel=0] - highest all-time-active rung (earned floor)
+ * @returns {{level, factors, label, atHardest, currentMastered, floorLevel, levels}}
  */
-export function resolveMultiplicationLevel(levelStats = {}, opts = {}) {
+export function resolveMultiplicationLevel(levelStats = {}, opts = {}, floorLevel = 0) {
   const options = { ...MASTERY_DEFAULTS, ...opts };
+  const floor = clampMultiplicationLevel(floorLevel);
   const levels = MULTIPLICATION_LADDER.map((factors, level) => {
     const stat = levelStats?.[level] || levelStats?.[String(level)] || {};
     const samples = Number.isFinite(stat.samples) ? stat.samples : 0;
@@ -129,8 +148,19 @@ export function resolveMultiplicationLevel(levelStats = {}, opts = {}) {
     };
   });
 
-  let level = 0;
+  // Advance from the earned floor while the current rung's recent performance
+  // clears the mastery bar. Starting at `floor` (not 0) prevents involuntary
+  // demotion of rungs whose window evidence has aged out.
+  let level = floor;
   while (level < MAX_MULTIPLICATION_LEVEL && levels[level].mastered) level += 1;
+
+  // For the UI: every rung strictly below the resolved level has been cleared
+  // (you can't be on rung N without having passed the ones beneath it), so mark
+  // it mastered even if its recent window is empty — otherwise the ladder dots
+  // would falsely show a cleared rung as un-mastered after it ages out.
+  for (const rung of levels) {
+    if (rung.level < level) rung.mastered = true;
+  }
 
   const current = levels[level];
   return {
@@ -139,6 +169,7 @@ export function resolveMultiplicationLevel(levelStats = {}, opts = {}) {
     label: current.label,
     atHardest: level >= MAX_MULTIPLICATION_LEVEL,
     currentMastered: current.mastered,
+    floorLevel: floor,
     levels,
   };
 }
