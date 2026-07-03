@@ -1007,7 +1007,8 @@ describe('spawnTuiAgent runtime', () => {
 // a needs-manual-finish failure instead of a silent `status: completed`. This is
 // the exact decision the `idleTimer` interval makes; mirror it as a pure function
 // (the inline-copy pattern from subAgentSpawner.test.js) so the branch matrix is
-// tested without standing up the full fake-timer PTY harness.
+// tested without standing up the full fake-timer PTY harness. Generalized to
+// do:release/do:pr/do:rpr's multi-reviewer loop below (agent-61508f36, PR #2084).
 describe('agentTuiSpawning — idle reap decision (#2074)', () => {
   const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
   const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
@@ -1068,37 +1069,11 @@ describe('agentTuiSpawning — idle reap decision (#2074)', () => {
     const r = decideIdleReap({ idle: MERGE_QUEUE_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: true, workActive: false, rendersCounter: true });
     expect(r.reason).toBe('merge-queue-idle-timeout');
   });
-});
 
-// Generalizes #2074's fix to do:release/do:pr/do:rpr's multi-reviewer loop —
-// observed 2026-07-02 on agent-61508f36 (PR #2084): a slow codex review pass
-// went silent past the 3-minute default and the still-waiting release agent
-// was reaped as a false `idle-complete` success before it ever merged.
-describe('agentTuiSpawning — idle reap decision (review loop)', () => {
-  const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
-
-  function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, reviewLoopActive, workActive, rendersCounter }) {
-    const effectiveIdleTimeoutMs = mergeQueueActive
-      ? Math.max(baseIdleTimeoutMs, 900000)
-      : reviewLoopActive
-        ? Math.max(baseIdleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
-        : baseIdleTimeoutMs;
-    if (idle < effectiveIdleTimeoutMs) return { action: 'wait', effectiveIdleTimeoutMs };
-    if (mergeQueueActive) {
-      return { action: 'reap', success: false, reason: 'merge-queue-idle-timeout', effectiveIdleTimeoutMs };
-    }
-    if (reviewLoopActive) {
-      return { action: 'reap', success: false, reason: 'review-loop-idle-timeout', effectiveIdleTimeoutMs };
-    }
-    const noWorkButCounterExpected = !workActive && rendersCounter;
-    if (noWorkButCounterExpected) {
-      return { action: 'reap', success: false, reason: 'idle-no-activity', effectiveIdleTimeoutMs };
-    }
-    return { action: 'reap', success: true, reason: 'idle-complete', effectiveIdleTimeoutMs };
-  }
-
-  const BASE = 180000;
-
+  // Generalizes the #2074 fix to do:release/do:pr/do:rpr's multi-reviewer loop —
+  // observed 2026-07-02 on agent-61508f36 (PR #2084): a slow codex review pass
+  // went silent past the 3-minute default and the still-waiting release agent
+  // was reaped as a false `idle-complete` success before it ever merged.
   it('does NOT reap at the 3-min default while in a review loop — grace extends to 15min', () => {
     const r = decideIdleReap({ idle: BASE + 5000, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: true, rendersCounter: true });
     expect(r.action).toBe('wait');
@@ -1110,13 +1085,6 @@ describe('agentTuiSpawning — idle reap decision (review loop)', () => {
     expect(r.action).toBe('reap');
     expect(r.success).toBe(false);
     expect(r.reason).toBe('review-loop-idle-timeout');
-  });
-
-  it('leaves the pre-existing idle-complete path untouched when NOT in a review loop', () => {
-    const r = decideIdleReap({ idle: BASE + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: false, workActive: true, rendersCounter: true });
-    expect(r.action).toBe('reap');
-    expect(r.success).toBe(true);
-    expect(r.reason).toBe('idle-complete');
   });
 
   it('a review-loop reap takes precedence over the no-activity downgrade', () => {
