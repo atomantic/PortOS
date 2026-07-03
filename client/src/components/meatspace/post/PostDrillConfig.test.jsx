@@ -5,11 +5,12 @@ vi.mock('../../../services/api', () => ({
   updatePostConfig: vi.fn(),
   getProviders: vi.fn(),
   getPostAdaptivePreview: vi.fn(),
+  getPostMultiplicationProgress: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress } from '../../../services/api';
 
 // The 14 generatable LLM drill types (mirror server + client constants).
 const ALL_LLM_TYPES = [
@@ -50,6 +51,18 @@ beforeEach(() => {
   getProviders.mockResolvedValue({ providers: [] });
   updatePostConfig.mockResolvedValue(config);
   getPostAdaptivePreview.mockResolvedValue({ enabled: false, drills: {} });
+  getPostMultiplicationProgress.mockResolvedValue({
+    level: 0,
+    label: '1×1-digit',
+    atHardest: false,
+    currentMastered: false,
+    levels: [
+      { level: 0, label: '1×1-digit', mastered: false },
+      { level: 1, label: '1×2-digit', mastered: false },
+    ],
+    thresholds: { minSamples: 12, targetAccuracy: 0.9 },
+    windowDays: 30,
+  });
 });
 
 describe('PostDrillConfig', () => {
@@ -141,7 +154,14 @@ describe('PostDrillConfig', () => {
         multiplication: { type: 'multiplication', field: 'maxDigits', from: 2, to: 3, applied: true, score: 94, samples: 5, reason: 'harder' },
       },
     });
-    const withAdaptive = { ...config, adaptive: { enabled: true } };
+    // Multiplication defaults to the progressive ladder (which supersedes the
+    // adaptive badge on that card); turn it off here so the adaptive preview is
+    // what renders for this test.
+    const withAdaptive = {
+      ...config,
+      mentalMath: { drillTypes: { multiplication: { enabled: true, count: 10, progressive: false } } },
+      adaptive: { enabled: true },
+    };
     render(<PostDrillConfig config={withAdaptive} onSaved={vi.fn()} onBack={vi.fn()} />);
     expect(screen.getByRole('switch', { name: 'Adaptive difficulty' }).getAttribute('aria-checked')).toBe('true');
     await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
@@ -167,6 +187,26 @@ describe('PostDrillConfig', () => {
     await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText(/hardest tolerance % 3/)).toBeTruthy());
     expect(screen.queryByText(/at max tolerance/)).toBeNull();
+  });
+
+  it('multiplication defaults to Progressive difficulty on, hiding Max Digits and showing the ladder', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    // Max Digits is ignored while progressive is on, so its field is hidden.
+    expect(screen.queryByText('Max Digits')).toBeNull();
+    // The fetched ladder status renders.
+    await waitFor(() => expect(getPostMultiplicationProgress).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/Level 1 of 2 · 1×1-digit/)).toBeTruthy());
+  });
+
+  it('toggling Progressive off reveals Max Digits and persists progressive=false', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty' }));
+    expect(screen.getByText('Max Digits')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.multiplication.progressive).toBe(false);
   });
 
   it('toggling Adaptive on persists enabled=true', async () => {

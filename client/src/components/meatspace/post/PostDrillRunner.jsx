@@ -154,6 +154,11 @@ export default function PostDrillRunner({ session }) {
       <div className="flex items-center justify-between text-sm text-gray-400">
         <span className={isTraining ? 'text-port-accent-2' : ''}>
           {DRILL_LABELS[currentDrill.type] || currentDrill.type}
+          {currentDrill.progression && (
+            <span className="ml-2 text-xs text-port-accent">
+              Lvl {currentDrill.progression.level + 1} · {currentDrill.progression.label}
+            </span>
+          )}
           {isTraining && ' — Training'}
         </span>
         <span>Drill {currentDrillIndex + 1} of {drillCount}</span>

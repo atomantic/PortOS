@@ -88,6 +88,13 @@ const drillTypeConfigSchema = z.object({
   timeLimitSec: z.number().int().min(10).max(600).optional(),
   count: z.number().int().min(1).max(50).optional(),
   maxDigits: z.number().int().min(1).max(4).optional(),
+  // Progressive multiplication ladder (server/lib/postMultiplicationLadder.js).
+  // `progressive` is the config toggle; `level`/`factors` are server-computed
+  // effective config stamped into the generated drill (and stored per-task on
+  // session submit), so they must survive validation on the round-trip.
+  progressive: z.boolean().optional(),
+  level: z.number().int().min(0).max(50).optional(),
+  factors: z.array(z.number().int().min(1).max(4)).min(2).max(6).optional(),
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional(),
