@@ -10,10 +10,8 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import dns from 'dns/promises';
-import net from 'net';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { decodeXmlEntities } from '../lib/xmlEntities.js';
 
 const FEEDS_FILE = join(PATHS.data, 'feeds.json');
@@ -378,119 +376,47 @@ export async function markAllRead(feedId) {
 
 export async function getFeedStats() {
   const data = await store.load();
+  // Single-pass per-feed unread tally (O(I)) — mirrors getFeeds()'s approach so
+  // the widget can surface top unread feed names without a second computation.
+  const unreadCounts = new Map();
+  for (const item of data.items) {
+    if (!item.read) unreadCounts.set(item.feedId, (unreadCounts.get(item.feedId) || 0) + 1);
+  }
+  const topUnread = data.feeds
+    .map(feed => ({ id: feed.id, title: feed.title, unread: unreadCounts.get(feed.id) || 0 }))
+    .filter(f => f.unread > 0)
+    .sort((a, b) => b.unread - a.unread)
+    .slice(0, 5);
   return {
     totalFeeds: data.feeds.length,
     totalItems: data.items.length,
-    unreadItems: data.items.filter(i => !i.read).length
+    unreadItems: data.items.filter(i => !i.read).length,
+    topUnread
   };
 }
 
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
-// Check if an IP address is private/loopback/link-local (IPv4 or IPv6).
-function isPrivateIP(ip) {
-  if (!ip) return true;
-  const lower = ip.toLowerCase();
-  // IPv6
-  if (lower.includes(':')) {
-    if (lower === '::1' || lower === '::') return true;
-    // IPv4-mapped IPv6 — accept both ::ffff:a.b.c.d (raw form from dns.resolve)
-    // and ::ffff:wxyz:wxyz (the hex form Node's URL parser normalizes to).
-    const mappedDotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mappedDotted) return isPrivateIP(mappedDotted[1]);
-    const mappedHex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (mappedHex) {
-      const high = parseInt(mappedHex[1], 16);
-      const low = parseInt(mappedHex[2], 16);
-      return isPrivateIP(`${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`);
-    }
-    const firstGroup = lower.split(':')[0];
-    if (firstGroup) {
-      const firstWord = parseInt(firstGroup, 16);
-      if (Number.isFinite(firstWord)) {
-        // ULA fc00::/7 (top 7 bits = 1111110)
-        if ((firstWord & 0xfe00) === 0xfc00) return true;
-        // Link-local fe80::/10 (top 10 bits = 1111111010)
-        if ((firstWord & 0xffc0) === 0xfe80) return true;
-      }
-    }
-    return false;
-  }
-  // IPv4
-  const parts = lower.split('.').map(Number);
-  if (parts.length === 4 && parts.every(p => !isNaN(p) && p >= 0 && p <= 255)) {
-    if (parts[0] === 10) return true;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] === 192 && parts[1] === 168) return true;
-    if (parts[0] === 169 && parts[1] === 254) return true;
-    if (parts[0] === 127) return true;
-    if (parts[0] === 0) return true;
-  }
-  return false;
-}
+const FEED_HEADERS = {
+  'User-Agent': 'PortOS Feed Reader/1.0',
+  Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml',
+};
 
-// DNS error codes that mean "this record type does not exist" — safe to treat
-// as an empty result. Anything else (SERVFAIL, TIMEOUT, CONNREFUSED, …) is a
-// resolver failure that can't prove the family is safe; we must fail closed
-// because Node's fetch performs its own lookup and may still happy-eyeballs to
-// a private address we never got to inspect.
-const BENIGN_DNS_MISS_CODES = new Set(['ENOTFOUND', 'ENODATA', 'NODATA', 'NOTFOUND']);
-
-// Resolve hostname and verify it doesn't point to a private IP. Resolves A
-// and AAAA in parallel so a hostname with a public A but a private AAAA
-// (happy-eyeballs would prefer the AAAA in Node's fetch) is rejected; the
-// parallel AAAA lookup also lets AAAA-only feeds resolve.
-async function isHostSafe(hostname) {
-  // URL.hostname preserves the [::1] bracketed form for IPv6 literals; strip
-  // brackets so net.isIP recognizes the address before falling through to DNS.
-  const stripped = hostname.startsWith('[') && hostname.endsWith(']')
-    ? hostname.slice(1, -1)
-    : hostname;
-  if (net.isIP(stripped)) return !isPrivateIP(stripped);
-  const wrap = (p) => p.then(
-    addrs => ({ ok: true, addrs }),
-    err => BENIGN_DNS_MISS_CODES.has(err?.code) ? { ok: true, addrs: [] } : { ok: false, addrs: [] },
-  );
-  const [v4, v6] = await Promise.all([
-    wrap(dns.resolve4(stripped)),
-    wrap(dns.resolve6(stripped)),
-  ]);
-  if (!v4.ok || !v6.ok) return false;
-  const addresses = [...v4.addrs, ...v6.addrs];
-  if (addresses.length === 0) return false;
-  return addresses.every(addr => !isPrivateIP(addr));
-}
-
+// Fetch a feed's XML through the shared SSRF-guarded fetch. `blockPrivate: true`
+// keeps feeds' historical block-all-private posture (an arbitrary user-added
+// feed URL must not be aimable at the home network) while gaining the
+// connect-time IP PIN that closes the DNS-rebinding TOCTOU (#2046): the
+// hostname is resolved once and undici connects to exactly that vetted address,
+// re-validated and re-pinned on every redirect hop. `throwOnUnsafe: false`
+// preserves this module's contract of returning null on any failure (so addFeed
+// surfaces the friendly "Could not fetch feed" message rather than a bubbled
+// 400) for an unsafe/private host, network error, non-ok status, or blocked
+// redirect.
 async function fetchFeedXml(url) {
-  // Restrict to http/https to prevent SSRF via file://, data://, etc.
-  const parsed = new URL(url);
-  if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-  // Resolve DNS and block private/loopback/link-local IPs (prevents rebinding attacks)
-  if (!await isHostSafe(parsed.hostname)) return null;
-
-  const feedHeaders = { 'User-Agent': 'PortOS Feed Reader/1.0', Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml' };
-
-  const res = await fetchWithTimeout(url, {
-    redirect: 'manual',
-    headers: feedHeaders
-  }, FETCH_TIMEOUT_MS).catch(() => null);
-
-  // Handle redirects manually to validate each redirect target
-  if (res?.status >= 300 && res?.status < 400) {
-    const location = res.headers.get('location');
-    if (!location) return null;
-    const redirectUrl = new URL(location, url);
-    if (!['http:', 'https:'].includes(redirectUrl.protocol)) return null;
-    if (!await isHostSafe(redirectUrl.hostname)) return null;
-    // Follow the validated redirect
-    const res2 = await fetchWithTimeout(redirectUrl.href, {
-      redirect: 'error',
-      headers: feedHeaders
-    }, FETCH_TIMEOUT_MS).catch(() => null);
-    if (!res2?.ok) return null;
-    return res2.text();
-  }
-
-  if (!res?.ok) return null;
-  return res.text();
+  return fetchPublicText(url, {
+    timeoutMs: FETCH_TIMEOUT_MS,
+    headers: FEED_HEADERS,
+    blockPrivate: true,
+    throwOnUnsafe: false,
+  });
 }

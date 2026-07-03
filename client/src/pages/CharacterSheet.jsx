@@ -216,7 +216,7 @@ export default function CharacterSheet() {
     // The route persists `avatarPath` onto the character server-side
     // (persistToCharacter), so no follow-up charPut is needed — keep the
     // optimistic setChar for instant feedback.
-    generateAvatar({ name: char.name, characterClass: char.class, persistToCharacter: true })
+    generateAvatar({ name: char.name, characterClass: char.class, persistToCharacter: true }, { silent: true })
       .then(result => {
         setChar(prev => ({ ...prev, avatarPath: result.path }));
       })

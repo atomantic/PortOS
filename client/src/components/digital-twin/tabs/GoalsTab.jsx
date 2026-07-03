@@ -4,6 +4,7 @@ import {Target, Plus, Trash2, Check, ChevronDown, ChevronUp,
   Clock, AlertTriangle, Activity, Milestone} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
@@ -283,8 +284,7 @@ export default function GoalsTab({ onRefresh }) {
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
             />
             <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">Horizon</label>
+              <FormField className="flex-1" label="Horizon" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.horizon}
                   onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
@@ -294,9 +294,8 @@ export default function GoalsTab({ onRefresh }) {
                     <option key={h.value} value={h.value}>{h.label}</option>
                   ))}
                 </select>
-              </div>
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">Category</label>
+              </FormField>
+              <FormField className="flex-1" label="Category" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.category}
                   onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
@@ -306,7 +305,7 @@ export default function GoalsTab({ onRefresh }) {
                     <option key={key} value={key}>{cfg.label}</option>
                   ))}
                 </select>
-              </div>
+              </FormField>
             </div>
             <div className="flex gap-2">
               <button

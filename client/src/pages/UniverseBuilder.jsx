@@ -16,6 +16,7 @@ import {
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { formatDateTime } from '../utils/formatters';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
@@ -883,11 +884,6 @@ export default function UniverseBuilder() {
 
   const handleDelete = async () => {
     if (!selectedId) return;
-    if (pendingDeleteId !== selectedId) {
-      setPendingDeleteId(selectedId);
-      toast(`Click delete again to confirm — "${draft.name}" will be removed`, { icon: '⚠️' });
-      return;
-    }
     const id = selectedId;
     // Only update local UI + show success toast when the server confirmed the
     // delete. Otherwise the user would see both a red "Delete failed" toast
@@ -1691,17 +1687,21 @@ export default function UniverseBuilder() {
               <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
               <SyncToPeerButton recordKind="universe" recordId={selectedId} label="Sync" />
               {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
-              <button
-                onClick={handleDelete}
-                className={`px-3 py-2 rounded flex items-center gap-2 min-h-[40px] ${
-                  pendingDeleteId === selectedId
-                    ? 'bg-port-error hover:bg-port-error/80 text-white'
-                    : 'bg-port-error/30 hover:bg-port-error/50 text-port-error'
-                }`}
-                title="Delete world"
-              >
-                <Trash2 size={16} /> {pendingDeleteId === selectedId ? 'Confirm delete' : 'Delete'}
-              </button>
+              {pendingDeleteId === selectedId ? (
+                <InlineConfirmRow
+                  question={`Delete "${draft.name || 'this world'}"?`}
+                  onConfirm={handleDelete}
+                  onCancel={() => setPendingDeleteId(null)}
+                />
+              ) : (
+                <button
+                  onClick={() => setPendingDeleteId(selectedId)}
+                  className="px-3 py-2 rounded flex items-center gap-2 min-h-[40px] bg-port-error/30 hover:bg-port-error/50 text-port-error"
+                  title="Delete world"
+                >
+                  <Trash2 size={16} /> Delete
+                </button>
+              )}
             </>
           )}
         </header>

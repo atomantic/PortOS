@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
@@ -804,8 +805,7 @@ export default function WorldTab({ agentId }) {
               {wsConnected && <span className="text-xs text-port-success">(via WS)</span>}
             </div>
             <div className="grid grid-cols-2 gap-2 mb-2">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">X (-240 to 240)</label>
+              <FormField label="X (-240 to 240)" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={moveX}
@@ -815,9 +815,8 @@ export default function WorldTab({ agentId }) {
                   placeholder="X"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Y (-240 to 240)</label>
+              </FormField>
+              <FormField label="Y (-240 to 240)" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={moveY}
@@ -827,7 +826,7 @@ export default function WorldTab({ agentId }) {
                   placeholder="Y"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
+              </FormField>
             </div>
             <input
               type="text"
@@ -882,8 +881,7 @@ export default function WorldTab({ agentId }) {
           <div className="bg-port-card border border-port-border rounded-lg p-4">
             <h3 className="font-semibold text-white mb-3">Build</h3>
             <div className="grid grid-cols-3 gap-2 mb-2">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">X</label>
+              <FormField label="X" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={buildX}
@@ -893,9 +891,8 @@ export default function WorldTab({ agentId }) {
                   placeholder="X"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Y</label>
+              </FormField>
+              <FormField label="Y" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={buildY}
@@ -905,9 +902,8 @@ export default function WorldTab({ agentId }) {
                   placeholder="Y"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Z (height)</label>
+              </FormField>
+              <FormField label="Z (height)" labelClassName="block text-xs text-gray-500 mb-1">
                 <input
                   type="number"
                   value={buildZ}
@@ -917,7 +913,7 @@ export default function WorldTab({ agentId }) {
                   placeholder="Z"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
+              </FormField>
             </div>
             <div className="grid grid-cols-2 gap-2 mb-3">
               <select

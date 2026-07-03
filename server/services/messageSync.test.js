@@ -46,9 +46,38 @@ vi.mock('./messagePlaywrightSync.js', () => ({
   refreshMessageDetail: vi.fn()
 }));
 
+// tribe.js is loaded dynamically by logMessageTouchpoints; mock it so the
+// producer test asserts the candidates without a live Postgres.
+vi.mock('./tribe.js', () => ({
+  autoLogTouchpoints: vi.fn().mockResolvedValue({ created: 0, matched: 0 }),
+}));
+
+// The dedupe day is derived in the user's LOCAL timezone. Mock the tz module
+// self-contained (getUserTimezone → mockTimezone, default UTC so the existing
+// UTC-day assertions hold; getLocalParts is a faithful Intl-based re-impl of the
+// real one) — importActual would load the real module against the mocked
+// fileUtils and fail on its settings read.
+let mockTimezone = 'UTC';
+vi.mock('../lib/timezone.js', () => ({
+  getUserTimezone: vi.fn(async () => mockTimezone),
+  getLocalParts: (utcDate, timezone) => {
+    const parts = {};
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    for (const { type, value } of fmt.formatToParts(utcDate)) parts[type] = value;
+    return {
+      year: parseInt(parts.year), month: parseInt(parts.month), day: parseInt(parts.day),
+      hour: parts.hour === '24' ? 0 : parseInt(parts.hour), minute: parseInt(parts.minute),
+    };
+  },
+}));
+
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, logMessageTouchpoints } from './messageSync.js';
+import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
 import { syncPlaywright, refreshMessageDetail } from './messagePlaywrightSync.js';
@@ -564,5 +593,79 @@ describe('refreshMessage', () => {
 
     const original = result.find(m => m.id === 'msg-1');
     expect(original.bodyText).toBe('');
+  });
+});
+
+describe('logMessageTouchpoints — candidate building (#2033)', () => {
+  const account = { id: VALID_UUID, type: 'gmail', email: 'me@work.com' };
+
+  beforeEach(() => {
+    autoLogTouchpoints.mockClear();
+    autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
+    mockTimezone = 'UTC';
+  });
+
+  it('builds a message candidate keyed per thread + day, excluding the account owner', async () => {
+    await logMessageTouchpoints(account, [{
+      id: 'm1',
+      threadId: 'thread-9',
+      subject: 'Lunch?',
+      date: '2026-06-01T12:00:00Z',
+      from: { name: 'Ada', email: 'ada@work.com' },
+      to: ['me@work.com', 'grace@x.io'],
+      cc: [],
+    }]);
+
+    expect(autoLogTouchpoints).toHaveBeenCalledTimes(1);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      source: 'message',
+      dedupeKey: `msg:${VALID_UUID}:thread-9:2026-06-01`,
+      summary: 'Lunch?',
+    });
+    // Own address excluded; sender + other recipient remain.
+    const emails = candidates[0].identities.map((i) => i.email).sort();
+    expect(emails).toEqual(['ada@work.com', 'grace@x.io']);
+  });
+
+  it('falls back to the message id when there is no threadId', async () => {
+    await logMessageTouchpoints(account, [{
+      id: 'm2', subject: 'Hi', date: '2026-06-02T00:00:00Z',
+      from: { name: 'Grace', email: 'grace@x.io' }, to: [], cc: [],
+    }]);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates[0].dedupeKey).toBe(`msg:${VALID_UUID}:m2:2026-06-02`);
+  });
+
+  it('keeps a name-only participant so the matcher unique-name fallback applies', async () => {
+    await logMessageTouchpoints(account, [{
+      id: 'm4', subject: 'Hi', date: '2026-06-01T00:00:00Z',
+      from: { name: 'Ada Lovelace', email: '' }, to: [], cc: [],
+    }]);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates[0].identities).toEqual([{ email: '', name: 'Ada Lovelace' }]);
+  });
+
+  it('skips a message with no counterpart beyond the account owner', async () => {
+    await logMessageTouchpoints(account, [{
+      id: 'm3', date: '2026-06-01T00:00:00Z',
+      from: { name: 'Me', email: 'me@work.com' }, to: ['me@work.com'], cc: [],
+    }]);
+    expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it('derives the dedupe day in the user local timezone, not UTC', async () => {
+    // 03:00Z on Jun 2 is still Jun 1 (20:00) in America/Los_Angeles. The dedupe
+    // day must be the LOCAL day (2026-06-01) so a same-local-evening thread that
+    // straddles UTC midnight collapses to one touchpoint, matching cadence math.
+    mockTimezone = 'America/Los_Angeles';
+    await logMessageTouchpoints(account, [{
+      id: 'm5', threadId: 'thread-tz', subject: 'Evening',
+      date: '2026-06-02T03:00:00Z',
+      from: { name: 'Ada', email: 'ada@work.com' }, to: [], cc: [],
+    }]);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates[0].dedupeKey).toBe(`msg:${VALID_UUID}:thread-tz:2026-06-01`);
   });
 });

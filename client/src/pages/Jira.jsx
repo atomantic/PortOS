@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import { FormField } from '../components/ui/FormField';
 import api from '../services/api';
 
 const TOKEN_LIFETIME_DAYS = 30;
@@ -176,11 +178,7 @@ export default function Jira() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading JIRA instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-52" cards={2} />;
   }
 
   return (
@@ -246,10 +244,7 @@ export default function Jira() {
             )}
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Instance ID
-                </label>
+              <FormField label="Instance ID" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="id"
@@ -262,12 +257,9 @@ export default function Jira() {
                 <p className="text-xs text-gray-400 mt-1">
                   Unique identifier (cannot be changed after creation)
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Display Name
-                </label>
+              <FormField label="Display Name" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="name"
@@ -276,12 +268,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="e.g., Company JIRA"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Base URL
-                </label>
+              <FormField label="Base URL" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="url"
                   name="baseUrl"
@@ -290,12 +279,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="https://jira.example.com"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Email
-                </label>
+              <FormField label="Email" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="email"
                   name="email"
@@ -304,12 +290,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="your.email@example.com"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  API Token (Personal Access Token)
-                </label>
+              <FormField label="API Token (Personal Access Token)" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="apiToken"
@@ -321,7 +304,7 @@ export default function Jira() {
                 <p className="text-xs text-gray-400 mt-1">
                   Generate this from your JIRA profile → Personal Access Tokens
                 </p>
-              </div>
+              </FormField>
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <button

@@ -14,6 +14,7 @@ import {
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
+import { FormField } from '../../ui/FormField';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
@@ -324,8 +325,7 @@ export default function DocumentsTab({ onRefresh }) {
         <h2 className="text-lg font-semibold text-white mb-4">Create Soul Document</h2>
 
         <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Filename</label>
+          <FormField label="Filename">
             <input
               type="text"
               value={newDoc.filename}
@@ -333,10 +333,9 @@ export default function DocumentsTab({ onRefresh }) {
               placeholder="DOCUMENT_NAME.md"
               className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Title</label>
+          <FormField label="Title">
             <input
               type="text"
               value={newDoc.title}
@@ -344,10 +343,9 @@ export default function DocumentsTab({ onRefresh }) {
               placeholder="Document title"
               className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white"
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Category</label>
+          <FormField label="Category">
             <select
               value={newDoc.category}
               onChange={(e) => setNewDoc({ ...newDoc, category: e.target.value })}
@@ -357,10 +355,9 @@ export default function DocumentsTab({ onRefresh }) {
                 <option key={key} value={key}>{config.label}</option>
               ))}
             </select>
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Content</label>
+          <FormField label="Content">
             <textarea
               value={newDoc.content}
               onChange={(e) => setNewDoc({ ...newDoc, content: e.target.value })}
@@ -368,7 +365,7 @@ export default function DocumentsTab({ onRefresh }) {
               rows={8}
               className="w-full px-3 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm"
             />
-          </div>
+          </FormField>
         </div>
 
         <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 mt-6">

@@ -33,8 +33,8 @@ import {
   Clock,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { timeAgo } from '../../utils/formatters';
-import { useArmedAction } from '../../hooks/useArmedAction';
 import { useLockToggle } from '../../hooks/useLockToggle';
 import MediaImage from '../MediaImage';
 import {
@@ -2693,21 +2693,17 @@ function SeasonActions({
 
 function IssueRow({ issue, seasons, onIssuesUpdate }) {
   const [reassigning, setReassigning] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const cover = issueCoverRecord(issue);
 
   const runDelete = async () => {
+    setConfirmingDelete(false);
     const ok = await deletePipelineIssue(issue.id).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;
     });
     if (ok == null) return;
     onIssuesUpdate((prev) => prev.filter((i) => i.id !== issue.id));
-  };
-  const [armDelete, armedDelete] = useArmedAction(runDelete);
-  const handleDelete = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    armedDelete();
   };
 
   const handleReassign = async (newSeasonId) => {
@@ -2751,29 +2747,41 @@ function IssueRow({ issue, seasons, onIssuesUpdate }) {
           <p className="text-[10px] text-gray-600">updated {timeAgo(issue.updatedAt)}</p>
         </div>
       </Link>
-      <div className="px-2 pb-2 flex items-center gap-1.5">
-        <select
-          value={issue.seasonId || ''}
-          onChange={(e) => handleReassign(e.target.value)}
-          disabled={reassigning}
-          title="Move to a different season"
-          className="min-w-0 flex-1 text-[10px] bg-port-card border border-port-border rounded text-gray-300 opacity-70 group-hover:opacity-100 focus:opacity-100"
-        >
-          <option value="">— ungrouped —</option>
-          {seasons.map((s) => (
-            <option key={s.id} value={s.id}>V{s.number}: {s.title}</option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={handleDelete}
-          className={`p-1 rounded border border-port-border bg-port-card ${armDelete ? 'text-port-error opacity-100' : 'text-gray-500 hover:text-port-error opacity-70 group-hover:opacity-100 focus:opacity-100'}`}
-          aria-label={armDelete ? `Confirm delete ${issue.title}` : `Delete ${issue.title}`}
-          title={armDelete ? 'Click again to confirm' : 'Delete issue / episode'}
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
+      {confirmingDelete ? (
+        <div className="px-2 pb-2">
+          <ConfirmButtonPair
+            prompt="Delete?"
+            className="justify-end"
+            ariaLabel={`Confirm delete ${issue.title}`}
+            onConfirm={runDelete}
+            onCancel={() => setConfirmingDelete(false)}
+          />
+        </div>
+      ) : (
+        <div className="px-2 pb-2 flex items-center gap-1.5">
+          <select
+            value={issue.seasonId || ''}
+            onChange={(e) => handleReassign(e.target.value)}
+            disabled={reassigning}
+            title="Move to a different season"
+            className="min-w-0 flex-1 text-[10px] bg-port-card border border-port-border rounded text-gray-300 opacity-70 group-hover:opacity-100 focus:opacity-100"
+          >
+            <option value="">— ungrouped —</option>
+            {seasons.map((s) => (
+              <option key={s.id} value={s.id}>V{s.number}: {s.title}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="p-1 rounded border border-port-border bg-port-card text-gray-500 hover:text-port-error opacity-70 group-hover:opacity-100 focus:opacity-100"
+            aria-label={`Delete ${issue.title}`}
+            title="Delete issue / episode"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
     </li>
   );
 }

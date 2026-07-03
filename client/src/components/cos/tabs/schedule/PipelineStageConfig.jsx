@@ -1,4 +1,5 @@
 import { filterSelectableModels } from '../../../../utils/providers';
+import { FormField } from '../../../ui/FormField';
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
   const stages = config.taskMetadata?.pipeline?.stages || [];
@@ -47,8 +48,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                 )}
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-500 block mb-1">Provider</label>
+                <FormField label="Provider" labelClassName="text-xs text-gray-500 block mb-1">
                   <select
                     value={stage.providerId || ''}
                     onChange={(e) => handleStageUpdate(i, 'providerId', e.target.value || null)}
@@ -60,9 +60,8 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                       <option key={provider.id} value={provider.id}>{provider.name}</option>
                     ))}
                   </select>
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 block mb-1">Model</label>
+                </FormField>
+                <FormField label="Model" labelClassName="text-xs text-gray-500 block mb-1">
                   <select
                     value={stage.model || ''}
                     onChange={(e) => handleStageUpdate(i, 'model', e.target.value || null)}
@@ -77,7 +76,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                       <option key={model} value={model}>{model}</option>
                     ))}
                   </select>
-                </div>
+                </FormField>
               </div>
             </div>
           );

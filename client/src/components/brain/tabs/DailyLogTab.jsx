@@ -5,6 +5,7 @@ import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { FormField } from '../../ui/FormField';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 import BrailleSpinner from '../../BrailleSpinner';
 
@@ -377,8 +378,7 @@ export default function DailyLogTab() {
 
         {showSettings && (
           <div className="p-3 border-b border-port-border space-y-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Obsidian vault (mirror logs)</label>
+            <FormField label="Obsidian vault (mirror logs)" labelClassName="block text-xs text-gray-400 mb-1">
               <select
                 value={settings?.obsidianVaultId || ''}
                 onChange={(e) => saveSettings({ obsidianVaultId: e.target.value || null })}
@@ -389,9 +389,8 @@ export default function DailyLogTab() {
                   <option key={v.id} value={v.id}>{v.name}</option>
                 ))}
               </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Folder inside vault</label>
+            </FormField>
+            <FormField label="Folder inside vault" labelClassName="block text-xs text-gray-400 mb-1">
               <input
                 type="text"
                 value={settings?.obsidianFolder || ''}
@@ -400,7 +399,7 @@ export default function DailyLogTab() {
                 className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
                 placeholder="Daily Log"
               />
-            </div>
+            </FormField>
             <label className="flex items-center gap-2 text-xs text-gray-400">
               <input
                 type="checkbox"

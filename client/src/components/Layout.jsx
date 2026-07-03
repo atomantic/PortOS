@@ -238,6 +238,7 @@ const navItems = [
       { to: '/devtools/runner', label: 'Code', icon: Code2 },
       { to: '/data', label: 'Data', icon: HardDrive },
       { to: '/devtools/datadog', label: 'DataDog', icon: Dog },
+      { to: '/devtools/flows', label: 'Flows', icon: WorkflowIcon },
       { to: '/devtools/github', label: 'GitHub', icon: GitBranch },
       { to: '/devtools/history', label: 'History', icon: History },
       { to: '/devtools/image-clean', label: 'Image Cleaner', icon: Eraser },
@@ -1118,6 +1119,7 @@ export default function Layout() {
         {(() => {
           const isFullWidth = location.pathname === '/character' ||
             location.pathname === '/ai' ||
+            location.pathname === '/devtools/flows' ||
             location.pathname === '/ask' ||
             location.pathname.startsWith('/ask/') ||
             location.pathname.startsWith('/calendar') ||

@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
@@ -58,10 +59,13 @@ function Field({ label, hint, children }) {
 }
 
 export default function ArtistsManager() {
+  const navigate = useNavigate();
+  // Selection lives in the URL (`/music/artists/:id`, `/music/artists/new`) so
+  // it's deep-linkable and reload-safe. `id === 'new'` is create mode; a real id
+  // is edit mode; absent is idle.
+  const { id } = useParams();
   const [artists, setArtists] = useState([]);
   const [loading, setLoading] = useState(true);
-  // selectedId === 'new' is create mode; a real id is edit mode; null is idle.
-  const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -164,26 +168,32 @@ export default function ArtistsManager() {
       .finally(() => setLoading(false));
   }, []);
 
-  const isCreate = selectedId === 'new';
+  const isCreate = id === 'new';
   const selected = useMemo(
-    () => (isCreate || !selectedId ? null : artists.find((a) => a.id === selectedId) || null),
-    [artists, selectedId, isCreate],
+    () => (isCreate || !id ? null : artists.find((a) => a.id === id) || null),
+    [artists, id, isCreate],
   );
+  const notFound = !isCreate && !!id && !loading && !selected;
   const canGenerate = !!(form.physicalDescription.trim() || form.portraitStyle.trim());
 
-  const selectArtist = (a) => {
-    setSelectedId(a.id);
-    setForm(formFromArtist(a));
-    setConfirmDelete(false);
-    clearGeneration();
-  };
+  const selectArtist = (a) => navigate(`/music/artists/${encodeURIComponent(a.id)}`);
+  const startCreate = () => navigate('/music/artists/new');
 
-  const startCreate = () => {
-    setSelectedId('new');
-    setForm(emptyForm());
+  // Hydrate the editor form from the URL-selected artist. Keyed on the id so a
+  // list refresh doesn't clobber the open form; resets run for every selection
+  // change (incl. idle / not-found) so a stray render can't land on the previous
+  // artist (see Authors.jsx for the base pattern).
+  const hydratedRef = useRef(null);
+  const selectionKey = id ?? null;
+  useEffect(() => {
+    if (loading) return;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  };
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromArtist(selected));
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleSave = async () => {
     const name = form.name.trim();
@@ -198,10 +208,10 @@ export default function ArtistsManager() {
       setSaving(false);
       if (!created) return;
       setArtists((prev) => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
-      setSelectedId(created.id);
+      navigate(`/music/artists/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.name}"`);
     } else {
-      const updated = await updateArtist(selectedId, payload).catch((err) => {
+      const updated = await updateArtist(id, payload).catch((err) => {
         toast.error(err.message || 'Failed to save artist');
         return null;
       });
@@ -218,8 +228,8 @@ export default function ArtistsManager() {
     if (!selected) return;
     const prior = artists;
     setArtists((prev) => prev.filter((a) => a.id !== selected.id));
-    setSelectedId(null);
     setConfirmDelete(false);
+    navigate('/music/artists');
     await deleteArtist(selected.id).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setArtists(prior);
@@ -257,7 +267,7 @@ export default function ArtistsManager() {
                     type="button"
                     onClick={() => selectArtist(a)}
                     className={`w-full text-left px-3 py-2 rounded text-sm truncate ${
-                      a.id === selectedId ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
+                      a.id === id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
                     }`}
                   >
                     {a.name}
@@ -270,7 +280,14 @@ export default function ArtistsManager() {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-lg p-4">
-          {!isCreate && !selected ? (
+          {notFound ? (
+            <div className="text-gray-500 text-sm">
+              That artist could not be found — it may have been deleted.{' '}
+              <button type="button" onClick={() => navigate('/music/artists')} className="text-port-accent hover:underline">
+                Back to artists
+              </button>
+            </div>
+          ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">Select an artist to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">

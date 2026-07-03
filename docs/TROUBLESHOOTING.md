@@ -102,8 +102,8 @@ claude --version
 - Verify model name matches provider's available models
 - Check provider documentation for correct model identifiers
 - Common models:
-  - Claude: `claude-sonnet-4-20250514`, `claude-opus-4-5-20251101`
-  - OpenAI: `gpt-4`, `gpt-4-turbo`
+  - Claude: `claude-sonnet-5`, `claude-opus-4-8`, `claude-haiku-4-5-20251001`
+  - OpenAI: `gpt-5`, `gpt-5-mini`
   - Ollama: Model must be pulled first (`ollama pull llama3`)
 
 ## Chief of Staff Issues

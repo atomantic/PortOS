@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import Pill from '../ui/Pill';
+import { FormField } from '../ui/FormField';
 import { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_OPTIONS, MAX_TAGS } from './goalConstants';
 
 export default function GoalEditForm({
@@ -20,8 +21,7 @@ export default function GoalEditForm({
         rows={3}
         className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white resize-none"
       />
-      <div>
-        <label className="text-xs text-gray-500">Horizon</label>
+      <FormField label="Horizon" labelClassName="text-xs text-gray-500">
         <select
           value={form.horizon}
           onChange={e => setForm({ ...form, horizon: e.target.value })}
@@ -29,9 +29,8 @@ export default function GoalEditForm({
         >
           {HORIZON_OPTIONS.map(h => <option key={h.value} value={h.value}>{h.label}</option>)}
         </select>
-      </div>
-      <div>
-        <label className="text-xs text-gray-500">Category</label>
+      </FormField>
+      <FormField label="Category" labelClassName="text-xs text-gray-500">
         <select
           value={form.category}
           onChange={e => setForm({ ...form, category: e.target.value })}
@@ -41,9 +40,8 @@ export default function GoalEditForm({
             <option key={k} value={k}>{v.label}</option>
           ))}
         </select>
-      </div>
-      <div>
-        <label className="text-xs text-gray-500">Goal Type</label>
+      </FormField>
+      <FormField label="Goal Type" labelClassName="text-xs text-gray-500">
         <select
           value={form.goalType || 'standard'}
           onChange={e => setForm({ ...form, goalType: e.target.value })}
@@ -51,9 +49,8 @@ export default function GoalEditForm({
         >
           {GOAL_TYPE_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
         </select>
-      </div>
-      <div>
-        <label className="text-xs text-gray-500">Parent Goal</label>
+      </FormField>
+      <FormField label="Parent Goal" labelClassName="text-xs text-gray-500">
         <select
           value={form.parentId}
           onChange={e => setForm({ ...form, parentId: e.target.value })}
@@ -64,16 +61,15 @@ export default function GoalEditForm({
             <option key={g.id} value={g.id}>{g.title}</option>
           ))}
         </select>
-      </div>
-      <div>
-        <label className="text-xs text-gray-500">Target Date</label>
+      </FormField>
+      <FormField label="Target Date" labelClassName="text-xs text-gray-500">
         <input
           type="date"
           value={form.targetDate || ''}
           onChange={e => setForm({ ...form, targetDate: e.target.value })}
           className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white mt-1"
         />
-      </div>
+      </FormField>
       <div>
         <label className="text-xs text-gray-500">Time Block Config</label>
         <div className="mt-1 space-y-2">

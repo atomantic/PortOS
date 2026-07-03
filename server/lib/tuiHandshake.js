@@ -313,6 +313,71 @@ export function scheduleSubmitEnters(write, isFinalized) {
 export const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
 export const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
 
+// Extended idle threshold applied ONLY while a `/do:next --swarm` orchestrator
+// is in its Phase C serialized merge queue (issue #2074). Merging PRs one at a
+// time makes each subsequent PR rebase onto the new `main` and re-run required
+// CI — several minutes of *silent* TUI output per PR (`gh pr checks --watch`
+// shows a static "pending" screen with no repaint). That quiet window routinely
+// blows past the 3-minute default and the runner reaps the still-working
+// orchestrator as `idle-complete`, leaving PRs merged-but-uncleaned or unmerged
+// while `state.json` records `status: completed`. 15 minutes comfortably covers
+// one CI run's silent gap while still bounding a genuinely-dead orchestrator's
+// reap (see MERGE_QUEUE_IDLE_TIMEOUT reap path in agentTuiSpawning.js).
+export const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
+
+// Distinctive markers the swarm orchestrator's TUI prints once it enters the
+// Phase C merge queue. Detection is deliberately conservative: a false POSITIVE
+// only *extends* the idle window (bounded, low-cost), and a false NEGATIVE just
+// preserves the pre-#2074 behavior (no regression) — so this is nothing like the
+// fragile completion-detection regexes we avoid for FINALIZING a run. Matched
+// against ANSI-stripped output. Kept lower-cased for case-insensitive testing.
+const MERGE_QUEUE_MARKERS = [
+  'merge queue',
+  'serialized merge',
+  'phase c',
+  'gh pr merge',
+  'gh pr checks',
+  '--delete-branch',
+];
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the swarm orchestrator has
+ * entered its Phase C serialized merge queue. Callers MUST pass stripped output.
+ * Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isMergeQueueSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  const lower = strippedText.toLowerCase();
+  return MERGE_QUEUE_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * Latching tracker for "this agent is in a serialized merge queue" (issue
+ * #2074). Feed it each ANSI-stripped post-submit chunk via `observe(text)`; it
+ * becomes `active` the first time a merge-queue marker appears and STAYS active
+ * thereafter. Latching (not a sliding window) is deliberate: the whole failure
+ * mode is a *silent* CI wait — no markers print during the quiet gap — so a
+ * recency window would age the flag out exactly when the extended idle grace is
+ * needed. Once latched, the idle reaper uses MERGE_QUEUE_IDLE_TIMEOUT_MS instead
+ * of the 3-minute default. Lives here so the detection logic is unit-testable.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createMergeQueueTracker() {
+  let active = false;
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (isMergeQueueSignal(strippedText)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
 // ─── Buffer caps (defensive RAM bounds) ───────────────────────────────────
 //
 // RAW caps stay small — the raw PTY stream is only used for paste-marker

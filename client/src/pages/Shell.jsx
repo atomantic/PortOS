@@ -9,6 +9,7 @@ import { useThemeContext } from '../components/ThemeContext';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot, Maximize2, Minimize2 } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
+import { formatDurationMs } from '../utils/formatters';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
@@ -66,15 +67,6 @@ const readTerminalTheme = () => {
     success: parseCssColorToHex(css('--port-success')),
     warning: parseCssColorToHex(css('--port-warning')),
   }, mode);
-};
-
-const formatAge = (createdAt) => {
-  const seconds = Math.floor((Date.now() - createdAt) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h${minutes % 60}m`;
 };
 
 const shortId = (id) => id?.slice(0, 6) ?? '';
@@ -487,6 +479,23 @@ export default function Shell() {
       navigateRef.current('/shell', { replace: true });
     }
   }, [socket, clearActiveSession, cancelPendingAttach]);
+
+  // Restart = kill the current session, then start a fresh one after a short delay
+  // (gives the server time to tear down the old PTY). The deferred startSession must
+  // respect both staleness and unmount: stopSession() bumps the pending generation,
+  // so capture it and abort the delayed start if the user switched sessions (which
+  // bumps the generation again) or navigated away within the 1s window. Without the
+  // generation guard, a tab click inside the window would fire startSession() and
+  // clobber the in-flight switch.
+  const restartSession = useCallback(() => {
+    stopSession();
+    const gen = pendingAttachRef.current.generation;
+    setTimeout(() => {
+      if (!mountedRef.current) return;
+      if (pendingAttachRef.current.generation !== gen) return;
+      startSession();
+    }, 1000);
+  }, [stopSession, startSession]);
 
   const switchToSession = useCallback((sessionId, { fromUrl = false } = {}) => {
     // Compare against the in-flight attach target if there is one, falling back to the
@@ -908,7 +917,7 @@ export default function Shell() {
           {/* Restart (kill + new shell) is meaningless for a TUI-run view. */}
           {connected && !isLiveRun && (
             <button
-              onClick={() => { stopSession(); setTimeout(() => { if (mountedRef.current) startSession(); }, 1000); }}
+              onClick={restartSession}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >
@@ -959,12 +968,12 @@ export default function Shell() {
                       : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
-                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
+                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatDurationMs(Date.now() - s.createdAt)} old`}
               >
                 <TabIcon size={12} className="shrink-0" />
                 <span className="min-w-0 break-all">{label}</span>
                 {isRun && <span className="w-1.5 h-1.5 rounded-full bg-port-accent animate-pulse shrink-0" title="Live" />}
-                <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
+                <span className="text-[10px] opacity-60 shrink-0">{formatDurationMs(Date.now() - s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}
                   className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${

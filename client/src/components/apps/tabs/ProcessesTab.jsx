@@ -4,18 +4,9 @@ import * as api from '../../../services/api';
 import { executeCommand } from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
+import { FormField } from '../../ui/FormField';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
-import { formatBytes } from '../../../utils/formatters';
-
-const formatUptime = (ms) => {
-  if (!ms) return '-';
-  const hours = Math.floor(ms / 3600000);
-  const mins = Math.floor((ms % 3600000) / 60000);
-  if (hours > 24) {
-    return `${Math.floor(hours / 24)}d ${hours % 24}h`;
-  }
-  return `${hours}h ${mins}m`;
-};
+import { formatBytes, formatDurationMs } from '../../../utils/formatters';
 
 const getStatusClasses = (status) => {
   switch (status) {
@@ -174,7 +165,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                     <td className="px-4 py-3 text-gray-400 font-mono text-sm">{proc.pid || '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.cpu ? `${proc.cpu}%` : '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{formatBytes(proc.memory)}</td>
-                    <td className="px-4 py-3 text-gray-400">{formatUptime(proc.uptime)}</td>
+                    <td className="px-4 py-3 text-gray-400">{proc.uptime ? formatDurationMs(proc.uptime) : '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.restarts}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
@@ -219,8 +210,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                               )}
                             </div>
                             <div className="flex items-center gap-3">
-                              <div className="flex items-center gap-2">
-                                <label className="text-xs text-gray-500">Tail lines:</label>
+                              <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
                                 <select
                                   value={tailLines}
                                   onChange={(e) => {
@@ -235,7 +225,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                                   <option value={1000}>1000</option>
                                   <option value={2000}>2000</option>
                                 </select>
-                              </div>
+                              </FormField>
                               <span className="text-xs text-gray-600">{logs.length} lines</span>
                               <button
                                 onClick={() => setLogs([])}
@@ -304,8 +294,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
               )}
             </div>
             <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-500">Tail lines:</label>
+              <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-sm text-gray-500">
                 <select
                   value={tailLines}
                   onChange={(e) => {
@@ -320,7 +309,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                   <option value={1000}>1000</option>
                   <option value={2000}>2000</option>
                 </select>
-              </div>
+              </FormField>
               <span className="text-sm text-gray-600">{logs.length} lines</span>
               <button
                 onClick={() => setLogs([])}

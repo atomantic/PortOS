@@ -31,41 +31,41 @@ export default function FeatureAgents() {
   }, [fetchAgents]);
 
   const handleStart = useCallback((id) => {
-    api.startFeatureAgent(id).then(agent => {
+    api.startFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent activated');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handlePause = useCallback((id) => {
-    api.pauseFeatureAgent(id).then(agent => {
+    api.pauseFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent paused');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleResume = useCallback((id) => {
-    api.resumeFeatureAgent(id).then(agent => {
+    api.resumeFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent resumed');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleStop = useCallback((id) => {
-    api.stopFeatureAgent(id).then(agent => {
+    api.stopFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent stopped');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleTrigger = useCallback((id) => {
-    api.triggerFeatureAgent(id).then(() => {
+    api.triggerFeatureAgent(id, { silent: true }).then(() => {
       toast.success('Run triggered');
     }).catch(err => toast.error(err.message || 'Action failed'));
   }, []);
 
   const handleDelete = useCallback((id) => {
-    api.deleteFeatureAgent(id).then(() => {
+    api.deleteFeatureAgent(id, { silent: true }).then(() => {
       setAgents(prev => prev.filter(a => a.id !== id));
       toast.success('Feature agent deleted');
     }).catch(err => toast.error(err.message || 'Action failed'));

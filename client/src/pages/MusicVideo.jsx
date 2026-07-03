@@ -289,6 +289,10 @@ export default function MusicVideo() {
       return;
     }
     const byId = new Map(arrangement.map((a) => [a.sceneId, a]));
+    // Snapshot the pre-arrangement project so a mid-loop PATCH failure can roll the
+    // optimistic board back to match the server-side partial state — otherwise the
+    // local board shows the complete arrangement over a partial persist until reload.
+    const snapshot = selected;
     replaceProject({
       ...selected,
       scenes: scenes.map((s) => {
@@ -308,7 +312,12 @@ export default function MusicVideo() {
       }
     })()
       .then(() => toast.success(`Auto-arranged ${arrangement.length} scene${arrangement.length === 1 ? '' : 's'} by energy`))
-      .catch((err) => toast.error(err?.message || 'Auto-arrange failed'))
+      .catch((err) => {
+        // Revert the optimistic board to the snapshot so it doesn't show the full
+        // arrangement over a server-side partial write.
+        replaceProject(snapshot);
+        toast.error(err?.message || 'Auto-arrange failed');
+      })
       .finally(() => setArranging(false));
   };
 

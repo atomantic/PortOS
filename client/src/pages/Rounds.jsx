@@ -12,8 +12,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { listRounds, createRound, deleteRound, generateRound } from '../services/api';
 import { RHYTHM_SHAPES } from '../lib/songCraft';
 
@@ -25,8 +27,9 @@ export default function Rounds() {
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
-  // Two-step delete confirm (no window.confirm) — the armed round id.
-  const [armed, setArmed] = useState(null);
+  // Inline delete confirm (no window.confirm, no two-click-arm) — one row armed
+  // at a time via useConfirmDelete + <ConfirmButtonPair>.
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
     listRounds({ silent: true })
@@ -67,13 +70,11 @@ export default function Rounds() {
     return round;
   }, { errorMessage: 'Failed to generate round' });
 
-  const onDelete = useCallback(async (round) => {
-    if (armed !== round.id) { setArmed(round.id); return; }
-    setArmed(null);
-    await deleteRound(round.id, { silent: true })
+  const onDelete = useCallback((round) => confirmDelete(() =>
+    deleteRound(round.id, { silent: true })
       .then(() => setRounds((prev) => prev.filter((s) => s.id !== round.id)))
-      .catch((err) => toast.error(err?.message || 'Failed to delete round'));
-  }, [armed]);
+      .catch((err) => toast.error(err?.message || 'Failed to delete round')),
+  ), [confirmDelete]);
 
   return (
     <div>
@@ -180,16 +181,25 @@ export default function Rounds() {
                     {round.updatedAt && <span>Edited {timeAgo(round.updatedAt)}</span>}
                   </div>
                 </Link>
-                <button
-                  type="button"
-                  onClick={() => onDelete(round)}
-                  onBlur={() => setArmed((cur) => (cur === round.id ? null : cur))}
-                  className={`p-2 shrink-0 ${armed === round.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-                  aria-label={armed === round.id ? `Confirm delete ${round.title}` : `Delete ${round.title}`}
-                  title={armed === round.id ? 'Click again to confirm delete' : 'Delete round'}
-                >
-                  <Trash2 size={16} />
-                </button>
+                {isConfirming(round.id) ? (
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    className="shrink-0"
+                    ariaLabel={`Confirm delete ${round.title}`}
+                    onConfirm={() => onDelete(round)}
+                    onCancel={cancelDelete}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(round.id)}
+                    className="p-2 shrink-0 text-gray-500 hover:text-port-error"
+                    aria-label={`Delete ${round.title}`}
+                    title="Delete round"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </li>
             );
           })}

@@ -203,6 +203,8 @@ export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
 export * from './timezone.js';
+export * from './tribeCadence.js';
+export * from './tribeMatch.js';
 export * from './viteAllowedHosts.js';
 
 // === General utilities ===

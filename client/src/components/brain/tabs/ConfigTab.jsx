@@ -104,7 +104,7 @@ export default function ConfigTab({ onRefresh }) {
   const handleSaveEmbedding = async () => {
     setSavingEmbedding(true);
     const result = await api
-      .updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel })
+      .updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel }, { silent: true })
       .catch(err => { toast.error(err.message || 'Failed to save embedding config'); return null; });
     setSavingEmbedding(false);
     if (result) {
@@ -139,7 +139,7 @@ export default function ConfigTab({ onRefresh }) {
       weeklyReviewTime
     };
 
-    const result = await api.updateBrainSettings(updatedSettings).catch(err => {
+    const result = await api.updateBrainSettings(updatedSettings, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to save settings');
       return null;
     });

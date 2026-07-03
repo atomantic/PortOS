@@ -42,7 +42,7 @@ export default function QuickBrainCapture() {
         toast.success(result.isGitHubRepo ? 'GitHub repo added' : 'Link saved');
       }
     } else {
-      const result = await api.captureBrainThought(text, undefined, undefined, { creative }).catch(err => {
+      const result = await api.captureBrainThought(text, undefined, undefined, { creative }, { silent: true }).catch(err => {
         toast.error(err.message || 'Failed to capture thought');
         setInput(prev => prev || text);
         return null;

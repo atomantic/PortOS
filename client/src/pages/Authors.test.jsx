@@ -1,6 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import Authors from './Authors';
+
+// Selection is URL-driven (`/authors/:authorId`, `/authors/new`), so mount the
+// page inside a router exposing those routes; navigation drives the editor.
+const renderAuthors = () => render(
+  <MemoryRouter initialEntries={['/authors']}>
+    <Routes>
+      <Route path="/authors" element={<Authors />} />
+      <Route path="/authors/:authorId" element={<Authors />} />
+    </Routes>
+  </MemoryRouter>,
+);
 
 const listAuthors = vi.fn();
 const generateImage = vi.fn();
@@ -49,7 +61,7 @@ describe('Authors headshot generation', () => {
   });
 
   const openCreateForm = async () => {
-    render(<Authors />);
+    renderAuthors();
     await screen.findByText(/No authors yet/i);
     fireEvent.click(screen.getByRole('button', { name: /New Author/i }));
   };
@@ -135,7 +147,7 @@ describe('Authors headshot generation', () => {
       { id: 'a1', name: 'Alice', headshotImageUrl: '' },
       { id: 'a2', name: 'Bob', headshotImageUrl: '' },
     ]);
-    render(<Authors />);
+    renderAuthors();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Alice' }));
     fireEvent.change(screen.getByPlaceholderText(/silver-streaked dark hair/i), {
@@ -164,7 +176,7 @@ describe('Authors headshot generation', () => {
       { id: 'a1', name: 'Alice', headshotImageUrl: '' },
       { id: 'a2', name: 'Bob', headshotImageUrl: '' },
     ]);
-    render(<Authors />);
+    renderAuthors();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Alice' }));
     fireEvent.change(screen.getByPlaceholderText(/silver-streaked dark hair/i), {

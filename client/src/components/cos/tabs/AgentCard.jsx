@@ -151,7 +151,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     const result = await api.submitCosAgentFeedback(agent.id, {
       rating,
       comment: feedbackComment || undefined
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(`Failed to submit feedback: ${err.message}`);
       return null;
     });
@@ -192,7 +192,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (sendingBtw || !btwInput.trim()) return;
     setSendingBtw(true);
 
-    const result = await api.sendCosAgentBtw(agent.id, btwInput.trim()).catch(err => {
+    const result = await api.sendCosAgentBtw(agent.id, btwInput.trim(), { silent: true }).catch(err => {
       toast.error(`Failed to send: ${err.message}`);
       return null;
     });

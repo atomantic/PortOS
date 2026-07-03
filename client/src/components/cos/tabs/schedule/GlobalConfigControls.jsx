@@ -4,6 +4,7 @@ import CronInput from '../../../CronInput';
 import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
+import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import ToggleSwitch from '../../../ToggleSwitch';
@@ -177,8 +178,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         </Banner>
       )}
 
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Interval Type</label>
+      <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
         <select
           value={selectedType}
           onChange={(e) => handleTypeChange(e.target.value)}
@@ -203,7 +203,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         ) : (
           <p className="text-xs text-gray-500 mt-1">{INTERVAL_DESCRIPTIONS[selectedType]}</p>
         )}
-      </div>
+      </FormField>
 
       {selectedType === 'perpetual' && (
         <div>
@@ -265,8 +265,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {!config.taskMetadata?.pipeline?.stages?.length && (
         <>
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
+          <FormField label="Provider (optional)" labelClassName="text-sm text-gray-400 block mb-2">
             <select
               value={selectedProviderId}
               onChange={(e) => handleProviderChange(e.target.value)}
@@ -279,10 +278,9 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
-          </div>
+          </FormField>
 
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
+          <FormField label="Model (optional)" labelClassName="text-sm text-gray-400 block mb-2">
             <select
               value={selectedModel}
               onChange={(e) => handleModelChange(e.target.value)}
@@ -298,7 +296,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
-          </div>
+          </FormField>
         </>
       )}
 

@@ -218,6 +218,21 @@ export const setMediaAnnotation = (key, patch) => request(`/media/annotations/${
   body: JSON.stringify(patch),
 });
 
+// Media sketches — freehand annotation strokes drawn over a generated image,
+// keyed by "<kind>:<ref>" (only image:* is supported in phase 1 of #2036).
+// GET returns `{ key, sketch: { width, height, strokes, updatedAt, hasPng } | null }`.
+// PUT persists strokes + an optional flattened PNG data URL. The persisted PNG
+// is retrievable at GET /media/sketches/:key/png (consumed by phase 2's
+// img2img feedback; the UI's own Export button flattens client-side).
+export const getMediaSketch = (key, { silent = false } = {}) =>
+  request(`/media/sketches/${encodeURIComponent(key)}`, { silent });
+export const saveMediaSketch = (key, payload, { silent = false } = {}) =>
+  request(`/media/sketches/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+    silent,
+  });
+
 // Models management (HF cache + LoRAs)
 export const listCachedModels = () => request('/image-video/models');
 export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });

@@ -81,7 +81,7 @@ export function usePostSession() {
     setLastAnswer(null);
 
     const first = drillConfigs[0];
-    const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model).catch(err => {
+    const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model, { silent: true }).catch(err => {
       toast.error(`Failed to generate drill: ${err.message}`);
       setState(STATES.IDLE);
       return null;
@@ -217,7 +217,7 @@ export function usePostSession() {
     setState(STATES.LOADING);
 
     const next = drills[nextIndex];
-    const drill = await generatePostDrill(next.type, next.config, next.providerId, next.model).catch(err => {
+    const drill = await generatePostDrill(next.type, next.config, next.providerId, next.model, { silent: true }).catch(err => {
       toast.error(`Failed to generate drill: ${err.message}`);
       setState(STATES.IDLE);
       return null;
@@ -260,7 +260,7 @@ export function usePostSession() {
       const timeLimitMs = (drillConfig?.timeLimitSec || 120) * 1000;
       const scoreResult = await scorePostLlmDrill(
         drillResult.type, drillResult.drillData, drillResult.responses,
-        timeLimitMs, drillConfig?.providerId, drillConfig?.model
+        timeLimitMs, drillConfig?.providerId, drillConfig?.model, { silent: true }
       ).catch(err => {
         toast.error(`LLM scoring failed: ${err.message}`);
         return null;
@@ -333,7 +333,7 @@ export function usePostSession() {
       modules,
       tasks: drillResults,
       tags
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(`Failed to save session: ${err.message}`);
       setState(STATES.COMPLETE);
       return null;

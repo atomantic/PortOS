@@ -11,20 +11,20 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: () => tmpRoot });
 });
 
+// feeds.js fetches through the shared SSRF-guarded helper (server/lib/safeUrlFetch.js),
+// which is exercised for real here — we only mock its two boundaries: the DNS
+// resolve (dns.lookup) and the timed fetch. safeUrlFetch resolves a hostname
+// once via dns.lookup and PINS the connection to that vetted address, so these
+// tests drive the same rebinding-pin path production uses.
 const fetchMock = vi.fn();
 vi.mock('../lib/fetchWithTimeout.js', () => ({
   fetchWithTimeout: (...args) => fetchMock(...args),
 }));
 
-const dnsResolveMock = vi.fn();
-const dnsResolve6Mock = vi.fn();
+const lookupMock = vi.fn();
 vi.mock('dns/promises', () => ({
-  default: {
-    resolve4: (...args) => dnsResolveMock(...args),
-    resolve6: (...args) => dnsResolve6Mock(...args),
-  },
-  resolve4: (...args) => dnsResolveMock(...args),
-  resolve6: (...args) => dnsResolve6Mock(...args),
+  default: { lookup: (...args) => lookupMock(...args) },
+  lookup: (...args) => lookupMock(...args),
 }));
 
 let feeds;
@@ -42,8 +42,7 @@ beforeEach(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-feeds-test-'));
   vi.resetModules();
   fetchMock.mockReset();
-  dnsResolveMock.mockReset().mockResolvedValue(['93.184.216.34']);
-  dnsResolve6Mock.mockReset().mockResolvedValue([]);
+  lookupMock.mockReset().mockResolvedValue({ address: '93.184.216.34', family: 4 });
   feeds = await import('./feeds.js');
 });
 
@@ -102,7 +101,7 @@ const FETCH_ERROR = 'Could not fetch feed — check the URL';
 describe('getFeeds / getFeedStats — empty state', () => {
   it('returns empty arrays before any subscriptions', async () => {
     expect(await feeds.getFeeds()).toEqual([]);
-    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 0, totalItems: 0, unreadItems: 0 });
+    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 0, totalItems: 0, unreadItems: 0, topUnread: [] });
   });
 });
 
@@ -168,7 +167,7 @@ describe('addFeed', () => {
   ])('rejects literal private IPv4 %s without DNS lookup', async (host) => {
     const result = await feeds.addFeed(`http://${host}/feed`);
     expect(result).toEqual({ error: FETCH_ERROR });
-    expect(dnsResolveMock).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled(); // literal is classified without resolving
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -183,7 +182,7 @@ describe('addFeed', () => {
   ])('rejects literal private IPv6 %s without DNS lookup', async (_label, host) => {
     const result = await feeds.addFeed(`http://${host}/feed`);
     expect(result).toEqual({ error: FETCH_ERROR });
-    expect(dnsResolveMock).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -191,83 +190,51 @@ describe('addFeed', () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
     const result = await feeds.addFeed('http://[2606:4700:4700::1111]/rss');
     expect(result.error).toBeUndefined();
-    expect(dnsResolveMock).not.toHaveBeenCalled();
+    expect(lookupMock).not.toHaveBeenCalled(); // literal needs no resolve/pin
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Bracketed form must survive into the outbound fetch URL — stripping happened only inside isHostSafe
+    // Bracketed form must survive into the outbound fetch URL — bracket-stripping
+    // happens only inside the private-literal classifier.
     expect(fetchMock.mock.calls[0][0]).toContain('[2606:4700:4700::1111]');
   });
 
   it('rejects hostnames that resolve to a private IP (DNS rebinding guard)', async () => {
-    dnsResolveMock.mockResolvedValue(['10.0.0.42']);
+    lookupMock.mockResolvedValue({ address: '10.0.0.42', family: 4 });
     const result = await feeds.addFeed('https://evil.example.com/rss');
     expect(result).toEqual({ error: FETCH_ERROR });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects hostnames with no A or AAAA records', async () => {
-    dnsResolveMock.mockResolvedValue([]);
-    dnsResolve6Mock.mockResolvedValue([]);
+  it('rejects hostnames that resolve to a link-local / metadata IP', async () => {
+    lookupMock.mockResolvedValue({ address: '169.254.169.254', family: 4 });
+    const result = await feeds.addFeed('https://metadata.example.com/rss');
+    expect(result).toEqual({ error: FETCH_ERROR });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the hostname cannot be resolved (no unpinned fetch)', async () => {
+    // A hostname we can't vet must never fall through to an unpinned connect —
+    // that connect would re-resolve at TCP time, exactly the rebinding window.
+    lookupMock.mockRejectedValue(Object.assign(new Error('not found'), { code: 'ENOTFOUND' }));
     const result = await feeds.addFeed('https://no-records.example.com/rss');
     expect(result).toEqual({ error: FETCH_ERROR });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects when AAAA resolves to a private IPv6 even if A is public (happy-eyeballs SSRF)', async () => {
-    dnsResolveMock.mockResolvedValue(['93.184.216.34']);
-    dnsResolve6Mock.mockResolvedValue(['fc00::1']);
-    const result = await feeds.addFeed('https://dual-stack.example.com/rss');
-    expect(result).toEqual({ error: FETCH_ERROR });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('accepts AAAA-only hostnames (no A record, public IPv6)', async () => {
+  it('accepts a hostname that resolves to a public IPv6 address', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
-    dnsResolveMock.mockResolvedValue([]);
-    dnsResolve6Mock.mockResolvedValue(['2606:4700:4700::1111']);
+    lookupMock.mockResolvedValue({ address: '2606:4700:4700::1111', family: 6 });
     const result = await feeds.addFeed('https://v6only.example.com/rss');
     expect(result.error).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Connection is pinned to the vetted address (undici would otherwise re-resolve).
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
   });
 
-  it('rejects AAAA-only hostnames that point to private IPv6', async () => {
-    dnsResolveMock.mockResolvedValue([]);
-    dnsResolve6Mock.mockResolvedValue(['fe80::1']);
-    const result = await feeds.addFeed('https://v6private.example.com/rss');
-    expect(result).toEqual({ error: FETCH_ERROR });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects when AAAA resolver fails (SERVFAIL) even if A is public (fail-closed)', async () => {
-    // Node's fetch may still happy-eyeballs to a private AAAA on its own
-    // lookup, so a resolver error on AAAA must reject — we cannot prove
-    // the family is safe to fall through to the A result alone.
-    const err = Object.assign(new Error('servfail'), { code: 'ESERVFAIL' });
-    dnsResolveMock.mockResolvedValue(['93.184.216.34']);
-    dnsResolve6Mock.mockRejectedValue(err);
-    const result = await feeds.addFeed('https://flaky-aaaa.example.com/rss');
-    expect(result).toEqual({ error: FETCH_ERROR });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('accepts when AAAA returns NODATA and A is public (benign no-records miss)', async () => {
-    // ENODATA means "name exists, no records of this type" — the other
-    // family covers the hostname and we should not fail closed on it.
-    const err = Object.assign(new Error('no data'), { code: 'ENODATA' });
+  it('pins the connection to the vetted address (rebinding TOCTOU closed)', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
-    dnsResolveMock.mockResolvedValue(['93.184.216.34']);
-    dnsResolve6Mock.mockRejectedValue(err);
-    const result = await feeds.addFeed('https://a-only.example.com/rss');
-    expect(result.error).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects when A resolver fails (TIMEOUT) even if AAAA is public (fail-closed)', async () => {
-    const err = Object.assign(new Error('timeout'), { code: 'ETIMEOUT' });
-    dnsResolveMock.mockRejectedValue(err);
-    dnsResolve6Mock.mockResolvedValue(['2606:4700:4700::1111']);
-    const result = await feeds.addFeed('https://flaky-a.example.com/rss');
-    expect(result).toEqual({ error: FETCH_ERROR });
-    expect(fetchMock).not.toHaveBeenCalled();
+    lookupMock.mockResolvedValue({ address: '93.184.216.34', family: 4 });
+    await feeds.addFeed('https://rebind.example.com/rss');
+    expect(fetchMock.mock.calls[0][1].dispatcher).toBeDefined();
   });
 
   it('follows a single safe redirect to the new URL', async () => {
@@ -282,12 +249,13 @@ describe('addFeed', () => {
   });
 
   it('rejects redirects to private IPs without making the second fetch', async () => {
-    dnsResolveMock.mockImplementation(async (host) => host === 'evil.example.com' ? ['10.0.0.1'] : ['93.184.216.34']);
+    lookupMock.mockImplementation(async (host) =>
+      host === 'evil.example.com' ? { address: '10.0.0.1', family: 4 } : { address: '93.184.216.34', family: 4 });
     fetchMock.mockResolvedValueOnce(makeResponse({ status: 302, headers: { location: 'https://evil.example.com/x' } }));
     const result = await feeds.addFeed('https://example.com/redirect');
     expect(result).toEqual({ error: FETCH_ERROR });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(dnsResolveMock).toHaveBeenCalledWith('evil.example.com');
+    expect(lookupMock).toHaveBeenCalledWith('evil.example.com');
   });
 
   it('falls back to the URL hostname when the feed has no <title>', async () => {
@@ -481,7 +449,27 @@ describe('getFeeds — unread counts', () => {
 
 describe('getFeedStats', () => {
   it('aggregates totals across feeds', async () => {
-    await seedTwoFeeds();
-    expect(await feeds.getFeedStats()).toEqual({ totalFeeds: 2, totalItems: 4, unreadItems: 4 });
+    const { feedA, feedB } = await seedTwoFeeds();
+    const stats = await feeds.getFeedStats();
+    expect(stats.totalFeeds).toBe(2);
+    expect(stats.totalItems).toBe(4);
+    expect(stats.unreadItems).toBe(4);
+    // Every feed with unread items is surfaced, sorted by unread count desc.
+    expect(stats.topUnread).toHaveLength(2);
+    expect(stats.topUnread.map(f => f.id).sort()).toEqual([feedA.id, feedB.id].sort());
+    expect(stats.topUnread.every(f => f.unread === 2)).toBe(true);
+  });
+
+  it('excludes fully-read feeds and ranks by unread count', async () => {
+    const { feedA } = await seedTwoFeeds();
+    // Mark every item in feedA read so it drops out of topUnread entirely.
+    for (const item of await feeds.getItems({ feedId: feedA.id })) {
+      await feeds.markItemRead(item.id);
+    }
+    const stats = await feeds.getFeedStats();
+    expect(stats.unreadItems).toBe(2);
+    expect(stats.topUnread).toHaveLength(1);
+    expect(stats.topUnread[0].id).not.toBe(feedA.id);
+    expect(stats.topUnread[0].unread).toBe(2);
   });
 });

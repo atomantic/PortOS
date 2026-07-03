@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 
 import {
   DESTINATIONS,
@@ -56,7 +57,7 @@ export default function TrustTab({ onRefresh }) {
       dailyDigestTime: settingsForm.dailyDigestTime,
       weeklyReviewTime: settingsForm.weeklyReviewTime,
       weeklyReviewDay: settingsForm.weeklyReviewDay
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to save settings');
       return null;
     });
@@ -118,8 +119,7 @@ export default function TrustTab({ onRefresh }) {
         {editingSettings ? (
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Confidence Threshold</label>
+              <FormField label="Confidence Threshold">
                 <input
                   type="number"
                   min="0"
@@ -132,20 +132,18 @@ export default function TrustTab({ onRefresh }) {
                 <p className="text-xs text-gray-500 mt-1">
                   Items below this threshold go to "needs review" (0-1)
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Daily Digest Time</label>
+              <FormField label="Daily Digest Time">
                 <input
                   type="time"
                   value={settingsForm.dailyDigestTime || '09:00'}
                   onChange={(e) => setSettingsForm({ ...settingsForm, dailyDigestTime: e.target.value })}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Weekly Review Day</label>
+              <FormField label="Weekly Review Day">
                 <select
                   value={settingsForm.weeklyReviewDay || 'sunday'}
                   onChange={(e) => setSettingsForm({ ...settingsForm, weeklyReviewDay: e.target.value })}
@@ -159,17 +157,16 @@ export default function TrustTab({ onRefresh }) {
                   <option value="friday">Friday</option>
                   <option value="saturday">Saturday</option>
                 </select>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Weekly Review Time</label>
+              <FormField label="Weekly Review Time">
                 <input
                   type="time"
                   value={settingsForm.weeklyReviewTime || '16:00'}
                   onChange={(e) => setSettingsForm({ ...settingsForm, weeklyReviewTime: e.target.value })}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 />
-              </div>
+              </FormField>
             </div>
 
             <div className="flex items-center gap-2">

@@ -3,15 +3,17 @@ import { request } from './apiCore.js';
 // Brain - Second Brain Feature
 export const getBrainSummary = (options) => request('/brain/summary', options);
 export const getBrainSettings = (options) => request('/brain/settings', options);
-export const updateBrainSettings = (settings) => request('/brain/settings', {
+export const updateBrainSettings = (settings, options = {}) => request('/brain/settings', {
   method: 'PUT',
-  body: JSON.stringify(settings)
+  body: JSON.stringify(settings),
+  ...options
 });
 
 // Brain - Capture & Inbox
-export const captureBrainThought = (text, providerOverride, modelOverride, { creative } = {}) => request('/brain/capture', {
+export const captureBrainThought = (text, providerOverride, modelOverride, { creative } = {}, options = {}) => request('/brain/capture', {
   method: 'POST',
-  body: JSON.stringify({ text, providerOverride, modelOverride, creative })
+  body: JSON.stringify({ text, providerOverride, modelOverride, creative }),
+  ...options
 });
 export const getBrainInbox = (options = {}) => {
   const params = new URLSearchParams();
@@ -24,24 +26,28 @@ export const getBrainInbox = (options = {}) => {
   return request(`/brain/inbox?${params}`, { silent: options.silent });
 };
 export const getBrainInboxEntry = (id) => request(`/brain/inbox/${id}`);
-export const resolveBrainReview = (inboxLogId, destination, editedExtracted) => request('/brain/review/resolve', {
+export const resolveBrainReview = (inboxLogId, destination, editedExtracted, options = {}) => request('/brain/review/resolve', {
   method: 'POST',
-  body: JSON.stringify({ inboxLogId, destination, editedExtracted })
+  body: JSON.stringify({ inboxLogId, destination, editedExtracted }),
+  ...options
 });
-export const fixBrainClassification = (inboxLogId, newDestination, updatedFields, note) => request('/brain/fix', {
+export const fixBrainClassification = (inboxLogId, newDestination, updatedFields, note, options = {}) => request('/brain/fix', {
   method: 'POST',
-  body: JSON.stringify({ inboxLogId, newDestination, updatedFields, note })
+  body: JSON.stringify({ inboxLogId, newDestination, updatedFields, note }),
+  ...options
 });
-export const retryBrainClassification = (id, providerOverride, modelOverride) => request(`/brain/inbox/${id}/retry`, {
+export const retryBrainClassification = (id, providerOverride, modelOverride, options = {}) => request(`/brain/inbox/${id}/retry`, {
   method: 'POST',
-  body: JSON.stringify({ providerOverride, modelOverride })
+  body: JSON.stringify({ providerOverride, modelOverride }),
+  ...options
 });
-export const updateBrainInboxEntry = (id, capturedText) => request(`/brain/inbox/${id}`, {
+export const updateBrainInboxEntry = (id, capturedText, options = {}) => request(`/brain/inbox/${id}`, {
   method: 'PUT',
-  body: JSON.stringify({ capturedText })
+  body: JSON.stringify({ capturedText }),
+  ...options
 });
-export const deleteBrainInboxEntry = (id) => request(`/brain/inbox/${id}`, { method: 'DELETE' });
-export const markBrainInboxDone = (id) => request(`/brain/inbox/${id}/done`, { method: 'POST' });
+export const deleteBrainInboxEntry = (id, options = {}) => request(`/brain/inbox/${id}`, { method: 'DELETE', ...options });
+export const markBrainInboxDone = (id, options = {}) => request(`/brain/inbox/${id}/done`, { method: 'POST', ...options });
 // Stamp a batch of creative notes as consumed once their catalog ingest commits.
 export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inbox/sent-to-catalog', {
   method: 'POST',
@@ -52,15 +58,17 @@ export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inb
 // Brain - People
 export const getBrainPeople = () => request('/brain/people');
 export const getBrainPerson = (id) => request(`/brain/people/${id}`);
-export const createBrainPerson = (data) => request('/brain/people', {
+export const createBrainPerson = (data, options = {}) => request('/brain/people', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainPerson = (id, data) => request(`/brain/people/${id}`, {
+export const updateBrainPerson = (id, data, options = {}) => request(`/brain/people/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainPerson = (id) => request(`/brain/people/${id}`, { method: 'DELETE' });
+export const deleteBrainPerson = (id, options = {}) => request(`/brain/people/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Projects
 export const getBrainProjects = (filters) => {
@@ -69,15 +77,17 @@ export const getBrainProjects = (filters) => {
   return request(`/brain/projects?${params}`);
 };
 export const getBrainProject = (id) => request(`/brain/projects/${id}`);
-export const createBrainProject = (data) => request('/brain/projects', {
+export const createBrainProject = (data, options = {}) => request('/brain/projects', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainProject = (id, data) => request(`/brain/projects/${id}`, {
+export const updateBrainProject = (id, data, options = {}) => request(`/brain/projects/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainProject = (id) => request(`/brain/projects/${id}`, { method: 'DELETE' });
+export const deleteBrainProject = (id, options = {}) => request(`/brain/projects/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Ideas
 export const getBrainIdeas = (filters) => {
@@ -86,15 +96,17 @@ export const getBrainIdeas = (filters) => {
   return request(`/brain/ideas?${params}`);
 };
 export const getBrainIdea = (id) => request(`/brain/ideas/${id}`);
-export const createBrainIdea = (data) => request('/brain/ideas', {
+export const createBrainIdea = (data, options = {}) => request('/brain/ideas', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainIdea = (id, data) => request(`/brain/ideas/${id}`, {
+export const updateBrainIdea = (id, data, options = {}) => request(`/brain/ideas/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainIdea = (id) => request(`/brain/ideas/${id}`, { method: 'DELETE' });
+export const deleteBrainIdea = (id, options = {}) => request(`/brain/ideas/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Admin
 export const getBrainAdmin = (filters) => {
@@ -103,28 +115,32 @@ export const getBrainAdmin = (filters) => {
   return request(`/brain/admin?${params}`);
 };
 export const getBrainAdminItem = (id) => request(`/brain/admin/${id}`);
-export const createBrainAdminItem = (data) => request('/brain/admin', {
+export const createBrainAdminItem = (data, options = {}) => request('/brain/admin', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainAdminItem = (id, data) => request(`/brain/admin/${id}`, {
+export const updateBrainAdminItem = (id, data, options = {}) => request(`/brain/admin/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainAdminItem = (id) => request(`/brain/admin/${id}`, { method: 'DELETE' });
+export const deleteBrainAdminItem = (id, options = {}) => request(`/brain/admin/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Memories
 export const getBrainMemories = () => request('/brain/memories');
 export const getBrainMemory = (id) => request(`/brain/memories/${id}`);
-export const createBrainMemory = (data) => request('/brain/memories', {
+export const createBrainMemory = (data, options = {}) => request('/brain/memories', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainMemory = (id, data) => request(`/brain/memories/${id}`, {
+export const updateBrainMemory = (id, data, options = {}) => request(`/brain/memories/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainMemory = (id) => request(`/brain/memories/${id}`, { method: 'DELETE' });
+export const deleteBrainMemory = (id, options = {}) => request(`/brain/memories/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Third-party Imports
 export const getBrainImportSources = () => request('/brain/import/sources');
@@ -153,15 +169,17 @@ export const getChatgptArchive = (name) =>
 // Brain - Digests & Reviews
 export const getBrainLatestDigest = () => request('/brain/digest/latest');
 export const getBrainDigests = (limit = 10) => request(`/brain/digests?limit=${limit}`);
-export const runBrainDigest = (providerOverride, modelOverride) => request('/brain/digest/run', {
+export const runBrainDigest = (providerOverride, modelOverride, options = {}) => request('/brain/digest/run', {
   method: 'POST',
-  body: JSON.stringify({ providerOverride, modelOverride })
+  body: JSON.stringify({ providerOverride, modelOverride }),
+  ...options
 });
 export const getBrainLatestReview = () => request('/brain/review/latest');
 export const getBrainReviews = (limit = 10) => request(`/brain/reviews?limit=${limit}`);
-export const runBrainReview = (providerOverride, modelOverride) => request('/brain/review/run', {
+export const runBrainReview = (providerOverride, modelOverride, options = {}) => request('/brain/review/run', {
   method: 'POST',
-  body: JSON.stringify({ providerOverride, modelOverride })
+  body: JSON.stringify({ providerOverride, modelOverride }),
+  ...options
 });
 
 // Brain - Links
@@ -191,26 +209,29 @@ export const reorderBrainLinks = (updates, options = {}) => request('/brain/link
   body: JSON.stringify({ updates }),
   ...options
 });
-export const deleteBrainLink = (id) => request(`/brain/links/${id}`, { method: 'DELETE' });
-export const cloneBrainLink = (id) => request(`/brain/links/${id}/clone`, { method: 'POST' });
-export const pullBrainLink = (id) => request(`/brain/links/${id}/pull`, { method: 'POST' });
-export const openBrainLinkFolder = (id) => request(`/brain/links/${id}/open-folder`, { method: 'POST' });
-export const scanBrainLink = (id) => request(`/brain/links/${id}/scan`, { method: 'POST' });
+export const deleteBrainLink = (id, options = {}) => request(`/brain/links/${id}`, { method: 'DELETE', ...options });
+export const cloneBrainLink = (id, options = {}) => request(`/brain/links/${id}/clone`, { method: 'POST', ...options });
+export const pullBrainLink = (id, options = {}) => request(`/brain/links/${id}/pull`, { method: 'POST', ...options });
+export const openBrainLinkFolder = (id, options = {}) => request(`/brain/links/${id}/open-folder`, { method: 'POST', ...options });
+export const scanBrainLink = (id, options = {}) => request(`/brain/links/${id}/scan`, { method: 'POST', ...options });
 
 // Brain - Buckets (bookmark groups for links)
 export const getBrainBuckets = (options = {}) => request('/brain/buckets', options);
-export const createBrainBucket = (data) => request('/brain/buckets', {
+export const createBrainBucket = (data, options = {}) => request('/brain/buckets', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateBrainBucket = (id, data) => request(`/brain/buckets/${id}`, {
+export const updateBrainBucket = (id, data, options = {}) => request(`/brain/buckets/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteBrainBucket = (id) => request(`/brain/buckets/${id}`, { method: 'DELETE' });
-export const reorderBrainBuckets = (ids) => request('/brain/buckets/reorder', {
+export const deleteBrainBucket = (id, options = {}) => request(`/brain/buckets/${id}`, { method: 'DELETE', ...options });
+export const reorderBrainBuckets = (ids, options = {}) => request('/brain/buckets/reorder', {
   method: 'POST',
-  body: JSON.stringify({ ids })
+  body: JSON.stringify({ ids }),
+  ...options
 });
 
 // Brain - Goals (identity system, read-only view for the graph detail panel)

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Calculator } from 'lucide-react';
+import { FormField } from '../ui/FormField';
 
 export default function StandardDrinkCalculator() {
   const [oz, setOz] = useState('');
@@ -17,8 +18,7 @@ export default function StandardDrinkCalculator() {
         </h4>
       </div>
       <div className="flex items-end gap-3">
-        <div className="flex-1">
-          <label className="text-xs text-gray-500 block mb-1">Oz</label>
+        <FormField className="flex-1" label="Oz" labelClassName="text-xs text-gray-500 block mb-1">
           <input
             type="number"
             step="0.1"
@@ -28,10 +28,9 @@ export default function StandardDrinkCalculator() {
             placeholder="12"
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600"
           />
-        </div>
+        </FormField>
         <span className="text-gray-500 pb-1.5">@</span>
-        <div className="flex-1">
-          <label className="text-xs text-gray-500 block mb-1">ABV %</label>
+        <FormField className="flex-1" label="ABV %" labelClassName="text-xs text-gray-500 block mb-1">
           <input
             type="number"
             step="0.1"
@@ -42,7 +41,7 @@ export default function StandardDrinkCalculator() {
             placeholder="5"
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white placeholder-gray-600"
           />
-        </div>
+        </FormField>
         <span className="text-gray-500 pb-1.5">=</span>
         <div className="text-center pb-1">
           <span className="text-xs text-gray-500 block">Std drinks</span>

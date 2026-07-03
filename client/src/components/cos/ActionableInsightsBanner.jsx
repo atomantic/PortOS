@@ -117,7 +117,7 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
   };
 
   const handleUnblockTask = async (taskId, taskType) => {
-    const result = await api.updateCosTask(taskId, { status: 'pending', type: taskType }).catch(err => {
+    const result = await api.updateCosTask(taskId, { status: 'pending', type: taskType }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

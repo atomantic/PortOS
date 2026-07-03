@@ -51,7 +51,7 @@ export default function ScheduleTab({ apps }) {
   }, [fetchSchedule, fetchProviders]);
 
   const handleUpdateTask = async (taskType, settings) => {
-    const result = await api.updateCosTaskInterval(taskType, settings).catch(err => {
+    const result = await api.updateCosTaskInterval(taskType, settings, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -62,7 +62,7 @@ export default function ScheduleTab({ apps }) {
   };
 
   const handleTriggerTask = async (taskType, appId = null) => {
-    const result = await api.triggerCosOnDemandTask(taskType, appId).catch(err => {
+    const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -73,7 +73,7 @@ export default function ScheduleTab({ apps }) {
   };
 
   const handleResetTask = async (taskType) => {
-    const result = await api.resetCosTaskHistory(taskType).catch(err => {
+    const result = await api.resetCosTaskHistory(taskType, null, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -86,7 +86,7 @@ export default function ScheduleTab({ apps }) {
   const handleTriggerAppImprovement = (taskType, appId) => handleTriggerTask(taskType, appId);
 
   const handleUpdateAppOverride = async (appId, taskType, { enabled, interval, taskMetadata }) => {
-    const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval, taskMetadata }).catch(err => {
+    const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval, taskMetadata }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -98,7 +98,7 @@ export default function ScheduleTab({ apps }) {
   };
 
   const handleBulkToggleOverride = async (taskType, enabled) => {
-    const result = await api.bulkUpdateAppTaskTypeOverride(taskType, { enabled }).catch(err => {
+    const result = await api.bulkUpdateAppTaskTypeOverride(taskType, { enabled }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

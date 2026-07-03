@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -23,6 +24,7 @@ import { timeAgo } from '../utils/formatters';
 import { listUniverses, deleteUniverse, listPipelineSeries, listMediaCollections, listUniverseDuplicates } from '../services/api';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import { useRecordMerge } from '../hooks/useRecordMerge';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 
 // Named canon entities across all trunks — the "Canon" column reflects the
 // characters/places/objects the user has registered, not the looser variation
@@ -74,17 +76,28 @@ function UniverseThumb({ imageRef }) {
   return <ImageThumb imageRef={imageRef} FallbackIcon={Globe} />;
 }
 
-// Shared between the desktop table row and the mobile card so the armed-state
-// styling + a11y labels stay in one place.
-function DeleteButton({ universe, armed, onDelete }) {
+// Shared between the desktop table row and the mobile card so the inline-confirm
+// affordance + a11y labels stay in one place. An explicit Delete?/Cancel row
+// replaces the two-click-arm button once the row is armed.
+function DeleteButton({ universe, confirming, onRequest, onConfirm, onCancel }) {
   const name = universe.name || '(untitled universe)';
+  if (confirming) {
+    return (
+      <ConfirmButtonPair
+        prompt="Delete?"
+        ariaLabel={`Confirm delete universe ${name}`}
+        onConfirm={() => onConfirm(universe)}
+        onCancel={onCancel}
+      />
+    );
+  }
   return (
     <button
       type="button"
-      onClick={() => onDelete(universe)}
-      className={`p-2 ${armed ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-      aria-label={armed ? `Confirm delete universe ${name}` : `Delete universe ${name}`}
-      title={armed ? 'Click again to confirm delete' : 'Delete universe'}
+      onClick={() => onRequest(universe.id)}
+      className="p-2 text-gray-500 hover:text-port-error"
+      aria-label={`Delete universe ${name}`}
+      title="Delete universe"
     >
       <Trash2 size={16} />
     </button>
@@ -189,16 +202,11 @@ export default function Universes() {
     return m;
   }, [series]);
 
-  // Two-click delete: first click "arms" the row, second click fires. Avoids
-  // window.confirm (banned per CLAUDE.md) without pulling in a modal. armedId
-  // resets after the action or when a different row is armed.
-  const [armedId, setArmedId] = useState(null);
-  const handleDelete = async (u) => {
-    if (armedId !== u.id) {
-      setArmedId(u.id);
-      return;
-    }
-    setArmedId(null);
+  // Inline delete confirm: the trash button arms the row (one at a time) and an
+  // explicit Delete?/Cancel row fires it. Avoids window.confirm (banned per
+  // CLAUDE.md) and the non-discoverable two-click-arm pattern.
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const handleDelete = (u) => confirmDelete(async () => {
     setUniverses((prev) => prev.filter((x) => x.id !== u.id));
     // silent: the custom catch below owns the error toast (CLAUDE.md).
     await deleteUniverse(u.id, { silent: true }).catch((err) => {
@@ -213,7 +221,7 @@ export default function Universes() {
           : [...prev, u].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')),
       );
     });
-  };
+  });
 
   return (
     <div>
@@ -305,7 +313,7 @@ export default function Universes() {
                       <div className="flex items-center justify-end gap-1">
                         <ShareToButton kind="universe" ids={[u.id]} compact />
                         <SyncToPeerButton recordKind="universe" recordId={u.id} compact />
-                        <DeleteButton universe={u} armed={armedId === u.id} onDelete={handleDelete} />
+                        <DeleteButton universe={u} confirming={isConfirming(u.id)} onRequest={requestDelete} onConfirm={handleDelete} onCancel={cancelDelete} />
                       </div>
                     </td>
                   </tr>
@@ -336,7 +344,7 @@ export default function Universes() {
                       </div>
                     </div>
                   </Link>
-                  <DeleteButton universe={u} armed={armedId === u.id} onDelete={handleDelete} />
+                  <DeleteButton universe={u} confirming={isConfirming(u.id)} onRequest={requestDelete} onConfirm={handleDelete} onCancel={cancelDelete} />
                 </div>
                 <div className="flex items-center gap-1 mt-2">
                   <ShareToButton kind="universe" ids={[u.id]} compact />

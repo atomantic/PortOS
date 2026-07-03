@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
+import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
@@ -185,6 +186,15 @@ export async function syncAccount(accountId, io, options = {}) {
     await saveCache(accountId, cache);
     await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
 
+    // Auto-log Tribe touchpoints from the cached messages (#2033) — secondary
+    // effect, must not fail the sync. Scans the full (maxMessages-capped) cache
+    // rather than only the newly-added batch, mirroring the calendar path: so
+    // adding a person's email AFTER their messages synced still backfills, and a
+    // prior auto-log failure self-heals on the next sync. Deduped per thread+day
+    // (partial unique index), so re-scanning already-logged messages is a no-op.
+    await logMessageTouchpoints(account, cache.messages).catch((err) =>
+      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {
       io?.emit('messages:changed', {});
@@ -321,4 +331,65 @@ export async function getSyncStatus(accountId) {
     lastSyncAt: account.lastSyncAt,
     lastSyncStatus: account.lastSyncStatus
   };
+}
+
+// Normalize a message participant (from is `{ name, email }`, to/cc are bare
+// email strings) to the `{ email, name }` shape the Tribe matcher expects.
+function toIdentity(participant) {
+  if (!participant) return null;
+  if (typeof participant === 'string') return { email: participant };
+  return { email: participant.email || '', name: participant.name || '' };
+}
+
+// Auto-log Tribe touchpoints for synced messages (#2033). Deterministic: the
+// message counterparts (sender + recipients, excluding the account's own
+// address) are matched to tracked people by email/handle (or unique exact name)
+// and one touchpoint per person is logged, deduped per thread + calendar day so
+// a long thread doesn't spam touchpoints. Tribe is imported dynamically to avoid
+// a static import cycle. A no-op when nothing is tracked.
+export async function logMessageTouchpoints(account, messages = []) {
+  const selfEmail = String(account?.email || '').trim().toLowerCase();
+  // Derive the dedupe "calendar day" in the user's LOCAL timezone (matching the
+  // Tribe cadence math in tribeCadence.daysSinceDate). Using the UTC day here
+  // would split one local evening of contact across two days whenever a thread
+  // straddles UTC midnight (common in the Americas), double-logging touchpoints.
+  const timezone = await getUserTimezone();
+  const localDay = (when) => {
+    const p = getLocalParts(new Date(safeDate(when)), timezone);
+    return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+  };
+  const candidates = [];
+  for (const message of messages) {
+    const participants = [message.from, ...(message.to || []), ...(message.cc || [])];
+    const identities = participants
+      .map(toIdentity)
+      .filter((identity) => {
+        if (!identity) return false;
+        const email = (identity.email || '').trim().toLowerCase();
+        if (email && email === selfEmail) return false; // exclude the account owner
+        // Keep name-only participants too so the matcher's unique-name fallback
+        // still applies (mirrors the calendar path, which passes every identity).
+        return Boolean(email || identity.name);
+      });
+    if (identities.length === 0) continue;
+    const when = message.date || new Date().toISOString();
+    const day = localDay(when);
+    const threadKey = message.threadId || message.id;
+    candidates.push({
+      identities,
+      source: 'message',
+      happenedAt: when,
+      channel: account?.type || 'Message',
+      summary: message.subject || 'Message touchpoint',
+      dedupeKey: `msg:${account?.id}:${threadKey}:${day}`,
+      metadata: { subject: message.subject, threadId: message.threadId || null },
+    });
+  }
+  if (candidates.length === 0) return { created: 0, matched: 0 };
+  const tribe = await import('./tribe.js');
+  const result = await tribe.autoLogTouchpoints(candidates);
+  if (result.created > 0) {
+    console.log(`🤝 Auto-logged ${result.created} message touchpoint(s) for account ${account?.id}`);
+  }
+  return result;
 }

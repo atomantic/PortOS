@@ -9,18 +9,8 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { join } from 'path';
-import { existsSync } from 'fs';
-import { createHash } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
-import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
-import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
-import { generateThumbnail } from '../../lib/ffmpeg.js';
-import { pullSidecarForImage } from './sidecarSync.js';
-import { sanitizeAssetFilename } from './buckets.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -50,15 +40,11 @@ import {
   getExerciseForSync,
   mergeExercisesFromSync,
 } from '../writersRoom/sync.js';
-import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
-import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
 import {
-  initCursor,
   ackDeletesUpTo,
 } from './peerTombstoneCursors.js';
 import {
   diffAssetManifestAgainstLocal,
-  directoryForAssetKind,
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
 } from './peerSyncAssets.js';

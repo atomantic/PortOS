@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import toast from '../components/ui/Toast';
+import { FormField } from '../components/ui/FormField';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import api from '../services/api';
 
 const SITE_OPTIONS = [
@@ -181,11 +183,7 @@ export default function DataDog() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading DataDog instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-56" cards={2} />;
   }
 
   return (
@@ -243,10 +241,7 @@ export default function DataDog() {
             )}
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Instance ID
-                </label>
+              <FormField label="Instance ID" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="id"
@@ -259,12 +254,9 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Unique identifier (cannot be changed after creation)
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Display Name
-                </label>
+              <FormField label="Display Name" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="name"
@@ -273,12 +265,9 @@ export default function DataDog() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="e.g., Company DataDog"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Site
-                </label>
+              <FormField label="Site" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <select
                   value={customSite ? 'custom' : formData.site}
                   onChange={handleSiteChange}
@@ -298,12 +287,9 @@ export default function DataDog() {
                     placeholder="e.g., api.custom-datadog.com"
                   />
                 )}
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  API Key
-                </label>
+              <FormField label="API Key" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="apiKey"
@@ -315,12 +301,9 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Found in DataDog Organization Settings &rarr; API Keys
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Application Key
-                </label>
+              <FormField label="Application Key" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="appKey"
@@ -332,7 +315,7 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Found in DataDog Organization Settings &rarr; Application Keys
                 </p>
-              </div>
+              </FormField>
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <button

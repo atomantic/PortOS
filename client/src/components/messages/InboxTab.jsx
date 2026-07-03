@@ -114,7 +114,7 @@ export default function InboxTab({ accounts }) {
     let totalPruned = 0;
     for (const acct of targets) {
       toast(`Syncing ${acct.name} (${mode})...`, { icon: '📧' });
-      const result = await api.syncMessageAccount(acct.id, mode).catch(err => {
+      const result = await api.syncMessageAccount(acct.id, mode, { silent: true }).catch(err => {
         toast.error(`${acct.name}: ${err?.message || 'Sync failed'}`);
         return null;
       });
@@ -174,7 +174,7 @@ export default function InboxTab({ accounts }) {
     }
     setActionInProgress(msg.id);
     toast(`${action === 'archive' ? 'Archiving' : 'Deleting'}...`, { icon: '📧' });
-    const result = await api.executeMessageAction(msg.accountId, msg.id, action).catch(err => {
+    const result = await api.executeMessageAction(msg.accountId, msg.id, action, { silent: true }).catch(err => {
       toast.error(err?.message || `${action} failed`);
       return null;
     });

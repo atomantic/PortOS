@@ -38,6 +38,7 @@ vi.mock('./eventScheduler.js', () => ({
 
 vi.mock('../lib/timezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+  getTimezoneUpdatedAt: vi.fn().mockResolvedValue(null),
   getLocalParts: vi.fn(),
   todayInTimezone: vi.fn(),
   HHMM_STRICT_RE: /^([01]\d|2[0-3]):[0-5]\d$/
@@ -61,7 +62,7 @@ vi.mock('./settings.js', () => ({
 }));
 
 import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
-import { getUserTimezone, getLocalParts, todayInTimezone } from '../lib/timezone.js';
+import { getUserTimezone, getTimezoneUpdatedAt, getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions } from './meatspacePost.js';
 import { addNotification, getNotifications } from './notifications.js';
 import {
@@ -92,6 +93,7 @@ describe('registerPostReminderSchedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getUserTimezone.mockResolvedValue('UTC');
+    getTimezoneUpdatedAt.mockResolvedValue(null);
     parseCronToPrevRun.mockReturnValue(null);
   });
 
@@ -244,6 +246,92 @@ describe('registerPostReminderSchedule', () => {
       todayInTimezone.mockReturnValue('2026-07-01');
       getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
       parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression (#2040): a same-day missed slot must ALSO be gated on when the
+    // user's GLOBAL timezone last changed, not just the reminder's own config.
+    // If the user switches timezone such that today's slot newly appears
+    // already-passed under the new zone, then the server restarts later the
+    // same local day, replaying that slot would nag for a slot that was never
+    // scheduled under the timezone active when it "occurred."
+    it('does not fire when the missed slot predates the last global timezone change', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      // The 09:00 slot happened BEFORE the 10:00 timezone switch.
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+      getTimezoneUpdatedAt.mockResolvedValue(new Date('2026-07-01T10:00:00.000Z').getTime());
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+      expect(getPostSessions).not.toHaveBeenCalled();
+    });
+
+    it('fires when the missed slot occurred after the last global timezone change', async () => {
+      getPostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
+      getPostSessions.mockResolvedValue([]);
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+      // Timezone last changed BEFORE the slot — the slot is genuinely owned by
+      // the currently-active zone, so catch-up proceeds.
+      getTimezoneUpdatedAt.mockResolvedValue(new Date('2026-06-01T00:00:00.000Z').getTime());
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).toHaveBeenCalledTimes(1);
+    });
+
+    // The effective floor is the LATER of the two cutoffs. Here the reminder
+    // config was saved BEFORE the slot (its own guard alone would allow the
+    // fire), but the timezone changed AFTER the slot — the later (timezone)
+    // cutoff must win and block the catch-up.
+    it('uses the later of (reminder config, timezone change) cutoffs — timezone wins', async () => {
+      getPostConfig.mockResolvedValue({
+        reminder: { enabled: true, time: '09:00', updatedAt: '2026-07-01T08:00:00.000Z' }
+      });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+      getTimezoneUpdatedAt.mockResolvedValue(new Date('2026-07-01T10:00:00.000Z').getTime());
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+    });
+
+    // Inverse: timezone changed BEFORE the slot but the reminder config was
+    // saved AFTER it — the later (reminder) cutoff wins and blocks.
+    it('uses the later of (reminder config, timezone change) cutoffs — reminder config wins', async () => {
+      getPostConfig.mockResolvedValue({
+        reminder: { enabled: true, time: '09:00', updatedAt: '2026-07-01T10:00:00.000Z' }
+      });
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+      getTimezoneUpdatedAt.mockResolvedValue(new Date('2026-07-01T08:00:00.000Z').getTime());
+
+      await registerPostReminderSchedule({ catchUpMissedSlot: true });
+
+      expect(addNotification).not.toHaveBeenCalled();
+    });
+
+    // Both cutoffs predate the slot → the slot is owned by the current config
+    // AND the current zone, so catch-up fires.
+    it('fires when the slot postdates both the reminder config and the timezone change', async () => {
+      getPostConfig.mockResolvedValue({
+        reminder: { enabled: true, time: '09:00', updatedAt: '2026-06-15T00:00:00.000Z' }
+      });
+      getPostSessions.mockResolvedValue([]);
+      todayInTimezone.mockReturnValue('2026-07-01');
+      getLocalParts.mockReturnValue({ year: 2026, month: 7, day: 1 });
+      parseCronToPrevRun.mockReturnValue(new Date('2026-07-01T09:00:00.000Z'));
+      getTimezoneUpdatedAt.mockResolvedValue(new Date('2026-06-20T00:00:00.000Z').getTime());
 
       await registerPostReminderSchedule({ catchUpMissedSlot: true });
 

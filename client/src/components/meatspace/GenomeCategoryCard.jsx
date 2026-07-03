@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const STATUS_DOT = {
@@ -170,8 +171,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       </div>
 
                       {/* Notes */}
-                      <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Your Notes</label>
+                      <FormField labelClassName="text-[10px] font-medium text-gray-500 uppercase tracking-wide" label="Your Notes">
                         <textarea
                           value={marker.notes || ''}
                           onChange={(e) => onEditNotes(marker.id, e.target.value)}
@@ -179,7 +179,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                           rows={2}
                           className="w-full mt-1 p-2 bg-port-card border border-port-border rounded text-sm text-gray-300 placeholder-gray-600 resize-none focus:outline-hidden focus:border-port-accent"
                         />
-                      </div>
+                      </FormField>
 
                       {/* References */}
                       {marker.references?.length > 0 && (

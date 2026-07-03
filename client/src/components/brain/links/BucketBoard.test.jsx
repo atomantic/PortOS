@@ -135,7 +135,7 @@ describe('BucketBoard', () => {
     fireEvent.change(screen.getByLabelText('New bucket name'), { target: { value: 'Reading' } });
     fireEvent.click(screen.getByText('Create'));
 
-    await waitFor(() => expect(api.createBrainBucket).toHaveBeenCalledWith({ name: 'Reading' }));
+    await waitFor(() => expect(api.createBrainBucket).toHaveBeenCalledWith({ name: 'Reading' }, { silent: true }));
     expect(setBuckets).toHaveBeenCalled();
   });
 });

@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -30,6 +30,7 @@ const FILTERS = [
 ];
 
 export default function MediaHistory() {
+  const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -262,6 +263,7 @@ export default function MediaHistory() {
                 hideActions={stitchMode}
                 {...getCardProps(it.key)}
                 onToggleStar={!stitchMode ? toggleStar : undefined}
+                onAnnotate={!stitchMode && it.kind === 'image' ? (m) => navigate(`/media/annotate/${encodeURIComponent(m.key)}`) : undefined}
               />
             );
           })}

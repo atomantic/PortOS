@@ -16,7 +16,14 @@ vi.mock('./googleAuth.js', () => ({
   getAuthenticatedClient: vi.fn(async () => null),
 }));
 
-import { syncAccount } from './calendarSync.js';
+// tribe.js is loaded dynamically by logCalendarTouchpoints; mock it so the
+// producer test asserts the candidates without a live Postgres.
+vi.mock('./tribe.js', () => ({
+  autoLogTouchpoints: vi.fn().mockResolvedValue({ created: 0, matched: 0 }),
+}));
+
+import { syncAccount, logCalendarTouchpoints } from './calendarSync.js';
+import { autoLogTouchpoints } from './tribe.js';
 import { mcpSyncAccount, mcpDiscoverCalendars } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';
 import { getAccount } from './calendarAccounts.js';
@@ -78,5 +85,49 @@ describe('calendar sync services throw ServerError with the documented statuses'
       getAccount.mockResolvedValue(null);
       await expect(apiDiscoverCalendars(ACCOUNT_ID)).rejects.toMatchObject({ status: 404 });
     });
+  });
+});
+
+describe('logCalendarTouchpoints — candidate building (#2033)', () => {
+  const PAST = '2020-01-01T10:00:00Z';
+  const FUTURE = new Date(Date.now() + 7 * 86400000).toISOString();
+
+  beforeEach(() => {
+    autoLogTouchpoints.mockClear();
+    autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
+  });
+
+  it('builds a calendar candidate with a stable per-event dedupe key', async () => {
+    await logCalendarTouchpoints(ACCOUNT_ID, [{
+      externalId: 'evt-1',
+      title: 'Coffee with Ada',
+      location: 'Cafe',
+      startTime: PAST,
+      organizer: { name: 'Ada', email: 'ada@work.com' },
+      attendees: [{ name: 'Me', email: 'me@x.com' }],
+    }]);
+
+    expect(autoLogTouchpoints).toHaveBeenCalledTimes(1);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      source: 'calendar',
+      dedupeKey: `cal:${ACCOUNT_ID}:evt-1`,
+      calendarEventId: 'evt-1',
+      happenedAt: PAST,
+      summary: 'Coffee with Ada',
+    });
+    expect(candidates[0].identities).toHaveLength(2);
+  });
+
+  it('skips future, cancelled, declined, and attendee-less events', async () => {
+    await logCalendarTouchpoints(ACCOUNT_ID, [
+      { externalId: 'future', startTime: FUTURE, attendees: [{ email: 'ada@work.com' }] },
+      { externalId: 'cancelled', startTime: PAST, isCancelled: true, attendees: [{ email: 'ada@work.com' }] },
+      { externalId: 'declined', startTime: PAST, myStatus: 'declined', attendees: [{ email: 'ada@work.com' }] },
+      { externalId: 'empty', startTime: PAST, attendees: [] },
+    ]);
+    // All four filtered out → producer never calls the logger.
+    expect(autoLogTouchpoints).not.toHaveBeenCalled();
   });
 });

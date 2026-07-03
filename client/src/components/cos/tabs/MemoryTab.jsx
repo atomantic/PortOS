@@ -88,7 +88,7 @@ export default function MemoryTab({ apps = [] }) {
     if (actionRef.current) return;
     actionRef.current = true;
     setActionInFlight(id);
-    const result = await action(id).catch(err => {
+    const result = await action(id, { silent: true }).catch(err => {
       toast.error(err?.message || `Failed to ${label.toLowerCase()} memory`);
       return null;
     });
