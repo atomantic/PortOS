@@ -17,10 +17,17 @@ import {
 } from '../../../server/lib/tribeCadence.js';
 
 // N days before today as a YYYY-MM-DD string, so the suite is date-independent.
+// Build the string from LOCAL calendar fields — `daysSinceDate` parses the
+// `YYYY-MM-DD` in local time, so using `toISOString()` (UTC) here would shift
+// the date across the UTC/local day boundary in the evening and make the
+// elapsed-day math off-by-one (timezone-dependent flake).
 function daysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 describe('tribeCadence — client/server mirror is byte-identical', () => {
