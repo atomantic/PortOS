@@ -308,7 +308,6 @@ describe('tuiHandshake — review-loop idle suppression', () => {
   it('isReviewLoopSignal matches multi-reviewer-loop chrome (case-insensitive)', () => {
     expect(isReviewLoopSignal('Review plan: [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
     expect(isReviewLoopSignal('--- Review pass 1/2: codex ---')).toBe(true);
-    expect(isReviewLoopSignal('## Multi-Reviewer Summary')).toBe(true);
   });
 
   it('isReviewLoopSignal ignores ordinary implementation/output chrome', () => {
@@ -319,20 +318,24 @@ describe('tuiHandshake — review-loop idle suppression', () => {
     expect(isReviewLoopSignal(undefined)).toBe(false);
   });
 
-  // Regression for false-positive latches found across two rounds of local
-  // review: bare substrings ('review pass', 'review loop', 'multi-reviewer')
-  // would match this project's own CLAUDE.md convention ("run a simplify/
-  // self-review pass before committing") and this repo's bundled slashdo docs
-  // (which say "review loop" and "multi-reviewer" dozens of times, including
-  // the literal instruction text "Review plan: {REVIEW_AGENTS}..."), latching
-  // the tracker for ANY CoS agent's ordinary narration or docs-editing — not
-  // just an actual do:release/do:pr/do:rpr run.
+  // Regression for false-positive latches found across three rounds of local
+  // review: bare substrings ('review pass', 'review loop', 'multi-reviewer',
+  // 'multi-reviewer summary') would match this project's own CLAUDE.md
+  // convention ("run a simplify/self-review pass before committing") and this
+  // repo's bundled slashdo docs — which say "review loop"/"multi-reviewer"
+  // dozens of times, include the literal instruction text "Review plan:
+  // {REVIEW_AGENTS}...", AND (codex review's finding) render a fully-formed
+  // example of their own "## Multi-Reviewer Summary" aggregate-report heading
+  // in a sample output block — latching the tracker for ANY CoS agent's
+  // ordinary narration or docs-editing, not just an actual do:release/do:pr/
+  // do:rpr run.
   it('isReviewLoopSignal does NOT match ordinary self-review narration or doc prose', () => {
     expect(isReviewLoopSignal('running the self-review pass before committing')).toBe(false);
     expect(isReviewLoopSignal('## Local Agent Code Review Loop')).toBe(false);
     expect(isReviewLoopSignal('You are a Copilot review loop agent.')).toBe(false);
     expect(isReviewLoopSignal('the multi-reviewer wrapper dispatches each listed agent')).toBe(false);
     expect(isReviewLoopSignal('Print the resolved plan before starting: `Review plan: {REVIEW_AGENTS} (mode: ...)`')).toBe(false);
+    expect(isReviewLoopSignal('## Multi-Reviewer Summary')).toBe(false);
   });
 
   it('createReviewLoopTracker latches on first signal and stays active through silence', () => {

@@ -398,21 +398,29 @@ export const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
 // only extends the (bounded) idle window, and a false NEGATIVE just preserves
 // prior behavior. Matched against ANSI-stripped output.
 //
-// All three patterns are anchored to the literal RENDERED shape rather than a
-// bare substring, because this repo bundles the slashdo docs that DESCRIBE
-// these banners in prose — `lib/slashdo/lib/multi-reviewer-loop.md` alone
-// contains the word "multi-reviewer" dozens of times and the literal phrase
-// "Review plan:" once (inside its own instruction text), and this project's
-// CLAUDE.md convention text is "run a simplify/self-review pass before
-// committing", whose substring "review pass" would otherwise latch on ANY
-// CoS agent's ordinary narration or docs-editing — not just an actual
+// Both patterns are anchored to the literal RENDERED shape rather than a bare
+// substring, because this repo bundles the slashdo docs that DESCRIBE these
+// banners — `lib/slashdo/lib/multi-reviewer-loop.md` alone contains the word
+// "multi-reviewer" dozens of times, the literal phrase "Review plan:" once
+// (inside its own instruction text), AND a fully-rendered example of its own
+// aggregate-report heading ("## Multi-Reviewer Summary", in the doc's sample
+// output block) — so a THIRD marker keyed on that heading alone would latch
+// on any agent reading/quoting that one doc file (codex review flagged this
+// exact collision; verified via `grep -rn "multi-reviewer summary"
+// lib/slashdo/` — it's the only bundled doc containing that literal string).
+// This project's CLAUDE.md convention text is also "run a simplify/
+// self-review pass before committing", whose substring "review pass" would
+// otherwise latch on ANY CoS agent's ordinary narration — not just an actual
 // do:release/do:pr/do:rpr run. Anchoring on the shape only the runtime output
-// actually has (a rendered `[...]` agent list, a digit/slash pass counter, or
-// the literal report heading) keeps the false-positive rate low without
-// weakening true-positive detection of the real banners.
+// actually has (a rendered `[...]` agent list, or a digit/slash pass counter)
+// — verified clean against every bundled slashdo doc — keeps the
+// false-positive rate low without weakening true-positive detection: the
+// review-plan banner alone is a complete, sufficient signal (it prints once,
+// unconditionally, before ANY reviewer pass begins) and the tracker latches
+// permanently once set, so the pass-banner pattern only needs to catch the
+// (rare) case where the plan banner itself was missed.
 const REVIEW_PLAN_PATTERN = /review plan:\s*\[/i;
 const REVIEW_PASS_BANNER_PATTERN = /review pass\s+\d+\s*\/\s*\d+/i;
-const REVIEW_SUMMARY_PATTERN = /multi-reviewer summary/i;
 
 /**
  * True when a chunk of ANSI-stripped TUI output shows the multi-reviewer loop
@@ -424,9 +432,7 @@ const REVIEW_SUMMARY_PATTERN = /multi-reviewer summary/i;
  */
 export function isReviewLoopSignal(strippedText) {
   if (typeof strippedText !== 'string' || !strippedText) return false;
-  return REVIEW_PLAN_PATTERN.test(strippedText)
-    || REVIEW_PASS_BANNER_PATTERN.test(strippedText)
-    || REVIEW_SUMMARY_PATTERN.test(strippedText);
+  return REVIEW_PLAN_PATTERN.test(strippedText) || REVIEW_PASS_BANNER_PATTERN.test(strippedText);
 }
 
 /**
