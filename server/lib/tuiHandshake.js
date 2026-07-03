@@ -378,6 +378,70 @@ export function createMergeQueueTracker() {
   };
 }
 
+// Extended idle threshold applied while a `/do:release`, `/do:pr`, or `/do:rpr`
+// multi-reviewer loop is waiting on a slow external reviewer (a Copilot cloud
+// review, a headless codex/agy/claude review pass, an Ollama pass, or an
+// arbitrary @<login> human reviewer). Observed 2026-07-02 (agent-61508f36): the
+// review loop correctly backgrounds the reviewer and polls for it rather than
+// blocking — but the reviewer itself can go silent in the wrapped TUI for well
+// over the 3-minute default while it works (e.g. codex reading a large diff),
+// and the runner reaped the still-waiting release agent as `idle-complete` (a
+// false SUCCESS) before it ever reached the merge gate, leaving the release PR
+// open and unmerged. Mirrors the merge-queue grace (#2074) exactly: 15 minutes
+// comfortably covers one reviewer's silent working stretch while still
+// bounding a genuinely-dead agent's reap.
+export const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
+
+// Distinctive markers the multi-reviewer loop (do:release/do:pr/do:rpr) prints
+// once it starts waiting on a reviewer pass. Detection is deliberately
+// conservative, same rationale as MERGE_QUEUE_MARKERS above: a false POSITIVE
+// only extends the (bounded) idle window, and a false NEGATIVE just preserves
+// prior behavior. Matched against ANSI-stripped output, lower-cased.
+const REVIEW_LOOP_MARKERS = [
+  'review plan:',
+  'review pass',
+  'multi-reviewer',
+  'review loop',
+];
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the multi-reviewer loop
+ * (do:release/do:pr/do:rpr) has started a reviewer pass. Callers MUST pass
+ * stripped output. Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isReviewLoopSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  const lower = strippedText.toLowerCase();
+  return REVIEW_LOOP_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * Latching tracker for "this agent is waiting inside a multi-reviewer loop"
+ * (do:release/do:pr/do:rpr). Feed it each ANSI-stripped post-submit chunk via
+ * `observe(text)`; it becomes `active` the first time a review-loop marker
+ * appears and STAYS active thereafter (same latching rationale as
+ * createMergeQueueTracker — the failure mode is a silent external-reviewer
+ * wait, so a recency window would age the flag out exactly when the extended
+ * grace is needed). Once latched, the idle reaper uses
+ * REVIEW_LOOP_IDLE_TIMEOUT_MS instead of the 3-minute default.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createReviewLoopTracker() {
+  let active = false;
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (isReviewLoopSignal(strippedText)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
 // ─── Buffer caps (defensive RAM bounds) ───────────────────────────────────
 //
 // RAW caps stay small — the raw PTY stream is only used for paste-marker

@@ -1010,15 +1010,21 @@ describe('spawnTuiAgent runtime', () => {
 // tested without standing up the full fake-timer PTY harness.
 describe('agentTuiSpawning — idle reap decision (#2074)', () => {
   const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
+  const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
 
   // Faithful copy of the idleTimer body's finalize-selection logic.
-  function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, workActive, rendersCounter }) {
+  function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, reviewLoopActive, workActive, rendersCounter }) {
     const effectiveIdleTimeoutMs = mergeQueueActive
       ? Math.max(baseIdleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
-      : baseIdleTimeoutMs;
+      : reviewLoopActive
+        ? Math.max(baseIdleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : baseIdleTimeoutMs;
     if (idle < effectiveIdleTimeoutMs) return { action: 'wait', effectiveIdleTimeoutMs };
     if (mergeQueueActive) {
       return { action: 'reap', success: false, reason: 'merge-queue-idle-timeout', effectiveIdleTimeoutMs };
+    }
+    if (reviewLoopActive) {
+      return { action: 'reap', success: false, reason: 'review-loop-idle-timeout', effectiveIdleTimeoutMs };
     }
     const noWorkButCounterExpected = !workActive && rendersCounter;
     if (noWorkButCounterExpected) {
@@ -1060,6 +1066,66 @@ describe('agentTuiSpawning — idle reap decision (#2074)', () => {
     // Even with no work counter seen, a latched merge queue means real work was
     // happening — surface it as needs-manual-finish, not a never-submitted prompt.
     const r = decideIdleReap({ idle: MERGE_QUEUE_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: true, workActive: false, rendersCounter: true });
+    expect(r.reason).toBe('merge-queue-idle-timeout');
+  });
+});
+
+// Generalizes #2074's fix to do:release/do:pr/do:rpr's multi-reviewer loop —
+// observed 2026-07-02 on agent-61508f36 (PR #2084): a slow codex review pass
+// went silent past the 3-minute default and the still-waiting release agent
+// was reaped as a false `idle-complete` success before it ever merged.
+describe('agentTuiSpawning — idle reap decision (review loop)', () => {
+  const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
+
+  function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, reviewLoopActive, workActive, rendersCounter }) {
+    const effectiveIdleTimeoutMs = mergeQueueActive
+      ? Math.max(baseIdleTimeoutMs, 900000)
+      : reviewLoopActive
+        ? Math.max(baseIdleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : baseIdleTimeoutMs;
+    if (idle < effectiveIdleTimeoutMs) return { action: 'wait', effectiveIdleTimeoutMs };
+    if (mergeQueueActive) {
+      return { action: 'reap', success: false, reason: 'merge-queue-idle-timeout', effectiveIdleTimeoutMs };
+    }
+    if (reviewLoopActive) {
+      return { action: 'reap', success: false, reason: 'review-loop-idle-timeout', effectiveIdleTimeoutMs };
+    }
+    const noWorkButCounterExpected = !workActive && rendersCounter;
+    if (noWorkButCounterExpected) {
+      return { action: 'reap', success: false, reason: 'idle-no-activity', effectiveIdleTimeoutMs };
+    }
+    return { action: 'reap', success: true, reason: 'idle-complete', effectiveIdleTimeoutMs };
+  }
+
+  const BASE = 180000;
+
+  it('does NOT reap at the 3-min default while in a review loop — grace extends to 15min', () => {
+    const r = decideIdleReap({ idle: BASE + 5000, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('wait');
+    expect(r.effectiveIdleTimeoutMs).toBe(REVIEW_LOOP_IDLE_TIMEOUT_MS);
+  });
+
+  it('reaps a review-loop agent as needs-manual-finish once the EXTENDED window blows', () => {
+    const r = decideIdleReap({ idle: REVIEW_LOOP_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(false);
+    expect(r.reason).toBe('review-loop-idle-timeout');
+  });
+
+  it('leaves the pre-existing idle-complete path untouched when NOT in a review loop', () => {
+    const r = decideIdleReap({ idle: BASE + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: false, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(true);
+    expect(r.reason).toBe('idle-complete');
+  });
+
+  it('a review-loop reap takes precedence over the no-activity downgrade', () => {
+    const r = decideIdleReap({ idle: REVIEW_LOOP_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: false, rendersCounter: true });
+    expect(r.reason).toBe('review-loop-idle-timeout');
+  });
+
+  it('a merge-queue reap takes precedence over a review-loop reap when both are (implausibly) active', () => {
+    const r = decideIdleReap({ idle: 900001, baseIdleTimeoutMs: BASE, mergeQueueActive: true, reviewLoopActive: true, workActive: true, rendersCounter: true });
     expect(r.reason).toBe('merge-queue-idle-timeout');
   });
 });

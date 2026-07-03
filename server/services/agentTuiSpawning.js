@@ -26,12 +26,14 @@ import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
+  REVIEW_LOOP_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createWorkActivityTracker,
   createMergeQueueTracker,
+  createReviewLoopTracker,
   createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
@@ -283,6 +285,14 @@ export async function spawnTuiAgent({
   // latched, the idle reaper uses the extended MERGE_QUEUE_IDLE_TIMEOUT_MS so a
   // still-working orchestrator isn't reaped mid-merge (issue #2074).
   const mergeQueue = createMergeQueueTracker();
+  // Latches once the agent enters a do:release/do:pr/do:rpr multi-reviewer
+  // loop, whose external reviewer passes (codex reading a large diff, a
+  // Copilot cloud review, a human @<login> review) can go silent in the TUI
+  // for well over the default idle window. While latched, the idle reaper
+  // uses the extended REVIEW_LOOP_IDLE_TIMEOUT_MS so a still-waiting release
+  // isn't reaped as a false `idle-complete` success before it reaches the
+  // merge gate (issue observed on agent-61508f36, PR #2084).
+  const reviewLoop = createReviewLoopTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
@@ -639,6 +649,13 @@ export async function spawnTuiAgent({
         emitLog('info', `TUI agent ${agentId} entered merge queue — idle reaper extended to ${Math.round(MERGE_QUEUE_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'merge-queue' });
         await updateAgent(agentId, { metadata: { phase: 'merge-queue' } });
       }
+      // Detect entry into a do:release/do:pr/do:rpr multi-reviewer loop so the
+      // idle reaper can extend its grace across a slow reviewer's silent
+      // working stretch (see reviewLoop declaration above for the incident).
+      if (promptSubmittedAt && stripped && !reviewLoop.active && reviewLoop.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} entered review loop — idle reaper extended to ${Math.round(REVIEW_LOOP_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'review-loop' });
+        await updateAgent(agentId, { metadata: { phase: 'review-loop' } });
+      }
       lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
@@ -901,7 +918,9 @@ export async function spawnTuiAgent({
     // extended window still bounds a genuinely-dead orchestrator's reap.
     const effectiveIdleTimeoutMs = mergeQueue.active
       ? Math.max(tuiConfig.idleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
-      : tuiConfig.idleTimeoutMs;
+      : reviewLoop.active
+        ? Math.max(tuiConfig.idleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : tuiConfig.idleTimeoutMs;
     if (idle >= effectiveIdleTimeoutMs) {
       // Reaped AFTER the extended merge-queue grace elapsed: the orchestrator
       // almost certainly died mid-merge with PRs opened/merged-but-uncleaned.
@@ -913,6 +932,22 @@ export async function spawnTuiAgent({
           exitCode: 1,
           error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min in the merge queue — it likely died mid-merge; check for open or merged-but-uncleaned PRs and finish them manually.`,
           reason: 'merge-queue-idle-timeout',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+        return;
+      }
+      // Reaped AFTER the extended review-loop grace elapsed: a reviewer
+      // (copilot/codex/agy/claude/ollama/@<login>) likely hung, or the wait
+      // simply exceeded budget. Surface it as a needs-manual-finish FAILURE
+      // rather than the silent `status: completed` that let PR #2084 sit
+      // open+unmerged for hours while agent-61508f36 looked "done".
+      if (reviewLoop.active) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min waiting inside the multi-reviewer loop — a reviewer may have hung or the wait exceeded budget; check the PR's review/merge state and finish manually.`,
+          reason: 'review-loop-idle-timeout',
         }).catch(err => {
           emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
         });
