@@ -803,8 +803,17 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
   const [done, setDone] = useState(false);
   const inputRef = useRef(null);
   const roundStartRef = useRef(0);
+  // Re-entrancy guard. On the first play of a session `ensureCtx()` awaits the
+  // iOS audio-unlock, and `prompt`/`playing` aren't set until after it — so the
+  // Start Round / New Round button stays live during that window. A second tap
+  // would otherwise start a second overlapping playPrompt, scheduling two Morse
+  // prompts over each other with the UI tracking only whichever set state last.
+  // A ref (not `playing` state) because it must gate synchronously, before the
+  // first await, where a state update wouldn't have rendered yet.
+  const playingRef = useRef(false);
 
   async function startRound() {
+    if (playingRef.current) return;
     setResults([]);
     setFeedback(null);
     setDone(false);
@@ -813,6 +822,8 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
   }
 
   async function playPrompt(isNew) {
+    if (playingRef.current) return;
+    playingRef.current = true;
     const ctx = await ensureCtx();
     const text = isNew ? pickKochPrompt(prefs.kochLevel) : prompt;
     if (isNew) {
@@ -823,6 +834,7 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
     setPlaying(true);
     await playMorse(ctx, text, prefs);
     setPlaying(false);
+    playingRef.current = false;
     setTimeout(() => inputRef.current?.focus(), 50);
   }
 

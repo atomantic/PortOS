@@ -197,6 +197,7 @@ describe('MorseTrainer iOS audio unlock', () => {
   // sounds. The trainer must await resume() (like metronome.js / scorePlayback.js)
   // so no oscillator is ever created while the context is still 'suspended'.
   let createdWhileSuspended;
+  let oscCount;
   class SuspendedAudioContext {
     constructor() { this.currentTime = 0; this.destination = {}; this.state = 'suspended'; }
     // Resolve on a macrotask (setTimeout), NOT a microtask. iOS resume latency
@@ -210,6 +211,7 @@ describe('MorseTrainer iOS audio unlock', () => {
     resume() { return new Promise((resolve) => { setTimeout(() => { this.state = 'running'; resolve(); }, 0); }); }
     createOscillator() {
       if (this.state === 'suspended') createdWhileSuspended = true;
+      oscCount += 1;
       return new MockOscillator();
     }
     createGain() { return new MockGainNode(); }
@@ -218,6 +220,7 @@ describe('MorseTrainer iOS audio unlock', () => {
 
   beforeEach(() => {
     createdWhileSuspended = false;
+    oscCount = 0;
     submitTrainingEntry.mockClear();
     getTrainingStats.mockClear();
     window.AudioContext = SuspendedAudioContext;
@@ -231,6 +234,22 @@ describe('MorseTrainer iOS audio unlock', () => {
     // first tone has been scheduled and played.
     await screen.findByPlaceholderText('????');
     expect(createdWhileSuspended).toBe(false);
+  });
+
+  it('ignores a second Start-Round tap during the audio-unlock window (no overlapping prompt)', async () => {
+    // While the first play awaits resume() (the iOS unlock window), prompt/playing
+    // aren't set yet, so the Start Round button is still live. A second tap in that
+    // window must be ignored — otherwise two playPrompt runs schedule two Morse
+    // prompts over each other. playMorse uses exactly one oscillator per prompt, so
+    // two overlapping prompts would create two oscillators for one round start.
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    const startBtn = await screen.findByRole('button', { name: /Start Round/i });
+    // Two synchronous taps land inside the unlock window (resume() resolves on a
+    // later macrotask, so neither startRound has reached createOscillator yet).
+    fireEvent.click(startBtn);
+    fireEvent.click(startBtn);
+    await screen.findByPlaceholderText('????');
+    expect(oscCount).toBe(1);
   });
 });
 
