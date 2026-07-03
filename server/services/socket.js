@@ -184,10 +184,11 @@ export function initSocket(io) {
       try {
         const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
         if (!data) return;
-        const { repoPath, providerId } = data;
+        const { repoPath, providerId, overwriteEcosystem = false } = data;
         console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
         const outcome = await pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+          overwriteEcosystem,
           onStep: ({ step, status, data }) => {
             socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
           },
@@ -390,15 +391,19 @@ export function initSocket(io) {
 
         // Step 3: Apply
         emit('apply', 'running', 'Writing ecosystem.config.cjs...');
-        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
-          .catch(err => ({ success: false, errors: [err.message] }));
+        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis, {
+          overwriteEcosystem: data.overwriteEcosystem ?? false
+        }).catch(err => ({ success: false, errors: [err.message] }));
 
         if (result.errors?.length > 0) {
           emit('apply', 'error', result.errors.join(', '));
           socket.emit('app:standardize:error', { message: result.errors.join(', ') });
           return;
         }
-        emit('apply', 'done', `Modified ${result.filesModified.length} files`);
+        const preserved = result.filesPreserved || [];
+        emit('apply', 'done', preserved.length
+          ? `Modified ${result.filesModified.length} files, preserved ${preserved.length}`
+          : `Modified ${result.filesModified.length} files`);
 
         // Update app with new PM2 process names
         if (analysis.proposedChanges?.processes) {
@@ -411,6 +416,7 @@ export function initSocket(io) {
           result: {
             backupBranch: result.backupBranch,
             filesModified: result.filesModified,
+            filesPreserved: preserved,
             processes: analysis.proposedChanges.processes
           }
         });

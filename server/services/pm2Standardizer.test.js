@@ -1,5 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
-import { reassignCollidingPorts, runStandardizeFlow } from './pm2Standardizer.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import {
+  reassignCollidingPorts,
+  runStandardizeFlow,
+  applyStandardization,
+  PORTOS_ECOSYSTEM_MARKER
+} from './pm2Standardizer.js';
 
 describe('reassignCollidingPorts', () => {
   it('moves a process off a taken port and rewrites both env.PORT and --port args', () => {
@@ -116,16 +124,49 @@ describe('runStandardizeFlow', () => {
     const outcome = await runStandardizeFlow('/repo', 'prov-1', { analyze, backup, apply });
 
     expect(analyze).toHaveBeenCalledWith('/repo', 'prov-1');
-    // Step 3 must skip its own backup since step 2 already made one.
-    expect(apply).toHaveBeenCalledWith('/repo', okAnalysis, { skipBackup: true });
+    // Step 3 must skip its own backup since step 2 already made one, and defaults
+    // to preserving an existing config (overwriteEcosystem false) when not opted in.
+    expect(apply).toHaveBeenCalledWith('/repo', okAnalysis, {
+      skipBackup: true,
+      overwriteEcosystem: false
+    });
     expect(outcome).toEqual({
       success: true,
       result: {
         backupBranch: 'portos-backup-123',
         filesModified: ['ecosystem.config.cjs'],
+        filesPreserved: [],
         processes: okAnalysis.proposedChanges.processes
       }
     });
+  });
+
+  it('forwards an explicit overwriteEcosystem opt-in through to apply', async () => {
+    const apply = vi.fn().mockResolvedValue({ success: true, filesModified: ['ecosystem.config.cjs'], errors: [] });
+    await runStandardizeFlow('/repo', null, {
+      overwriteEcosystem: true,
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: true, branch: 'b1' }),
+      apply
+    });
+    expect(apply).toHaveBeenCalledWith('/repo', okAnalysis, {
+      skipBackup: true,
+      overwriteEcosystem: true
+    });
+  });
+
+  it('surfaces filesPreserved from the apply result in the outcome', async () => {
+    const outcome = await runStandardizeFlow('/repo', null, {
+      analyze: vi.fn().mockResolvedValue(okAnalysis),
+      backup: vi.fn().mockResolvedValue({ success: true, branch: 'b1' }),
+      apply: vi.fn().mockResolvedValue({
+        success: true,
+        filesModified: [],
+        filesPreserved: ['ecosystem.config.cjs'],
+        errors: []
+      })
+    });
+    expect(outcome.result.filesPreserved).toEqual(['ecosystem.config.cjs']);
   });
 
   it('emits ordered step + analyzed callbacks while it runs', async () => {
@@ -197,5 +238,96 @@ describe('runStandardizeFlow', () => {
       apply: vi.fn()
     });
     expect(outcome).toEqual({ success: false, error: 'boom' });
+  });
+});
+
+describe('applyStandardization — preserve existing ecosystem.config.cjs', () => {
+  let dir = null;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  const NEW_CONTENT = `// PM2 Ecosystem Configuration\n// ${PORTOS_ECOSYSTEM_MARKER}\n\nmodule.exports = { apps: [{ name: 'new', script: 'x.js' }] };\n`;
+  const USER_CONFIG = "module.exports = { apps: [{ name: 'mine', script: 'server.js', env: { PORT: 5261 } }] };\n";
+  const OLD_PORTOS_CONFIG = `// PM2 Ecosystem Configuration\n// ${PORTOS_ECOSYSTEM_MARKER}\n\nmodule.exports = { apps: [{ name: 'old', script: 'y.js' }] };\n`;
+
+  const makePlan = (strayPorts = []) => ({
+    currentState: { hasGit: false },
+    proposedChanges: { ecosystemContent: NEW_CONTENT, createEcosystem: false, strayPorts }
+  });
+
+  const ecoPath = () => join(dir, 'ecosystem.config.cjs');
+
+  it('preserves a user-authored config (no PortOS marker) by default', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-preserve-'));
+    writeFileSync(ecoPath(), USER_CONFIG);
+
+    const result = await applyStandardization(dir, makePlan(), { skipBackup: true });
+
+    expect(readFileSync(ecoPath(), 'utf-8')).toBe(USER_CONFIG); // untouched
+    expect(result.filesPreserved).toContain('ecosystem.config.cjs');
+    expect(result.filesModified).not.toContain('ecosystem.config.cjs');
+  });
+
+  it('regenerates a PortOS-generated config (has marker) by default', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-regen-'));
+    writeFileSync(ecoPath(), OLD_PORTOS_CONFIG);
+
+    const result = await applyStandardization(dir, makePlan(), { skipBackup: true });
+
+    expect(readFileSync(ecoPath(), 'utf-8')).toBe(NEW_CONTENT); // overwritten
+    expect(result.filesModified).toContain('ecosystem.config.cjs');
+    expect(result.filesPreserved).not.toContain('ecosystem.config.cjs');
+  });
+
+  it('overwrites a user-authored config when overwriteEcosystem is true', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-force-'));
+    writeFileSync(ecoPath(), USER_CONFIG);
+
+    const result = await applyStandardization(dir, makePlan(), {
+      skipBackup: true,
+      overwriteEcosystem: true
+    });
+
+    expect(readFileSync(ecoPath(), 'utf-8')).toBe(NEW_CONTENT);
+    expect(result.filesModified).toContain('ecosystem.config.cjs');
+  });
+
+  it('writes a new config when none exists', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-new-'));
+
+    const result = await applyStandardization(dir, makePlan(), { skipBackup: true });
+
+    expect(existsSync(ecoPath())).toBe(true);
+    expect(readFileSync(ecoPath(), 'utf-8')).toBe(NEW_CONTENT);
+    expect(result.filesModified).toContain('ecosystem.config.cjs');
+  });
+
+  it('leaves .env stray ports alone when the config is preserved', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-stray-preserve-'));
+    writeFileSync(ecoPath(), USER_CONFIG);
+    const envBefore = 'PORT=5261\nNODE_ENV=development\n';
+    writeFileSync(join(dir, '.env'), envBefore);
+
+    await applyStandardization(
+      dir,
+      makePlan([{ action: 'remove', file: '.env', variable: 'PORT' }]),
+      { skipBackup: true }
+    );
+
+    // Preserving the config means we don't strip the user's ports elsewhere either.
+    expect(readFileSync(join(dir, '.env'), 'utf-8')).toBe(envBefore);
+  });
+
+  it('still strips .env stray ports when the config is (re)generated', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-stray-regen-'));
+    writeFileSync(ecoPath(), OLD_PORTOS_CONFIG); // PortOS-generated → regenerated
+    writeFileSync(join(dir, '.env'), 'PORT=5261\nNODE_ENV=development\n');
+
+    await applyStandardization(
+      dir,
+      makePlan([{ action: 'remove', file: '.env', variable: 'PORT' }]),
+      { skipBackup: true }
+    );
+
+    expect(readFileSync(join(dir, '.env'), 'utf-8')).not.toContain('PORT=5261');
   });
 });
