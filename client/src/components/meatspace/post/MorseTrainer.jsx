@@ -215,12 +215,17 @@ function pickSendPrompt() {
 
 function useAudioContext() {
   const ctxRef = useRef(null);
-  const ensureCtx = useCallback(() => {
+  const ensureCtx = useCallback(async () => {
     if (!ctxRef.current) {
       const Ctor = window.AudioContext || window.webkitAudioContext;
       ctxRef.current = new Ctor();
     }
-    if (ctxRef.current.state === 'suspended') ctxRef.current.resume();
+    // Autoplay policy starts the context suspended until a user gesture — and on
+    // iOS Safari resume() is async, so we MUST await it before scheduling any
+    // oscillator. Firing resume() without awaiting (the old behavior) laid tones
+    // down against a still-suspended clock: silent on mobile Safari. Mirrors the
+    // await-resume idiom in metronome.js / scorePlayback.js / songPlayback.js.
+    if (ctxRef.current.state === 'suspended') await ctxRef.current.resume();
     return ctxRef.current;
   }, []);
   useEffect(() => () => {
@@ -252,8 +257,12 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   const [decoded, setDecoded] = useState('');
   const [pressing, setPressing] = useState(false);
 
-  const startTone = useCallback(() => {
-    const ctx = ensureCtx();
+  const startTone = useCallback(async () => {
+    const ctx = await ensureCtx();
+    // A fast tap can release (endPress → stopTone) before the first-press-only
+    // resume await settles. Bail so we don't spin up an orphan oscillator that
+    // has no matching stop and drones on.
+    if (!pressingRef.current) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -272,8 +281,10 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     const osc = oscRef.current;
     const gain = gainRef.current;
     if (!osc || !gain) return;
-    const ctx = ensureCtx();
-    const now = ctx.currentTime;
+    // Read the clock straight off the live oscillator's context — a tone is only
+    // playing on an already-running context, so there's nothing to resume here
+    // (and stopTone stays synchronous, which endPress/clear/cleanup rely on).
+    const now = osc.context.currentTime;
     gain.gain.cancelScheduledValues(now);
     gain.gain.setValueAtTime(gain.gain.value, now);
     gain.gain.linearRampToValueAtTime(0, now + RAMP_SEC);
@@ -281,7 +292,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
     oscRef.current = null;
     gainRef.current = null;
-  }, [ensureCtx]);
+  }, []);
 
   const flushLetter = useCallback(() => {
     const buf = patternRef.current;
@@ -795,7 +806,7 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
   }
 
   async function playPrompt(isNew) {
-    const ctx = ensureCtx();
+    const ctx = await ensureCtx();
     const text = isNew ? pickKochPrompt(prefs.kochLevel) : prompt;
     if (isNew) {
       setPrompt(text);

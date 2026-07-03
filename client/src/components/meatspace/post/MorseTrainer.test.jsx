@@ -22,7 +22,9 @@ import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
 // own) — mirrors that convention. `stop()` resolves playMorse's promise on
 // the next tick, matching the real oscillator's `onended` callback shape.
 class MockOscillator {
-  constructor() { this.onended = null; this.frequency = { value: 0 }; }
+  // `context` mirrors the real AudioNode.context — stopTone reads currentTime
+  // off it instead of re-resolving the AudioContext.
+  constructor(context = { currentTime: 0 }) { this.onended = null; this.frequency = { value: 0 }; this.context = context; }
   connect() { return this; }
   start() {}
   stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
@@ -185,6 +187,44 @@ describe('MorseTrainer training log integration', () => {
         }));
       });
     });
+  });
+});
+
+describe('MorseTrainer iOS audio unlock', () => {
+  // Regression for "audio doesn't work on mobile Safari": iOS starts the
+  // AudioContext suspended and resume() is async. If a tone is scheduled before
+  // resume() settles, it's laid down against a still-suspended clock and never
+  // sounds. The trainer must await resume() (like metronome.js / scorePlayback.js)
+  // so no oscillator is ever created while the context is still 'suspended'.
+  let createdWhileSuspended;
+  class SuspendedAudioContext {
+    constructor() { this.currentTime = 0; this.destination = {}; this.state = 'suspended'; }
+    // Resolve on a later microtask, mirroring the real async resume — the
+    // component must await this before touching createOscillator.
+    resume() { return Promise.resolve().then(() => { this.state = 'running'; }); }
+    createOscillator() {
+      if (this.state === 'suspended') createdWhileSuspended = true;
+      return new MockOscillator();
+    }
+    createGain() { return new MockGainNode(); }
+    close() {}
+  }
+
+  beforeEach(() => {
+    createdWhileSuspended = false;
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+    window.AudioContext = SuspendedAudioContext;
+  });
+  afterEach(() => { delete window.AudioContext; });
+
+  it('awaits resume() before scheduling any tone (no oscillator while suspended)', async () => {
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    // The round input only renders once playMorse has finished, so by here the
+    // first tone has been scheduled and played.
+    await screen.findByPlaceholderText('????');
+    expect(createdWhileSuspended).toBe(false);
   });
 });
 
