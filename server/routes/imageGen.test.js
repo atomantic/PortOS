@@ -1233,8 +1233,10 @@ describe('Image Gen Routes', () => {
       expect(params.annotatedRegen).toBe(true);
       expect(params.initImageStrength).toBe(regen.REGEN_ANNOTATED_STRENGTH_DEFAULT);
       // Regression guard for the silently-dropped-init-image bug: the staged
-      // path must resolve under an approved image-input root.
-      expect(params.initImagePath).toContain('image-refs');
+      // path must resolve under an approved image-input root, AND carry the
+      // `init-<uuid>` name that imageRefsGc.js sweeps (so a canceled re-render
+      // doesn't leak the snapshot).
+      expect(params.initImagePath).toMatch(/[/\\]image-refs[/\\]init-[0-9a-f-]+\.png$/i);
       expect(fileUtils.resolveImageInputPath(params.initImagePath)).not.toBeNull();
 
       await rm(params.initImagePath, { force: true });

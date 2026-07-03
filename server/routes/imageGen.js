@@ -724,9 +724,11 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     // sidecar path directly would make the re-render ignore the annotation.
     // Stage a snapshot of the flattened annotation into the image-refs root the
     // runner accepts; the copy also freezes the markup at enqueue time so a
-    // later re-save can't change what this queued job renders from.
+    // later re-save can't change what this queued job renders from. Use the
+    // `init-<uuid>` name (it IS this job's init image) so imageRefsGc.js sweeps
+    // it once unreferenced — a canceled/failed re-render doesn't leak the file.
     await ensureDir(PATHS.imageRefs);
-    initImageAbsPath = join(PATHS.imageRefs, `annot-${randomUUID()}.png`);
+    initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
     await copyFile(sketchPngPath, initImageAbsPath);
   }
 
