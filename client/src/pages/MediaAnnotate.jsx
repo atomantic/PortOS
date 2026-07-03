@@ -58,6 +58,11 @@ export default function MediaAnnotate() {
   useEffect(() => {
     if (!isImage) return;
     let active = true;
+    // Clear synchronously on every image change: React Router reuses this page
+    // across :mediaKey changes, so a leftover regenInfo would otherwise disclose
+    // the PREVIOUS image's model/bounds until the new (possibly slow) probe
+    // resolves — letting the dialog open on stale availability.
+    setRegenInfo(null);
     // Pass the source filename so the reported model is the exact one a regen of
     // THIS image would run (multi-model installs), keeping the dialog honest.
     getRegenAvailability(parsed?.ref)

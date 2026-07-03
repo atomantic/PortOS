@@ -1119,10 +1119,13 @@ describe('Image Gen Routes', () => {
       const availSpy = vi.spyOn(regen, 'getRegenAvailability')
         .mockResolvedValueOnce({ available: true, modelId: 'flux2-klein-9b', strengthMin: 0.02, strengthMax: 0.6, strengthDefault: 0.25 });
 
-      const response = await request(app).get('/api/image-gen/regen/availability?filename=source.png');
+      // A path-prefixed query value must never reach the sidecar read raw — the
+      // sidecar is read by the RESOLVED gallery path's basename (traversal-safe).
+      const response = await request(app).get('/api/image-gen/regen/availability?filename=..%2F..%2Fsource.png');
 
       expect(response.status).toBe(200);
       expect(response.body.modelId).toBe('flux2-klein-9b');
+      expect(imageGen.local.readImageSidecar).toHaveBeenCalledWith('source.png');
       // The source model must reach the availability resolver, or the dialog can
       // name a different model than the POST enqueues on a multi-model install.
       expect(availSpy).toHaveBeenCalledWith({ sourceModelId: 'flux2-klein-9b' });

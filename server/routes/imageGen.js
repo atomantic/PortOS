@@ -35,7 +35,7 @@ import {
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { prepareGenerateParams } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
@@ -309,9 +309,14 @@ router.get('/active', asyncHandler(async (_req, res) => {
 // the annotate re-render dialog must disclose the real model before the render.
 router.get('/regen/availability', asyncHandler(async (req, res) => {
   const rawFilename = req.query.filename;
+  const galleryPath = typeof rawFilename === 'string' && rawFilename ? resolveGalleryImage(rawFilename) : null;
   let sourceModelId;
-  if (typeof rawFilename === 'string' && rawFilename && resolveGalleryImage(rawFilename)) {
-    const { metadata } = await local.readImageSidecar(rawFilename);
+  if (galleryPath) {
+    // Read the sidecar by the RESOLVED gallery path's basename, never the raw
+    // query value: resolveGalleryImage only validated the basename, so a
+    // `../foo.png` input could otherwise traverse out of PATHS.images in the
+    // sidecar read. basename(galleryPath) is the sanitized filename.
+    const { metadata } = await local.readImageSidecar(basename(galleryPath));
     sourceModelId = metadata?.modelId;
   }
   res.json(await getRegenAvailability({ sourceModelId }));
