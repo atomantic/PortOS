@@ -74,7 +74,11 @@ export const regenerateGalleryImage = (filename, { strength, steps, prompt, meth
   });
 // Whether the local FLUX regen backend is installed (hardware gate). Also carries
 // the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
-export const getRegenAvailability = () => request('/image-gen/regen/availability', { silent: true });
+// Pass a source `filename` (issue #2036) to get the EXACT model a regen of that
+// image would run — the backend picks by the source's own model on multi-model
+// installs, so the annotate dialog can disclose the real model before rendering.
+export const getRegenAvailability = (filename) =>
+  request(`/image-gen/regen/availability${filename ? `?filename=${encodeURIComponent(filename)}` : ''}`, { silent: true });
 // Annotation re-render (issue #2036 phase 2). Feeds the saved flattened sketch
 // (source image + drawn strokes) back through the local-FLUX img2img regen as the
 // init image; returns the queue ack ({ jobId, position, ... }). The annotation

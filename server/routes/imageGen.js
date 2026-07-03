@@ -303,8 +303,18 @@ router.get('/active', asyncHandler(async (_req, res) => {
 
 // SynthID-defeat regen availability (issue #912). Drives whether the lightbox
 // shows the "Regenerate" action — it's hardware-gated on a local FLUX runner.
-router.get('/regen/availability', asyncHandler(async (_req, res) => {
-  res.json(await getRegenAvailability());
+// Optional `?filename=` (issue #2036): when the caller names a source image, its
+// model is resolved from the sidecar and threaded into the backend pick so the
+// reported `modelId` matches the exact model a regen of THAT image would run —
+// the annotate re-render dialog must disclose the real model before the render.
+router.get('/regen/availability', asyncHandler(async (req, res) => {
+  const rawFilename = req.query.filename;
+  let sourceModelId;
+  if (typeof rawFilename === 'string' && rawFilename && resolveGalleryImage(rawFilename)) {
+    const { metadata } = await local.readImageSidecar(rawFilename);
+    sourceModelId = metadata?.modelId;
+  }
+  res.json(await getRegenAvailability({ sourceModelId }));
 }));
 
 // Shape returned for any image-gen job that goes through the mediaJobQueue
@@ -704,8 +714,10 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
 
   // Annotation re-render (issue #2036 phase 2): use the saved flattened sketch
   // (source + strokes) as the img2img init image. It's a whole-image denoise, so
-  // the light spatial pass can't honor the marks — GPU only.
-  let initImageAbsPath = null;
+  // the light spatial pass can't honor the marks — GPU only. Validate cheaply
+  // here (no disk writes) so a bad request 400s without leaving anything behind;
+  // the actual staging copy happens below, only once every gate has passed.
+  let annotatedSketchPath = null;
   if (body.annotated) {
     if (body.method === 'light') {
       throw new ServerError('Annotation re-render needs the GPU img2img pass, not the light method.', { status: 400, code: 'VALIDATION_ERROR' });
@@ -714,22 +726,10 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     if (!isValidSketchKey(key)) {
       throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    const sketchPngPath = await getSketchPngPath(key);
-    if (!sketchPngPath) {
+    annotatedSketchPath = await getSketchPngPath(key);
+    if (!annotatedSketchPath) {
       throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
     }
-    // The local runner re-validates initImagePath against its approved image
-    // roots (gallery / image-refs / visual-templates) and silently drops
-    // anything outside them — `data/media-sketches/` is NOT one, so passing the
-    // sidecar path directly would make the re-render ignore the annotation.
-    // Stage a snapshot of the flattened annotation into the image-refs root the
-    // runner accepts; the copy also freezes the markup at enqueue time so a
-    // later re-save can't change what this queued job renders from. Use the
-    // `init-<uuid>` name (it IS this job's init image) so imageRefsGc.js sweeps
-    // it once unreferenced — a canceled/failed re-render doesn't leak the file.
-    await ensureDir(PATHS.imageRefs);
-    initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
-    await copyFile(sketchPngPath, initImageAbsPath);
   }
 
   // Sidecar (for prompt/model) and the on-disk dimension probe have no data
@@ -749,6 +749,23 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   const backend = await resolveRegenBackend({ sourceModelId: sourceMeta.modelId });
   if (!backend.available) {
     throw new ServerError(backend.reason, { status: 400, code: 'REGEN_BACKEND_UNAVAILABLE' });
+  }
+
+  // Stage the flattened annotation ONLY now that every gate has passed and the
+  // job is about to enqueue — so a rejected request (unavailable backend, failed
+  // read) never leaves an orphaned snapshot behind. The local runner re-validates
+  // initImagePath against its approved image roots (gallery / image-refs /
+  // visual-templates) and silently drops anything outside them — `data/media-
+  // sketches/` is NOT one, so the sidecar is copied into the image-refs root the
+  // runner accepts. The copy also freezes the markup at enqueue time (a later
+  // re-save can't change what this queued job renders from), and the `init-<uuid>`
+  // name (it IS this job's init image) lets imageRefsGc.js sweep it once
+  // unreferenced.
+  let initImageAbsPath = null;
+  if (annotatedSketchPath) {
+    await ensureDir(PATHS.imageRefs);
+    initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
+    await copyFile(annotatedSketchPath, initImageAbsPath);
   }
 
   // Provider-aware default (issue #912): SynthID-bearing sources keep the

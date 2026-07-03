@@ -1109,6 +1109,27 @@ describe('Image Gen Routes', () => {
       expect(response.body.strengthDefault).toBeGreaterThanOrEqual(response.body.strengthMin);
       expect(response.body.strengthDefault).toBeLessThanOrEqual(response.body.strengthMax);
     });
+
+    it('threads a named source image’s model into the availability pick so the reported model matches the regen (issue #2036)', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '', metadata: { modelId: 'flux2-klein-9b' },
+      });
+      const availSpy = vi.spyOn(regen, 'getRegenAvailability')
+        .mockResolvedValueOnce({ available: true, modelId: 'flux2-klein-9b', strengthMin: 0.02, strengthMax: 0.6, strengthDefault: 0.25 });
+
+      const response = await request(app).get('/api/image-gen/regen/availability?filename=source.png');
+
+      expect(response.status).toBe(200);
+      expect(response.body.modelId).toBe('flux2-klein-9b');
+      // The source model must reach the availability resolver, or the dialog can
+      // name a different model than the POST enqueues on a multi-model install.
+      expect(availSpy).toHaveBeenCalledWith({ sourceModelId: 'flux2-klein-9b' });
+
+      resolveGallerySpy.mockRestore();
+      availSpy.mockRestore();
+    });
   });
 
   describe('POST /api/image-gen/:filename/regenerate', () => {

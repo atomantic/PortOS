@@ -58,11 +58,13 @@ export default function MediaAnnotate() {
   useEffect(() => {
     if (!isImage) return;
     let active = true;
-    getRegenAvailability()
+    // Pass the source filename so the reported model is the exact one a regen of
+    // THIS image would run (multi-model installs), keeping the dialog honest.
+    getRegenAvailability(parsed?.ref)
       .then((r) => { if (active) setRegenInfo(r || null); })
       .catch(() => { if (active) setRegenInfo(null); });
     return () => { active = false; };
-  }, [isImage]);
+  }, [isImage, parsed?.ref]);
 
   // Load any previously-saved strokes for this media key. React Router reuses
   // this component instance across :mediaKey changes (no remount), so reset all

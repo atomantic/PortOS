@@ -224,8 +224,14 @@ export async function resolveRegenBackend({ sourceModelId } = {}) {
 // Slim shape for the UI gate — drives whether the lightbox shows the
 // Regenerate action, and carries the strength bounds so the in-lightbox slider
 // stays in lock-step with server validation (one place to tune the floor).
-export async function getRegenAvailability() {
-  const resolved = await resolveRegenBackend();
+export async function getRegenAvailability({ sourceModelId } = {}) {
+  // Thread the source image's model through so the reported `modelId` is the
+  // EXACT backend a regen of that source would run — `resolveRegenBackend`
+  // orders candidates by the source's own model, so a generic (source-less)
+  // call can name a different model than the POST later enqueues on a
+  // multi-model install (issue #2036: the annotate dialog must disclose the
+  // real model before the render).
+  const resolved = await resolveRegenBackend({ sourceModelId });
   return {
     available: resolved.available,
     modelId: resolved.model?.id || null,
