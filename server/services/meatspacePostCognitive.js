@@ -189,6 +189,34 @@ export function generateNBack(config = {}) {
       targets.push(false);
     }
   }
+
+  // Guarantee BOTH signal classes among the decision positions (issue #2094):
+  // the SDT scorer needs at least one target and one non-target, or a missing
+  // class degrades to chance and caps the achievable score at 75. The random
+  // 30% roll can produce an all-non-target (or, rarely, all-target) run, so
+  // mutate one decision position until both classes exist. Targets are always
+  // recomputed from the sequence after a mutation — changing sequence[i] also
+  // flips whether i+n is a target, so the mirror can never be hand-patched.
+  const recomputeTargets = () => {
+    for (let i = 0; i < length; i++) {
+      targets[i] = i >= n && sequence[i] === sequence[i - n];
+    }
+  };
+  let classGuard = 0;
+  while (classGuard++ < 20) {
+    const decisions = targets.slice(n);
+    const hasTarget = decisions.some(Boolean);
+    const hasNonTarget = decisions.some(t => !t);
+    if (hasTarget && hasNonTarget) break;
+    const i = n + Math.floor(Math.random() * (length - n));
+    if (!hasTarget) {
+      sequence[i] = sequence[i - n];
+    } else {
+      sequence[i] = pick(NBACK_LETTERS.filter(l => l !== sequence[i - n]));
+    }
+    recomputeTargets();
+  }
+
   return {
     type: 'n-back',
     config: { n, length, stimulusMs: clampInt(config.stimulusMs, 1000, 5000, 2500) },
@@ -395,13 +423,15 @@ function scoreNBack(drillData, questions) {
   const nonTargets = correctRejections + falseAlarms;
   const hitRate = targets ? hits / targets : null;
   const correctRejectionRate = nonTargets ? correctRejections / nonTargets : null;
-  // Balanced accuracy over whichever signal classes are present. A run with only
-  // targets (or only non-targets) falls back to the one rate it can measure.
-  let accuracy;
-  if (hitRate != null && correctRejectionRate != null) accuracy = (hitRate + correctRejectionRate) / 2;
-  else if (hitRate != null) accuracy = hitRate;
-  else if (correctRejectionRate != null) accuracy = correctRejectionRate;
-  else accuracy = null;
+  // Balanced accuracy. A missing signal class (a run with only targets or only
+  // non-targets — possible in legacy/short stored sequences even though the
+  // generator now guarantees both) counts as CHANCE (0.5), not as a free pass:
+  // otherwise never pressing through an all-non-target run would bank a perfect
+  // correct-rejection rate and score 100 — the exact do-nothing exploit this
+  // scorer exists to close. Single-class ceilings are therefore 75, floors 25.
+  const accuracy = hitRate == null && correctRejectionRate == null
+    ? null
+    : ((hitRate ?? 0.5) + (correctRejectionRate ?? 0.5)) / 2;
 
   const presses = recomputed.filter(q => q.answered === 'match' && q.responseMs > 0);
   const avgResponseMs = presses.length

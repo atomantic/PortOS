@@ -79,7 +79,9 @@ export function localNBackScore(drill, questions) {
   const nonTargets = correctRejections + falseAlarms;
   const hitRate = targets ? hits / targets : null;
   const crRate = nonTargets ? correctRejections / nonTargets : null;
-  const accuracy = hitRate != null && crRate != null ? (hitRate + crRate) / 2 : (hitRate ?? crRate);
+  // A missing signal class counts as chance (0.5), mirroring the server — a
+  // never-press run through an all-non-target sequence must not show 100.
+  const accuracy = hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
   return accuracy == null ? 0 : Math.min(100, Math.max(0, Math.round(accuracy * 100)));
 }
 

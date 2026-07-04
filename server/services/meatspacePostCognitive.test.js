@@ -156,21 +156,60 @@ describe('cognitive drill generators', () => {
 
 describe('cognitive drill scorers (recompute the answer key, never trust client)', () => {
   it('n-back scores a perfect run at 100 via signal-detection (all targets hit, no false alarms)', () => {
-    // Deterministic sequence: A B A B A → with n=2, positions 2,3,4 are all targets.
-    const drillData = { type: 'n-back', config: { n: 2, stimulusMs: 2000 }, sequence: ['A', 'B', 'A', 'B', 'A'] };
+    // Deterministic mixed sequence: A B A C A → with n=2, positions 2 and 4 are
+    // targets, 3 is a non-target — both signal classes present.
+    const drillData = { type: 'n-back', config: { n: 2, stimulusMs: 2000 }, sequence: ['A', 'B', 'A', 'C', 'A'] };
     const questions = [
       { index: 2, answered: 'match', responseMs: 400 },
-      { index: 3, answered: 'match', responseMs: 400 },
+      { index: 3, answered: null, responseMs: 0 },
       { index: 4, answered: 'match', responseMs: 400 },
     ];
     const { score, accuracy, hits, misses, falseAlarms, correctRejections, questions: scored } =
       scoreCognitiveDrill('n-back', drillData, questions);
     expect(scored.every(q => q.correct)).toBe(true);
-    // Balanced accuracy — all 3 targets hit (hitRate 1), no non-targets to falsely
-    // alarm on — is 1.0 → 100. Speed no longer folds into the n-back score.
+    // Balanced accuracy — both targets hit (hitRate 1) and the non-target
+    // correctly rejected (CR rate 1) — is 1.0 → 100. Speed no longer folds in.
     expect(score).toBe(100);
     expect(accuracy).toBe(1);
-    expect({ hits, misses, falseAlarms, correctRejections }).toEqual({ hits: 3, misses: 0, falseAlarms: 0, correctRejections: 0 });
+    expect({ hits, misses, falseAlarms, correctRejections }).toEqual({ hits: 2, misses: 0, falseAlarms: 0, correctRejections: 1 });
+  });
+
+  it('n-back: a single-class run caps at 75 — a missing SDT class counts as chance, not a free pass', () => {
+    // Legacy/stored all-non-target sequence (A B C D E, n=2 → no position matches
+    // 2 back): never pressing is a perfect correct-rejection rate, but with no
+    // targets ever presented the missing hit rate counts as 0.5 → (1+0.5)/2 = 75.
+    const drillData = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'C', 'D', 'E'] };
+    const { score, accuracy } = scoreCognitiveDrill('n-back', drillData, [
+      { index: 2, answered: null, responseMs: 0 },
+      { index: 3, answered: null, responseMs: 0 },
+      { index: 4, answered: null, responseMs: 0 },
+    ]);
+    expect(accuracy).toBe(0.75);
+    expect(score).toBe(75);
+    // All-target sequence, all hits: same cap from the other side.
+    const allTargets = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'A', 'B', 'A'] };
+    const perfectPresses = scoreCognitiveDrill('n-back', allTargets, [
+      { index: 2, answered: 'match', responseMs: 300 },
+      { index: 3, answered: 'match', responseMs: 300 },
+      { index: 4, answered: 'match', responseMs: 300 },
+    ]);
+    expect(perfectPresses.score).toBe(75);
+  });
+
+  it('generateNBack always yields BOTH signal classes among decision positions', () => {
+    // The SDT scorer needs at least one target and one non-target or the score
+    // caps at 75 — the generator guarantees both even at the shortest lengths.
+    for (let run = 0; run < 50; run++) {
+      const drill = generateCognitiveDrill('n-back', { n: 2, length: 7 });
+      const decisions = drill.targets.slice(drill.config.n);
+      expect(decisions.some(Boolean)).toBe(true);
+      expect(decisions.some(t => !t)).toBe(true);
+      // The targets mirror stays derived from the sequence (never hand-patched).
+      drill.targets.forEach((t, i) => {
+        const expected = i >= drill.config.n && drill.sequence[i] === drill.sequence[i - drill.config.n];
+        expect(t).toBe(expected);
+      });
+    }
   });
 
   it('n-back marks a false-positive press wrong even if client claims correct', () => {
