@@ -9,7 +9,7 @@ vi.mock('../services/api', () => ({
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import { generatePostDrill, submitPostSession } from '../services/api';
+import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import { usePostSession } from './usePostSession';
 
 // Covers issue #2010: a memory drill completed inside a POST session must
@@ -253,5 +253,95 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
     expect(task.questions[0].chunkId).toBe('verse-1');
     expect(task.questions[1].chunkId).toBe('verse-1');
     expect(task.questions[0].correct).toBe(false);
+  });
+});
+
+describe('usePostSession — LLM training-log correctCount (issue #2097)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Regression: completeLlmDrill stores the scored responses under
+  // `responses` (with an `llmScore` field), never under `questions` (with a
+  // boolean `correct`) — but saveSession's training-mode branch used to read
+  // `r.questions?.filter(q => q.correct)`, which is always undefined for an
+  // LLM drill. Every LLM training entry (including wordplay) therefore
+  // silently logged correctCount=0 no matter how well the user actually did.
+  it('derives correctCount from the scored llmScore, not from the always-undefined r.questions', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'compound-chain', config: {}, challenges: [{ rootWord: 'fire' }],
+    });
+    scorePostLlmDrill.mockResolvedValue({
+      score: 90,
+      questions: [{ questionIndex: 0, items: ['firehouse'], llmScore: 90 }],
+      evaluation: { overallScore: 90, scores: [{ score: 90 }] },
+    });
+    submitTrainingEntry.mockResolvedValue({});
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], true);
+    });
+
+    await act(async () => {
+      await result.current.completeLlmDrill({
+        module: 'llm-drills',
+        type: 'compound-chain',
+        config: {},
+        drillData: {},
+        responses: [{ questionIndex: 0, items: ['firehouse'], responseMs: 500 }],
+        totalMs: 5000,
+      });
+    });
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+      module: 'llm-drills',
+      drillType: 'compound-chain',
+      questionCount: 1,
+      correctCount: 1,
+      totalMs: 5000,
+    }));
+  });
+
+  it('logs correctCount=0 when the llmScore is below the correct threshold', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'bridge-word', config: {}, puzzles: [{ clues: ['a', 'b'] }],
+    });
+    scorePostLlmDrill.mockResolvedValue({
+      score: 20,
+      questions: [{ questionIndex: 0, response: 'wrong', llmScore: 20 }],
+      evaluation: { overallScore: 20, scores: [{ score: 20 }] },
+    });
+    submitTrainingEntry.mockResolvedValue({});
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'bridge-word', config: {}, timeLimitSec: 120 }], true);
+    });
+
+    await act(async () => {
+      await result.current.completeLlmDrill({
+        module: 'llm-drills',
+        type: 'bridge-word',
+        config: {},
+        drillData: {},
+        responses: [{ questionIndex: 0, response: 'wrong', responseMs: 500 }],
+        totalMs: 4000,
+      });
+    });
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+      drillType: 'bridge-word', questionCount: 1, correctCount: 0,
+    }));
   });
 });

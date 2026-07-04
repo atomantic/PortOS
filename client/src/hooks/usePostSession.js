@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
-import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
+import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect } from '../components/meatspace/post/constants';
 
 function computeSessionScoreFromResults(results) {
   if (!results.length) return 0;
@@ -313,7 +313,18 @@ export function usePostSession() {
     if (isTraining) {
       for (const r of drillResults) {
         const questionCount = r.questions?.length || r.responses?.length || 0;
-        const correctCount = r.questions?.filter(q => q.correct)?.length ?? 0;
+        // LLM drills score via completeLlmDrill, which stores the scored
+        // responses under `r.responses` (with an `llmScore` field) rather
+        // than `r.questions` (with a boolean `correct`) — the two shapes come
+        // from two different result-building paths (finishDrill vs
+        // completeLlmDrill). Reading `.correct` off `r.questions` for an LLM
+        // drill always found `undefined`, so every LLM training entry
+        // (including wordplay) silently logged correctCount=0 regardless of
+        // actual performance (issue #2097).
+        const isLlmDrill = LLM_DRILL_TYPES.includes(r.type);
+        const correctCount = isLlmDrill
+          ? countLlmCorrect(r.responses || [])
+          : (r.questions?.filter(q => q.correct)?.length ?? 0);
         await submitTrainingEntry({
           module: r.module,
           drillType: r.type,

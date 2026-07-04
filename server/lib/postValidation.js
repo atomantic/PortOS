@@ -137,6 +137,25 @@ const taskResultSchema = z.object({
   // every other drill type.
   memoryItemId: z.string().optional(),
   score: z.number().min(0).max(100).optional(),
+  // Separated performance metrics stored alongside the blended `score` (issue
+  // #2094). The server always recomputes these from the drill answer key on
+  // submit, so an incoming client value is advisory — accepted (optional,
+  // nullable where a metric can be genuinely absent) rather than rejected, to
+  // keep the request/stored shapes in parity. `accuracy`/`completion` are 0-1
+  // fractions; `avgResponseMs`/`medianMs`/`bestMs` are milliseconds. The n-back
+  // signal-detection counts and reaction-time latency extremes ride along too.
+  accuracy: z.number().min(0).max(1).nullable().optional(),
+  completion: z.number().min(0).max(1).nullable().optional(),
+  avgResponseMs: z.number().min(0).nullable().optional(),
+  answeredCount: z.number().int().min(0).optional(),
+  totalCount: z.number().int().min(0).optional(),
+  medianMs: z.number().min(0).nullable().optional(),
+  bestMs: z.number().min(0).nullable().optional(),
+  span: z.number().int().min(0).optional(),
+  hits: z.number().int().min(0).optional(),
+  misses: z.number().int().min(0).optional(),
+  falseAlarms: z.number().int().min(0).optional(),
+  correctRejections: z.number().int().min(0).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(100).optional(),
     breakdown: z.array(z.object({
@@ -304,6 +323,54 @@ export const memoryDrillRequestSchema = z.object({
   mode: z.enum(['fill-blank', 'sequence', 'element-flash']).optional().default('fill-blank'),
   memoryItemId: z.string().optional(),
   count: z.number().int().min(1).max(30).optional().default(5),
+});
+
+// =============================================================================
+// MORSE TRAINER PROGRESS VALIDATION
+// =============================================================================
+
+// Server-side ceiling for a Koch level — KOCH_ORDER in MorseTrainer.jsx has 41
+// entries. Mirrors MAX_KOCH_LEVEL in meatspacePostMorse.js.
+const MORSE_MAX_KOCH_LEVEL = 41;
+
+// One recorded prompt→guess character within a Morse round. `guessed` is
+// nullable ('' or null = a miss, distinct from a wrong character); `sent` may be
+// '' for an insertion (an extra typed character with no transmitted counterpart)
+// — the server drops empty-sent items from the confusion matrix but still counts
+// them against round accuracy. The `sent` key must still be present (a missing
+// key is rejected); the server recomputes `correct` from the pair, so it's
+// advisory here.
+const morseRoundItemSchema = z.object({
+  sent: z.string().max(8),
+  guessed: z.string().max(16).nullable().optional(),
+  correct: z.boolean().optional(),
+  responseMs: z.number().min(0).optional().default(0),
+});
+
+// A completed copy/head-copy/send round the client submits on finish.
+export const morseRoundSchema = z.object({
+  mode: z.enum(['copy', 'head-copy', 'send']),
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL).optional(),
+  wpm: z.number().min(1).max(100).optional(),
+  farnsworthWpm: z.number().min(1).max(100).optional(),
+  // Bounded so a malformed client can't write (and then re-aggregate on every
+  // progress read) an unbounded array. A legit round tops out well under this:
+  // copy is 10 questions × ≤5-char groups (≈50, doubled by insertions), send is
+  // one short prompt — 200 leaves generous headroom.
+  items: z.array(morseRoundItemSchema).min(1).max(200),
+  durationMs: z.number().min(0).optional().default(0),
+});
+
+// Explicit Koch level change (advance/reset) or a one-time localStorage adoption
+// (`adopt: true` — server only applies it when it has never had a level).
+export const morseLevelUpdateSchema = z.object({
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL),
+  adopt: z.boolean().optional().default(false),
+  settings: z.object({
+    wpm: z.number().min(1).max(100).optional(),
+    farnsworthWpm: z.number().min(1).max(100).optional(),
+    toneHz: z.number().min(100).max(2000).optional(),
+  }).optional(),
 });
 
 // Training log entry submission

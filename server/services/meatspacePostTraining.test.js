@@ -114,6 +114,25 @@ describe('getTrainingStats', () => {
     expect(stats.currentStreak).toBe(3);
   });
 
+  it('aggregates wordplay drill entries the same generic way as any other drill (issue #2097)', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    readJSONFile.mockResolvedValue({
+      entries: [
+        { date: today, module: 'llm-drills', drillType: 'compound-chain', questionCount: 5, correctCount: 4, totalMs: 60000 },
+        { date: today, module: 'llm-drills', drillType: 'compound-chain', questionCount: 5, correctCount: 5, totalMs: 55000 },
+      ]
+    });
+
+    const stats = await getTrainingStats(30);
+    expect(stats.byDrill['llm-drills:compound-chain']).toMatchObject({
+      practiceCount: 2,
+      accuracy: 90, // (4+5)/(5+5) = 90%
+      totalMs: 115000,
+      daysActive: 1,
+    });
+    expect(stats.currentStreak).toBe(1);
+  });
+
   it('filters by date range', async () => {
     const old = '2020-01-01';
     const today = new Date().toISOString().split('T')[0];

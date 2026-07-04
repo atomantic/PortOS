@@ -5,7 +5,8 @@ import {
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
+import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel, nBackBalancedAccuracy } from './constants';
+import DrillQuestionReview from './DrillQuestionReview';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -271,9 +272,40 @@ export default function PostHistory({ onBack }) {
               if (expanded) {
                 for (const [i, task] of (s.tasks || []).entries()) {
                   const isLlm = LLM_DRILL_TYPES.includes(task.type);
-                  const detail = isLlm
-                    ? `${task.responses?.length || 0} responses`
-                    : `${task.questions?.filter(q => q.correct).length || 0}/${task.questions?.length || 0} correct`;
+                  // Non-LLM rows show accuracy (answered-only), speed, and
+                  // completion separately from the blended score column (issue
+                  // #2094) — never "correct/total", which counts timed-out
+                  // questions as wrong. Prefer the server-persisted metrics; fall
+                  // back to deriving from questions[] for legacy sessions. Legacy
+                  // n-back needs balanced SDT accuracy (its stored `correct`
+                  // flags encode the old raw-position model that pays ~70% for
+                  // never pressing) and is always fully reached (go/no-go).
+                  let detail;
+                  if (isLlm) {
+                    detail = `${task.responses?.length || 0} responses`;
+                  } else {
+                    const questions = task.questions || [];
+                    const noGo = task.type === 'n-back';
+                    const reached = noGo ? questions : questions.filter(q => q.answered != null);
+                    const derivedAcc = noGo
+                      ? nBackBalancedAccuracy(questions)
+                      : (reached.length ? reached.filter(q => q.correct).length / reached.length : null);
+                    const accPct = task.accuracy != null
+                      ? Math.round(task.accuracy * 100)
+                      : (derivedAcc != null ? Math.round(derivedAcc * 100) : null);
+                    const compPct = task.completion != null
+                      ? Math.round(task.completion * 100)
+                      : (questions.length ? Math.round((reached.length / questions.length) * 100) : null);
+                    const timed = reached.filter(q => (q.responseMs || 0) > 0);
+                    const avgMs = task.avgResponseMs != null
+                      ? task.avgResponseMs
+                      : (timed.length ? Math.round(timed.reduce((s, q) => s + (q.responseMs || 0), 0) / timed.length) : null);
+                    const parts = [];
+                    if (accPct != null) parts.push(`${accPct}% acc`);
+                    if (avgMs != null) parts.push(`${(avgMs / 1000).toFixed(1)}s`);
+                    if (compPct != null && compPct < 100) parts.push(`${compPct}% done`);
+                    detail = parts.join(' · ') || `${questions.length} questions`;
+                  }
                   rows.push(
                     <tr key={`${s.id}-${i}`} className="bg-port-bg/30">
                       <td></td>
@@ -288,6 +320,22 @@ export default function PostHistory({ onBack }) {
                       </td>
                     </tr>
                   );
+
+                  // Per-question mistake review — same shared component as
+                  // PostSessionResults, reused here so a past session teaches
+                  // from mistakes exactly like the just-finished one (#2093).
+                  // LLM drills are unchanged (the summary line above is all
+                  // history shows for them, matching PostSessionResults).
+                  if (!isLlm && task.questions?.length > 0) {
+                    rows.push(
+                      <tr key={`${s.id}-${i}-review`} className="bg-port-bg/30">
+                        <td></td>
+                        <td className="px-4 pb-3 pt-0" colSpan={4}>
+                          <DrillQuestionReview type={task.type} questions={task.questions} drillData={task.drillData} />
+                        </td>
+                      </tr>
+                    );
+                  }
                 }
               }
 
