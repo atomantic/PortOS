@@ -93,12 +93,16 @@ const DEFAULT_CONFIG = {
     }
   },
   // Default session composition is a balanced, interleaved mix of the free
-  // (no-provider) modules — mental math, deterministic cognitive drills, and
-  // memory (issue #2100). LLM drills are deliberately excluded from the default:
-  // auto-enabling them would queue provider calls the user hasn't consented to
-  // (see CLAUDE.md's AI Provider Usage Policy). A user who wants wit/verbal
-  // drills in every session adds `llm-drills` here explicitly.
-  sessionModules: ['mental-math', 'cognitive', 'memory'],
+  // (no-provider) modules the launcher can actually compose — mental math and
+  // deterministic cognitive drills (issue #2100). LLM drills are deliberately
+  // excluded: auto-enabling them would queue provider calls the user hasn't
+  // consented to (see CLAUDE.md's AI Provider Usage Policy) — a user who wants
+  // wit/verbal drills in every session adds `llm-drills` here explicitly.
+  // `memory` is intentionally NOT a default: memory practice lives in its own
+  // tab and has no launcher-composed drill yet, so including it would only risk
+  // an empty composed session. Legacy installs that persisted the old
+  // `['mental-math']` default are upgraded to this by migration 159.
+  sessionModules: ['mental-math', 'cognitive'],
   // Optional practice goals (issue #2100). All fields absent by default so a
   // fresh/legacy install shows no goal UI until the user sets one. Bounds are
   // enforced by postGoalsSchema (server/lib/postValidation.js).

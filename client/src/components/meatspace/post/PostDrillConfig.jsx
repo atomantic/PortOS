@@ -6,13 +6,12 @@ import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 import { GOAL_DEFS } from './constants';
 
-// Modules a Full/Quick composed session can draw from (issue #2100). `memory`
-// has no launcher-composed drill yet, so it's listed for forward-compat but is
-// a no-op in composition today.
+// Modules a Full/Quick composed session can draw from (issue #2100). Memory is
+// deliberately absent — it has no launcher-composed drill yet (practice lives in
+// the Memory tab), so offering it here would let a user build an empty session.
 const SESSION_MODULE_OPTIONS = [
   { id: 'mental-math', label: 'Mental Math' },
   { id: 'cognitive', label: 'Cognitive' },
-  { id: 'memory', label: 'Memory' },
   { id: 'llm-drills', label: 'Wit & Memory (AI)' },
 ];
 
@@ -541,7 +540,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   // never auto-run without provider-cost consent — check "Wit & Memory" to opt
   // them into composed sessions.
   const [sessionModules, setSessionModules] = useState(
-    () => Array.isArray(config?.sessionModules) ? config.sessionModules : ['mental-math', 'cognitive', 'memory']
+    () => Array.isArray(config?.sessionModules) ? config.sessionModules : ['mental-math', 'cognitive']
   );
   const [providers, setProviders] = useState([]);
   const [saving, setSaving] = useState(false);
