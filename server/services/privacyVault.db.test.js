@@ -121,6 +121,21 @@ describe.skipIf(!dbReady)('privacy vault DB round-trip', () => {
     expect(revealed).toEqual({ id: record.id, type: 'phone', value: '+1 503 555 0142' });
   });
 
+  it('round-trips valid_from/valid_to as plain YYYY-MM-DD strings (no TZ shift)', async () => {
+    const record = await vault.createVaultRecord({
+      type: 'address', label: 'Old place', value: '1 Old Rd, Portland, OR', status: 'previous',
+      validFrom: '2019-02-01', validTo: '2026-07-04',
+    });
+    created.push(record.id);
+    expect(record.validFrom).toBe('2019-02-01');
+    expect(record.validTo).toBe('2026-07-04');
+    const fetched = await vault.getVaultRecord(record.id);
+    expect(fetched.validFrom).toBe('2019-02-01');
+    expect(fetched.validTo).toBe('2026-07-04');
+    const cleared = await vault.updateVaultRecord(record.id, { validTo: null });
+    expect(cleared.validTo).toBe(null);
+  });
+
   it('updates value (re-encrypt + re-mask) and metadata', async () => {
     const record = await vault.createVaultRecord({
       type: 'address', label: 'Home', value: '123 Main St, Portland, OR 97201',

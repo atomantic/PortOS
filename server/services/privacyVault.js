@@ -25,7 +25,12 @@ import {
 import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES } from '../lib/privacyValidation.js';
 
 // Everything EXCEPT value_enc — list/read responses never carry ciphertext.
-const RECORD_COLUMNS = `id, type, label, masked_value, status, valid_from, valid_to,
+// DATE columns come back via to_char as plain 'YYYY-MM-DD' strings: node-postgres
+// otherwise parses DATE into a local-midnight JS Date, and re-serializing that
+// through toISOString() shifts the date back a day in UTC+N timezones.
+const RECORD_COLUMNS = `id, type, label, masked_value, status,
+  to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
+  to_char(valid_to, 'YYYY-MM-DD') AS valid_to,
   share_with_twin, use_for_scans, notes, created_at, updated_at`;
 
 function rowToRecord(row) {
@@ -36,8 +41,8 @@ function rowToRecord(row) {
     label: row.label,
     maskedValue: row.masked_value,
     status: row.status,
-    validFrom: row.valid_from ? new Date(row.valid_from).toISOString().slice(0, 10) : null,
-    validTo: row.valid_to ? new Date(row.valid_to).toISOString().slice(0, 10) : null,
+    validFrom: row.valid_from ?? null,
+    validTo: row.valid_to ?? null,
     shareWithTwin: row.share_with_twin,
     useForScans: row.use_for_scans,
     notes: row.notes,

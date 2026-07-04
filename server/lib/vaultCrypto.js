@@ -109,11 +109,16 @@ export function decryptValue(ciphertext) {
 
 // ─── Masking ─────────────────────────────────────────────────────────────────
 
-/** `••••1234` — last 4 of the digits (or raw chars when digits are scarce). */
+/**
+ * `••••1234` — last 4 of the digits (or raw chars when digits are scarce).
+ * A source of 4 or fewer characters is fully masked: showing "the last 4" of a
+ * 4-char value would be full disclosure, not a mask.
+ */
 function maskLastFour(value) {
   const digits = value.replace(/\D/g, '');
-  const tail = (digits.length >= 4 ? digits : value).slice(-4);
-  return `••••${tail}`;
+  const source = digits.length >= 4 ? digits : value;
+  if (source.length <= 4) return '••••';
+  return `••••${source.slice(-4)}`;
 }
 
 /**

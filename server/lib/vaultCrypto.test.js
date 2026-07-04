@@ -137,6 +137,12 @@ describe('maskValue', () => {
     expect(maskValue('financial_account', 'DE89 3704 0044 0532 0130 00')).toBe('••••3000');
   });
 
+  it('fully masks a last-4 value of 4 or fewer characters (never full disclosure)', () => {
+    expect(maskValue('financial_account', '1234')).toBe('••••');
+    expect(maskValue('ssn', '123')).toBe('••••');
+    expect(maskValue('phone', 'x1y2')).toBe('••••');
+  });
+
   it('keeps the email domain visible', () => {
     expect(maskValue('email', 'john.doe@example.com')).toBe('j•••@example.com');
     expect(maskValue('email', 'no-at-sign')).toBe('••••');
