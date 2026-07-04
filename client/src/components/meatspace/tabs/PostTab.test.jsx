@@ -14,6 +14,13 @@ vi.mock('../../../services/api', () => ({
   // mount — stub both so its effects resolve without hitting the network.
   getTrainingStats: () => Promise.resolve({ currentStreak: 0, byDrill: {} }),
   submitTrainingEntry: () => Promise.resolve({}),
+  // MorseTrainer + its progress panel read server-side Morse progress on mount.
+  getMorseProgress: () => Promise.resolve({
+    days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
+    series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
+  }),
+  submitMorseRound: () => Promise.resolve({}),
+  updateMorseLevel: () => Promise.resolve({ kochLevel: 2, kochLevelSet: true, adopted: false, settings: null }),
 }));
 
 vi.mock('../../../hooks/usePostSession', () => ({

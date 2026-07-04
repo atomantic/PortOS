@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle, Save, ArrowLeft, ChevronDown, ChevronUp, Dumbbell } from 'lucide-react';
 import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS, nBackBalancedAccuracy } from './constants';
+import DrillQuestionReview from './DrillQuestionReview';
 
 export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
   const { drillResults, sessionScore, state, saveSession, isTraining } = session;
@@ -122,7 +123,7 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
                     <span className={`font-mono font-medium ${drillScoreColor}`}>
                       {result.score || 0}
                     </span>
-                    {isLlm && (isExpanded ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />)}
+                    {isExpanded ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
                   </div>
                 </button>
 
@@ -147,6 +148,13 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
                     {result.evaluation?.summary && (
                       <p className="text-gray-400 text-xs italic px-1">{result.evaluation.summary}</p>
                     )}
+                  </div>
+                )}
+
+                {/* Math / Memory / Cognitive per-question review */}
+                {!isLlm && isExpanded && (result.questions?.length > 0) && (
+                  <div className="mt-2 ml-2 bg-port-bg border border-port-border rounded p-3">
+                    <DrillQuestionReview type={result.type} questions={result.questions} drillData={result.drillData} />
                   </div>
                 )}
               </div>

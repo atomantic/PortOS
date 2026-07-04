@@ -6,6 +6,7 @@ import {
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel, nBackBalancedAccuracy } from './constants';
+import DrillQuestionReview from './DrillQuestionReview';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -308,6 +309,22 @@ export default function PostHistory({ onBack }) {
                       </td>
                     </tr>
                   );
+
+                  // Per-question mistake review — same shared component as
+                  // PostSessionResults, reused here so a past session teaches
+                  // from mistakes exactly like the just-finished one (#2093).
+                  // LLM drills are unchanged (the summary line above is all
+                  // history shows for them, matching PostSessionResults).
+                  if (!isLlm && task.questions?.length > 0) {
+                    rows.push(
+                      <tr key={`${s.id}-${i}-review`} className="bg-port-bg/30">
+                        <td></td>
+                        <td className="px-4 pb-3 pt-0" colSpan={4}>
+                          <DrillQuestionReview type={task.type} questions={task.questions} drillData={task.drillData} />
+                        </td>
+                      </tr>
+                    );
+                  }
                 }
               }
 

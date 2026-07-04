@@ -150,6 +150,11 @@ export function buildNBackQuestions(seq, n, answers) {
       return {
         prompt: letter,
         index: i,
+        // Mirrors the server's scoreNBack recompute exactly ('match'/'no-match')
+        // so the results-review UI (DrillQuestionReview) reads one consistent
+        // field regardless of whether it's showing the just-finished client
+        // result or a server-rescored history record.
+        expected: isTarget ? 'match' : 'no-match',
         answered: a.answered ?? null,
         correct: answeredMatch === isTarget,
         responseMs: a.responseMs || 0,
@@ -171,6 +176,10 @@ export function scoreDigitSpanRecall({ digits, direction, index, answeredStr, re
     question: {
       prompt: `${digits.length}-digit (${direction})`,
       index,
+      // Shown digits in recall order — matches the server's scoreDigitSpan
+      // recompute so the review UI shows "shown vs recalled" from either the
+      // client's local result or a server-rescored history record.
+      expected,
       answered: answeredRaw.length ? answeredRaw : null,
       correct: answeredRaw.length > 0 && answeredRaw === expected,
       responseMs,
@@ -188,6 +197,8 @@ export function scoreStroopTrial({ trial, index, colorName, responseMs }) {
   return {
     prompt: trial.word,
     index,
+    // Ink color is the answer key — mirrors the server's scoreStroop recompute.
+    expected: trial.inkColor,
     answered: colorName,
     correct: colorName === trial.inkColor,
     responseMs,
@@ -202,6 +213,8 @@ export function scoreMentalRotationTrial({ trial, index, optionIndex, responseMs
   return {
     prompt: `shape ${trial.shape || ''}`,
     index,
+    // Mirrors the server's scoreMentalRotation recompute.
+    expected: trial.correctIndex,
     answered: optionIndex,
     correct: optionIndex === trial.correctIndex,
     responseMs,

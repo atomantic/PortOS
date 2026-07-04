@@ -116,6 +116,13 @@ export default function useSingToScore({ tempo, score = '', musicKey = 'C' } = {
     // relative to beat 1 of the bar.
     trackerRef.current = createPitchTracker(graph.analyser, {
       intervalMs: FRAME_INTERVAL_MS,
+      // Transcription wants the raw per-frame track: a single clarity gate (no
+      // acquire/hold hysteresis) and an immediate null on an unclear frame (no
+      // release-window hold), so a dropout is a real gap the segmenter can see
+      // rather than a stale held pitch. The tuner's hysteresis defaults are for
+      // the live readout, not the captured signal.
+      holdClarity: 0.9,
+      releaseFrames: 0,
       onUpdate: (u) => {
         if (!capturingRef.current) return;
         const tMs = nowMs() - captureStartRef.current;

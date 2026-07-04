@@ -210,9 +210,36 @@ const median = (values) => {
 // Drive a live pitch readout off a Web Audio `AnalyserNode`. Pulls time-domain
 // frames on a rAF (or interval) loop, runs `detectFrequency`, smooths the result
 // (median window to drop octave jumps, then an EMA to settle the needle), and
-// emits `{ hz, note, cents, clarity }` through `onUpdate`. While the frame is
-// silent / unclear it emits nulls so the UI can show "no pitch" rather than
-// freezing on the last note.
+// emits `{ hz, note, cents, clarity, held }` through `onUpdate`.
+//
+// Raw frame-by-frame vocal detection is jittery — vibrato, consonants, and
+// breath dips routinely drop NSDF clarity below a strict gate for a frame or two
+// while the note itself is perfectly steady. Without smoothing the readout
+// strobes: the label flickers, the needle lurches, and the display blanks
+// mid-note. Four knobs tame that, all configurable so the raw behavior stays
+// available to callers (sing-to-score, color-match) that want every frame:
+//
+//  - **Acquire/hold hysteresis** (`acquireClarity` / `holdClarity`). We require a
+//    strong frame (≥ `acquireClarity`) to START believing a pitch, but only a
+//    weaker one (≥ `holdClarity`) to KEEP believing it — so a mid-note clarity
+//    dip still feeds the smoother instead of tearing it down. Below `holdClarity`
+//    a frame counts as "unclear".
+//  - **Release window** (`releaseMs` / `releaseFrames`). A short run of unclear
+//    frames keeps emitting the last smoothed reading (flagged `held: true`) rather
+//    than blanking on the first bad frame; only once the window elapses do we emit
+//    nulls and reset the smoother (so a new note doesn't ramp from the stale EMA).
+//  - **Sticky note label** (`stickyCents`). The note label stays put until the
+//    smoothed pitch drifts more than ±`stickyCents` from that note's center —
+//    singing ~50¢ between C and C♯ no longer flaps the label C↔C♯. Cents are
+//    reported relative to the held note (so they pass through ±50 continuously
+//    instead of snapping sign); a clean semitone step blows past the band and
+//    re-derives within a few frames.
+//  - **Emit throttle** (`updateHz`). Cap the callback rate (e.g. the tuner's
+//    ~12Hz) so integer-cents redraws don't read as vibration; a material change
+//    (note flip, held⇄live) still emits immediately. `null` = emit every frame.
+//
+// Back-compat: a legacy `clarityThreshold` is honored as the `acquireClarity`
+// fallback.
 //
 // Returns `{ stop }`. `stop()` cancels the loop — call it on stop/unmount so no
 // rAF or timer dangles (the deferred-work teardown rule in CLAUDE.md). The loop
@@ -224,19 +251,90 @@ export const createPitchTracker = (analyser, opts = {}) => {
     a4 = 440,
     minHz = 70,
     maxHz = 1200,
-    clarityThreshold = 0.9,
+    clarityThreshold,                     // legacy single-threshold → acquireClarity fallback
+    acquireClarity = clarityThreshold ?? 0.9,
+    holdClarity = 0.6,
     medianWindow = 5,
     emaAlpha = 0.25,
-    intervalMs = null, // when set, use setInterval instead of requestAnimationFrame
+    stickyCents = 60,
+    releaseMs = 250,
+    releaseFrames = null,                 // wins over releaseMs when given (frame-exact)
+    updateHz = null,                      // emit throttle in Hz; null = every frame
+    intervalMs = null,                    // when set, use setTimeout instead of requestAnimationFrame
   } = opts;
 
   const sampleRate = analyser?.context?.sampleRate || 44100;
   const frame = new Float32Array(analyser?.fftSize || 2048);
-  const recent = []; // recent clear-frame Hz for the median window
-  let emaHz = null;
+
+  // Resolve the release window into a frame count. A frame is `intervalMs` (when
+  // the loop is timer-driven) or ~16.7 ms (rAF at 60fps); `releaseFrames` wins
+  // when given so tests can pin an exact count independent of the loop rate.
+  const frameMs = intervalMs != null ? intervalMs : 1000 / 60;
+  const holdFrames = releaseFrames != null
+    ? Math.max(0, releaseFrames)
+    : Math.max(0, Math.round(releaseMs / frameMs));
+  const minEmitMs = updateHz != null && updateHz > 0 ? 1000 / updateHz : 0;
+
+  const recent = [];      // recent clear-frame Hz for the median window
+  let emaHz = null;       // smoothed pitch
+  let acquired = false;   // do we currently hold a believed pitch?
+  let unclearRun = 0;     // consecutive unclear frames since the last clear one
+  let stickyNote = null;  // the note label we're holding across the ±stickyCents band
+  let lastEmitted = null; // last reading handed to onUpdate (throttle bookkeeping)
+  let lastEmitMs = null;
   let running = true;
   let rafId = null;
   let timerId = null;
+
+  const clockMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+
+  // Note identity for throttle material-change detection (a null note is '∅').
+  const noteId = (note) => (note ? `${note.letter}${note.accidental}${note.octave}` : '∅');
+
+  // Pick the note label for a smoothed pitch, keeping the current label sticky
+  // until the pitch drifts more than ±stickyCents from that note's center. A
+  // clean semitone step (100¢) blows past the band and re-derives.
+  const resolveNote = (hz) => {
+    const fresh = frequencyToNote(hz, { a4 });
+    if (!fresh) return stickyNote;
+    if (!stickyNote) { stickyNote = fresh; return stickyNote; }
+    const centerHz = noteToFrequency(stickyNote, { a4 });
+    const drift = centerHz ? Math.abs(1200 * Math.log2(hz / centerHz)) : Infinity;
+    if (drift > stickyCents) stickyNote = fresh;
+    return stickyNote;
+  };
+
+  // Cents of `hz` relative to a HELD note's center (may exceed ±50 while sticky).
+  const centsFromHeld = (hz, note) => {
+    const centerHz = noteToFrequency(note, { a4 });
+    return centerHz ? Math.round(1200 * Math.log2(hz / centerHz)) : null;
+  };
+
+  const emit = (reading) => {
+    // Throttle: within a note, emit at most `updateHz`/sec; a material change
+    // (note flip, held⇄live) always emits so the UI never lags a real transition.
+    // `updateHz == null` (minEmitMs 0) disables the throttle — every frame emits.
+    if (minEmitMs > 0 && lastEmitted) {
+      const material = noteId(reading.note) !== noteId(lastEmitted.note) || reading.held !== lastEmitted.held;
+      if (!material && lastEmitMs != null && clockMs() - lastEmitMs < minEmitMs) return;
+    }
+    lastEmitted = reading;
+    lastEmitMs = clockMs();
+    onUpdate?.(reading);
+  };
+
+  const emitLive = (hz, clarity, held) => {
+    const note = resolveNote(hz);
+    emit({ hz, note, cents: note ? centsFromHeld(hz, note) : null, clarity, held });
+  };
+
+  const reset = () => {
+    recent.length = 0;
+    emaHz = null;
+    acquired = false;
+    unclearRun = 0;
+    stickyNote = null;
+  };
 
   const schedule = () => {
     if (!running) return;
@@ -250,19 +348,30 @@ export const createPitchTracker = (analyser, opts = {}) => {
     try {
       analyser.getFloatTimeDomainData(frame);
       const res = detectFrequency(frame, { sampleRate, minHz, maxHz });
-      if (res && res.clarity >= clarityThreshold) {
+      const clarity = res?.clarity ?? 0;
+      // Acquire high, hold low: once we believe a pitch a frame merely above the
+      // hold floor still updates the smoother; only from silence do we require the
+      // stricter acquire floor.
+      const clear = !!res && clarity >= (acquired ? holdClarity : acquireClarity);
+
+      if (clear) {
+        acquired = true;
+        unclearRun = 0;
         recent.push(res.hz);
         if (recent.length > medianWindow) recent.shift();
         const med = median(recent);
         emaHz = emaHz == null ? med : emaAlpha * med + (1 - emaAlpha) * emaHz;
-        const note = frequencyToNote(emaHz, { a4 });
-        onUpdate?.({ hz: emaHz, note, cents: note?.cents ?? null, clarity: res.clarity });
+        emitLive(emaHz, clarity, false);
+      } else if (acquired && unclearRun < holdFrames && emaHz != null) {
+        // Brief dropout (consonant, breath, vibrato dip) — keep showing the last
+        // stable reading for up to the release window instead of blanking.
+        unclearRun += 1;
+        emitLive(emaHz, clarity, true);
       } else {
-        // Lost the pitch — reset the smoother so a new note doesn't ramp in from
-        // the stale one, and report the gap.
-        recent.length = 0;
-        emaHz = null;
-        onUpdate?.({ hz: null, note: null, cents: null, clarity: res?.clarity ?? 0 });
+        // Truly lost the pitch — reset so a new note doesn't ramp in from the
+        // stale EMA, and report the gap.
+        reset();
+        emit({ hz: null, note: null, cents: null, clarity, held: false });
       }
     } catch (err) {
       console.error(`❌ pitch tracker frame failed: ${err.message}`);
