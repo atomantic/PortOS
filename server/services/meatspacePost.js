@@ -24,6 +24,7 @@ import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } fr
 import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems, isStatMastered, MASTERY_TARGET_ACCURACY } from './meatspacePostMemory.js';
 import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
+import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, ymdToUTC } from '../lib/postStreak.js';
 
 // Re-export the shared streak helper so existing importers of
@@ -91,7 +92,25 @@ const DEFAULT_CONFIG = {
       'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 }
     }
   },
-  sessionModules: ['mental-math'],
+  // Default session composition is a balanced, interleaved mix of the free
+  // (no-provider) modules the launcher can actually compose — mental math and
+  // deterministic cognitive drills (issue #2100). LLM drills are deliberately
+  // excluded: auto-enabling them would queue provider calls the user hasn't
+  // consented to (see CLAUDE.md's AI Provider Usage Policy) — a user who wants
+  // wit/verbal drills in every session adds `llm-drills` here explicitly.
+  // `memory` is intentionally NOT a default: memory practice lives in its own
+  // tab and has no launcher-composed drill yet, so including it would only risk
+  // an empty composed session. Legacy installs that persisted the old
+  // `['mental-math']` default are upgraded to this by migration 159.
+  sessionModules: ['mental-math', 'cognitive'],
+  // Optional practice goals (issue #2100). All fields absent by default so a
+  // fresh/legacy install shows no goal UI until the user sets one. Bounds are
+  // enforced by postGoalsSchema (server/lib/postValidation.js).
+  //   dailyMinutes?   — minutes trained today target
+  //   weeklySessions? — scored sessions per rolling 7 days target
+  //   streakTarget?   — unified activity-streak (days) target
+  //   morseWpmTarget? — Morse effective-WPM target
+  goals: {},
   // Per-module weight applied to a session's blended score (issue #2099).
   // Uniform 1.0 defaults reproduce the old unweighted-mean behavior exactly —
   // a user only sees a change once they actually adjust a weight.
@@ -137,6 +156,15 @@ export async function updatePostConfig(updates) {
     // same day, would otherwise catch up a slot the reminder wasn't even
     // active for.
     merged.reminder = { ...merged.reminder, updatedAt: new Date().toISOString() };
+  }
+  // `goals` is REPLACED wholesale when present in the patch, not deep-merged
+  // (issue #2100). deepMerge would otherwise make a set goal impossible to
+  // clear: JSON can't send `undefined`, `0` is out of the schema's range, and
+  // `{}` would merge into the existing object rather than replace it. Sending
+  // the full desired goals object — including `{}` to clear every goal — now
+  // takes effect and the launcher/widget goal rows hide again.
+  if (updates?.goals !== undefined) {
+    merged.goals = { ...updates.goals };
   }
   await ensureMeatspaceDir();
   await atomicWrite(CONFIG_FILE, merged);
@@ -803,6 +831,275 @@ export async function getPostProgress({ days = 90 } = {}) {
       })),
       reviews,
     },
+  };
+}
+
+// =============================================================================
+// RECOMMENDATIONS ("what to practice next") — issue #2100
+// =============================================================================
+
+// Cap on how many recommendations the launcher/widget surface — enough to fill
+// an "Up next" panel without becoming a wall of tasks.
+const RECOMMENDATION_LIMIT = 5;
+// Coarse module → domain routing for weak-skill recommendations. Only the
+// domains a weak-skill rec can name are needed here; the full map lives on the
+// client (constants.js DRILL_TO_DOMAIN). Prettify falls back to the drill type.
+const DRILL_LABEL = (type) =>
+  String(type || '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * The single weakest scored drill by recent (windowed) accuracy — the drill
+ * whose `byDrillAccuracy` is lowest among drills with at least one sample.
+ * Pure; reads the shape `getPostStats` returns. `null` when there's no
+ * accuracy signal yet (fresh install / all drills without derivable accuracy).
+ * Returns `{ key, module, type, accuracy, samples }` where `key` is
+ * `"<module>:<type>"`.
+ */
+export function weakestSkillFromStats(stats) {
+  const acc = stats?.byDrillAccuracy || {};
+  const counts = stats?.byDrillCount || {};
+  let worst = null;
+  for (const [key, a] of Object.entries(acc)) {
+    if (typeof a !== 'number' || Number.isNaN(a)) continue;
+    const samples = counts[key] || 0;
+    if (samples < 1) continue;
+    if (!worst || a < worst.accuracy) {
+      const sep = key.indexOf(':');
+      worst = {
+        key,
+        module: sep >= 0 ? key.slice(0, sep) : null,
+        type: sep >= 0 ? key.slice(sep + 1) : key,
+        accuracy: a,
+        samples,
+      };
+    }
+  }
+  return worst;
+}
+
+/**
+ * Stalled-progression descriptors from the resolved multiplication + cognitive
+ * ladders: a laddered drill the user is partway up but not yet advancing, with
+ * how many more clean/fast reps remain to reach the next rung. Pure — takes the
+ * already-resolved progress objects. A ladder that's mastered-and-advancing or
+ * at its hardest rung contributes nothing.
+ *
+ * @param {object} mulProgress - getMultiplicationProgress() result
+ * @param {Record<string,object>} cogProgress - getCognitiveProgress() result
+ * @param {{kochLevel:number, kochLevelSet:boolean, maxKochLevel:number}} morse
+ */
+export function stalledProgressions(mulProgress, cogProgress, morse) {
+  const out = [];
+
+  const ladderStall = (prog, drillType, label, deepLink) => {
+    if (!prog || prog.atHardest || prog.currentMastered) return null;
+    const cur = (prog.levels || []).find((r) => r.level === prog.level);
+    if (!cur) return null;
+    // Only surface a ladder the user has actually engaged with. A fresh install
+    // sits at level 0 with 0 samples and an unearned floor — telling it to "keep
+    // climbing" a drill that's never been run is noise, and it would also crowd
+    // out the fresh-state "run your first POST" default (issue #2100 review).
+    const engaged = (cur.samples || 0) > 0 || (prog.floorLevel || 0) > 0 || prog.level > 0;
+    if (!engaged) return null;
+    const next = (prog.levels || []).find((r) => r.level === prog.level + 1);
+    const minSamples = prog.thresholds?.minSamples ?? 0;
+    const remaining = Math.max(1, minSamples - (cur.samples || 0));
+    return {
+      drillType,
+      label,
+      remaining,
+      nextLabel: next?.label || null,
+      deepLink,
+    };
+  };
+
+  const mul = ladderStall(mulProgress, 'multiplication', 'Multiplication', '/post/launcher');
+  if (mul) out.push(mul);
+
+  for (const [type, prog] of Object.entries(cogProgress || {})) {
+    const stall = ladderStall(prog, type, DRILL_LABEL(type), '/post/launcher');
+    if (stall) out.push(stall);
+  }
+
+  // Morse Koch progression: surface only once the user has engaged with Morse
+  // (a level has been set) and isn't already at the final Koch level — so a
+  // fresh install is never nagged about a track it hasn't started.
+  if (morse?.kochLevelSet && morse.kochLevel < (morse.maxKochLevel ?? Infinity)) {
+    out.push({
+      drillType: 'morse-copy',
+      label: 'Morse',
+      remaining: null,
+      nextLabel: `Koch level ${morse.kochLevel + 1}`,
+      deepLink: '/post/morse/copy',
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Compose the ordered "what to practice next" list from already-gathered
+ * signals. PURE + fully unit-testable — the async `getPostRecommendations`
+ * gathers the inputs and delegates here. Priority order (highest first):
+ *   1. Due memory items (spaced-repetition overdue)
+ *   2. Due skill re-verifications (mastered-but-inactive skills, issue #2096)
+ *   3. Weakest scored skill by recent accuracy
+ *   4. Stalled ladder progressions (N more reps to advance)
+ * When nothing is actionable (e.g. a fresh install with no history), a single
+ * sensible default ("run a full POST") is returned so the panel is never empty.
+ */
+export function composePostRecommendations({
+  dueMemoryItems = [],
+  dueReviews = [],
+  weakestSkill = null,
+  stalled = [],
+  hasHistory = false,
+  limit = RECOMMENDATION_LIMIT,
+} = {}) {
+  const recs = [];
+
+  for (const item of dueMemoryItems) {
+    recs.push({
+      id: `memory-due:${item.id}`,
+      kind: 'memory-due',
+      title: `Review "${item.title}"`,
+      detail: 'Due for spaced-repetition practice',
+      deepLink: '/post/memory',
+      drillType: 'memory-sequence',
+    });
+  }
+
+  for (const review of dueReviews) {
+    // A memory-chunk re-verification can't run through the launcher's review-rep
+    // path (getPostReviewReps only regenerates multiplication/cognitive reps —
+    // memory retention lives under /post/memory), so route it there instead of a
+    // dead /post/launcher link (issue #2100 review).
+    recs.push({
+      id: `skill-review:${review.skillId}`,
+      kind: 'skill-review',
+      title: `Re-verify ${review.label}`,
+      detail: review.status === 'needs-refresh'
+        ? 'Needs a refresh — last review slipped'
+        : 'Maintenance rep due',
+      deepLink: review.kind === 'memory' ? '/post/memory' : '/post/launcher',
+      drillType: review.drillType || null,
+    });
+  }
+
+  if (weakestSkill) {
+    recs.push({
+      id: `weak-skill:${weakestSkill.key}`,
+      kind: 'weak-skill',
+      title: `Shore up ${DRILL_LABEL(weakestSkill.type)}`,
+      detail: `Weakest skill lately — ${Math.round((weakestSkill.accuracy || 0) * 100)}% accuracy`,
+      deepLink: weakestSkill.deepLink || '/post/launcher',
+      drillType: weakestSkill.type,
+    });
+  }
+
+  for (const stall of stalled) {
+    const remainText = stall.remaining != null
+      ? `${stall.remaining} more clean rep${stall.remaining === 1 ? '' : 's'} to reach ${stall.nextLabel || 'the next level'}`
+      : `Advance to ${stall.nextLabel || 'the next level'}`;
+    recs.push({
+      id: `stalled:${stall.drillType}`,
+      kind: 'stalled-progression',
+      title: `${stall.label}: keep climbing`,
+      detail: remainText,
+      deepLink: stall.deepLink,
+      drillType: stall.drillType,
+    });
+  }
+
+  if (recs.length === 0) {
+    recs.push({
+      id: 'default:full-post',
+      kind: 'default',
+      title: hasHistory ? 'Keep your streak going' : 'Run your first POST',
+      detail: hasHistory
+        ? 'No specific gaps right now — run a full self-test to stay sharp.'
+        : 'Complete a full self-test to start tracking what to practice next.',
+      deepLink: '/post/launcher',
+      drillType: null,
+    });
+  }
+
+  return recs.slice(0, Math.max(1, limit)).map((r, i) => ({ ...r, priority: i }));
+}
+
+// Coarse module → config key for the enabled-drill lookup.
+const MODULE_CONFIG_KEY = { 'mental-math': 'mentalMath', 'llm-drills': 'llmDrills', cognitive: 'cognitive' };
+
+/**
+ * Whether a recommended drill can actually be run under the current config
+ * (issue #2100 review): a weak-skill / stalled rec deep-links into a session,
+ * so recommending a drill the user has since disabled — or a module they've
+ * removed from Session Composition — would be a dead end. Memory practice runs
+ * from its own tab, so it's always runnable regardless of session composition.
+ * Pure — exported for unit tests.
+ */
+export function isRecDrillRunnable(config, module, type) {
+  if (module === 'memory') return true;
+  const sm = Array.isArray(config?.sessionModules) ? config.sessionModules : null;
+  // null = legacy/absent → all modules allowed; an explicit array must include it.
+  if (sm !== null && !sm.includes(module)) return false;
+  const key = MODULE_CONFIG_KEY[module];
+  if (!key) return true; // unknown module — don't filter it out
+  // An absent module/drill entry means "default" (enabled) — getPostConfig
+  // deep-merges the enabled-by-default config, so only an EXPLICIT `false`
+  // disables it.
+  const mod = config?.[key];
+  if (mod && mod.enabled === false) return false;
+  const dt = mod?.drillTypes?.[type];
+  return !dt || dt.enabled !== false;
+}
+
+/**
+ * Gather the recommendation signals and compose the ordered "Up next" list
+ * (issue #2100). Reads due memory items, due skill re-verifications, recent
+ * stats (weakest skill), and the resolved ladders (stalled progressions), then
+ * filters the config-dependent ones (weakest/stalled) to drills the current
+ * config can actually run.
+ */
+export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
+  const [dueMemoryItems, dueReviews, stats, mulProgress, cogProgress, morse, sessions, config] = await Promise.all([
+    getDueMemoryItems(),
+    getDueReviews(new Date(), Infinity),
+    getPostStats(MASTERY_DEFAULTS.windowDays),
+    getMultiplicationProgress(),
+    getCognitiveProgress(),
+    getMorseProgress(MASTERY_DEFAULTS.windowDays),
+    getPostSessions(),
+    getPostConfig(),
+  ]);
+
+  // Weakest skill — drop it unless the drill is currently runnable; a memory
+  // weak-skill deep-links to its own tab rather than a composed session.
+  let weakestSkill = weakestSkillFromStats(stats);
+  if (weakestSkill) {
+    weakestSkill = isRecDrillRunnable(config, weakestSkill.module, weakestSkill.type)
+      ? { ...weakestSkill, deepLink: weakestSkill.module === 'memory' ? '/post/memory' : '/post/launcher' }
+      : null;
+  }
+
+  // Stalled progressions — keep Morse (runs from its own tab) and any ladder
+  // whose drill is still runnable under the current config.
+  const stalled = stalledProgressions(mulProgress, cogProgress, {
+    kochLevel: morse?.kochLevel,
+    kochLevelSet: morse?.kochLevelSet,
+    maxKochLevel: MAX_KOCH_LEVEL,
+  }).filter(s => s.drillType === 'morse-copy'
+    || isRecDrillRunnable(config, s.drillType === 'multiplication' ? 'mental-math' : 'cognitive', s.drillType));
+
+  return {
+    recommendations: composePostRecommendations({
+      dueMemoryItems,
+      dueReviews,
+      weakestSkill,
+      stalled,
+      hasHistory: sessions.length > 0,
+      limit,
+    }),
   };
 }
 

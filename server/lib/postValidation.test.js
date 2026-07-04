@@ -254,6 +254,34 @@ describe('postSessionSubmitSchema.modules — enum of known modules (issue #2099
   });
 });
 
+describe('postConfigUpdateSchema goals (issue #2100)', () => {
+  it('accepts a full goals block within bounds', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      goals: { dailyMinutes: 20, weeklySessions: 5, streakTarget: 30, morseWpmTarget: 15 },
+    });
+    expect(parsed.goals).toEqual({ dailyMinutes: 20, weeklySessions: 5, streakTarget: 30, morseWpmTarget: 15 });
+  });
+
+  it('accepts a partial goals block (any subset of targets)', () => {
+    expect(postConfigUpdateSchema.parse({ goals: { streakTarget: 10 } }).goals).toEqual({ streakTarget: 10 });
+    expect(postConfigUpdateSchema.parse({ goals: {} }).goals).toEqual({});
+  });
+
+  it('stays valid for a legacy config with no goals key', () => {
+    // Back-compat: a config that predates goals must not 400.
+    expect(() => postConfigUpdateSchema.parse({ sessionModules: ['mental-math'] })).not.toThrow();
+    expect(postConfigUpdateSchema.parse({ mentalMath: { enabled: true } }).goals).toBeUndefined();
+  });
+
+  it('rejects out-of-bounds or wrong-typed goal values', () => {
+    expect(() => postConfigUpdateSchema.parse({ goals: { dailyMinutes: 0 } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ goals: { dailyMinutes: 5000 } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ goals: { streakTarget: 1.5 } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ goals: { morseWpmTarget: 200 } })).toThrow();
+    expect(() => postConfigUpdateSchema.parse({ goals: { weeklySessions: 'lots' } })).toThrow();
+  });
+});
+
 describe('POST_SUPPORTED_MEMORY_TYPES (issue #2099, fix #1)', () => {
   // Regression: memory-fill-blank used to be absent, which forced its score
   // to 0 and skipped schedule/mastery advancement in submitPostSession.

@@ -105,6 +105,27 @@ describe('PostDrillConfig', () => {
     }
   });
 
+  it('saves goals and sessionModules (issue #2100)', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    // Set a streak-target goal, then include AI drills in composed sessions.
+    fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Wit & Memory (AI)' }));
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    const payload = updatePostConfig.mock.calls[0][0];
+    expect(payload.goals).toEqual({ streakTarget: 10 });
+    expect(payload.sessionModules).toContain('llm-drills');
+    expect(payload.sessionModules).toContain('mental-math');
+  });
+
+  it('clears a previously-set goal to an empty goals patch on save', async () => {
+    render(<PostDrillConfig config={{ ...config, goals: { streakTarget: 5 } }} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].goals).toEqual({});
+  });
+
   it('enabling a newly-exposed drill persists it as enabled', async () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     // Toggle the "What If?" card (a previously-inaccessible imagination drill) on.

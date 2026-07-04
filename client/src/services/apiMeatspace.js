@@ -198,6 +198,12 @@ export const getPostReviewReps = (limit, options = {}) => request(
   `/meatspace/post/review/reps${limit != null ? `?limit=${limit}` : ''}`,
   { silent: true, ...options }
 );
+// Ordered "what to practice next" recommendations (issue #2100). Silent — the
+// launcher/widget degrade gracefully (hide the panel) if this fails.
+export const getPostRecommendations = (limit, options = {}) => request(
+  `/meatspace/post/recommendations${limit != null ? `?limit=${limit}` : ''}`,
+  { silent: true, ...options }
+);
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
 export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');
 export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {
