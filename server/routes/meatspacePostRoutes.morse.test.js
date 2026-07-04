@@ -62,6 +62,15 @@ describe('POST /api/meatspace/post/morse/rounds', () => {
       .send({ mode: 'copy', items: [{ guessed: 'R', correct: false }] });
     expect(r.status).toBe(400);
   });
+
+  it('rejects an over-large items array', async () => {
+    const items = Array.from({ length: 201 }, () => ({ sent: 'K', guessed: 'K', correct: true }));
+    const r = await request(app)
+      .post('/api/meatspace/post/morse/rounds')
+      .send({ mode: 'copy', items });
+    expect(r.status).toBe(400);
+    expect(morseService.appendMorseRound).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/meatspace/post/morse/progress', () => {

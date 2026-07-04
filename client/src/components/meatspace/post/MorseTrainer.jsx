@@ -1137,13 +1137,19 @@ function SendDrill({ keying, onExit, onSessionComplete, onRoundSubmit }) {
     const targetChars = target.replace(/\s+/g, '').split('');
     const decodedChars = got.replace(/\s+/g, '').split('');
     const log = keying.getLetterLog?.() || [];
-    const items = targetChars.map((sent, i) => {
+    // Align over the LONGER sequence (like copy mode) so an over-long send —
+    // e.g. target `KM` keyed as `KMM` — records the surplus keyed character as an
+    // empty-sent insertion error instead of silently scoring a perfect send.
+    const len = Math.max(targetChars.length, decodedChars.length);
+    const items = [];
+    for (let i = 0; i < len; i++) {
+      const sent = targetChars[i] ?? '';
       const guessed = decodedChars[i] ?? '';
       const at = log[i]?.at;
       const prevAt = log[i - 1]?.at;
       const responseMs = at != null && prevAt != null ? Math.max(0, Math.round(at - prevAt)) : 0;
-      return { sent, guessed, correct: sent === guessed, responseMs };
-    });
+      items.push({ sent, guessed, correct: sent === guessed, responseMs });
+    }
     if (items.length > 0) {
       onRoundSubmit?.({ mode: 'send', durationMs, items });
     }
