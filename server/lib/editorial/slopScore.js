@@ -205,7 +205,11 @@ export const AI_TELL_PATTERNS = Object.freeze([
   {
     id: 'couldnt-help-but',
     label: '"couldn\'t help but" hedge-tell',
-    re: /\bcould(?:n'?t| not) help but\b/gi,
+    // [''] accepts both the straight apostrophe and the curly one word
+    // processors (Word/Scrivener/Google Docs) auto-substitute — manuscript
+    // text is not guaranteed to be normalized upstream (see dialogue.js's
+    // similar DQUOTE straight+curly handling for double quotes).
+    re: /\bcould(?:n['’]?t| not) help but\b/gi,
     suggestion: 'Commit to the action directly — cut the hedge and just show the character doing it.',
   },
   {
@@ -266,8 +270,12 @@ export function findAiTells(text, opts = {}) {
 // ---------------------------------------------------------------------------
 
 const NOT_JUST_BUT_RE = /\bnot\s+(?:just|only)\b[^.!?\n]{1,100}?\bbut\b(?:\s+also)?[^.!?\n]{1,100}?[.!?]/gi;
-const NOT_SAYING_RE = /\bI'?m\s+not\s+saying\b[^.!?\n]{1,100}?\bI'?m\s+saying\b[^.!?\n]{1,100}?[.!?]/gi;
-const NEGATIVE_ASSERTION_RE = /\b(?:did|does)\s+not\s+[a-z]+\b|\b(?:didn'?t|doesn'?t)\s+[a-z]+\b/gi;
+// [''] accepts both the straight apostrophe and the curly one word processors
+// (Word/Scrivener/Google Docs) auto-substitute — manuscript text is not
+// guaranteed to be normalized upstream (see dialogue.js's similar DQUOTE
+// straight+curly handling for double quotes).
+const NOT_SAYING_RE = /\bI['’]?m\s+not\s+saying\b[^.!?\n]{1,100}?\bI['’]?m\s+saying\b[^.!?\n]{1,100}?[.!?]/gi;
+const NEGATIVE_ASSERTION_RE = /\b(?:did|does)\s+not\s+[a-z]+\b|\b(?:didn['’]?t|doesn['’]?t)\s+[a-z]+\b/gi;
 const THE_WAY_RE = /\bthe\s+way\s+(?:[a-z']+\s+){1,4}?(?:[a-z]+(?:ed|ing)|did|does|would|had|has|was|were|is|are|could|can|might|should)\b/gi;
 
 /**

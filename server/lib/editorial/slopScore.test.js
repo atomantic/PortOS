@@ -128,6 +128,12 @@ describe('findAiTells', () => {
     expect(findAiTells('The door creaked open and she stepped through.')).toHaveLength(0);
   });
 
+  it('"couldn\'t help but" matches the typographic curly apostrophe too', () => {
+    // ’ is the curly apostrophe Word/Scrivener/Google Docs auto-substitute.
+    const hits = findAiTells('She couldn’t help but smile at the memory.');
+    expect(hits.map((h) => h.id)).toContain('couldnt-help-but');
+  });
+
   it('every pattern declares a unique id', () => {
     const ids = AI_TELL_PATTERNS.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -161,6 +167,12 @@ describe('findNotSayingPatterns', () => {
   it('does not flag a lone "I\'m not saying" clause', () => {
     expect(findNotSayingPatterns("I'm not saying anything else about it tonight.")).toHaveLength(0);
   });
+
+  it('matches typographic curly apostrophes too (word-processor manuscripts)', () => {
+    // ’ is the curly apostrophe Word/Scrivener/Google Docs auto-substitute.
+    const text = 'I’m not saying he’s guilty, I’m saying the evidence is thin.';
+    expect(findNotSayingPatterns(text)).toHaveLength(1);
+  });
 });
 
 describe('findNegativeAssertions', () => {
@@ -172,6 +184,11 @@ describe('findNegativeAssertions', () => {
 
   it('returns nothing for text with no negative assertions', () => {
     expect(findNegativeAssertions('She smiled and walked away.')).toHaveLength(0);
+  });
+
+  it('matches typographic curly apostrophes too (word-processor manuscripts)', () => {
+    const text = 'They didn’t speak. It doesn’t matter.';
+    expect(findNegativeAssertions(text)).toHaveLength(2);
   });
 });
 
