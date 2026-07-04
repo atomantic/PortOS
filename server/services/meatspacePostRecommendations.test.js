@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // (composePostRecommendations / weakestSkillFromStats / stalledProgressions)
 // need no mocks; getPostRecommendations is exercised through the same
 // mocked-fileUtils harness the other POST service tests use.
-const state = { sessions: [], memoryItems: [], reviewSchedule: { skills: {} }, morse: { kochLevel: null, settings: null, rounds: [] } };
+const state = { sessions: [], memoryItems: [], reviewSchedule: { skills: {} }, morse: { kochLevel: null, settings: null, rounds: [] }, config: {} };
 
 vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn().mockResolvedValue(undefined),
@@ -17,7 +17,7 @@ vi.mock('../lib/fileUtils.js', () => ({
       if (path.includes('memory-items')) return Promise.resolve({ items: state.memoryItems });
       if (path.includes('post-review-schedule')) return Promise.resolve(state.reviewSchedule);
       if (path.includes('post-morse')) return Promise.resolve(state.morse);
-      if (path.includes('post-config')) return Promise.resolve({});
+      if (path.includes('post-config')) return Promise.resolve(state.config);
     }
     return Promise.resolve(defaultValue);
   }),
@@ -28,14 +28,25 @@ import {
   weakestSkillFromStats,
   stalledProgressions,
   getPostRecommendations,
+  updatePostConfig,
 } from './meatspacePost.js';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 beforeEach(() => {
   state.sessions = [];
   state.memoryItems = [];
   state.reviewSchedule = { skills: {} };
   state.morse = { kochLevel: null, settings: null, rounds: [] };
+  state.config = {};
+  atomicWrite.mockClear();
 });
+
+// Read back the config object written to post-config.json by the most recent
+// updatePostConfig call (atomicWrite is the mocked writer).
+function lastWrittenConfig() {
+  const call = [...atomicWrite.mock.calls].reverse().find(([p]) => typeof p === 'string' && p.includes('post-config'));
+  return call?.[1];
+}
 
 describe('weakestSkillFromStats', () => {
   it('returns the lowest-accuracy drill with samples', () => {
@@ -99,6 +110,46 @@ describe('stalledProgressions', () => {
   it('does not surface Morse for a fresh install (level not set)', () => {
     const out = stalledProgressions(null, {}, { kochLevel: 2, kochLevelSet: false, maxKochLevel: 41 });
     expect(out.find(o => o.drillType === 'morse-copy')).toBeUndefined();
+  });
+
+  it('skips an untouched ladder (fresh install: level 0, no samples, no floor)', () => {
+    const fresh = { level: 0, floorLevel: 0, atHardest: false, currentMastered: false, thresholds: { minSamples: 12 }, levels: [
+      { level: 0, label: '1×1-digit', samples: 0, mastered: false },
+      { level: 1, label: '1×2-digit', samples: 0, mastered: false },
+    ] };
+    expect(stalledProgressions(fresh, { 'n-back': fresh }, {})).toHaveLength(0);
+  });
+
+  it('surfaces a ladder once the user has earned a higher floor even with no windowed samples', () => {
+    const earned = { level: 1, floorLevel: 1, atHardest: false, currentMastered: false, thresholds: { minSamples: 12 }, levels: [
+      { level: 0, label: '1×1-digit', samples: 0, mastered: true },
+      { level: 1, label: '1×2-digit', samples: 0, mastered: false },
+      { level: 2, label: '1×1×1-digit', samples: 0, mastered: false },
+    ] };
+    const out = stalledProgressions(earned, {}, {});
+    expect(out).toHaveLength(1);
+    expect(out[0].remaining).toBe(12);
+  });
+});
+
+describe('updatePostConfig goals (issue #2100)', () => {
+  it('replaces the goals block wholesale so a goal can be cleared', async () => {
+    state.config = { goals: { streakTarget: 5, dailyMinutes: 20 } };
+    // A partial goals patch replaces (not deep-merges) — dailyMinutes drops.
+    await updatePostConfig({ goals: { streakTarget: 10 } });
+    expect(lastWrittenConfig().goals).toEqual({ streakTarget: 10 });
+  });
+
+  it('clears all goals when sent an empty goals object', async () => {
+    state.config = { goals: { streakTarget: 5 } };
+    await updatePostConfig({ goals: {} });
+    expect(lastWrittenConfig().goals).toEqual({});
+  });
+
+  it('leaves goals untouched when the patch omits them', async () => {
+    state.config = { goals: { streakTarget: 5 } };
+    await updatePostConfig({ adaptive: { enabled: true } });
+    expect(lastWrittenConfig().goals).toEqual({ streakTarget: 5 });
   });
 });
 

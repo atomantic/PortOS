@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock the API surface the launcher touches on mount (providers + review reps +
@@ -164,5 +164,23 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     renderLauncher({ config: { ...baseConfig, goals: {} } });
     await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
     expect(screen.queryByText('Goals')).toBeNull();
+  });
+
+  it('excludes LLM drills from Full POST when sessionModules omits llm-drills', async () => {
+    const onStart = vi.fn();
+    renderLauncher({
+      onStart,
+      config: {
+        ...baseConfig,
+        sessionModules: ['mental-math', 'cognitive'],
+        llmDrills: { enabled: true, drillTypes: { 'wit-comeback': { enabled: true, count: 3 } } },
+      },
+    });
+    await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    const drills = onStart.mock.calls[0][0];
+    expect(drills.some(d => d.type === 'wit-comeback')).toBe(false);
+    expect(drills.some(d => d.type === 'multiplication')).toBe(true);
   });
 });

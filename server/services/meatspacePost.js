@@ -153,6 +153,15 @@ export async function updatePostConfig(updates) {
     // active for.
     merged.reminder = { ...merged.reminder, updatedAt: new Date().toISOString() };
   }
+  // `goals` is REPLACED wholesale when present in the patch, not deep-merged
+  // (issue #2100). deepMerge would otherwise make a set goal impossible to
+  // clear: JSON can't send `undefined`, `0` is out of the schema's range, and
+  // `{}` would merge into the existing object rather than replace it. Sending
+  // the full desired goals object — including `{}` to clear every goal — now
+  // takes effect and the launcher/widget goal rows hide again.
+  if (updates?.goals !== undefined) {
+    merged.goals = { ...updates.goals };
+  }
   await ensureMeatspaceDir();
   await atomicWrite(CONFIG_FILE, merged);
   console.log(`🧪 POST config updated`);
@@ -882,6 +891,12 @@ export function stalledProgressions(mulProgress, cogProgress, morse) {
     if (!prog || prog.atHardest || prog.currentMastered) return null;
     const cur = (prog.levels || []).find((r) => r.level === prog.level);
     if (!cur) return null;
+    // Only surface a ladder the user has actually engaged with. A fresh install
+    // sits at level 0 with 0 samples and an unearned floor — telling it to "keep
+    // climbing" a drill that's never been run is noise, and it would also crowd
+    // out the fresh-state "run your first POST" default (issue #2100 review).
+    const engaged = (cur.samples || 0) > 0 || (prog.floorLevel || 0) > 0 || prog.level > 0;
+    if (!engaged) return null;
     const next = (prog.levels || []).find((r) => r.level === prog.level + 1);
     const minSamples = prog.thresholds?.minSamples ?? 0;
     const remaining = Math.max(1, minSamples - (cur.samples || 0));

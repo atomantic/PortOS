@@ -130,8 +130,19 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     choices: cfg.choices,
   });
 
+  // Composed sessions (Full POST / Quick) honor `sessionModules` (issue #2100):
+  // a module's drills are only added when it's listed. The default
+  // (mental-math + cognitive + memory) excludes LLM drills, so wit/verbal work
+  // is never auto-added to a default session — provider-cost consent stays
+  // opt-in (CLAUDE.md AI-provider policy). An empty/absent list means "all
+  // enabled" (back-compat). Focus-practice on a specific weak domain bypasses
+  // this filter (it's an explicit user choice, not a default composition).
+  const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : [];
+  const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive' };
+  const moduleAllowed = (source) => sessionModules.length === 0 || sessionModules.includes(SOURCE_TO_MODULE[source]);
+
   function handleStart() {
-    const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
+    const mathConfigs = (moduleAllowed('math') ? enabledMathDrills : []).map(([type, cfg]) => ({
       type,
       domain: DRILL_TO_DOMAIN[type],
       config: {
@@ -147,7 +158,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       timeLimitSec: cfg.timeLimitSec || 120
     }));
 
-    const llmConfigs = enabledLlmDrills.map(([type, cfg]) => ({
+    const llmConfigs = (moduleAllowed('llm') ? enabledLlmDrills : []).map(([type, cfg]) => ({
       type,
       domain: DRILL_TO_DOMAIN[type],
       config: { count: cfg.count || 5 },
@@ -156,7 +167,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       model: cfg.model || llmModel
     }));
 
-    const cognitiveConfigs = enabledCognitiveDrills.map(([type, cfg]) => ({
+    const cognitiveConfigs = (moduleAllowed('cognitive') ? enabledCognitiveDrills : []).map(([type, cfg]) => ({
       type,
       domain: DRILL_TO_DOMAIN[type],
       config: cognitiveDrillConfig(cfg)
@@ -187,6 +198,15 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     enabledDomains[domain].push({ type, cfg, source });
   }
 
+  // Domains eligible for a COMPOSED (Full/Quick) session, after the
+  // sessionModules filter — so a default Quick session never silently pulls in
+  // an opt-out module's drills (issue #2100).
+  const sessionEnabledDomains = {};
+  for (const [domainKey, drills] of Object.entries(enabledDomains)) {
+    const allowed = drills.filter(d => moduleAllowed(d.source));
+    if (allowed.length) sessionEnabledDomains[domainKey] = allowed;
+  }
+
   function handleQuickSession() {
     // Bias toward the top recommendation instead of pure random (issue #2100):
     // if it names a drill type in an enabled domain, run that domain first and
@@ -194,14 +214,14 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     const topRec = recommendations[0] || null;
     const recDrill = topRec?.drillType || null;
     const recDomain = recDrill ? DRILL_TO_DOMAIN[recDrill] : null;
-    const domainKeys = Object.keys(enabledDomains);
-    const orderedKeys = recDomain && enabledDomains[recDomain]
+    const domainKeys = Object.keys(sessionEnabledDomains);
+    const orderedKeys = recDomain && sessionEnabledDomains[recDomain]
       ? [recDomain, ...domainKeys.filter(k => k !== recDomain)]
       : domainKeys;
 
     const drillConfigs = [];
     for (const domainKey of orderedKeys) {
-      const drills = enabledDomains[domainKey];
+      const drills = sessionEnabledDomains[domainKey];
       const domain = DOMAINS[domainKey];
       // Prefer the recommended drill in its domain; otherwise pick at random.
       const recommendedPick = domainKey === recDomain
@@ -303,7 +323,9 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
-  const domainCount = Object.keys(enabledDomains).length;
+  // Quick-session domain count reflects the sessionModules-filtered set, so the
+  // "Quick 5 Min (N domains)" button matches what it will actually run.
+  const domainCount = Object.keys(sessionEnabledDomains).length;
 
   // Analytics derived from the 30-day stats window. Streaks span all history.
   const hasStats = stats && stats.sessionCount > 0;
