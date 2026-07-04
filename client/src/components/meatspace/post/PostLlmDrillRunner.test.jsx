@@ -5,8 +5,9 @@ vi.mock('../../../services/api', () => ({
   scorePostLlmDrill: vi.fn(),
 }));
 
-import PostLlmDrillRunner from './PostLlmDrillRunner';
+import PostLlmDrillRunner, { getPrompts, buildLlmResponseObj } from './PostLlmDrillRunner';
 import { scorePostLlmDrill } from '../../../services/api';
+import { LLM_DRILL_TYPES } from './constants';
 
 const noop = () => {};
 
@@ -131,5 +132,114 @@ describe('PostLlmDrillRunner — training-mode scoring path', () => {
     fireEvent.click(screen.getByText('Next'));
 
     await waitFor(() => expect(screen.getByText('65')).toBeInTheDocument());
+  });
+});
+
+// getPrompts pure-function coverage (issue #2102 gap #9): each of the 14
+// generatable LLM drill types stores its prompt list under a different key
+// (questions/exercises/categories/etc.) — a typo in the switch silently
+// leaves that drill type with zero prompts.
+const TYPE_FIELD = {
+  'word-association': 'questions',
+  'story-recall': 'exercises',
+  'verbal-fluency': 'categories',
+  'wit-comeback': 'scenarios',
+  'pun-wordplay': 'challenges',
+  'compound-chain': 'challenges',
+  'bridge-word': 'puzzles',
+  'double-meaning': 'challenges',
+  'idiom-twist': 'challenges',
+  'what-if': 'scenarios',
+  'alternative-uses': 'objects',
+  'story-prompt': 'prompts',
+  'invention-pitch': 'problems',
+  'reframe': 'situations',
+};
+
+describe('getPrompts', () => {
+  it('returns the correct field array for every one of the 14 LLM drill-type shapes', () => {
+    for (const type of LLM_DRILL_TYPES) {
+      const field = TYPE_FIELD[type];
+      const list = [{ id: 'a' }, { id: 'b' }];
+      expect(getPrompts({ type, [field]: list })).toBe(list);
+    }
+  });
+
+  it('returns an empty array when the type-specific field is missing', () => {
+    for (const type of LLM_DRILL_TYPES) {
+      expect(getPrompts({ type })).toEqual([]);
+    }
+  });
+
+  it('returns an empty array for an unrecognized drill type', () => {
+    expect(getPrompts({ type: 'not-a-real-type' })).toEqual([]);
+  });
+
+  it('returns an empty array when drill is null or undefined', () => {
+    expect(getPrompts(null)).toEqual([]);
+    expect(getPrompts(undefined)).toEqual([]);
+  });
+});
+
+// buildLlmResponseObj pure-function coverage (issue #2102 gap #9): every
+// response shape stamps `questionIndex` so the server can pair a response
+// with its originating prompt by explicit index rather than array position
+// (regression fixed in 0a60c8457 — "pair wordplay responses with correct
+// challenge by index"). A dropped/misassigned questionIndex silently
+// mis-scores responses against the wrong prompt.
+describe('buildLlmResponseObj', () => {
+  it('stamps sequential questionIndex values matching each prompt position', () => {
+    const prompts = [{ prompt: 'a' }, { prompt: 'b' }, { prompt: 'c' }];
+    const responses = prompts.map((currentPrompt, questionIndex) =>
+      buildLlmResponseObj({
+        drillType: 'word-association',
+        questionIndex,
+        items: [],
+        inputValue: `answer-${questionIndex}`,
+        currentPrompt,
+        responseMs: 100,
+      })
+    );
+    expect(responses.map(r => r.questionIndex)).toEqual([0, 1, 2]);
+    expect(responses[1]).toMatchObject({ questionIndex: 1, prompt: 'b', response: 'answer-1' });
+  });
+
+  it('story-recall: uses the collected items as answers when present', () => {
+    const result = buildLlmResponseObj({
+      drillType: 'story-recall', questionIndex: 2, items: ['ans1', 'ans2'], inputValue: '', currentPrompt: {}, responseMs: 500,
+    });
+    expect(result).toEqual({ questionIndex: 2, answers: ['ans1', 'ans2'], responseMs: 500 });
+  });
+
+  it('story-recall: falls back to the trimmed inputValue as a single answer when no items were collected', () => {
+    const result = buildLlmResponseObj({
+      drillType: 'story-recall', questionIndex: 0, items: [], inputValue: '  lone answer  ', currentPrompt: {}, responseMs: 200,
+    });
+    expect(result).toEqual({ questionIndex: 0, answers: ['lone answer'], responseMs: 200 });
+  });
+
+  it.each(['verbal-fluency', 'compound-chain', 'alternative-uses'])('%s: passes the items array through as-is', (drillType) => {
+    const items = ['x', 'y', 'z'];
+    const result = buildLlmResponseObj({ drillType, questionIndex: 1, items, inputValue: 'ignored', currentPrompt: {}, responseMs: 300 });
+    expect(result).toEqual({ questionIndex: 1, items, responseMs: 300 });
+  });
+
+  it('other types: builds the prompt from the first available field in the fallback chain and trims the response', () => {
+    const result = buildLlmResponseObj({
+      drillType: 'wit-comeback',
+      questionIndex: 3,
+      items: [],
+      inputValue: '  witty reply  ',
+      currentPrompt: { setup: 'a setup line' },
+      responseMs: 400,
+    });
+    expect(result).toEqual({ questionIndex: 3, prompt: 'a setup line', response: 'witty reply', responseMs: 400 });
+  });
+
+  it('other types: falls back to an empty prompt string when currentPrompt has none of the known fields', () => {
+    const result = buildLlmResponseObj({
+      drillType: 'what-if', questionIndex: 0, items: [], inputValue: 'x', currentPrompt: {}, responseMs: 0,
+    });
+    expect(result.prompt).toBe('');
   });
 });
