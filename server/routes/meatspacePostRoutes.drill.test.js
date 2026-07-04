@@ -28,12 +28,13 @@ vi.mock('../services/meatspacePostMemory.js', () => ({
 vi.mock('../services/meatspacePost.js', () => ({
   resolveDrillConfig: vi.fn(),
   generateDrill: vi.fn(),
+  getPostReviewReps: vi.fn(),
 }));
 
 import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
 import { generateLlmDrill } from '../services/meatspacePostLlm.js';
 import { generateMemoryDrill } from '../services/meatspacePostMemory.js';
-import { resolveDrillConfig, generateDrill } from '../services/meatspacePost.js';
+import { resolveDrillConfig, generateDrill, getPostReviewReps } from '../services/meatspacePost.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 
@@ -196,5 +197,59 @@ describe('POST /api/meatspace/post/drill', () => {
     const r = await request(app).post('/api/meatspace/post/drill').send({ type: 'not-a-real-type', config: {} });
     expect(r.status).toBe(400);
     expect(resolveDrillConfig).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Maintenance-review reps (issue #2096)
+// =============================================================================
+
+describe('POST /api/meatspace/post/drill — review re-stamp', () => {
+  let app;
+  beforeEach(() => {
+    app = makeApp();
+    vi.clearAllMocks();
+  });
+
+  it('re-stamps review markers from the resolved config onto the generated drill', async () => {
+    // The generators rebuild their own config and drop review/reviewSkillId, so
+    // the route must re-attach them for the session-submit tie-back.
+    resolveDrillConfig.mockResolvedValue({
+      config: { count: 5, level: 0, factors: [1, 1], review: true, reviewSkillId: 'multiplication:L0' },
+      adaptive: null,
+      progression: null,
+    });
+    generateDrill.mockReturnValue({ type: 'multiplication', config: { count: 5, factors: [1, 1], level: 0 }, questions: [] });
+
+    const r = await request(app).post('/api/meatspace/post/drill').send({
+      type: 'multiplication',
+      config: { review: true, reviewSkillId: 'multiplication:L0', level: 0, factors: [1, 1] },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.config.review).toBe(true);
+    expect(r.body.config.reviewSkillId).toBe('multiplication:L0');
+    expect(r.body.isReview).toBe(true);
+  });
+});
+
+describe('GET /api/meatspace/post/review/reps', () => {
+  let app;
+  beforeEach(() => {
+    app = makeApp();
+    vi.clearAllMocks();
+  });
+
+  it('returns the due maintenance reps under a { reps } envelope', async () => {
+    getPostReviewReps.mockResolvedValue([{ skillId: 'multiplication:L0', label: 'Multiplication 1×1-digit', type: 'multiplication', config: {} }]);
+    const r = await request(app).get('/api/meatspace/post/review/reps');
+    expect(r.status).toBe(200);
+    expect(r.body.reps).toHaveLength(1);
+    expect(getPostReviewReps).toHaveBeenCalledWith(expect.any(Date), 2);
+  });
+
+  it('clamps the limit query param to 0..5', async () => {
+    getPostReviewReps.mockResolvedValue([]);
+    await request(app).get('/api/meatspace/post/review/reps?limit=99');
+    expect(getPostReviewReps).toHaveBeenCalledWith(expect.any(Date), 5);
   });
 });

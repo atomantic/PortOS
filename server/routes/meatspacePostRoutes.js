@@ -171,6 +171,14 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
   // Progressive multiplication ladder explainer (current level + per-rung mastery)
   // so the drill runner can show which rung the user is on and why.
   if (progression) drill.progression = progression;
+  // Maintenance-review rep (issue #2096): the drill generators rebuild their own
+  // config, so re-stamp the review markers from the requested config onto the
+  // returned drill. This ties the scored task back to the review scheduler on
+  // submit (getSessionSkillContext reads task.config.reviewSkillId).
+  if (effectiveConfig?.review && effectiveConfig?.reviewSkillId) {
+    drill.config = { ...(drill.config || {}), review: true, reviewSkillId: effectiveConfig.reviewSkillId };
+    drill.isReview = true;
+  }
   res.json(drill);
 }));
 
@@ -193,6 +201,20 @@ router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
 router.get('/post/cognitive-progress', asyncHandler(async (req, res) => {
   const progress = await postService.getCognitiveProgress();
   res.json(progress);
+}));
+
+/**
+ * GET /api/meatspace/post/review/reps
+ * Ready-to-run "maintenance rep" drill specs for mastered-but-inactive skills
+ * currently due for re-verification (issue #2096). The launcher mixes 1–2 of
+ * these into a Quick session as labeled review items. Empty until a skill is
+ * mastered and its review interval elapses.
+ */
+router.get('/post/review/reps', asyncHandler(async (req, res) => {
+  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : 2;
+  const limit = Number.isNaN(rawLimit) ? 2 : Math.max(0, Math.min(5, rawLimit));
+  const reps = await postService.getPostReviewReps(new Date(), limit);
+  res.json({ reps });
 }));
 
 /**

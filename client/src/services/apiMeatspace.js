@@ -191,6 +191,13 @@ export const getPostProgress = (days, options = {}) => request(
   options
 );
 export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
+// Mastered-but-inactive skills due for a maintenance review (issue #2096). The
+// launcher mixes these into a Quick session as labeled review reps. Silent — the
+// caller degrades to a normal Quick session if this fails.
+export const getPostReviewReps = (limit, options = {}) => request(
+  `/meatspace/post/review/reps${limit != null ? `?limit=${limit}` : ''}`,
+  { silent: true, ...options }
+);
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
 export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');
 export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {

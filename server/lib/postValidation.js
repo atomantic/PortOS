@@ -107,6 +107,13 @@ const drillTypeConfigSchema = z.object({
   progressive: z.boolean().optional(),
   level: z.number().int().min(0).max(50).optional(),
   factors: z.array(z.number().int().min(1).max(4)).min(2).max(6).optional(),
+  // Maintenance-review rep (issue #2096): `review` bypasses the progression
+  // override so a specific mastered-but-inactive rung is re-verified at its own
+  // level; `reviewSkillId` ties the scored task back to the review scheduler so
+  // session-submit records the pass/fail. Both survive validation on the drill
+  // request AND the session-submit round-trip.
+  review: z.boolean().optional(),
+  reviewSkillId: z.string().max(200).optional(),
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional(),

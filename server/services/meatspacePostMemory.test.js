@@ -30,6 +30,10 @@ import {
   defaultSchedule,
   DEFAULT_EASE,
   ELEMENTS_SONG,
+  windowedAccuracy,
+  isStatMastered,
+  computeOverallMastery,
+  MASTERY_WINDOW,
 } from './meatspacePostMemory.js';
 
 // =============================================================================
@@ -517,8 +521,8 @@ describe('mergeMasteryFromSession', () => {
       { chunkId: 'verse-2', correct: true },
     ], now);
 
-    expect(result.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: now.toISOString() });
-    expect(result.chunks['verse-2']).toEqual({ correct: 1, attempts: 1, lastPracticed: now.toISOString() });
+    expect(result.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: now.toISOString(), recent: [1, 0] });
+    expect(result.chunks['verse-2']).toEqual({ correct: 1, attempts: 1, lastPracticed: now.toISOString(), recent: [1] });
     expect(atomicWrite).toHaveBeenCalledTimes(1);
   });
 
@@ -536,8 +540,8 @@ describe('mergeMasteryFromSession', () => {
       { element: 'He', correct: false },
     ], now);
 
-    expect(result.elements.H).toEqual({ correct: 2, attempts: 2 });
-    expect(result.elements.He).toEqual({ correct: 0, attempts: 1 });
+    expect(result.elements.H).toEqual({ correct: 2, attempts: 2, recent: [1, 1] });
+    expect(result.elements.He).toEqual({ correct: 0, attempts: 1, recent: [0] });
   });
 
   it('accumulates onto existing mastery counts rather than overwriting them', async () => {
@@ -556,7 +560,7 @@ describe('mergeMasteryFromSession', () => {
       { chunkId: 'verse-1', correct: true },
     ], now);
 
-    expect(result.chunks['verse-1']).toEqual({ correct: 3, attempts: 4, lastPracticed: now.toISOString() });
+    expect(result.chunks['verse-1']).toEqual({ correct: 3, attempts: 4, lastPracticed: now.toISOString(), recent: [1] });
   });
 
   it('ignores questions with neither chunkId nor element', async () => {
@@ -798,5 +802,114 @@ describe('submitPractice — schedule advancement', () => {
       totalMs: 5000,
     });
     expect(result.schedule.intervalDays).toBe(0);
+  });
+});
+
+// =============================================================================
+// DECAY-AWARE WINDOWED MASTERY (issue #2096)
+// =============================================================================
+
+describe('windowedAccuracy / isStatMastered', () => {
+  it('uses the recent window when present (decay-aware)', () => {
+    // Cumulative would read 8/10=80%, but the recent window is a run of misses.
+    const stat = { correct: 8, attempts: 10, recent: [0, 0, 0, 1] };
+    expect(windowedAccuracy(stat)).toEqual({ attempts: 4, accuracy: 0.25 });
+    expect(isStatMastered(stat)).toBe(false);
+  });
+
+  it('falls back to cumulative counts for legacy stats with no recent window', () => {
+    const stat = { correct: 9, attempts: 10 }; // no `recent`
+    expect(windowedAccuracy(stat)).toEqual({ attempts: 10, accuracy: 0.9 });
+    expect(isStatMastered(stat)).toBe(true);
+  });
+
+  it('enforces the >=3-attempt gate on the window', () => {
+    expect(isStatMastered({ recent: [1, 1] })).toBe(false);       // 2 attempts — gated
+    expect(isStatMastered({ recent: [1, 1, 1] })).toBe(true);     // 3 attempts, 100%
+    expect(isStatMastered({ recent: [1, 1, 0] })).toBe(false);    // 3 attempts, 67% < 0.8
+  });
+
+  it('masters at exactly the 0.8 window accuracy', () => {
+    expect(isStatMastered({ recent: [1, 1, 1, 1, 0] })).toBe(true); // 4/5 = 0.8
+  });
+});
+
+describe('computeOverallMastery — ratchet removed, decay-aware (issue #2096)', () => {
+  const songWith = (elements) => ({
+    id: 'elements-song',
+    content: { elementMap: { H: {}, He: {} } },
+    mastery: { chunks: {}, elements },
+  });
+
+  it('a recent run of misses LOWERS element mastery (no permanent ratchet)', () => {
+    // Both elements were mastered all-time (high cumulative), but H just had a
+    // window full of recent misses — mastery must drop, not ratchet.
+    const before = songWith({
+      H: { correct: 20, attempts: 20, recent: [1, 1, 1, 1, 1] },
+      He: { correct: 20, attempts: 20, recent: [1, 1, 1, 1, 1] },
+    });
+    expect(computeOverallMastery(before)).toBe(100);
+
+    const after = songWith({
+      H: { correct: 20, attempts: 25, recent: [0, 0, 0, 0, 0] }, // recent decay
+      He: { correct: 20, attempts: 20, recent: [1, 1, 1, 1, 1] },
+    });
+    expect(computeOverallMastery(after)).toBe(50); // H no longer mastered
+  });
+
+  it('early misses recover — an element answered wrong early is not permanently diluted', () => {
+    // Cumulative 6/10 = 60% (would fail the old all-time >=0.8 gate forever), but
+    // the recent window is clean, so it now reads as mastered.
+    const item = songWith({
+      H: { correct: 6, attempts: 10, recent: [1, 1, 1, 1, 1] },
+      He: { correct: 10, attempts: 10, recent: [1, 1, 1, 1, 1] },
+    });
+    expect(computeOverallMastery(item)).toBe(100);
+  });
+
+  it('keeps the >=3-attempt gate (a barely-practiced element is not mastered)', () => {
+    const item = songWith({
+      H: { correct: 2, attempts: 2, recent: [1, 1] },  // only 2 attempts
+      He: { correct: 10, attempts: 10, recent: [1, 1, 1] },
+    });
+    expect(computeOverallMastery(item)).toBe(50); // only He counts
+  });
+
+  it('legacy items with no recent window still report via cumulative counts', () => {
+    const item = songWith({
+      H: { correct: 9, attempts: 10 },   // legacy shape, 90% >= 0.8
+      He: { correct: 5, attempts: 10 },  // 50% < 0.8
+    });
+    expect(computeOverallMastery(item)).toBe(50);
+  });
+
+  it('windows generic-item chunk mastery too', () => {
+    const item = {
+      id: 'custom',
+      content: { chunks: [] },
+      mastery: {
+        elements: {},
+        chunks: {
+          a: { correct: 10, attempts: 10, recent: [0, 0, 0, 0] }, // recent decay → 0%
+          b: { correct: 10, attempts: 10, recent: [1, 1, 1, 1] }, // 100%
+        },
+      },
+    };
+    expect(computeOverallMastery(item)).toBe(50); // (0 + 100) / 2
+  });
+});
+
+describe('mastery window is bounded', () => {
+  it('caps the recent array at MASTERY_WINDOW entries', async () => {
+    readJSONFile.mockResolvedValueOnce({
+      items: [{
+        ...ELEMENTS_SONG,
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+    const answers = Array.from({ length: MASTERY_WINDOW + 5 }, () => ({ element: 'H', correct: true }));
+    const result = await mergeMasteryFromSession('elements-song', answers, new Date());
+    expect(result.elements.H.recent.length).toBe(MASTERY_WINDOW);
+    expect(result.elements.H.attempts).toBe(MASTERY_WINDOW + 5); // cumulative unbounded
   });
 });

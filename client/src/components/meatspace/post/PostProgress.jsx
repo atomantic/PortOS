@@ -131,8 +131,9 @@ export default function PostProgress({ subtab, onBack }) {
 
   const streak = progress?.streak || { current: 0, longest: 0 };
   const totals = progress?.totals || { minutesTrained: 0, sessions: 0, practiceEntries: 0 };
-  const mastery = progress?.mastery || { multiplication: null, memoryItems: [] };
+  const mastery = progress?.mastery || { multiplication: null, memoryItems: [], reviews: null };
   const dueTotal = (mastery.memoryItems || []).reduce((n, m) => n + (m.dueCount || 0), 0);
+  const reviews = mastery.reviews || null;
   const hasAny = totals.sessions > 0 || totals.practiceEntries > 0;
 
   return (
@@ -306,11 +307,57 @@ export default function PostProgress({ subtab, onBack }) {
               )}
             </div>
           </div>
+
+          {/* Skill retention panel (issue #2096) — mastered skills' re-verification
+              state + a 90-day retention %. Only shown once a skill is mastered. */}
+          {reviews && reviews.trackedCount > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-medium text-gray-400">Skill Retention</h3>
+                <div className="flex items-center gap-2">
+                  {reviews.retentionPct != null && (
+                    <span className="text-xs text-gray-400">
+                      90-day retention: <span className="font-mono text-white">{reviews.retentionPct}%</span>
+                    </span>
+                  )}
+                  {reviews.dueCount > 0 && (
+                    <span className="px-2 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded-full">
+                      {reviews.dueCount} due
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(reviews.skills || []).map(s => (
+                  <span
+                    key={s.skillId}
+                    className={`px-2 py-1 rounded-md text-xs border ${RETENTION_STATE_CLASS[s.state] || RETENTION_STATE_CLASS.fresh}`}
+                    title={RETENTION_STATE_LABEL[s.state] || s.state}
+                  >
+                    {s.label}
+                    <span className="ml-1 opacity-70">· {RETENTION_STATE_LABEL[s.state] || s.state}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
+
+// Retention-state → badge styling + human label (issue #2096).
+const RETENTION_STATE_CLASS = {
+  fresh: 'bg-port-success/10 border-port-success/30 text-port-success',
+  due: 'bg-port-warning/10 border-port-warning/30 text-port-warning',
+  'needs-refresh': 'bg-port-error/10 border-port-error/30 text-port-error',
+};
+const RETENTION_STATE_LABEL = {
+  fresh: 'fresh',
+  due: 'due for review',
+  'needs-refresh': 'needs refresh',
+};
 
 function ProgressTabs({ subtab, navigate }) {
   const tabs = [
