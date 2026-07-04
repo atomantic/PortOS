@@ -44,17 +44,18 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     : [];
 
   // Only the fields each cognitive generator reads; extras are harmless.
-  // stimulusMs/showMs are intentionally NOT forwarded here — no UI field ever
-  // sets them (PostDrillConfig.jsx exposes no such control), so this config
-  // never carries them; the generators always fall back to their own internal
-  // defaults (server/services/meatspacePostCognitive.js). Forwarding them
-  // would have been dead pass-through (issue #2008).
+  // stimulusMs (n-back) / showMs (digit-span) are forwarded so that manual mode
+  // (Progressive off) actually uses the presentation-speed values the user set
+  // in PostDrillConfig.jsx (issue #2095) — under the progressive ladder the
+  // server overrides them per rung anyway, so forwarding is safe in both modes.
   const cognitiveDrillConfig = (cfg) => ({
     n: cfg.n,
     length: cfg.length,
+    stimulusMs: cfg.stimulusMs,
     direction: cfg.direction,
     startLength: cfg.startLength,
     maxLength: cfg.maxLength,
+    showMs: cfg.showMs,
     count: cfg.count,
     size: cfg.size,
     mode: cfg.mode,

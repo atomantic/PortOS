@@ -913,6 +913,18 @@ describe('progressive cognitive drills', () => {
     expect(config.n).toBe(2);
   });
 
+  it('does not advance on high-accuracy but low-completion runs (skipped hard trials)', async () => {
+    // Answered only the easy sequence (100% accuracy) but left the rest blank —
+    // low completion must not bank a mastery sample (issue #2095 review).
+    const lowCompletion = (level, date = today) => ({
+      date,
+      tasks: [{ module: 'cognitive', type: 'digit-span', config: { level }, accuracy: 1, completion: 0.25, totalCount: 4, questions: [{ answered: '1' }] }],
+    });
+    mockSessions([lowCompletion(0), lowCompletion(0), lowCompletion(0)]);
+    const { progression } = await resolveDrillConfig('digit-span', {});
+    expect(progression.level).toBe(0);
+  });
+
   it('does not advance when accuracy is below the mastery bar', async () => {
     mockSessions([
       cognitiveSession('n-back', 0, 0.6),

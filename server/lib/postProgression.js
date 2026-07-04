@@ -180,6 +180,12 @@ export const COGNITIVE_MASTERY_DEFAULTS = {
   // question), so a handful of clean runs is enough to advance.
   minSamples: 3,
   targetAccuracy: 0.85,
+  // A run must reach at least this fraction of its trials to count toward
+  // mastery. Accuracy is answered-only, so without this a digit-span run that
+  // answers just the one easy sequence and leaves the hard ones blank banks a
+  // 100%-accuracy "sample" — skipped trials could otherwise promote the rung.
+  // (n-back completion is always 1 — go/no-go — so this never gates it.)
+  minCompletion: 0.75,
   windowDays: 30,
 };
 

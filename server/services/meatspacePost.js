@@ -703,6 +703,12 @@ async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAU
       if (cutoffStr && session.date < cutoffStr) continue;
       const acc = Number.isFinite(task.accuracy) ? task.accuracy : null;
       if (acc == null) continue;
+      // Skip low-completion runs: accuracy is answered-only, so a run that
+      // leaves the harder trials blank must not bank a high-accuracy sample and
+      // promote the rung (issue #2095 review). A null completion (legacy tasks)
+      // is treated as complete so old history still counts.
+      const comp = Number.isFinite(task.completion) ? task.completion : null;
+      if (comp != null && comp < COGNITIVE_MASTERY_DEFAULTS.minCompletion) continue;
       const bucket = byLevel[level] || (byLevel[level] = { samples: 0, accSum: 0 });
       bucket.samples += 1;
       bucket.accSum += acc;
