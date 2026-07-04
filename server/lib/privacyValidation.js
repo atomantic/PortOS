@@ -76,3 +76,72 @@ export const privacyVaultListQuerySchema = z.object({
 export const privacyVaultIdParamsSchema = z.object({
   id: z.string().uuid(),
 }).strict();
+
+// =============================================================================
+// TRUSTED ORGANIZATIONS REGISTRY SCHEMAS (issue #2141, epic #2138)
+// =============================================================================
+// Zod schemas for `privacy_orgs` / `privacy_org_holdings` — db-primary Postgres,
+// machine-local (same federation-deferred scope as the vault, #2148).
+
+export const PRIVACY_ORG_CATEGORIES = Object.freeze([
+  'bank', 'utility', 'government', 'employer', 'subscription',
+  'medical', 'insurance', 'platform', 'broker', 'other',
+]);
+
+export const PRIVACY_ORG_TRUST_LEVELS = Object.freeze(['trusted', 'tolerated', 'unwanted']);
+
+export const PRIVACY_ORG_STATUSES = Object.freeze(['active', 'closed', 'opted_out']);
+
+export const PRIVACY_ORG_HOLDING_STATUSES = Object.freeze([
+  'current', 'update_pending', 'updated', 'removed', 'unknown',
+]);
+
+const privacyOrgContactSchema = z.object({
+  email: z.string().max(320).optional(),
+  phone: z.string().max(64).optional(),
+  portalUrl: z.string().max(2000).optional(),
+  mailingAddress: z.string().max(2000).optional(),
+}).strict();
+
+export const privacyOrgCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
+  website: z.string().max(2000).optional(),
+  trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
+  status: z.enum(PRIVACY_ORG_STATUSES).optional(),
+  contact: privacyOrgContactSchema.optional(),
+  socialAccountId: z.string().max(200).nullable().optional(),
+  notes: z.string().max(5000).optional(),
+}).strict();
+
+// PUT is a partial update — every field optional, same shape otherwise.
+export const privacyOrgUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
+  website: z.string().max(2000).optional(),
+  trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
+  status: z.enum(PRIVACY_ORG_STATUSES).optional(),
+  contact: privacyOrgContactSchema.optional(),
+  socialAccountId: z.string().max(200).nullable().optional(),
+  notes: z.string().max(5000).optional(),
+}).strict();
+
+export const privacyOrgListQuerySchema = z.object({
+  trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
+  status: z.enum(PRIVACY_ORG_STATUSES).optional(),
+  category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
+}).strict();
+
+export const privacyOrgIdParamsSchema = z.object({
+  id: z.string().uuid(),
+}).strict();
+
+// PUT /api/privacy/orgs/:id/holdings — replace-set semantics: body is the
+// full list of vault record ids (+ optional status) this org holds. An empty
+// array clears all holdings for the org.
+export const privacyOrgHoldingsSetSchema = z.object({
+  holdings: z.array(z.object({
+    vaultRecordId: z.string().uuid(),
+    status: z.enum(PRIVACY_ORG_HOLDING_STATUSES).optional(),
+  }).strict()).max(500),
+}).strict();
