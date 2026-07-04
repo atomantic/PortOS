@@ -107,13 +107,27 @@ const scorePartSchema = z.object({
   score: str(svc.SCORE_MAX_LENGTH),
 });
 
+// One labeled time range on a reference's attached audio (#2106). The service
+// clamps times and drops zero/negative-length spans; the schema only types the
+// fields (startMs/endMs required — a span without both selects nothing).
+const refSegmentSchema = z.object({
+  layerId: str(svc.ID_MAX_LENGTH).optional().default(''),
+  startMs: z.number(),
+  endMs: z.number(),
+});
+
 // A reference link/video (e.g. a TikTok performance). `url` is required; the
 // client renders TikTok urls as embeds and everything else as a link.
+// `audioFilename`/`segments` are the optional reference-audio analysis fields
+// (#2106) — absent on legacy references; the service omits empty values so
+// pre-feature records round-trip unchanged.
 const referenceSchema = z.object({
   id: str(svc.ID_MAX_LENGTH).optional(),
   url: str(svc.URL_MAX_LENGTH),
   label: str(svc.LABEL_MAX_LENGTH).optional().default(''),
   note: str(svc.FIELD_MAX_LENGTH).optional().default(''),
+  audioFilename: str(svc.URL_MAX_LENGTH).optional(),
+  segments: z.array(refSegmentSchema).max(svc.REF_SEGMENTS_MAX).optional(),
 });
 
 // No `.default('')` on these fields: `.partial()` (used for PUT) materializes a

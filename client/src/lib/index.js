@@ -77,6 +77,7 @@ export * from './lossSparkline.js';
 export * from './metronome.js';
 export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';
+export * from './referenceAnalysis.js';
 export * from './scoreNotation.js';
 export * from './scorePlayback.js';
 export * from './singToScore.js';
