@@ -198,6 +198,35 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(drills[0].config.reviewSkillId).toBe('multiplication:L1');
   });
 
+  it('fetches a review rep on demand when it was not preloaded, without starting a normal session', async () => {
+    const onStart = vi.fn();
+    const rep = { skillId: 'cognitive:n-back:L0', label: 'n-back L0', type: 'n-back', module: 'cognitive', config: { level: 0, review: true, reviewSkillId: 'cognitive:n-back:L0' } };
+    // First call (mount preload) returns nothing; the on-demand click fetch finds it.
+    getPostReviewReps.mockResolvedValueOnce({ reps: [] }).mockResolvedValue({ reps: [rep] });
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'skill-review:cognitive:n-back:L0', kind: 'skill-review', title: 'Re-verify n-back L0', deepLink: '/post/launcher', drillType: 'n-back', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Re-verify n-back L0')).toBeTruthy());
+    fireEvent.click(screen.getByText('Re-verify n-back L0').closest('button'));
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1));
+    expect(onStart.mock.calls[0][0][0].config.reviewSkillId).toBe('cognitive:n-back:L0');
+  });
+
+  it('does not start any session when a skill-review rep cannot be found', async () => {
+    const onStart = vi.fn();
+    getPostReviewReps.mockResolvedValue({ reps: [] }); // never resolves to the rep
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'skill-review:multiplication:L1', kind: 'skill-review', title: 'Re-verify Multiplication', deepLink: '/post/launcher', drillType: 'multiplication', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Re-verify Multiplication')).toBeTruthy());
+    fireEvent.click(screen.getByText('Re-verify Multiplication').closest('button'));
+    // A missing rep must NOT fall back to a normal Full POST.
+    await new Promise(r => setTimeout(r, 0));
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it('counts training-log time toward the daily-minutes goal', async () => {
     getPostProgress.mockResolvedValue({ series: { byDay: [{ date: new Date().toISOString().split('T')[0], minutes: 15 }] } });
     renderLauncher({ config: { ...baseConfig, goals: { dailyMinutes: 20 } } });

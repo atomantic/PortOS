@@ -89,7 +89,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
-    getPostReviewReps(2).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
+    getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
     getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
   }, []);
 
@@ -367,13 +367,19 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
   // Launch a single due maintenance-review rep from an "Up next" skill-review
   // recommendation (issue #2100). The rep carries the `review`/`reviewSkillId`
-  // markers the server needs to record the re-verification — a plain focus
-  // session would NOT resolve the scheduled review. Falls back to a Full POST
-  // when no runnable rep matches (e.g. reps not yet loaded).
-  function startReviewRep(rec) {
+  // markers the server needs to record the re-verification — a plain focus/Full
+  // session would NOT resolve the scheduled review, so we NEVER fall back to one.
+  // If the matching rep isn't in the preloaded set (still pending, or beyond the
+  // first page), fetch fresh on demand; if it still can't be found there's no
+  // runnable rep, so do nothing rather than start an unrelated session.
+  async function startReviewRep(rec) {
     const skillId = rec.id.replace(/^skill-review:/, '');
-    const rep = reviewReps.find(r => r.skillId === skillId);
-    if (!rep) return hasSessionDrills ? handleStart() : undefined;
+    let rep = reviewReps.find(r => r.skillId === skillId);
+    if (!rep) {
+      const fresh = await getPostReviewReps(5).then(r => r?.reps || []).catch(() => []);
+      rep = fresh.find(r => r.skillId === skillId);
+    }
+    if (!rep) return;
     const drillConfig = {
       type: rep.type,
       domain: DRILL_TO_DOMAIN[rep.type],
