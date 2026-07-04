@@ -365,6 +365,85 @@ describe('rounds service', () => {
     expect(song.references[1].id).toBe('ref-keep');
   });
 
+  it('reference audioFilename/segments round-trip; absent keys stay absent (#2106)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [
+        { url: 'https://example.com/plain' }, // legacy — no analysis fields
+        {
+          url: 'https://www.tiktok.com/@u/video/9',
+          audioFilename: '  abc123-ref.wav  ',
+          segments: [
+            { layerId: 'lead', startMs: 0, endMs: 14000 },
+            { layerId: 'bass', startMs: 14000.7, endMs: 29000.2 }, // rounded
+          ],
+        },
+      ],
+    });
+    // Legacy reference: the new keys must not appear at all.
+    expect('audioFilename' in song.references[0]).toBe(false);
+    expect('segments' in song.references[0]).toBe(false);
+    // Analysis reference: trimmed filename + clamped/rounded segments.
+    expect(song.references[1].audioFilename).toBe('abc123-ref.wav');
+    expect(song.references[1].segments).toEqual([
+      { layerId: 'lead', startMs: 0, endMs: 14000 },
+      { layerId: 'bass', startMs: 14001, endMs: 29000 },
+    ]);
+  });
+
+  it('drops malformed reference segments and bounds the list (#2106)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: [
+          { layerId: 'a', startMs: 5000, endMs: 5000 },   // zero-length → dropped
+          { layerId: 'b', startMs: 9000, endMs: 1000 },   // inverted → dropped
+          { layerId: 'c', startMs: 'x', endMs: 2000 },    // non-finite → dropped
+          { layerId: 'd', startMs: -50, endMs: 2000 },    // clamped to 0
+          'not-an-object',                                 // shapeless → dropped
+        ],
+      }],
+    });
+    expect(song.references[0].segments).toEqual([
+      { layerId: 'd', startMs: 0, endMs: 2000 },
+    ]);
+    // An all-invalid list leaves the key absent (no empty-array husk).
+    const empty = svc.sanitizeRound({
+      id: 'y',
+      references: [{ url: 'https://example.com', audioFilename: 'ref.wav', segments: [{ startMs: 1, endMs: 1 }] }],
+    });
+    expect('segments' in empty.references[0]).toBe(false);
+    // Bound: more than REF_SEGMENTS_MAX spans are truncated.
+    const many = svc.sanitizeRound({
+      id: 'z',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: Array.from({ length: svc.REF_SEGMENTS_MAX + 5 }, (_, i) => ({
+          layerId: `l${i}`, startMs: i * 1000, endMs: i * 1000 + 500,
+        })),
+      }],
+    });
+    expect(many.references[0].segments).toHaveLength(svc.REF_SEGMENTS_MAX);
+  });
+
+  it('drops reference segments when no audio is attached (#2106)', () => {
+    // Segments are offsets into the attached audio — without an audioFilename
+    // they are stale ranges from a removed recording and must not persist
+    // (removing the audio clears them structurally).
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        segments: [{ layerId: 'bass', startMs: 0, endMs: 2000 }],
+      }],
+    });
+    expect('segments' in song.references[0]).toBe(false);
+    expect('audioFilename' in song.references[0]).toBe(false);
+  });
+
   it('refreshes a built-in from template, preserving recordings + learned', async () => {
     await svc.listRounds(); // seed
     const seedId = [...svc.BUILTIN_ROUND_IDS][0];
