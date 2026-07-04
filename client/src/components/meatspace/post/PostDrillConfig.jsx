@@ -79,6 +79,8 @@ const DRILL_META = {
   }
 };
 
+const MATH_TYPES = Object.keys(DRILL_META);
+
 // LLM drill config meta for all 14 generatable types.
 // `defaults.count` mirrors the server (`server/services/meatspacePostLlm.js`,
 // `config.count || N`); `defaults.timeLimitSec` follows the DEFAULT_CONFIG
@@ -112,6 +114,8 @@ const LLM_DRILL_META = {
   'invention-pitch': { label: 'Invention Pitch', desc: 'Pitch inventions that solve quirky problems', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } },
   'reframe': { label: 'Reframe', desc: 'Reframe a frustrating situation positively or humorously', fields: llmFields(), defaults: { enabled: false, count: 3, timeLimitSec: 180 } }
 };
+
+const LLM_TYPES = Object.keys(LLM_DRILL_META);
 
 // Seed state for every LLM drill type so a card's toggle reflects real,
 // persistable state. Without this, a type absent from the saved config renders
@@ -215,6 +219,8 @@ const COGNITIVE_DRILL_META = {
   },
 };
 
+const COGNITIVE_TYPES = Object.keys(COGNITIVE_DRILL_META);
+
 // String-valued cognitive config keys must NOT be coerced to Number on edit.
 const COGNITIVE_STRING_FIELDS = new Set(['direction', 'mode']);
 
@@ -239,6 +245,64 @@ const LLM_DRILL_GROUPS = [
 ];
 
 const CARD_GRID = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4';
+
+// Batch-set `enabled` across a domain's drill-type map, preserving every other
+// per-type field (count, timeLimitSec, etc). Used by both presets and the
+// per-group "Enable all / Disable all" buttons.
+function setEnabledMap(current, allTypes, enabledTypes) {
+  const out = { ...current };
+  for (const type of allTypes) {
+    out[type] = { ...out[type], enabled: enabledTypes.has(type) };
+  }
+  return out;
+}
+
+// Config presets — batch-set the enabled flags across domains so a first
+// session doesn't require clicking through ~25 individual cards. None of
+// these presets touch LLM drills (the "Everything" preset is explicitly
+// local-only) — enabling LLM drills in bulk is handled separately by the
+// LLM group's "Enable all" button, which is gated on a provider being chosen.
+const PRESETS = [
+  {
+    id: 'balanced',
+    label: 'Balanced daily',
+    apply: ({ setDrillTypes, setCognitiveDrillTypes, setCognitiveEnabled, setLlmEnabled }) => {
+      setDrillTypes(prev => setEnabledMap(prev, MATH_TYPES, new Set(['multiplication', 'estimation'])));
+      setCognitiveDrillTypes(prev => setEnabledMap(prev, COGNITIVE_TYPES, new Set(['n-back', 'stroop'])));
+      setCognitiveEnabled(true);
+      setLlmEnabled(false);
+    },
+  },
+  {
+    id: 'math-focus',
+    label: 'Math focus',
+    apply: ({ setDrillTypes, setCognitiveEnabled, setLlmEnabled }) => {
+      setDrillTypes(prev => setEnabledMap(prev, MATH_TYPES, new Set(MATH_TYPES)));
+      setCognitiveEnabled(false);
+      setLlmEnabled(false);
+    },
+  },
+  {
+    id: 'cognitive-focus',
+    label: 'Cognitive focus',
+    apply: ({ setDrillTypes, setCognitiveDrillTypes, setCognitiveEnabled, setLlmEnabled }) => {
+      setDrillTypes(prev => setEnabledMap(prev, MATH_TYPES, new Set()));
+      setCognitiveDrillTypes(prev => setEnabledMap(prev, COGNITIVE_TYPES, new Set(COGNITIVE_TYPES)));
+      setCognitiveEnabled(true);
+      setLlmEnabled(false);
+    },
+  },
+  {
+    id: 'everything',
+    label: 'Everything (local-only)',
+    apply: ({ setDrillTypes, setCognitiveDrillTypes, setCognitiveEnabled, setLlmEnabled }) => {
+      setDrillTypes(prev => setEnabledMap(prev, MATH_TYPES, new Set(MATH_TYPES)));
+      setCognitiveDrillTypes(prev => setEnabledMap(prev, COGNITIVE_TYPES, new Set(COGNITIVE_TYPES)));
+      setCognitiveEnabled(true);
+      setLlmEnabled(false);
+    },
+  },
+];
 
 function AdaptiveBadge({ info }) {
   const status = describeAdaptive(info);
@@ -281,6 +345,32 @@ function ProgressiveBadge({ info }) {
       <p className="text-xs text-gray-500">
         Advances to the next rung after ≥{pct}% accuracy and fast responses at this one. Max Digits is ignored while progressive is on.
       </p>
+    </div>
+  );
+}
+
+// Per-group "Enable all / Disable all" — a lighter-weight bulk action than the
+// top-level presets, scoped to one domain's own card grid.
+function GroupBulkToggle({ groupLabel, onEnableAll, onDisableAll }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <button
+        type="button"
+        onClick={onEnableAll}
+        className="text-port-accent hover:underline"
+        aria-label={`Enable all ${groupLabel}`}
+      >
+        Enable all
+      </button>
+      <span className="text-gray-600">/</span>
+      <button
+        type="button"
+        onClick={onDisableAll}
+        className="text-gray-400 hover:underline"
+        aria-label={`Disable all ${groupLabel}`}
+      >
+        Disable all
+      </button>
     </div>
   );
 }
@@ -501,6 +591,49 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     }));
   }
 
+  function applyPreset(id) {
+    const preset = PRESETS.find(p => p.id === id);
+    if (!preset) return;
+    preset.apply({ setDrillTypes, setCognitiveDrillTypes, setCognitiveEnabled, setLlmEnabled });
+    toast.success(`Preset "${preset.label}" applied — click Save to persist`);
+  }
+
+  function setAllMathEnabled(enabled) {
+    setDrillTypes(prev => setEnabledMap(prev, MATH_TYPES, enabled ? new Set(MATH_TYPES) : new Set()));
+  }
+
+  function setAllCognitiveEnabled(enabled) {
+    setCognitiveDrillTypes(prev => setEnabledMap(prev, COGNITIVE_TYPES, enabled ? new Set(COGNITIVE_TYPES) : new Set()));
+    // Bulk-enabling drills in a domain whose section toggle is off (e.g.
+    // right after the "Math focus" preset) must also turn the domain on —
+    // otherwise the flags flip invisibly and Save persists
+    // cognitive.enabled=false, so the launcher still ignores every drill the
+    // user just enabled. Disabling all leaves the domain toggle alone (an
+    // empty-but-on section is a valid state).
+    if (enabled) setCognitiveEnabled(true);
+  }
+
+  // Never bulk-enable LLM drills without a chosen provider — respects the
+  // AI-provider consent posture (no silent expansion into a provider the
+  // user hasn't picked; issue #2101 explicitly requires a non-empty provider
+  // selection here, so the "System Default" sentinel does not satisfy the
+  // gate). Disabling never calls a provider, so it's unguarded.
+  function setAllLlmEnabled(enabled) {
+    if (enabled && !llmProviderId) {
+      // Reveal the section (without enabling any drills) so the AI Provider
+      // picker the toast points at is actually on screen — it renders inside
+      // the {llmEnabled && …} block and every preset turns llmEnabled off.
+      setLlmEnabled(true);
+      toast.error('Pick an AI provider above before enabling all LLM drills');
+      return;
+    }
+    setLlmDrillTypes(prev => setEnabledMap(prev, LLM_TYPES, enabled ? new Set(LLM_TYPES) : new Set()));
+    // Same domain-on rule as cognitive: enabling all LLM drills while the
+    // LLM section toggle is off would otherwise persist
+    // llmDrills.enabled=false and the launcher would never run them.
+    if (enabled) setLlmEnabled(true);
+  }
+
   const selectedProvider = providers.find(p => p.id === llmProviderId);
   const availableModels = filterSelectableModels(selectedProvider?.models);
 
@@ -550,6 +683,21 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
         </button>
       </div>
 
+      {/* Presets — batch-set flags across domains; a subsequent Save persists them */}
+      <div className="flex flex-wrap items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg">
+        <span className="text-xs text-gray-500 uppercase tracking-wider mr-1">Presets</span>
+        {PRESETS.map(preset => (
+          <button
+            key={preset.id}
+            type="button"
+            onClick={() => applyPreset(preset.id)}
+            className="px-3 py-1.5 text-xs font-medium text-white bg-port-bg border border-port-border rounded-full hover:border-port-accent transition-colors"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+
       {/* Daily Reminder Section — opt-in, off by default; no LLM calls */}
       <div className="p-4 bg-port-card border border-port-border rounded-lg space-y-3">
         <div className="flex items-center justify-between">
@@ -594,7 +742,14 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       {/* Mental Math Section */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Mental Math</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Mental Math</h3>
+            <GroupBulkToggle
+              groupLabel="Mental Math drills"
+              onEnableAll={() => setAllMathEnabled(true)}
+              onDisableAll={() => setAllMathEnabled(false)}
+            />
+          </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-400">Adaptive difficulty</span>
             <button
@@ -643,9 +798,16 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
       {/* Cognitive Drills Section (deterministic — no provider) */}
       <div className="flex items-center justify-between pt-2">
-        <div className="flex items-center gap-2">
-          <Brain size={16} className="text-rose-400" />
-          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cognitive (deterministic)</h3>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Brain size={16} className="text-rose-400" />
+            <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Cognitive (deterministic)</h3>
+          </div>
+          <GroupBulkToggle
+            groupLabel="Cognitive drills"
+            onEnableAll={() => setAllCognitiveEnabled(true)}
+            onDisableAll={() => setAllCognitiveEnabled(false)}
+          />
         </div>
         <button
           type="button"
@@ -684,9 +846,16 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
       {/* LLM Drills Section */}
       <div className="flex items-center justify-between pt-2">
-        <div className="flex items-center gap-2">
-          <Brain size={16} className="text-port-accent-2" />
-          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Wit &amp; Memory (LLM)</h3>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Brain size={16} className="text-port-accent-2" />
+            <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Wit &amp; Memory (LLM)</h3>
+          </div>
+          <GroupBulkToggle
+            groupLabel="LLM drills"
+            onEnableAll={() => setAllLlmEnabled(true)}
+            onDisableAll={() => setAllLlmEnabled(false)}
+          />
         </div>
         <button
           type="button"

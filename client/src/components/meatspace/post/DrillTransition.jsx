@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronRight, Calculator, BookOpen, MessageCircle, Mic, Sparkles } from 'lucide-react';
+import { ChevronRight, Calculator, BookOpen, MessageCircle, Mic, Sparkles, Pause, Play } from 'lucide-react';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS } from './constants';
 
 const DOMAIN_ICONS = {
@@ -12,23 +12,48 @@ const DOMAIN_ICONS = {
 
 export default function DrillTransition({ nextDrillType, drillIndex, drillCount, completedResults, onContinue }) {
   const [countdown, setCountdown] = useState(3);
+  // Explicit user pause (Pause/Resume button) vs. transient hover/focus pause —
+  // tracked separately so releasing one doesn't silently un-pause another.
+  // Hover and focus are ALSO tracked independently of each other (not
+  // collapsed into one boolean): a mouseleave while a control inside the
+  // card still holds keyboard focus must not resume the countdown, and vice
+  // versa for blur while the mouse is still over the card. Any of the three
+  // being true halts the countdown.
+  const [manuallyPaused, setManuallyPaused] = useState(false);
+  const [hoveringMouse, setHoveringMouse] = useState(false);
+  const [hoveringFocus, setHoveringFocus] = useState(false);
+  const paused = manuallyPaused || hoveringMouse || hoveringFocus;
 
   const domainKey = DRILL_TO_DOMAIN[nextDrillType];
   const domain = domainKey ? DOMAINS[domainKey] : null;
   const Icon = domainKey ? DOMAIN_ICONS[domainKey] : ChevronRight;
 
-  // Auto-advance after 3 seconds
+  // Auto-advance after 3 seconds, unless paused (manually or via hover/focus).
   useEffect(() => {
+    if (paused) return;
     if (countdown <= 0) {
       onContinue();
       return;
     }
     const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
     return () => clearTimeout(timer);
-  }, [countdown, onContinue]);
+  }, [countdown, paused, onContinue]);
 
   return (
-    <div className="max-w-lg mx-auto space-y-8">
+    <div
+      className="max-w-lg mx-auto space-y-8"
+      onMouseEnter={() => setHoveringMouse(true)}
+      onMouseLeave={() => setHoveringMouse(false)}
+      onFocus={() => setHoveringFocus(true)}
+      onBlur={(e) => {
+        // Only clear focus-pause once focus has left the whole transition card,
+        // not just the individual button — a Tab between the Pause and Continue
+        // buttons shouldn't flicker the countdown back on mid-transition. This
+        // is independent of hoveringMouse, so leaving the card with the mouse
+        // while a control still holds focus (or vice versa) can't resume it.
+        if (!e.currentTarget.contains(e.relatedTarget)) setHoveringFocus(false);
+      }}
+    >
       {/* Completed domains summary */}
       {completedResults.length > 0 && (
         <div className="flex justify-center gap-3">
@@ -74,13 +99,42 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
         ))}
       </div>
 
-      {/* Continue button with countdown */}
-      <button
-        onClick={onContinue}
-        className="w-full px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white font-medium rounded-lg transition-colors"
-      >
-        Continue {countdown > 0 ? `(${countdown})` : ''}
-      </button>
+      {/* Pause/Resume + Continue now controls */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setManuallyPaused(p => !p);
+            // Explicitly clear the ambient focus-pause on every toggle rather
+            // than blurring the button: many browsers (Chrome/Edge, Windows
+            // Firefox) keep focus on a <button> after a click, so without
+            // this, hoveringFocus would stay true forever once the button is
+            // focused and clicking "Resume" would never actually resume.
+            // Resetting the flag directly (instead of calling .blur()) keeps
+            // real keyboard focus on the button — a keyboard user doesn't
+            // lose their place — while still letting a later Tab-away-and-
+            // back re-engage the ambient focus-pause normally.
+            setHoveringFocus(false);
+          }}
+          aria-pressed={manuallyPaused}
+          className="flex items-center gap-1.5 px-4 py-3 bg-port-card border border-port-border hover:border-port-accent text-gray-300 text-sm font-medium rounded-lg transition-colors shrink-0"
+        >
+          {manuallyPaused ? <Play size={16} /> : <Pause size={16} />}
+          {manuallyPaused ? 'Resume' : 'Pause'}
+        </button>
+        <button
+          type="button"
+          onClick={onContinue}
+          className="flex-1 px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white font-medium rounded-lg transition-colors"
+        >
+          Continue now {!paused && countdown > 0 ? `(${countdown})` : ''}
+        </button>
+      </div>
+      {paused && (
+        <p className="text-center text-xs text-gray-500">
+          {manuallyPaused ? 'Paused' : 'Paused — hover or focus'} · auto-advance stopped
+        </p>
+      )}
     </div>
   );
 }

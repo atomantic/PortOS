@@ -87,6 +87,28 @@ describe('Morse drill types stay scoped to the training log', () => {
   });
 });
 
+describe('trainingEntrySchema wordplay drill types (issue #2097)', () => {
+  // Regression: the standalone Wordplay tab (WordplayTrainer.jsx) never
+  // persisted practice — fixed by submitting these four LLM drill types
+  // through trainingEntrySchema, same as the in-session runner already does.
+  // They flow in via DRILL_TYPES (LLM_DRILL_TYPES ⊂ DRILL_TYPES), not the
+  // Morse-only union member, so this locks that acceptance in place.
+  it('accepts every wordplay drill type on the training-log entry schema', () => {
+    for (const drillType of ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist']) {
+      const parsed = trainingEntrySchema.parse({
+        module: 'llm-drills', drillType, questionCount: 5, correctCount: 4, totalMs: 60000
+      });
+      expect(parsed.drillType).toBe(drillType);
+    }
+  });
+
+  it('still rejects an unknown drill type', () => {
+    expect(() => trainingEntrySchema.parse({
+      module: 'llm-drills', drillType: 'not-a-real-drill', questionCount: 5, correctCount: 4, totalMs: 60000
+    })).toThrow();
+  });
+});
+
 describe('questionResultSchema chunkId/element (issue #2016)', () => {
   // Regression: memory-sequence/memory-element-flash answers must carry
   // chunkId/element through postSessionSubmitSchema so submitPostSession can
