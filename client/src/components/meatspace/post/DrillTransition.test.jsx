@@ -95,4 +95,32 @@ describe('DrillTransition', () => {
     await tickSeconds(5);
     expect(onContinue).not.toHaveBeenCalled();
   });
+
+  it('a focus-driven pause survives the mouse leaving the card (hover and focus are independent)', async () => {
+    // Regression: hover and focus used to collapse into one boolean, so a
+    // mouseleave while a control still held keyboard focus silently resumed
+    // the countdown even though the user never blurred the focused control.
+    const onContinue = vi.fn();
+    const { container } = render(<DrillTransition {...baseProps} onContinue={onContinue} />);
+    const card = container.firstChild;
+    fireEvent.mouseEnter(card);
+    fireEvent.focus(screen.getByRole('button', { name: 'Pause' }));
+    fireEvent.mouseLeave(card);
+    await tickSeconds(5);
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('a hover-driven pause survives a blur inside the card (focus and hover are independent)', async () => {
+    // Mirror of the above: leaving keyboard focus (blur) while the mouse is
+    // still hovering the card must not resume the countdown either.
+    const onContinue = vi.fn();
+    const { container } = render(<DrillTransition {...baseProps} onContinue={onContinue} />);
+    const card = container.firstChild;
+    const pauseButton = screen.getByRole('button', { name: 'Pause' });
+    fireEvent.focus(pauseButton);
+    fireEvent.mouseEnter(card);
+    fireEvent.blur(pauseButton, { relatedTarget: null });
+    await tickSeconds(5);
+    expect(onContinue).not.toHaveBeenCalled();
+  });
 });

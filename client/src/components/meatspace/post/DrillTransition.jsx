@@ -13,11 +13,16 @@ const DOMAIN_ICONS = {
 export default function DrillTransition({ nextDrillType, drillIndex, drillCount, completedResults, onContinue }) {
   const [countdown, setCountdown] = useState(3);
   // Explicit user pause (Pause/Resume button) vs. transient hover/focus pause —
-  // tracked separately so releasing hover/focus doesn't silently un-pause a
-  // deliberate Pause click. Either one halts the countdown.
+  // tracked separately so releasing one doesn't silently un-pause another.
+  // Hover and focus are ALSO tracked independently of each other (not
+  // collapsed into one boolean): a mouseleave while a control inside the
+  // card still holds keyboard focus must not resume the countdown, and vice
+  // versa for blur while the mouse is still over the card. Any of the three
+  // being true halts the countdown.
   const [manuallyPaused, setManuallyPaused] = useState(false);
-  const [hovering, setHovering] = useState(false);
-  const paused = manuallyPaused || hovering;
+  const [hoveringMouse, setHoveringMouse] = useState(false);
+  const [hoveringFocus, setHoveringFocus] = useState(false);
+  const paused = manuallyPaused || hoveringMouse || hoveringFocus;
 
   const domainKey = DRILL_TO_DOMAIN[nextDrillType];
   const domain = domainKey ? DOMAINS[domainKey] : null;
@@ -37,14 +42,16 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
   return (
     <div
       className="max-w-lg mx-auto space-y-8"
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
-      onFocus={() => setHovering(true)}
+      onMouseEnter={() => setHoveringMouse(true)}
+      onMouseLeave={() => setHoveringMouse(false)}
+      onFocus={() => setHoveringFocus(true)}
       onBlur={(e) => {
-        // Only clear hover-pause once focus has left the whole transition card,
+        // Only clear focus-pause once focus has left the whole transition card,
         // not just the individual button — a Tab between the Pause and Continue
-        // buttons shouldn't flicker the countdown back on mid-transition.
-        if (!e.currentTarget.contains(e.relatedTarget)) setHovering(false);
+        // buttons shouldn't flicker the countdown back on mid-transition. This
+        // is independent of hoveringMouse, so leaving the card with the mouse
+        // while a control still holds focus (or vice versa) can't resume it.
+        if (!e.currentTarget.contains(e.relatedTarget)) setHoveringFocus(false);
       }}
     >
       {/* Completed domains summary */}
