@@ -12,6 +12,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 vi.mock('fs/promises', () => ({
   unlink: vi.fn(async (path) => { fileStore.delete(path); }),
+  access: vi.fn(async (path) => { if (!fileStore.has(path)) throw new Error('ENOENT'); }),
 }));
 
 const svc = await import('./mediaSketches.js');
@@ -50,6 +51,21 @@ describe('mediaSketches service', () => {
     const png = await svc.getSketchPng(KEY);
     expect(Buffer.isBuffer(png)).toBe(true);
     expect(png.toString()).toBe('fake-png-bytes');
+  });
+
+  it('getSketchPngPath returns the flattened PNG path when it exists, null otherwise', async () => {
+    // Issue #2036 phase 2: the img2img re-render needs the sidecar path, not bytes.
+    expect(await svc.getSketchPngPath(KEY)).toBeNull();
+    await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes, png: PNG_DATA_URL });
+    const path = await svc.getSketchPngPath(KEY);
+    expect(path).toBe('/mock/data/media-sketches/aW1hZ2U6Zm9vLnBuZw.png');
+    // A vectors-only re-save drops the PNG, so the path resolver goes null again.
+    await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes });
+    expect(await svc.getSketchPngPath(KEY)).toBeNull();
+  });
+
+  it('getSketchPngPath rejects an invalid key', async () => {
+    await expect(svc.getSketchPngPath('not a key')).rejects.toThrow();
   });
 
   it('re-saving with strokes but no PNG drops the stale flattened export', async () => {

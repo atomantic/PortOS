@@ -246,6 +246,26 @@ describe('buildRegenParams', () => {
     expect(params.height % 16).toBe(0);
     expect(params.upscaleTo).toEqual({ width: 1024, height: 1000 });
   });
+
+  it('annotation re-render seeds initImagePath from the sketch PNG while keeping source lineage', () => {
+    // Issue #2036 phase 2: the img2img base is the flattened source+strokes PNG,
+    // but dimensions/lineage still come from the original source (regenOf).
+    const params = buildRegenParams({
+      ...base,
+      sourceMeta: { prompt: 'x', width: 1024, height: 768 },
+      initImageAbsPath: '/data/media-sketches/abc.png',
+      annotated: true,
+    });
+    expect(params.initImagePath).toBe('/data/media-sketches/abc.png');
+    expect(params.regenOf).toBe('source.png');
+    expect(params.annotatedRegen).toBe(true);
+  });
+
+  it('leaves initImagePath at the source and omits annotatedRegen for a normal regen', () => {
+    const params = buildRegenParams({ ...base, sourceMeta: { prompt: 'x' } });
+    expect(params.initImagePath).toBe('/data/images/source.png');
+    expect(params.annotatedRegen).toBeUndefined();
+  });
 });
 
 describe('clampRegenDimensions', () => {

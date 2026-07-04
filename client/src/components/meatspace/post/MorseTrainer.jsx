@@ -215,12 +215,17 @@ function pickSendPrompt() {
 
 function useAudioContext() {
   const ctxRef = useRef(null);
-  const ensureCtx = useCallback(() => {
+  const ensureCtx = useCallback(async () => {
     if (!ctxRef.current) {
       const Ctor = window.AudioContext || window.webkitAudioContext;
       ctxRef.current = new Ctor();
     }
-    if (ctxRef.current.state === 'suspended') ctxRef.current.resume();
+    // Autoplay policy starts the context suspended until a user gesture — and on
+    // iOS Safari resume() is async, so we MUST await it before scheduling any
+    // oscillator. Firing resume() without awaiting (the old behavior) laid tones
+    // down against a still-suspended clock: silent on mobile Safari. Mirrors the
+    // await-resume idiom in metronome.js / scorePlayback.js / songPlayback.js.
+    if (ctxRef.current.state === 'suspended') await ctxRef.current.resume();
     return ctxRef.current;
   }, []);
   useEffect(() => () => {
@@ -247,13 +252,24 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   // depends on them, and re-running per keystroke would tear down the
   // just-scheduled flush timers and cut off the active tone mid-press.
   const pressingRef = useRef(false);
+  // Bumped once per beginPress so a startTone whose resume await settles after a
+  // newer press started can tell it's been superseded and bail.
+  const toneGenRef = useRef(0);
 
   const [pattern, setPattern] = useState('');
   const [decoded, setDecoded] = useState('');
   const [pressing, setPressing] = useState(false);
 
-  const startTone = useCallback(() => {
-    const ctx = ensureCtx();
+  const startTone = useCallback(async () => {
+    const gen = ++toneGenRef.current;
+    const ctx = await ensureCtx();
+    // A fast tap can release (endPress → stopTone), or a newer press can start,
+    // before the first-press-only resume await settles. Bail if the key is no
+    // longer held (`!pressingRef.current`) OR a newer press superseded this one
+    // (`gen !== toneGenRef.current`) — a bare boolean can't distinguish the two,
+    // so two overlapping starts would both create an oscillator and orphan the
+    // first, leaving it droning with no matching stop.
+    if (!pressingRef.current || gen !== toneGenRef.current) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -272,8 +288,10 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     const osc = oscRef.current;
     const gain = gainRef.current;
     if (!osc || !gain) return;
-    const ctx = ensureCtx();
-    const now = ctx.currentTime;
+    // Read the clock straight off the live oscillator's context — a tone is only
+    // playing on an already-running context, so there's nothing to resume here
+    // (and stopTone stays synchronous, which endPress/clear/cleanup rely on).
+    const now = osc.context.currentTime;
     gain.gain.cancelScheduledValues(now);
     gain.gain.setValueAtTime(gain.gain.value, now);
     gain.gain.linearRampToValueAtTime(0, now + RAMP_SEC);
@@ -281,7 +299,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
     oscRef.current = null;
     gainRef.current = null;
-  }, [ensureCtx]);
+  }, []);
 
   const flushLetter = useCallback(() => {
     const buf = patternRef.current;
@@ -785,8 +803,17 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
   const [done, setDone] = useState(false);
   const inputRef = useRef(null);
   const roundStartRef = useRef(0);
+  // Re-entrancy guard. On the first play of a session `ensureCtx()` awaits the
+  // iOS audio-unlock, and `prompt`/`playing` aren't set until after it — so the
+  // Start Round / New Round button stays live during that window. A second tap
+  // would otherwise start a second overlapping playPrompt, scheduling two Morse
+  // prompts over each other with the UI tracking only whichever set state last.
+  // A ref (not `playing` state) because it must gate synchronously, before the
+  // first await, where a state update wouldn't have rendered yet.
+  const playingRef = useRef(false);
 
   async function startRound() {
+    if (playingRef.current) return;
     setResults([]);
     setFeedback(null);
     setDone(false);
@@ -795,7 +822,9 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
   }
 
   async function playPrompt(isNew) {
-    const ctx = ensureCtx();
+    if (playingRef.current) return;
+    playingRef.current = true;
+    const ctx = await ensureCtx();
     const text = isNew ? pickKochPrompt(prefs.kochLevel) : prompt;
     if (isNew) {
       setPrompt(text);
@@ -805,6 +834,7 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, h
     setPlaying(true);
     await playMorse(ctx, text, prefs);
     setPlaying(false);
+    playingRef.current = false;
     setTimeout(() => inputRef.current?.focus(), 50);
   }
 

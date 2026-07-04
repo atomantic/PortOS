@@ -146,13 +146,26 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
   // Adaptive difficulty (opt-in): when the Adaptive toggle is on, math drill
   // params are nudged from recent scored performance; otherwise config passes
   // through unchanged. Attaches an `adaptive` explainer when an adjustment ran.
-  const { config: effectiveConfig, adaptive } = await postService.resolveDrillConfig(data.type, data.config);
+  const { config: effectiveConfig, adaptive, progression } = await postService.resolveDrillConfig(data.type, data.config);
   const drill = postService.generateDrill(data.type, effectiveConfig);
   if (!drill) {
     throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
   }
   if (adaptive) drill.adaptive = adaptive;
+  // Progressive multiplication ladder explainer (current level + per-rung mastery)
+  // so the drill runner can show which rung the user is on and why.
+  if (progression) drill.progression = progression;
   res.json(drill);
+}));
+
+/**
+ * GET /api/meatspace/post/multiplication-progress
+ * Current progressive-multiplication ladder level + per-rung mastery status,
+ * so the config UI can show the ramp before a session starts.
+ */
+router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getMultiplicationProgress();
+  res.json(progress);
 }));
 
 /**

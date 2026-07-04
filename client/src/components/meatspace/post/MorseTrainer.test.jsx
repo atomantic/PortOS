@@ -22,7 +22,9 @@ import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
 // own) — mirrors that convention. `stop()` resolves playMorse's promise on
 // the next tick, matching the real oscillator's `onended` callback shape.
 class MockOscillator {
-  constructor() { this.onended = null; this.frequency = { value: 0 }; }
+  // `context` mirrors the real AudioNode.context — stopTone reads currentTime
+  // off it instead of re-resolving the AudioContext.
+  constructor(context = { currentTime: 0 }) { this.onended = null; this.frequency = { value: 0 }; this.context = context; }
   connect() { return this; }
   start() {}
   stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
@@ -185,6 +187,69 @@ describe('MorseTrainer training log integration', () => {
         }));
       });
     });
+  });
+});
+
+describe('MorseTrainer iOS audio unlock', () => {
+  // Regression for "audio doesn't work on mobile Safari": iOS starts the
+  // AudioContext suspended and resume() is async. If a tone is scheduled before
+  // resume() settles, it's laid down against a still-suspended clock and never
+  // sounds. The trainer must await resume() (like metronome.js / scorePlayback.js)
+  // so no oscillator is ever created while the context is still 'suspended'.
+  let createdWhileSuspended;
+  let oscCount;
+  class SuspendedAudioContext {
+    constructor() { this.currentTime = 0; this.destination = {}; this.state = 'suspended'; }
+    // Resolve on a macrotask (setTimeout), NOT a microtask. iOS resume latency
+    // is real time, and the component must AWAIT it before touching
+    // createOscillator. A microtask-resolving mock would let the unawaited
+    // (buggy) path pass too — playPrompt's own `await ensureCtx()` yields a
+    // microtask, so a microtask state-flip always beats createOscillator
+    // regardless of the await. The macrotask makes the missing-await path
+    // schedule the oscillator while still 'suspended', so the test fails if the
+    // fix regresses.
+    resume() { return new Promise((resolve) => { setTimeout(() => { this.state = 'running'; resolve(); }, 0); }); }
+    createOscillator() {
+      if (this.state === 'suspended') createdWhileSuspended = true;
+      oscCount += 1;
+      return new MockOscillator();
+    }
+    createGain() { return new MockGainNode(); }
+    close() {}
+  }
+
+  beforeEach(() => {
+    createdWhileSuspended = false;
+    oscCount = 0;
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+    window.AudioContext = SuspendedAudioContext;
+  });
+  afterEach(() => { delete window.AudioContext; });
+
+  it('awaits resume() before scheduling any tone (no oscillator while suspended)', async () => {
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    // The round input only renders once playMorse has finished, so by here the
+    // first tone has been scheduled and played.
+    await screen.findByPlaceholderText('????');
+    expect(createdWhileSuspended).toBe(false);
+  });
+
+  it('ignores a second Start-Round tap during the audio-unlock window (no overlapping prompt)', async () => {
+    // While the first play awaits resume() (the iOS unlock window), prompt/playing
+    // aren't set yet, so the Start Round button is still live. A second tap in that
+    // window must be ignored — otherwise two playPrompt runs schedule two Morse
+    // prompts over each other. playMorse uses exactly one oscillator per prompt, so
+    // two overlapping prompts would create two oscillators for one round start.
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    const startBtn = await screen.findByRole('button', { name: /Start Round/i });
+    // Two synchronous taps land inside the unlock window (resume() resolves on a
+    // later macrotask, so neither startRound has reached createOscillator yet).
+    fireEvent.click(startBtn);
+    fireEvent.click(startBtn);
+    await screen.findByPlaceholderText('????');
+    expect(oscCount).toBe(1);
   });
 });
 

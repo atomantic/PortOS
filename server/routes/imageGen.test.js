@@ -5,6 +5,10 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
 import * as regen from '../services/imageGen/regen.js';
+import * as mediaSketches from '../services/mediaSketches.js';
+import { writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join as pathJoin } from 'path';
 
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
@@ -1105,6 +1109,30 @@ describe('Image Gen Routes', () => {
       expect(response.body.strengthDefault).toBeGreaterThanOrEqual(response.body.strengthMin);
       expect(response.body.strengthDefault).toBeLessThanOrEqual(response.body.strengthMax);
     });
+
+    it('threads a named source image’s model into the availability pick so the reported model matches the regen (issue #2036)', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '', metadata: { modelId: 'flux2-klein-9b' },
+      });
+      const availSpy = vi.spyOn(regen, 'getRegenAvailability')
+        .mockResolvedValueOnce({ available: true, modelId: 'flux2-klein-9b', strengthMin: 0.02, strengthMax: 0.6, strengthDefault: 0.25 });
+
+      // A path-prefixed query value must never reach the sidecar read raw — the
+      // sidecar is read by the RESOLVED gallery path's basename (traversal-safe).
+      const response = await request(app).get('/api/image-gen/regen/availability?filename=..%2F..%2Fsource.png');
+
+      expect(response.status).toBe(200);
+      expect(response.body.modelId).toBe('flux2-klein-9b');
+      expect(imageGen.local.readImageSidecar).toHaveBeenCalledWith('source.png');
+      // The source model must reach the availability resolver, or the dialog can
+      // name a different model than the POST enqueues on a multi-model install.
+      expect(availSpy).toHaveBeenCalledWith({ sourceModelId: 'flux2-klein-9b' });
+
+      resolveGallerySpy.mockRestore();
+      availSpy.mockRestore();
+    });
   });
 
   describe('POST /api/image-gen/:filename/regenerate', () => {
@@ -1160,6 +1188,87 @@ describe('Image Gen Routes', () => {
       readDimsSpy.mockRestore();
       resolveBackendSpy.mockRestore();
       buildParamsSpy.mockRestore();
+    });
+
+    // Annotation re-render (issue #2036 phase 2)
+    it('400s an annotated re-render when no annotation has been saved', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath')
+        .mockResolvedValueOnce(null);
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('NO_ANNOTATION');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      resolveGallerySpy.mockRestore();
+      sketchPathSpy.mockRestore();
+    });
+
+    it('400s an annotated re-render on the light method (init image needs the GPU pass)', async () => {
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true, method: 'light' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('VALIDATION_ERROR');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      resolveGallerySpy.mockRestore();
+    });
+
+    it('stages the flattened annotation into an init-image root the runner accepts, at the higher default strength', async () => {
+      // A real flattened-sketch file for the route to copy — the fix stages a
+      // snapshot into PATHS.imageRefs, and the runner's resolveImageInputPath
+      // must accept the staged path (media-sketches/ is NOT an approved root).
+      const srcSketch = pathJoin(tmpdir(), `annot-src-${Date.now()}.png`);
+      await writeFile(srcSketch, Buffer.from('89504e470d0a1a0a', 'hex'));
+
+      const resolveGallerySpy = vi.spyOn(fileUtils, 'resolveGalleryImage')
+        .mockReturnValueOnce('/fake/gallery/source.png');
+      const sketchPathSpy = vi.spyOn(mediaSketches, 'getSketchPngPath')
+        .mockResolvedValueOnce(srcSketch);
+      imageGen.local.readImageSidecar.mockResolvedValueOnce({
+        path: '/fake/gallery/source.png.json',
+        metadata: { modelId: 'flux-dev', prompt: 'a robot' },
+      });
+      const readDimsSpy = vi.spyOn(regen, 'readImageDimensions')
+        .mockResolvedValueOnce({ width: 1024, height: 1024 });
+      const resolveBackendSpy = vi.spyOn(regen, 'resolveRegenBackend')
+        .mockResolvedValueOnce({ available: true, model: { id: 'flux-dev' }, pythonPath: '/fake/venv/python' });
+      // buildRegenParams is NOT mocked — assert the REAL params the route enqueues.
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'annot-job-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/source.png/regenerate')
+        .send({ annotated: true }); // no explicit strength → annotated default
+
+      expect(response.status).toBe(200);
+      expect(response.body.jobId).toBe('annot-job-001');
+      const [enqueued] = mediaJobQueue.enqueueJob.mock.calls;
+      const params = enqueued[0].params;
+      expect(params.annotatedRegen).toBe(true);
+      expect(params.initImageStrength).toBe(regen.REGEN_ANNOTATED_STRENGTH_DEFAULT);
+      // Regression guard for the silently-dropped-init-image bug: the staged
+      // path must resolve under an approved image-input root, AND carry the
+      // `init-<uuid>` name that imageRefsGc.js sweeps (so a canceled re-render
+      // doesn't leak the snapshot).
+      expect(params.initImagePath).toMatch(/[/\\]image-refs[/\\]init-[0-9a-f-]+\.png$/i);
+      expect(fileUtils.resolveImageInputPath(params.initImagePath)).not.toBeNull();
+
+      await rm(params.initImagePath, { force: true });
+      await rm(srcSketch, { force: true });
+      resolveGallerySpy.mockRestore();
+      sketchPathSpy.mockRestore();
+      readDimsSpy.mockRestore();
+      resolveBackendSpy.mockRestore();
     });
   });
 });
