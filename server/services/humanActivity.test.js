@@ -199,4 +199,21 @@ describe('calendarActivityCandidates', () => {
     // ends in the future relative to `now`
     expect(calendarActivityCandidates(account, [{ externalId: 'c', startTime: '2026-07-05T08:00:00Z', endTime: '2026-07-05T08:30:00Z' }], now)).toEqual([]);
   });
+  it('anchors offset-less/all-day values in the user timezone, not the server OS zone', () => {
+    // Google all-day events normalize to "YYYY-MM-DDT00:00:00" (no offset). With
+    // the user in America/Los_Angeles, midnight July 4 local = 07:00Z — NOT
+    // whatever the Node process's OS timezone would parse it as (which could
+    // land the event inside July 3's local-day window for users west of UTC).
+    const nowLate = new Date('2026-07-06T00:00:00Z').getTime();
+    const [c] = calendarActivityCandidates(account, [
+      { externalId: 'ad1', title: 'Independence Day', startTime: '2026-07-04T00:00:00', endTime: '2026-07-05T00:00:00', isAllDay: true },
+    ], nowLate, 'America/Los_Angeles');
+    expect(c.happenedAt).toBe('2026-07-04T07:00:00.000Z');
+    expect(c.durationS).toBe(24 * 3600);
+    // Values WITH an explicit offset pass straight through untouched.
+    const [z] = calendarActivityCandidates(account, [
+      { externalId: 'ad2', title: 'Zoomed', startTime: '2026-07-04T09:00:00Z', endTime: '2026-07-04T09:30:00Z' },
+    ], nowLate, 'America/Los_Angeles');
+    expect(z.happenedAt).toBe('2026-07-04T09:00:00.000Z');
+  });
 });

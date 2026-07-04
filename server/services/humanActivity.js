@@ -203,22 +203,45 @@ export function messageActivityCandidates(account, messages = []) {
   return out;
 }
 
+// Resolve a calendar time value to a UTC instant, interpreting OFFSET-LESS
+// values in the given timezone instead of the Node process's OS timezone.
+// Google all-day events are normalized to "YYYY-MM-DDT00:00:00" (no offset) —
+// `new Date()` would parse that as server-OS-local, so for a user west of UTC
+// an all-day July 4 event could land inside July 3's local-day window. Values
+// with an explicit offset (Z / ±hh:mm) pass straight through.
+export function resolveEventInstant(value, timezone) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const s = String(value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s);
+  if (m && timezone) {
+    const [, y, mo, d, hh, mm, ss] = m;
+    const midnight = localMidnightUtc(Number(y), Number(mo), Number(d), timezone);
+    const dayMs = ((Number(hh) || 0) * 3600 + (Number(mm) || 0) * 60 + (Number(ss) || 0)) * 1000;
+    return new Date(midnight.getTime() + dayMs);
+  }
+  const parsed = new Date(s);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 // Map calendar events to activity candidates. Only events that have already
 // happened (end/start <= now) and weren't declined/cancelled count as activity,
-// mirroring the tribe touchpoint gate.
-export function calendarActivityCandidates(account, events = [], now = Date.now()) {
+// mirroring the tribe touchpoint gate. `timezone` (the user's configured IANA
+// zone) anchors offset-less/all-day values; without it they fall back to
+// `new Date()` semantics.
+export function calendarActivityCandidates(account, events = [], now = Date.now(), timezone = null) {
   const accountId = account?.id || null;
   const out = [];
   for (const event of events || []) {
     if (event?.isCancelled || event?.myStatus === 'declined') continue;
-    const startedAt = event.startTime || event.endTime;
+    const startedAt = resolveEventInstant(event.startTime, timezone) || resolveEventInstant(event.endTime, timezone);
     if (!startedAt) continue;
-    const completedAt = event.endTime || event.startTime;
-    if (new Date(completedAt).getTime() > now) continue; // not finished yet
+    const completedAt = resolveEventInstant(event.endTime, timezone) || startedAt;
+    if (completedAt.getTime() > now) continue; // not finished yet
     const eventKey = event.externalId || event.id;
     if (!eventKey) continue;
-    const start = new Date(event.startTime).getTime();
-    const end = new Date(event.endTime).getTime();
+    const start = resolveEventInstant(event.startTime, timezone)?.getTime();
+    const end = resolveEventInstant(event.endTime, timezone)?.getTime();
     const durationS = Number.isFinite(start) && Number.isFinite(end) && end > start
       ? Math.round((end - start) / 1000)
       : null;
@@ -226,7 +249,7 @@ export function calendarActivityCandidates(account, events = [], now = Date.now(
       source: 'calendar',
       accountId,
       kind: 'calendar.event',
-      happenedAt: startedAt,
+      happenedAt: startedAt.toISOString(),
       durationS,
       title: event.title || '(untitled event)',
       summary: shortSummary(event.location || event.description || ''),

@@ -2,6 +2,7 @@ import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { getUserTimezone } from '../lib/timezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
 export const CACHE_DIR = join(PATHS.calendar, 'cache');
@@ -305,7 +306,10 @@ export async function logCalendarTouchpoints(accountId, events = []) {
 // dynamically to keep this hook lazy (mirrors the tribe auto-log path).
 export async function recordCalendarActivity(account, events = []) {
   const { calendarActivityCandidates, recordEvents } = await import('./humanActivity.js');
-  const candidates = calendarActivityCandidates(account, events);
+  // The user's configured timezone anchors offset-less values (Google all-day
+  // events normalize to "YYYY-MM-DDT00:00:00") so they land on the right local day.
+  const timezone = await getUserTimezone();
+  const candidates = calendarActivityCandidates(account, events, Date.now(), timezone);
   if (candidates.length === 0) return { recorded: 0, skipped: 0 };
   return recordEvents(candidates);
 }

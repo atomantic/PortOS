@@ -79,7 +79,10 @@ function Histogram({ histogram }) {
   );
 }
 
-function EventRow({ event }) {
+// `timezone` is the server's configured user timezone — event times render in
+// it so rows line up with the day window and histogram buckets even when the
+// browser is in a different zone (e.g. viewing remotely over Tailscale).
+function EventRow({ event, timezone }) {
   const Icon = kindIcon(event.kind, event.source);
   const when = new Date(event.happenedAt);
   const participants = (event.participants || [])
@@ -94,7 +97,7 @@ function EventRow({ event }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-xs text-gray-500">{formatClockTime(when)}</span>
+          <span className="font-mono text-xs text-gray-500">{formatClockTime(when, { timeZone: timezone })}</span>
           <KindBadge kind={event.kind} />
           <span className="text-[10px] uppercase tracking-wide text-gray-500">{event.source}</span>
           {Number.isFinite(event.durationS) && event.durationS > 0 && (
@@ -215,7 +218,7 @@ export default function Timeline() {
         </div>
       ) : (
         <div className="flex flex-col gap-2 pb-6">
-          {events.map((event) => <EventRow key={event.id} event={event} />)}
+          {events.map((event) => <EventRow key={event.id} event={event} timezone={day?.timezone} />)}
         </div>
       )}
     </div>
