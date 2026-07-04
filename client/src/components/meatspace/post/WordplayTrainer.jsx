@@ -217,13 +217,22 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     e?.preventDefault();
     const responseMs = Date.now() - questionStartRef.current;
 
+    // A human-readable label for the prompt this response answers, sourced
+    // from the current challenge/puzzle regardless of mode. Bridge Word has
+    // no single rootWord/word/idiom field — its prompt is the clue set the
+    // player was shown — so it needs its own fallback rather than falling
+    // through to '' (which left the persisted training-log breakdown unable
+    // to identify which bridge puzzle was missed).
+    const promptLabel = currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom
+      || (currentPrompt?.clues || []).join(' / ') || '';
+
     let responseObj;
     if (selectedMode === 'compound-chain') {
-      responseObj = { questionIndex, items, responseMs };
+      responseObj = { questionIndex, prompt: promptLabel, items, responseMs };
     } else {
       responseObj = {
         questionIndex,
-        prompt: currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
+        prompt: promptLabel,
         response: inputValue.trim(),
         responseMs,
       };

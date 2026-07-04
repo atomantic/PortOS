@@ -72,6 +72,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     // carrying the score/feedback already computed for the results screen.
     expect(entry.questions).toHaveLength(1);
     expect(entry.questions[0]).toMatchObject({
+      prompt: 'fire',
       items: ['firehouse'],
       score: 85,
       feedback: 'Nice compounds!',
@@ -105,5 +106,40 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     // no training entry has been logged yet (only the final round does).
     await screen.findByText('Next');
     expect(submitTrainingEntry).not.toHaveBeenCalled();
+  });
+
+  it('persists a Bridge Word breakdown with a readable prompt built from the clue set (issue #2114)', async () => {
+    // Regression: Bridge Word puzzles have no rootWord/word/idiom field, only
+    // `clues`. Before this fix, the persisted question's `prompt` silently
+    // fell through to '' for this mode — the training log couldn't identify
+    // which puzzle a missed answer belonged to.
+    generatePostDrill.mockResolvedValue({
+      type: 'bridge-word',
+      puzzles: [{ clues: ['news___', '___back'], answer: 'paper' }],
+    });
+    scorePostLlmDrill.mockResolvedValue({
+      evaluation: { scores: [{ score: 40, feedback: 'Not quite' }] },
+    });
+
+    render(<WordplayTrainer onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+
+    fireEvent.click(await screen.findByText('Bridge Word'));
+    await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText(/bridge word is/i);
+    fireEvent.change(input, { target: { value: 'wrongword' } });
+    fireEvent.click(screen.getByText('Submit'));
+
+    const seeResults = await screen.findByText('See Results');
+    fireEvent.click(seeResults);
+
+    await waitFor(() => expect(submitTrainingEntry).toHaveBeenCalledTimes(1));
+    const entry = submitTrainingEntry.mock.calls[0][0];
+    expect(entry.questions[0]).toMatchObject({
+      prompt: 'news___ / ___back',
+      response: 'wrongword',
+      score: 40,
+      correct: false,
+    });
   });
 });
