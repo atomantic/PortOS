@@ -156,10 +156,14 @@ const COGNITIVE_DRILL_META = {
   'n-back': {
     label: 'N-Back',
     desc: 'Signal when a letter matches the one N steps back — working memory',
-    // `progressive: true` marks a laddered drill — the ProgressiveBadge + toggle
-    // render, and every listed field is ladder-managed (hidden while progressive
-    // is on; shown, incl. stimulusMs, in manual mode). See server/lib/postProgression.js.
+    // `progressive: true` marks a laddered drill (ProgressiveBadge + toggle
+    // render). `ladderFields` are the knobs the ladder actually drives per rung
+    // (server/lib/postProgression.js COGNITIVE_LADDERS) — ONLY these are hidden
+    // while progressive is on. Fields NOT in `ladderFields` (n-back `length`,
+    // digit-span `showMs`) aren't ladder-managed, so they stay visible + editable
+    // even under progressive and are honestly forwarded to the drill.
     progressive: true,
+    ladderFields: ['n', 'stimulusMs'],
     fields: [
       { key: 'n', label: 'N (steps back)', type: 'number', min: 1, max: 3 },
       { key: 'length', label: 'Sequence Length', type: 'number', min: 6, max: 60 },
@@ -171,6 +175,7 @@ const COGNITIVE_DRILL_META = {
     label: 'Digit Span',
     desc: 'Recall a shown digit sequence forward or backward',
     progressive: true,
+    ladderFields: ['direction', 'startLength', 'maxLength'],
     fields: [
       { key: 'direction', label: 'Direction', type: 'select', options: [
         { value: 'forward', label: 'Forward' },
@@ -186,6 +191,7 @@ const COGNITIVE_DRILL_META = {
     label: 'Stroop',
     desc: 'Name the ink color of a color-word — attention & inhibition',
     progressive: true,
+    ladderFields: ['count'],
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
     ],
@@ -195,6 +201,7 @@ const COGNITIVE_DRILL_META = {
     label: 'Schulte Table',
     desc: 'Scan a shuffled grid and tap 1, 2, 3... in order — visual attention & speed',
     progressive: true,
+    ladderFields: ['size'],
     fields: [
       { key: 'size', label: 'Grid Size (NxN)', type: 'number', min: 3, max: 7 },
     ],
@@ -204,6 +211,7 @@ const COGNITIVE_DRILL_META = {
     label: 'Mental Rotation',
     desc: 'Pick the shape that’s the same, just rotated — spatial reasoning',
     progressive: true,
+    ladderFields: ['count'],
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 4, max: 20 },
     ],
@@ -889,9 +897,9 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 progressive={progressive}
                 onToggleProgressive={supportsProgressive ? () => toggleCognitiveProgressive(type) : undefined}
                 progressInfo={supportsProgressive ? cognitiveProgress?.[type] : null}
-                managedFieldKeys={supportsProgressive ? meta.fields.map(f => f.key) : []}
+                managedFieldKeys={supportsProgressive ? (meta.ladderFields || []) : []}
                 speedGated={false}
-                managedLabel="Manual knobs"
+                managedLabel="The difficulty knobs"
               />
             );
           })}

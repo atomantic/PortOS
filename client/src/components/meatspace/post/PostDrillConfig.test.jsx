@@ -229,6 +229,9 @@ describe('PostDrillConfig', () => {
     expect(screen.queryByText('Stimulus (ms)')).toBeNull();
     await waitFor(() => expect(getPostCognitiveProgress).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText(/Level 2 of 3 · 2-back @ 2500ms/)).toBeTruthy());
+    // `length` is NOT ladder-managed, so it stays visible + editable even under
+    // progressive (only n/stimulusMs are hidden) — the knob is honestly forwarded.
+    expect(screen.getByText('Sequence Length')).toBeTruthy();
   });
 
   it('turning n-back Progressive off exposes the Stimulus (ms) knob and persists progressive=false', async () => {
