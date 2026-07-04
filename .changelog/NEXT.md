@@ -7,6 +7,7 @@
 ## Human Activity Tracking
 
 - **[issue-2150] Activity timeline** — a new `/timeline` page shows a unified, day-by-day view of your activity (emails sent/received and calendar events, with more sources coming), backed by a machine-local `human_activity_events` store that your existing message and calendar syncs populate automatically. Pick any day (deep-linkable via `/timeline/:date`), see an hourly activity histogram and per-source tallies, and browse the day's events. Only metadata and a short summary line are stored — full message bodies stay in their per-source caches — and the timeline is machine-local (never federated to peers), like Tribe.
+- **[issue-2151] iMessage ingestion (macOS)** — a new Settings → iMessage tab lets you pull your Mac's Messages history into the activity timeline and your Tribe touchpoints. It reads `~/Library/Messages/chat.db` read-only (never writing to Apple's database) using a built-in SQLite reader — no new dependencies — and matches conversations to the people you track by phone number (a new phone field on Tribe people, matched in E.164 form) as well as email. It's off by default and opt-in: enable it, set a sync interval, and use "Check setup" to confirm PortOS has macOS Full Disk Access (with a clear fix if it doesn't) or "Sync now" to run immediately. Only conversation metadata and a short preview line are stored — full message text stays in chat.db — and, like Tribe, nothing federates to your peers. Re-syncs are incremental and idempotent, so running it repeatedly never double-logs.
 
 ## Privacy Center
 

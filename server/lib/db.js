@@ -375,9 +375,14 @@ async function ensureSchemaImpl() {
     // calendar attendee / message counterpart back to this tracked person so
     // touchpoints can be auto-logged (#2033).
     `ALTER TABLE tribe_people ADD COLUMN IF NOT EXISTS emails TEXT[] DEFAULT '{}'`,
+    // Known phone handles for a person — the deterministic key that maps an
+    // iMessage/Signal handle (E.164, e.g. +15551234567) back to this tracked
+    // person so touchpoints can be auto-logged (#2151). Mirrors emails[].
+    `ALTER TABLE tribe_people ADD COLUMN IF NOT EXISTS phones TEXT[] DEFAULT '{}'`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags)`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_people_emails ON tribe_people USING gin (emails)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_phones ON tribe_people USING gin (phones)`,
     `CREATE TABLE IF NOT EXISTS tribe_touchpoints (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,

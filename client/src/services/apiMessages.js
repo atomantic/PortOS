@@ -46,6 +46,11 @@ export const clearMessageCache = (accountId) =>
   request(`/messages/accounts/${accountId}/cache/clear`, { method: 'POST' });
 export const enableGmailApi = () => request('/messages/gmail/enable-api', { method: 'POST' });
 
+// iMessage ingestion (#2151) — read-only chat.db sync, tribe + timeline feed.
+export const getImessageStatus = (options = {}) => request('/imessage/status', options);
+export const checkImessageSetup = (options = {}) => request('/imessage/setup-check', options);
+export const syncImessage = (options = {}) => request('/imessage/sync', { method: 'POST', ...options });
+
 // Feeds - RSS/Atom Feed Ingestion
 export const getFeeds = () => request('/feeds');
 export const getFeedStats = (options = {}) => request('/feeds/stats', options);
