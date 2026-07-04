@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, Layers } from 'lucide-react';
-import { getProviders, getPostReviewReps, getPostRecommendations } from '../../../services/api';
+import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
@@ -79,12 +79,30 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // failure silently degrades to an empty list (the panel hides). The top
   // recommendation also biases the Quick session's drill picks.
   const [recommendations, setRecommendations] = useState([]);
+  // Current effective Morse WPM — fetched only when a Morse WPM goal is set, so
+  // that goal can render progress (issue #2100). null when unset/unavailable.
+  const [morseWpm, setMorseWpm] = useState(null);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
     getPostReviewReps(2).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
     getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
   }, []);
+
+  // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
+  // request on the common path. Effective WPM prefers the Farnsworth setting.
+  useEffect(() => {
+    if (!config?.goals?.morseWpmTarget) { setMorseWpm(null); return; }
+    let cancelled = false;
+    getMorseProgress(30, { silent: true })
+      .then(m => {
+        if (cancelled) return;
+        const wpm = m?.settings?.farnsworthWpm ?? m?.settings?.wpm ?? null;
+        setMorseWpm(typeof wpm === 'number' ? wpm : null);
+      })
+      .catch(() => { if (!cancelled) setMorseWpm(null); });
+    return () => { cancelled = true; };
+  }, [config?.goals?.morseWpmTarget]);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
@@ -363,7 +381,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const todaysSessions = (recentSessions || []).filter(s => s.date === today);
   const todayMinutes = Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
   const weekSessions = statsWeek?.sessionCount ?? 0;
-  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak });
+  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak, morseWpm });
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">

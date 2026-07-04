@@ -8,10 +8,11 @@ vi.mock('../../../services/api', () => ({
   getProviders: vi.fn().mockResolvedValue([]),
   getPostReviewReps: vi.fn().mockResolvedValue({ reps: [] }),
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
+  getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
 }));
 
 import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
-import { getPostRecommendations } from '../../../services/api';
+import { getPostRecommendations, getMorseProgress } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10). Both were lifted from component-body closures to module
@@ -139,6 +140,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
   });
 
   it('renders the "Up next" panel with working deep links', async () => {
@@ -158,6 +160,13 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(screen.getByText('Goals')).toBeTruthy());
     // streakTarget 10 with a 4-day streak → "4/10 d".
     expect(screen.getByText(/4\/10/)).toBeTruthy();
+  });
+
+  it('renders a Morse WPM goal by fetching current Morse speed', async () => {
+    renderLauncher({ config: { ...baseConfig, goals: { morseWpmTarget: 20 } } });
+    await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
+    // Effective WPM prefers Farnsworth (12) → "12/20".
+    await waitFor(() => expect(screen.getByText(/12\/20/)).toBeTruthy());
   });
 
   it('hides the goals panel when no goals are set', async () => {

@@ -29,6 +29,7 @@ import {
   stalledProgressions,
   getPostRecommendations,
   updatePostConfig,
+  isRecDrillRunnable,
 } from './meatspacePost.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 
@@ -129,6 +130,43 @@ describe('stalledProgressions', () => {
     const out = stalledProgressions(earned, {}, {});
     expect(out).toHaveLength(1);
     expect(out[0].remaining).toBe(12);
+  });
+});
+
+describe('isRecDrillRunnable (issue #2100)', () => {
+  it('memory is always runnable (its own tab)', () => {
+    expect(isRecDrillRunnable({ sessionModules: [] }, 'memory', 'memory-sequence')).toBe(true);
+  });
+
+  it('false when the module is excluded from session composition', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['mental-math'] }, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('null/absent sessionModules means all modules allowed', () => {
+    expect(isRecDrillRunnable({}, 'cognitive', 'n-back')).toBe(true);
+  });
+
+  it('false when the module or the specific drill is disabled', () => {
+    expect(isRecDrillRunnable({ cognitive: { enabled: false } }, 'cognitive', 'n-back')).toBe(false);
+    expect(isRecDrillRunnable({ cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: false } } } }, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('true when the module and drill are both enabled and allowed', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['cognitive'], cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true } } } }, 'cognitive', 'n-back')).toBe(true);
+  });
+});
+
+describe('getPostRecommendations config filtering (issue #2100)', () => {
+  it('drops a weakest-skill rec for a drill excluded from session composition', async () => {
+    // History makes n-back the weakest skill, but the config excludes cognitive
+    // from composition — so it must not surface as a runnable recommendation.
+    state.config = { sessionModules: ['mental-math'] };
+    state.sessions = [{
+      date: new Date().toISOString().split('T')[0], durationMs: 60000, score: 40,
+      tasks: [{ module: 'cognitive', type: 'n-back', score: 40, accuracy: 0.4, completion: 1, questions: [{ answered: 'match', correct: false }] }],
+    }];
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'weak-skill')).toBe(false);
   });
 });
 

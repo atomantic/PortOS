@@ -988,7 +988,7 @@ export function composePostRecommendations({
       kind: 'weak-skill',
       title: `Shore up ${DRILL_LABEL(weakestSkill.type)}`,
       detail: `Weakest skill lately — ${Math.round((weakestSkill.accuracy || 0) * 100)}% accuracy`,
-      deepLink: '/post/launcher',
+      deepLink: weakestSkill.deepLink || '/post/launcher',
       drillType: weakestSkill.type,
     });
   }
@@ -1023,13 +1023,42 @@ export function composePostRecommendations({
   return recs.slice(0, Math.max(1, limit)).map((r, i) => ({ ...r, priority: i }));
 }
 
+// Coarse module → config key for the enabled-drill lookup.
+const MODULE_CONFIG_KEY = { 'mental-math': 'mentalMath', 'llm-drills': 'llmDrills', cognitive: 'cognitive' };
+
+/**
+ * Whether a recommended drill can actually be run under the current config
+ * (issue #2100 review): a weak-skill / stalled rec deep-links into a session,
+ * so recommending a drill the user has since disabled — or a module they've
+ * removed from Session Composition — would be a dead end. Memory practice runs
+ * from its own tab, so it's always runnable regardless of session composition.
+ * Pure — exported for unit tests.
+ */
+export function isRecDrillRunnable(config, module, type) {
+  if (module === 'memory') return true;
+  const sm = Array.isArray(config?.sessionModules) ? config.sessionModules : null;
+  // null = legacy/absent → all modules allowed; an explicit array must include it.
+  if (sm !== null && !sm.includes(module)) return false;
+  const key = MODULE_CONFIG_KEY[module];
+  if (!key) return true; // unknown module — don't filter it out
+  // An absent module/drill entry means "default" (enabled) — getPostConfig
+  // deep-merges the enabled-by-default config, so only an EXPLICIT `false`
+  // disables it.
+  const mod = config?.[key];
+  if (mod && mod.enabled === false) return false;
+  const dt = mod?.drillTypes?.[type];
+  return !dt || dt.enabled !== false;
+}
+
 /**
  * Gather the recommendation signals and compose the ordered "Up next" list
  * (issue #2100). Reads due memory items, due skill re-verifications, recent
- * stats (weakest skill), and the resolved ladders (stalled progressions).
+ * stats (weakest skill), and the resolved ladders (stalled progressions), then
+ * filters the config-dependent ones (weakest/stalled) to drills the current
+ * config can actually run.
  */
 export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
-  const [dueMemoryItems, dueReviews, stats, mulProgress, cogProgress, morse, sessions] = await Promise.all([
+  const [dueMemoryItems, dueReviews, stats, mulProgress, cogProgress, morse, sessions, config] = await Promise.all([
     getDueMemoryItems(),
     getDueReviews(new Date(), Infinity),
     getPostStats(MASTERY_DEFAULTS.windowDays),
@@ -1037,14 +1066,26 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
     getCognitiveProgress(),
     getMorseProgress(MASTERY_DEFAULTS.windowDays),
     getPostSessions(),
+    getPostConfig(),
   ]);
 
-  const weakestSkill = weakestSkillFromStats(stats);
+  // Weakest skill — drop it unless the drill is currently runnable; a memory
+  // weak-skill deep-links to its own tab rather than a composed session.
+  let weakestSkill = weakestSkillFromStats(stats);
+  if (weakestSkill) {
+    weakestSkill = isRecDrillRunnable(config, weakestSkill.module, weakestSkill.type)
+      ? { ...weakestSkill, deepLink: weakestSkill.module === 'memory' ? '/post/memory' : '/post/launcher' }
+      : null;
+  }
+
+  // Stalled progressions — keep Morse (runs from its own tab) and any ladder
+  // whose drill is still runnable under the current config.
   const stalled = stalledProgressions(mulProgress, cogProgress, {
     kochLevel: morse?.kochLevel,
     kochLevelSet: morse?.kochLevelSet,
     maxKochLevel: MAX_KOCH_LEVEL,
-  });
+  }).filter(s => s.drillType === 'morse-copy'
+    || isRecDrillRunnable(config, s.drillType === 'multiplication' ? 'mental-math' : 'cognitive', s.drillType));
 
   return {
     recommendations: composePostRecommendations({
