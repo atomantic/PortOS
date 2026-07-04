@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { getProviders } from '../../../services/api';
+import { getProviders, getPostReviewReps } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
@@ -35,9 +35,15 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
+  // Mastered-but-inactive skills due for a maintenance review (issue #2096) —
+  // the Quick session mixes up to 2 of these in as labeled review reps. Empty
+  // until a skill is mastered and its review interval elapses; a load failure
+  // silently degrades to a plain Quick session.
+  const [reviewReps, setReviewReps] = useState([]);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
+    getPostReviewReps(2).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
   }, []);
 
   if (!config) {
@@ -174,6 +180,21 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       }
 
       drillConfigs.push(drillConfig);
+    }
+
+    // Mix in up to 2 maintenance reps for mastered-but-inactive skills that are
+    // due for re-verification (issue #2096). Each carries the review markers so
+    // the server re-verifies the specific rung and records the pass/fail.
+    for (const rep of reviewReps.slice(0, 2)) {
+      drillConfigs.push({
+        type: rep.type,
+        domain: DRILL_TO_DOMAIN[rep.type],
+        config: rep.config,
+        timeLimitSec: DOMAINS[DRILL_TO_DOMAIN[rep.type]]?.timeBudgetSec,
+        isReview: true,
+        reviewLabel: rep.label,
+        ...(rep.providerId && { providerId: rep.providerId }),
+      });
     }
 
     onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
@@ -416,6 +437,18 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
               ))}
             </div>
           </div>}
+
+          {/* Maintenance-review nudge (issue #2096) — mastered skills due for a
+              refresh, mixed into the next Quick session as labeled review reps. */}
+          {reviewReps.length > 0 && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
+              <Target size={16} className="mt-0.5 shrink-0" />
+              <span>
+                {reviewReps.length} skill{reviewReps.length > 1 ? 's' : ''} due for a maintenance rep
+                {' '}— a Quick session will mix {reviewReps.length > 1 ? 'them' : 'it'} in: {reviewReps.slice(0, 2).map(r => r.label).join(', ')}
+              </span>
+            </div>
+          )}
 
           {/* Start Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">

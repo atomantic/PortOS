@@ -34,6 +34,7 @@ import {
   deriveTaskCompletion,
   getCognitiveProgress,
   generateDrill,
+  getSessionSkillContext,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -626,7 +627,7 @@ describe('submitPostSession — memory drill schedule advance', () => {
     expect(memoryWrites.length).toBe(1);
     const masteryWrite = memoryWrites[memoryWrites.length - 1];
     const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
-    expect(updatedItem.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: expect.any(String) });
+    expect(updatedItem.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: expect.any(String), recent: [1, 0] });
   });
 
   it('buckets memory-element-flash answers into element mastery via the element attribution', async () => {
@@ -649,7 +650,7 @@ describe('submitPostSession — memory drill schedule advance', () => {
     const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
     const masteryWrite = memoryWrites[memoryWrites.length - 1];
     const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
-    expect(updatedItem.mastery.elements.H).toEqual({ correct: 1, attempts: 1 });
+    expect(updatedItem.mastery.elements.H).toEqual({ correct: 1, attempts: 1, recent: [1] });
   });
 
   it('does not touch memory items for a session with no memory tasks', async () => {
@@ -723,7 +724,7 @@ describe('submitPostSession — memory drill schedule advance', () => {
     expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
     const masteryWrite = memoryWrites[memoryWrites.length - 1];
     const updatedMastery = masteryWrite[1].items.find(i => i.id === 'song-1');
-    expect(updatedMastery.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 1, lastPracticed: expect.any(String) });
+    expect(updatedMastery.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 1, lastPracticed: expect.any(String), recent: [1] });
   });
 });
 
@@ -1780,5 +1781,77 @@ describe('submitPostSession — memory post-processing never 500s a saved sessio
     const sessionWrite = atomicWrite.mock.calls.find(([p]) => String(p).includes('post-sessions'));
     expect(sessionWrite).toBeTruthy();
     expect(sessionWrite[1].sessions.length).toBe(1);
+  });
+});
+
+// =============================================================================
+// SKILL RE-VERIFICATION HOOKS (issue #2096)
+// =============================================================================
+
+describe('getSessionSkillContext', () => {
+  it('extracts a passed review rep from a task carrying reviewSkillId (accuracy >= 0.8)', () => {
+    const session = { tasks: [{
+      type: 'multiplication',
+      config: { level: 1, factors: [1, 2], review: true, reviewSkillId: 'multiplication:L1' },
+      questions: [
+        { answered: 10, correct: true }, { answered: 20, correct: true },
+        { answered: 30, correct: true }, { answered: 40, correct: true },
+        { answered: 50, correct: false },
+      ],
+    }] };
+    const { reviewResults, practicedSkillIds } = getSessionSkillContext(session);
+    expect(reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: true }]); // 4/5 = 0.8
+    expect(practicedSkillIds).toEqual([]); // a review rep is NOT counted as practice
+  });
+
+  it('marks a review rep failed when answered accuracy < 0.8', () => {
+    const session = { tasks: [{
+      type: 'multiplication',
+      config: { level: 1, review: true, reviewSkillId: 'multiplication:L1' },
+      questions: [
+        { answered: 10, correct: true }, { answered: 20, correct: false }, { answered: 30, correct: false },
+      ],
+    }] };
+    expect(getSessionSkillContext(session).reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: false }]);
+  });
+
+  it('marks a review rep FAILED when accuracy is high but completion is too low (bailed review)', () => {
+    // One correct answer, four skipped: answered-only accuracy is 1.0, but the
+    // review was barely completed — it must not bank a pass and advance the
+    // interval without re-verifying the skill.
+    const session = { tasks: [{
+      type: 'multiplication',
+      config: { level: 1, review: true, reviewSkillId: 'multiplication:L1' },
+      questions: [
+        { answered: 10, correct: true },
+        { answered: null, correct: false }, { answered: null, correct: false },
+        { answered: null, correct: false }, { answered: null, correct: false },
+      ],
+    }] };
+    expect(getSessionSkillContext(session).reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: false }]);
+  });
+
+  it('collects practiced skill ids from normal (non-review) multiplication / cognitive / memory tasks', () => {
+    const session = { tasks: [
+      { type: 'multiplication', config: { level: 2 }, questions: [{ answered: 1, correct: true }] },
+      { type: 'n-back', config: { level: 1 }, accuracy: 0.9, questions: [] },
+      { type: 'memory-sequence', memoryItemId: 'song-1', questions: [{ chunkId: 'verse-1', correct: true }, { chunkId: 'verse-2', correct: true }] },
+    ] };
+    const { practicedSkillIds, reviewResults } = getSessionSkillContext(session);
+    expect(reviewResults).toEqual([]);
+    expect(practicedSkillIds.sort()).toEqual([
+      'cognitive:n-back:L1', 'memory:song-1:verse-1', 'memory:song-1:verse-2', 'multiplication:L2',
+    ]);
+  });
+});
+
+describe('resolveDrillConfig — maintenance-review bypass (issue #2096)', () => {
+  it('a review request passes its explicit level/factors through untouched (no ladder override)', async () => {
+    const requested = { count: 5, level: 0, factors: [1, 1], review: true, reviewSkillId: 'multiplication:L0' };
+    const { config, progression } = await resolveDrillConfig('multiplication', requested);
+    // Level 0 survives — the progression ladder did NOT re-resolve it to the
+    // user's current (higher) rung, which is the whole point of a review rep.
+    expect(config).toEqual(requested);
+    expect(progression).toBeNull();
   });
 });

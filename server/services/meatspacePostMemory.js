@@ -27,6 +27,56 @@ const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 // due now (see `ensureSchedule`) and get a persisted default by migration 154.
 
 export const DEFAULT_EASE = 2.5;
+// =============================================================================
+// WINDOWED (DECAY-AWARE) MASTERY
+// =============================================================================
+//
+// Element/chunk mastery is judged over a rolling window of the most-recent
+// attempts, NOT cumulative all-time counts — so a run of recent misses lowers
+// mastery (decay-aware) instead of an early wrong answer being permanently
+// diluted, and mastery reflects whether you STILL know it. The cumulative
+// `correct`/`attempts` counts are kept for history; the window rides alongside
+// as a bounded `recent` array of per-attempt correctness (1/0, most-recent
+// last, capped at MASTERY_WINDOW). Legacy items with no `recent` array fall back
+// to the cumulative counts so old data still reports sensibly (issue #2096).
+export const MASTERY_WINDOW = 10;
+// Mastery gate: at least this many attempts (in the window) at ≥ this accuracy.
+export const MASTERY_MIN_ATTEMPTS = 3;
+export const MASTERY_TARGET_ACCURACY = 0.8;
+
+/** Push a per-attempt correctness flag onto a mastery stat's rolling window. */
+function pushRecent(stat, correct) {
+  if (!Array.isArray(stat.recent)) stat.recent = [];
+  stat.recent.push(correct ? 1 : 0);
+  if (stat.recent.length > MASTERY_WINDOW) {
+    stat.recent = stat.recent.slice(-MASTERY_WINDOW);
+  }
+}
+
+/**
+ * Recency-weighted accuracy for a mastery stat: uses the bounded `recent`
+ * window when present (decay-aware — recent misses lower it), else falls back to
+ * the cumulative all-time `correct`/`attempts` for legacy items with no window.
+ * Returns `{ attempts, accuracy }` where `attempts` is the count the mastery
+ * gate is judged against.
+ */
+export function windowedAccuracy(stat) {
+  if (Array.isArray(stat?.recent) && stat.recent.length) {
+    const attempts = stat.recent.length;
+    const correct = stat.recent.reduce((sum, r) => sum + (r ? 1 : 0), 0);
+    return { attempts, accuracy: attempts ? correct / attempts : 0 };
+  }
+  const attempts = Number.isFinite(stat?.attempts) ? stat.attempts : 0;
+  const correct = Number.isFinite(stat?.correct) ? stat.correct : 0;
+  return { attempts, accuracy: attempts ? correct / attempts : 0 };
+}
+
+/** True when a mastery stat clears the windowed gate (≥3 recent attempts, ≥0.8). */
+export function isStatMastered(stat) {
+  const { attempts, accuracy } = windowedAccuracy(stat);
+  return attempts >= MASTERY_MIN_ATTEMPTS && accuracy >= MASTERY_TARGET_ACCURACY;
+}
+
 const MIN_EASE = 1.3;
 // Ceiling mirrors `memoryScheduleSchema.ease.max(5)` in postValidation.js — the
 // per-session +0.1 bumps are unbounded otherwise, so ~26 perfect reps would push
@@ -411,6 +461,8 @@ export async function submitPractice(id, practiceData) {
     chunk.attempts += results.length;
     chunk.correct += results.filter(r => r.correct).length;
     chunk.lastPracticed = now;
+    // Rolling window for decay-aware mastery (issue #2096) — one flag per result.
+    for (const r of results) pushRecent(chunk, r.correct);
   }
 
   // Update element-level mastery (for elements song)
@@ -420,8 +472,10 @@ export async function submitPractice(id, practiceData) {
         if (!item.mastery.elements[r.element]) {
           item.mastery.elements[r.element] = { correct: 0, attempts: 0 };
         }
-        item.mastery.elements[r.element].attempts++;
-        if (r.correct) item.mastery.elements[r.element].correct++;
+        const el = item.mastery.elements[r.element];
+        el.attempts++;
+        if (r.correct) el.correct++;
+        pushRecent(el, r.correct);
       }
     }
   }
@@ -512,13 +566,16 @@ function applyMasteryMergeToItem(item, questions, now) {
       chunk.attempts += 1;
       if (q.correct) chunk.correct += 1;
       chunk.lastPracticed = nowIso;
+      pushRecent(chunk, q.correct);
     }
     if (q.element) {
       if (!item.mastery.elements[q.element]) {
         item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
       }
-      item.mastery.elements[q.element].attempts += 1;
-      if (q.correct) item.mastery.elements[q.element].correct += 1;
+      const el = item.mastery.elements[q.element];
+      el.attempts += 1;
+      if (q.correct) el.correct += 1;
+      pushRecent(el, q.correct);
     }
   }
 
@@ -793,23 +850,26 @@ function generateElementFlash(item, count) {
 // HELPERS
 // =============================================================================
 
-function computeOverallMastery(item) {
-  // For elements song: mastery is based on per-element accuracy
+export function computeOverallMastery(item) {
+  // For elements song: mastery is per-element, judged over the recency window
+  // (decay-aware, issue #2096) — a recent run of misses lowers the count. The
+  // ≥3-attempt gate is kept, but applied to the window (or the cumulative
+  // fallback for legacy items with no window).
   if (item.id === 'elements-song' && item.content.elementMap) {
     const totalElements = Object.keys(item.content.elementMap).length;
     if (totalElements === 0) return 0;
     let masteredCount = 0;
     for (const sym of Object.keys(item.content.elementMap)) {
       const m = item.mastery.elements[sym];
-      if (m && m.attempts >= 3 && m.correct / m.attempts >= 0.8) masteredCount++;
+      if (m && isStatMastered(m)) masteredCount++;
     }
     return Math.round((masteredCount / totalElements) * 100);
   }
 
-  // For generic items: mastery is based on chunk accuracy
+  // For generic items: mastery is based on windowed chunk accuracy.
   const chunks = Object.values(item.mastery.chunks);
   if (!chunks.length) return 0;
-  const avgAccuracy = chunks.reduce((sum, c) => sum + (c.attempts > 0 ? c.correct / c.attempts : 0), 0) / chunks.length;
+  const avgAccuracy = chunks.reduce((sum, c) => sum + windowedAccuracy(c).accuracy, 0) / chunks.length;
   return Math.round(avgAccuracy * 100);
 }
 

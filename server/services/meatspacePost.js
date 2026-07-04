@@ -21,7 +21,8 @@ import {
   COGNITIVE_MASTERY_DEFAULTS,
 } from '../lib/postProgression.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
-import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems } from './meatspacePostMemory.js';
+import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems, isStatMastered, MASTERY_TARGET_ACCURACY } from './meatspacePostMemory.js';
+import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
 import { computePostStreaks, computeUnifiedStreak, ymdToUTC } from '../lib/postStreak.js';
 
@@ -289,9 +290,180 @@ export async function submitPostSession(sessionData) {
     } catch (err) {
       console.error(`❌ POST session memory post-processing failed (session ${sessionId} still saved): ${err.message}`);
     }
+    // Reconcile the skill re-verification schedule (issue #2096): upsert newly-
+    // mastered skills, record any maintenance-review reps in this session, and
+    // reset the staleness clock for mastered skills actively practiced here.
+    // Runs AFTER the memory update above so mastery reflects this session.
+    // Isolated so it can never 500 an already-persisted session.
+    try {
+      await syncReviewScheduleForSession(session, new Date(now));
+    } catch (err) {
+      console.error(`❌ POST session review-schedule sync failed (session ${sessionId} still saved): ${err.message}`);
+    }
   }
 
   return session;
+}
+
+// =============================================================================
+// SKILL RE-VERIFICATION (issue #2096) — mastered-skill review scheduling
+// =============================================================================
+
+// A maintenance-review rep must reach at least this fraction of its questions to
+// count as a genuine re-verification (mirrors COGNITIVE_MASTERY_DEFAULTS
+// minCompletion). Below it, the review is recorded as failed rather than passed.
+const MIN_REVIEW_COMPLETION = 0.75;
+
+/**
+ * Current mastered-but-inactive skills eligible for re-verification tracking:
+ *   - multiplication rungs strictly BELOW the resolved current level (you've
+ *     moved past them, so they're no longer actively drilled),
+ *   - cognitive rungs strictly below the current level, per laddered type,
+ *   - memory chunks whose windowed mastery clears the gate.
+ * Returns opaque skill descriptors the review scheduler upserts + schedules.
+ */
+export async function getMasteredSkills() {
+  const skills = [];
+
+  const mul = await getMultiplicationProgress();
+  for (const rung of mul.levels || []) {
+    if (rung.mastered && rung.level < mul.level) {
+      skills.push({
+        skillId: `multiplication:L${rung.level}`,
+        kind: 'multiplication',
+        label: `Multiplication ${rung.label}`,
+        drillType: 'multiplication',
+        module: 'mental-math',
+        level: rung.level,
+        factors: rung.factors,
+      });
+    }
+  }
+
+  const cog = await getCognitiveProgress();
+  for (const [type, prog] of Object.entries(cog)) {
+    if (!prog) continue;
+    for (const rung of prog.levels || []) {
+      if (rung.mastered && rung.level < prog.level) {
+        skills.push({
+          skillId: `cognitive:${type}:L${rung.level}`,
+          kind: 'cognitive',
+          label: `${type} ${rung.label}`,
+          drillType: type,
+          module: 'cognitive',
+          level: rung.level,
+          config: cognitiveLevelConfig(type, rung.level),
+        });
+      }
+    }
+  }
+
+  const memoryItems = await getMemoryItems();
+  for (const item of memoryItems) {
+    const chunkStats = item.mastery?.chunks || {};
+    for (const chunk of item.content?.chunks || []) {
+      const stat = chunkStats[chunk.id];
+      if (stat && isStatMastered(stat)) {
+        skills.push({
+          skillId: `memory:${item.id}:${chunk.id}`,
+          kind: 'memory',
+          label: `${item.title} — ${chunk.label || chunk.id}`,
+          drillType: 'memory-sequence',
+          module: 'memory',
+          memoryItemId: item.id,
+          chunkId: chunk.id,
+        });
+      }
+    }
+  }
+
+  return skills;
+}
+
+/**
+ * Extract, from a scored session, which tracked skills were exercised:
+ *   - `reviewResults`: maintenance-review reps (tasks whose config carries a
+ *     `reviewSkillId`), pass/fail decided by the task's answered accuracy.
+ *   - `practicedSkillIds`: mastered skills a NORMAL (non-review) task drilled,
+ *     so their staleness clock resets (an actively-used skill never goes stale).
+ */
+export function getSessionSkillContext(session) {
+  const practicedSkillIds = new Set();
+  const reviewResults = [];
+  for (const task of session?.tasks || []) {
+    const cfg = task.config || {};
+    if (cfg.reviewSkillId) {
+      // A review passes only when it's both accurate AND sufficiently completed:
+      // accuracy is answered-only, so without the completion gate answering one
+      // question correctly and skipping the rest would bank a "pass" (acc===1)
+      // and push the interval out without actually re-verifying the skill. A
+      // low-completion attempt is recorded as a FAIL → needs-refresh + sooner
+      // re-review, which is the safe outcome for a bailed review.
+      const acc = deriveTaskAccuracy(task);
+      const completion = deriveTaskCompletion(task);
+      const passed = acc != null && acc >= MASTERY_TARGET_ACCURACY
+        && (completion == null || completion >= MIN_REVIEW_COMPLETION);
+      reviewResults.push({ skillId: cfg.reviewSkillId, passed });
+      continue;
+    }
+    if (task.type === 'multiplication' && Number.isInteger(cfg.level)) {
+      practicedSkillIds.add(`multiplication:L${cfg.level}`);
+    } else if (cognitiveLadder(task.type) && Number.isInteger(cfg.level)) {
+      practicedSkillIds.add(`cognitive:${task.type}:L${cfg.level}`);
+    } else if (task.memoryItemId) {
+      for (const q of task.questions || []) {
+        if (q?.chunkId) practicedSkillIds.add(`memory:${task.memoryItemId}:${q.chunkId}`);
+      }
+    }
+  }
+  return { practicedSkillIds: [...practicedSkillIds], reviewResults };
+}
+
+/** Reconcile the review schedule against a just-completed scored session. */
+export async function syncReviewScheduleForSession(session, now = new Date()) {
+  const masteredSkills = await getMasteredSkills();
+  const { practicedSkillIds, reviewResults } = getSessionSkillContext(session);
+  return applySessionToReviewSchedule({ masteredSkills, practicedSkillIds, reviewResults, now });
+}
+
+/**
+ * Ready-to-run "maintenance rep" drill specs for the mastered skills currently
+ * due for review — the labeled review items the launcher mixes into a Quick
+ * session (issue #2096). Only multiplication + cognitive reps are generated (both
+ * run through the standard /post/drill path); memory-chunk retention is served by
+ * the existing spaced-repetition due-items flow. Each carries `review: true` +
+ * `reviewSkillId` so the session-submit path records the pass/fail.
+ */
+export async function getPostReviewReps(now = new Date(), limit = 2) {
+  // Fetch ALL due reviews, then filter to the runnable kinds BEFORE capping —
+  // capping first would let older due memory-chunk entries (which have no
+  // runnable rep) consume the limit slots and starve runnable multiplication/
+  // cognitive reps that are due later in the schedule.
+  const due = await getDueReviews(now, Infinity);
+  const reps = [];
+  for (const entry of due) {
+    if (reps.length >= limit) break;
+    if (entry.kind === 'multiplication') {
+      reps.push({
+        skillId: entry.skillId,
+        label: entry.label,
+        state: entry.status === 'needs-refresh' ? 'needs-refresh' : 'due',
+        module: 'mental-math',
+        type: 'multiplication',
+        config: { count: 5, level: entry.level, factors: entry.factors, review: true, reviewSkillId: entry.skillId },
+      });
+    } else if (entry.kind === 'cognitive') {
+      reps.push({
+        skillId: entry.skillId,
+        label: entry.label,
+        state: entry.status === 'needs-refresh' ? 'needs-refresh' : 'due',
+        module: 'cognitive',
+        type: entry.drillType,
+        config: { ...(entry.config || cognitiveLevelConfig(entry.drillType, entry.level)), level: entry.level, review: true, reviewSkillId: entry.skillId },
+      });
+    }
+  }
+  return reps;
 }
 
 /**
@@ -598,6 +770,10 @@ export async function getPostProgress({ days = 90 } = {}) {
   const memoryItems = await getMemoryItems();
   const dueItems = await getDueMemoryItems();
   const dueIds = new Set(dueItems.map(i => i.id));
+  // Skill re-verification retention state (issue #2096): per-skill fresh / due /
+  // needs-refresh + a 90-day retention %. Empty on fresh installs (nothing
+  // tracked until the first skill is mastered).
+  const reviews = await getRetentionReport(new Date());
 
   return {
     days: window,
@@ -625,6 +801,7 @@ export async function getPostProgress({ days = 90 } = {}) {
         // 0/1 per item so the client can sum to a total "due" count.
         dueCount: dueIds.has(it.id) ? 1 : 0,
       })),
+      reviews,
     },
   };
 }
@@ -942,6 +1119,15 @@ export async function getCognitiveProgress() {
  */
 export async function resolveDrillConfig(type, requestedConfig = {}) {
   const config = await getPostConfig();
+
+  // Maintenance-review rep (issue #2096): a review rep targets a SPECIFIC lower
+  // rung on purpose, so bypass the progression override entirely and run the
+  // explicit level/factors the review scheduler chose. Without this the ladder
+  // would silently re-resolve the level up to the user's current rung, defeating
+  // the whole point of re-verifying a mastered-but-inactive skill.
+  if (requestedConfig?.review) {
+    return { config: requestedConfig, adaptive: null, progression: null };
+  }
 
   // Progressive multiplication ladder (default ON) — independent of the generic
   // Adaptive toggle. Selects the factor structure by speed-gated mastery so a
