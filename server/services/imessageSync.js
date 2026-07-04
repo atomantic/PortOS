@@ -184,7 +184,7 @@ export function imessageTouchpointCandidates(messages = [], timezone) {
     if (!msg.chatGuid) continue;
     const day = localDayKey(msg.at, timezone);
     if (!day) continue;
-    const key = `${msg.chatGuid} ${day}`;
+    const key = `${msg.chatGuid}\u0000${day}`;
     let entry = byKey.get(key);
     if (!entry) {
       entry = { chatGuid: msg.chatGuid, day, at: msg.at, name: msg.chatName || '', handles: new Set() };
