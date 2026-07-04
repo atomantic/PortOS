@@ -26,7 +26,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import {
   Music, ArrowLeft, Plus, Trash2, Save, BookOpen, CheckCircle2, Circle, Layers, Eye, Pencil,
-  Sparkles, RefreshCw, Video, ExternalLink,
+  Sparkles, RefreshCw, Video, ExternalLink, AudioLines,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -38,6 +38,7 @@ import SongRecordings from '../components/songs/SongRecordings';
 import SongTraining from '../components/songs/SongTraining';
 import SongScoreEditor from '../components/songs/SongScoreEditor';
 import SongScoreParts from '../components/songs/SongScoreParts';
+import ReferenceAnalysis, { ReferenceAudioAttach } from '../components/songs/ReferenceAnalysis';
 import ScoreSheet from '../components/songs/ScoreSheet';
 import PianoRoll, { layerColor } from '../components/songs/PianoRoll';
 import RoundStack from '../components/songs/RoundStack';
@@ -48,6 +49,9 @@ import { harmonyPartOrder } from '../lib/songCraft';
 // Cap on partner songs — mirrors services/rounds.js PARTNERS_MAX. Used only to
 // disable adding more in the editor; the server enforces the real bound.
 const PARTNERS_MAX = 12;
+// Cap on harmony parts — mirrors services/rounds.js SCORE_PARTS_MAX. Used only
+// to refuse applying an extracted part past the bound; the server enforces it.
+const SCORE_PARTS_MAX = 12;
 
 // Extract a TikTok video id from a share/watch URL so we can render TikTok's
 // documented iframe Embed Player (https://www.tiktok.com/player/v1/<id>)
@@ -120,6 +124,17 @@ export default function RoundEditor() {
       const next = new URLSearchParams(prev);
       if (open) next.set('stack', '1');
       else next.delete('stack');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  // Reference-audio analysis view (#2106) lives in the URL too (?analyze=<refId>)
+  // so a specific reference's analysis workbench is deep-linkable.
+  const analyzeId = searchParams.get('analyze');
+  const setAnalyze = useCallback((refId) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (refId) next.set('analyze', refId);
+      else next.delete('analyze');
       return next;
     }, { replace: true });
   }, [setSearchParams]);
@@ -204,11 +219,36 @@ export default function RoundEditor() {
       layers: (song.layers || []).map(stripTempId),
       scoreParts: (song.scoreParts || []).map(stripTempId),
       recordings: (song.recordings || []).map(stripTempId),
-      references: (song.references || []).map(stripTempId),
+      // References also blank any segment layerId that points at a temp layer
+      // id — the server re-mints that layer's id on save, so the link would
+      // dangle after reload; an unassigned segment is the honest state.
+      references: (song.references || []).map((r) => {
+        const ref = stripTempId(r);
+        if (!ref.segments?.length) return ref;
+        return {
+          ...ref,
+          segments: ref.segments.map((s) => (
+            TEMP_ID_RE.test(s.layerId || '') ? { ...s, layerId: '' } : s
+          )),
+        };
+      }),
       partnerRoundIds: song.partnerRoundIds || [],
     };
     const data = await updateRound(id, patch, { silent: true });
-    if (data?.round) setServerSong(data.round);
+    if (data?.round) {
+      setServerSong(data.round);
+      // Saving strips temp reference ids, so a freshly-added reference gets a
+      // new server uuid — re-point an open ?analyze= deep link at its saved
+      // twin (matched by url + audioFilename) instead of stranding the
+      // workbench on a "no longer exists" fallback.
+      if (analyzeId && !(data.round.references || []).some((r) => r.id === analyzeId)) {
+        const old = (song.references || []).find((r) => r.id === analyzeId);
+        const twin = old && (data.round.references || []).find(
+          (r) => r.url === old.url && (r.audioFilename || '') === (old.audioFilename || ''),
+        );
+        setAnalyze(twin ? twin.id : null);
+      }
+    }
     toast.success('Round saved');
     return data?.round;
   }, { errorMessage: 'Failed to save round' });
@@ -291,6 +331,36 @@ export default function RoundEditor() {
     ...prev, references: prev.references.filter((r) => r.id !== rid),
   }));
 
+  // Apply an extracted reference part into the DRAFT (#2106). `base: true`
+  // updates the round's base melody (song.score); otherwise an `id` targeting
+  // an existing part replaces its score, and anything else is appended with a
+  // temp id (stripped on save). Nothing persists until the header Save — the
+  // same explicit-save model as recordings and AI derive.
+  const applyProposedPart = useCallback((part) => {
+    if (part.base) {
+      setSong((prev) => (prev ? { ...prev, score: part.score } : prev));
+      toast.success('Base melody updated in the draft — Save the song to keep it');
+      return;
+    }
+    const parts = song?.scoreParts || [];
+    const exists = part.id && parts.some((p) => p.id === part.id);
+    if (!exists && parts.length >= SCORE_PARTS_MAX) {
+      toast.error(`This round already has ${SCORE_PARTS_MAX} parts — remove one first.`);
+      return;
+    }
+    setSong((prev) => {
+      const cur = prev.scoreParts || [];
+      if (part.id && cur.some((p) => p.id === part.id)) {
+        return { ...prev, scoreParts: cur.map((p) => (p.id === part.id ? { ...p, score: part.score } : p)) };
+      }
+      return {
+        ...prev,
+        scoreParts: [...cur, { id: localId('part'), label: part.label || 'Part', role: part.role || '', score: part.score }],
+      };
+    });
+    toast.success('Part applied to the draft — Save the song to keep it');
+  }, [song?.scoreParts]);
+
   // Layer presets the user hasn't added yet, in foundation-first order. Match
   // on the preset id: preset layers (seed or ladder-added) carry the bare
   // preset id like `lead`, so renaming a layer's label can't make its preset
@@ -369,7 +439,27 @@ export default function RoundEditor() {
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6">
-        {!editing && (
+        {/* Reference-audio analysis workbench (#2106) — replaces the reading/
+            editing surface while ?analyze=<refId> is set, like ?stack does.
+            Renders its own fallbacks for a stale id or a no-audio reference. */}
+        {analyzeId && (
+          <ReferenceAnalysis
+            reference={(song.references || []).find((r) => r.id === analyzeId) || null}
+            // Only stable-id layers are offered as segment targets — a blank
+            // layer's temp id gets re-minted server-side on Save, which would
+            // orphan any segment linked to it.
+            layers={(song.layers || []).filter((l) => !TEMP_ID_RE.test(l.id))}
+            scoreParts={song.scoreParts || []}
+            baseScore={song.score || ''}
+            tempo={song.tempo ?? null}
+            songKey={song.key || ''}
+            onUpdateReference={updateReference}
+            onApplyPart={applyProposedPart}
+            onClose={() => setAnalyze(null)}
+          />
+        )}
+
+        {!analyzeId && !editing && (
           <ReadView
             song={song}
             setField={setField}
@@ -378,10 +468,11 @@ export default function RoundEditor() {
             partnerSongs={partnerSongs}
             stackOpen={stackOpen}
             onToggleStack={setStack}
+            onAnalyze={setAnalyze}
           />
         )}
 
-        {editing && (
+        {!analyzeId && editing && (
         <div className="max-w-5xl mx-auto space-y-6">
           {song.builtIn && <BuiltInBanner onRefresh={refreshTemplate} refreshing={refreshing} />}
           {/* Metadata */}
@@ -647,6 +738,30 @@ export default function RoundEditor() {
                       />
                     </div>
                     {tiktokVideoId(r.url) && <p className="text-xs text-port-success">✓ TikTok video — embeds in View</p>}
+                    {/* Reference-audio analysis (#2106): attach audio (upload or
+                        mic capture while the video plays), then analyze it into
+                        per-layer proposed parts. Gated on a valid http(s) URL —
+                        the server DROPS a reference whose url fails that check,
+                        so letting the user attach audio/segments to a droppable
+                        row would silently lose that work on Save. */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-port-border/60">
+                      {isHttpUrl(r.url) ? (
+                        <>
+                          <ReferenceAudioAttach reference={r} onUpdate={(key, value) => updateReference(r.id, key, value)} />
+                          {r.audioFilename && (
+                            <button
+                              type="button"
+                              onClick={() => setAnalyze(r.id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10"
+                            >
+                              <AudioLines size={14} /> Analyze audio
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-gray-600">Enter a valid http(s) link above to attach audio for analysis.</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -703,7 +818,7 @@ export default function RoundEditor() {
 // (no sub-scrollable textareas) and laid out in a responsive grid so short
 // sections sit side-by-side and use the available desktop width. The recorder
 // stays interactive (recording mutates the draft; the header Save persists it).
-function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs = [], stackOpen = false, onToggleStack }) {
+function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs = [], stackOpen = false, onToggleStack, onAnalyze }) {
   const sections = song.sections || [];
   const layers = song.layers || [];
   const references = song.references || [];
@@ -859,7 +974,7 @@ function ReadView({ song, setField, onRefreshTemplate, refreshing, partnerSongs 
             <Video size={15} className="text-port-accent" /> Reference material
           </h2>
           <div className="flex flex-wrap gap-4">
-            {references.map((r) => <ReferenceCard key={r.id} reference={r} />)}
+            {references.map((r) => <ReferenceCard key={r.id} reference={r} onAnalyze={onAnalyze} />)}
           </div>
         </section>
       )}
@@ -1107,11 +1222,22 @@ function LayeredSheetMusic({ tabs }) {
 }
 
 // One reference: a TikTok video renders as the official embed iframe; any other
-// URL renders as a link card (label + note + the raw URL).
-function ReferenceCard({ reference }) {
+// URL renders as a link card (label + note + the raw URL). A reference with
+// attached audio grows an "Analyze audio" action (#2106) that deep-links to
+// the analysis workbench (?analyze=<refId>).
+function ReferenceCard({ reference, onAnalyze }) {
   const ttId = tiktokVideoId(reference.url);
   const title = reference.label || reference.url;
   const safeHref = isHttpUrl(reference.url);
+  const analyzeButton = reference.audioFilename && onAnalyze ? (
+    <button
+      type="button"
+      onClick={() => onAnalyze(reference.id)}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10 w-fit"
+    >
+      <AudioLines size={14} /> Analyze audio
+    </button>
+  ) : null;
   if (ttId) {
     return (
       <div className="w-full sm:w-80 lg:w-96 max-w-[45vh] space-y-2">
@@ -1129,6 +1255,7 @@ function ReferenceCard({ reference }) {
             {reference.note && <p className="text-xs text-gray-500">{reference.note}</p>}
           </div>
         )}
+        {analyzeButton}
       </div>
     );
   }
@@ -1139,17 +1266,20 @@ function ReferenceCard({ reference }) {
     ? { href: reference.url, target: '_blank', rel: 'noopener noreferrer' }
     : {};
   return (
-    <Wrapper
-      {...wrapperProps}
-      className={`w-full sm:w-80 lg:w-96 bg-port-card border border-port-border rounded-lg p-4 ${safeHref ? 'hover:border-port-accent/50 transition-colors' : ''}`}
-    >
-      <div className="flex items-center gap-2 text-white">
-        <ExternalLink size={15} className="text-port-accent shrink-0" />
-        <span className="text-sm truncate">{title}</span>
-      </div>
-      {reference.note && <p className="mt-1 text-xs text-gray-500">{reference.note}</p>}
-      <p className="mt-1 text-xs text-gray-600 truncate">{reference.url}</p>
-    </Wrapper>
+    <div className="w-full sm:w-80 lg:w-96 space-y-2">
+      <Wrapper
+        {...wrapperProps}
+        className={`block bg-port-card border border-port-border rounded-lg p-4 ${safeHref ? 'hover:border-port-accent/50 transition-colors' : ''}`}
+      >
+        <div className="flex items-center gap-2 text-white">
+          <ExternalLink size={15} className="text-port-accent shrink-0" />
+          <span className="text-sm truncate">{title}</span>
+        </div>
+        {reference.note && <p className="mt-1 text-xs text-gray-500">{reference.note}</p>}
+        <p className="mt-1 text-xs text-gray-600 truncate">{reference.url}</p>
+      </Wrapper>
+      {analyzeButton}
+    </div>
   );
 }
 

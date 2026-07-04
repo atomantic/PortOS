@@ -9,6 +9,7 @@ import PostLlmDrillRunner from '../post/PostLlmDrillRunner';
 import PostCognitiveDrillRunner from '../post/PostCognitiveDrillRunner';
 import PostSessionResults from '../post/PostSessionResults';
 import PostHistory from '../post/PostHistory';
+import PostProgress from '../post/PostProgress';
 import PostDrillConfig from '../post/PostDrillConfig';
 import MemoryBuilder from '../post/MemoryBuilder';
 import ElementsSong from '../post/ElementsSong';
@@ -154,6 +155,8 @@ export default function PostTab({ tab = 'launcher', subtab }) {
   switch (tab) {
     case 'history':
       return <PostHistory onBack={() => navigate('/post/launcher')} />;
+    case 'progress':
+      return <PostProgress subtab={subtab} onBack={() => navigate('/post/launcher')} />;
     case 'config':
       // Wait for the async config load before mounting the editor: its state is
       // seeded once from the `config` prop, so mounting on a null/loading config

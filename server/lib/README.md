@@ -215,6 +215,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `postAdaptive.js` | Pure POST adaptive-difficulty policy — nudges a math drill's primary knob (`steps`/`maxDigits`/`maxExponent`/`tolerancePct`) up/down within clamped bounds from recent scored performance. Opt-in via the config Adaptive toggle. |
 | `postMultiplicationLadder.js` | Pure progressive multiplication ladder — mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …). Resolves the user's current level from per-level speed+accuracy stats so the plain multiplication drill ramps up instead of starting at a fixed hard difficulty. On by default. |
+| `postStreak.js` | Pure DST-safe POST practice-streak math — the single `computePostStreaks` implementation shared by scored sessions and the training log, plus `computeUnifiedStreak` (a day is active with EITHER a session or a practice entry). |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |

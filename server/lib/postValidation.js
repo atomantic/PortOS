@@ -385,6 +385,41 @@ export const morseLevelUpdateSchema = z.object({
   }).optional(),
 });
 
+// =============================================================================
+// PROGRESS DASHBOARD QUERY (issue #2091)
+// =============================================================================
+
+// GET /post/progress query params. `days` clamps like /post/stats: a NaN /
+// missing value falls back to the 90-day default, a value >365 is clamped, and
+// <=0 means all-time (0). `bucket` is forward-compat (only day buckets today).
+export const postProgressQuerySchema = z.object({
+  days: z.preprocess((v) => {
+    if (v == null || v === '') return 90;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return 90;
+    if (n <= 0) return 0;
+    return Math.min(n, 365);
+  }, z.number().int()),
+  bucket: z.enum(['day']).optional().default('day'),
+});
+
+// Per-question breakdown for a training-log entry (issue #2114 — follow-up to
+// #2097, which only persisted round-level aggregates). Optional and additive:
+// entries without it (legacy rows, and non-wordplay training modules that
+// never populate it) must stay valid. Field names mirror llmResponseSchema
+// above (the shape scored POST sessions store per LLM-drill question) so a
+// future progress dashboard can render training-log and scored-session
+// breakdowns with the same renderer rather than inventing a training-only shape.
+const trainingQuestionSchema = z.object({
+  prompt: z.string().optional(),
+  response: z.string().optional(),
+  items: z.array(z.string()).optional(),
+  responseMs: z.number().min(0).optional(),
+  score: z.number().min(0).max(100).optional(),
+  feedback: z.string().optional(),
+  correct: z.boolean().optional(),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
@@ -396,6 +431,7 @@ export const trainingEntrySchema = z.object({
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
+  questions: z.array(trainingQuestionSchema).optional(),
 });
 
 export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, POST_MODULES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };

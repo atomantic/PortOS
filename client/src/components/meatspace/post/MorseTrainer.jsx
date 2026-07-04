@@ -3,6 +3,7 @@ import { ArrowLeft, Radio, Headphones, Hand, EyeOff, CheckCircle, XCircle, Play,
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
 import MorseProgressPanel from './MorseProgressPanel';
+import { streakGlyph } from '../../../lib/streakGlyph.js';
 
 export const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
@@ -131,10 +132,6 @@ export const MODES = [
 // call from this trainer so POST's training stats can group Morse practice
 // under one key regardless of which mode logged it.
 const TRAINING_MODULE = 'morse';
-
-// Mirrors the streakGlyph helper in PostSessionLauncher.jsx/DailyPostWidget.jsx
-// (small enough that a shared util would be more indirection than reuse).
-const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨');
 
 function loadPrefs() {
   const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PREFS_KEY) : null;
