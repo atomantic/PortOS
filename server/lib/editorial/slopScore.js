@@ -554,13 +554,16 @@ export const SLOP_PENALTY_WEIGHTS = Object.freeze({
   transitionRatioThreshold: 0.3,
   highTransitionRatioPenalty: 0.75,
   paragraphUniformityPenalty: 0.75,
+  sectionBreakThresholdPer1000: 8,
+  sectionBreakPenalty: 0.5,
 });
 
 /**
  * Composite deterministic slop penalty (0–10, clamped) for `text`, combining
- * every detector above PLUS the sentence-length CV already measured by
- * `measureSentenceRhythm` (repetition.js) — read here for scoring only, never
- * re-emitted as its own finding (see the module doc comment's dedupe note).
+ * every detector above — including `countSectionBreaks` — PLUS the
+ * sentence-length CV already measured by `measureSentenceRhythm`
+ * (repetition.js) — read here for scoring only, never re-emitted as its own
+ * finding (see the module doc comment's dedupe note).
  *
  * @param {string} text
  * @param {object} [opts] passed through to every underlying detector
@@ -588,6 +591,11 @@ export function computeSlopPenalty(text, opts = {}) {
   if (transitions.total > 0 && transitions.ratio > w.transitionRatioThreshold) penalty += w.highTransitionRatioPenalty;
 
   if (paragraphLengthUniformity(text, opts).length > 0) penalty += w.paragraphUniformityPenalty;
+
+  const words = tokenizeWords(text).length;
+  const breaks = countSectionBreaks(text);
+  const breakRate = words > 0 ? (breaks / words) * 1000 : 0;
+  if (breaks > 0 && breakRate >= w.sectionBreakThresholdPer1000) penalty += w.sectionBreakPenalty;
 
   return Math.max(0, Math.min(10, Math.round(penalty * 100) / 100));
 }

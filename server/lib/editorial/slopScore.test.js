@@ -354,6 +354,17 @@ describe('computeSlopPenalty', () => {
     expect(penalty).toBeLessThanOrEqual(SLOP_PENALTY_WEIGHTS.tier1Cap + 0.01);
   });
 
+  it('adds the section-break penalty for an over-fragmented rate of scene breaks', () => {
+    // 40 words total (two 20-word paragraphs), 1 section-break line -> 25/1000
+    // words, far above the default 8/1000 threshold. Regression test:
+    // computeSlopPenalty must actually fold in countSectionBreaks (previously
+    // documented but not wired — caught in review).
+    const prose = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    const text = [prose, '***', prose].join('\n');
+    const penalty = computeSlopPenalty(text);
+    expect(penalty).toBeGreaterThanOrEqual(SLOP_PENALTY_WEIGHTS.sectionBreakPenalty);
+  });
+
   it('never exceeds 10 even for an adversarially slop-heavy passage', () => {
     const adversarial = [
       TIER1_BANNED_WORDS.join(' '),
