@@ -294,24 +294,25 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
             const isHighlighted = highlightedChunks.includes(chunk.id);
 
             return (
-              <details key={chunk.id} className="group" open={isHighlighted}>
-                <summary className={`flex items-center gap-2 justify-between cursor-pointer text-sm py-1 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
+              <details key={chunk.id} className="group relative" open={isHighlighted}>
+                <summary className={`flex items-center gap-2 justify-between cursor-pointer text-sm py-1 pr-9 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
                   <span className="min-w-0 truncate">{chunk.label}{isHighlighted && <span className="text-xs text-port-accent/60 ml-2">contains {selectedElement}</span>}</span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label }); }}
-                      className="flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
-                      title={`Rapid read ${chunk.label}`}
-                      aria-label={`Rapid read ${chunk.label}`}
-                    >
-                      <Gauge size={13} />
-                    </button>
-                    <span className={`font-mono text-xs ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
-                      {pct > 0 ? `${pct}%` : '—'}
-                    </span>
+                  <span className={`font-mono text-xs shrink-0 ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
+                    {pct > 0 ? `${pct}%` : '—'}
                   </span>
                 </summary>
+                {/* Rapid-read trigger sits OUTSIDE <summary> — interactive controls
+                    nested in a summary are invalid HTML and unreliable for screen
+                    readers. As a sibling of <summary> it doesn't toggle the details. */}
+                <button
+                  type="button"
+                  onClick={() => setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label })}
+                  className="absolute top-0 right-0 flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
+                  title={`Rapid read ${chunk.label}`}
+                  aria-label={`Rapid read ${chunk.label}`}
+                >
+                  <Gauge size={13} />
+                </button>
                 <div className="mt-2 ml-2 space-y-1">
                   {lines.map((line, i) => {
                     const lineHasSelected = selectedElement && line.elements?.includes(selectedElement);
