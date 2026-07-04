@@ -45,6 +45,23 @@ describe('DrillQuestionReview — generic (math/memory/fallback)', () => {
     expect(table.getByText('41')).toBeInTheDocument();
   });
 
+  it('falls back to answers[] for the expected column when a question has no scalar `expected` (e.g. memory-fill-blank)', () => {
+    const { container } = render(
+      <DrillQuestionReview
+        type="memory-fill-blank"
+        questions={[{
+          prompt: 'The ____ ____ jumps',
+          answered: 'quick brown',
+          correct: false,
+          responseMs: 1200,
+          answers: [{ index: 1, word: 'quick' }, { index: 2, word: 'fox' }],
+        }]}
+      />
+    );
+    const table = within(container.querySelector('table'));
+    expect(table.getByText('quick / fox')).toBeInTheDocument();
+  });
+
   it('formats mental-rotation option indices as human-readable option numbers', () => {
     render(
       <DrillQuestionReview
