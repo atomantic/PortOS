@@ -65,6 +65,29 @@ describe('DrillTransition', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
+  it('Resume still resumes the countdown when the browser leaves focus on the button after a click', async () => {
+    // Regression: Chrome/Edge/Windows Firefox keep focus on a <button> after
+    // a real click (jsdom's fireEvent.click does not model this, which is
+    // why the previous test alone didn't catch it). Without an explicit
+    // blur-on-click, hoveringFocus would stay true forever once the
+    // Pause/Resume button is focused, permanently pausing the countdown —
+    // clicking "Resume" would never actually resume it.
+    const onContinue = vi.fn();
+    render(<DrillTransition {...baseProps} onContinue={onContinue} />);
+    const pauseButton = screen.getByRole('button', { name: 'Pause' });
+    act(() => { pauseButton.focus(); });
+    fireEvent.click(pauseButton);
+    expect(document.activeElement).not.toBe(pauseButton);
+    await tickSeconds(5);
+    expect(onContinue).not.toHaveBeenCalled();
+
+    const resumeButton = screen.getByRole('button', { name: 'Resume' });
+    act(() => { resumeButton.focus(); });
+    fireEvent.click(resumeButton);
+    await tickSeconds(3);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
   it('hovering the card pauses the countdown, and un-hovering resumes it', async () => {
     const onContinue = vi.fn();
     const { container } = render(<DrillTransition {...baseProps} onContinue={onContinue} />);

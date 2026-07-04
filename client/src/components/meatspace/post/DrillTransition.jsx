@@ -103,7 +103,17 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={() => setManuallyPaused(p => !p)}
+          onClick={(e) => {
+            setManuallyPaused(p => !p);
+            // Many browsers (Chrome/Edge, Windows Firefox) keep focus on a
+            // <button> after a click, which would otherwise leave
+            // hoveringFocus=true forever — so clicking "Resume" would never
+            // actually resume (paused still true via hoveringFocus even
+            // after manuallyPaused flips off). Blur has relatedTarget=null,
+            // which the card's onBlur handler treats as "focus left the
+            // card", clearing hoveringFocus so paused can go false again.
+            e.currentTarget.blur();
+          }}
           aria-pressed={manuallyPaused}
           className="flex items-center gap-1.5 px-4 py-3 bg-port-card border border-port-border hover:border-port-accent text-gray-300 text-sm font-medium rounded-lg transition-colors shrink-0"
         >
