@@ -4,6 +4,7 @@
 // module's doc comment for how it EXTENDS (rather than duplicates) the
 // existing proseTics.js / cliches.js / repetition.js anti-slop primitives.
 import {
+  MIN_DENSITY_OCCURRENCES,
   countSectionBreaks,
   countWords,
   emDashDensityPer1000,
@@ -267,7 +268,7 @@ export const slopChecks = [
         const { number, location } = sectionIssue(s);
 
         const emDash = emDashDensityPer1000(text);
-        if (findings.length < max && emDash.count > 0 && emDash.rate >= emDashThreshold) {
+        if (findings.length < max && emDash.count >= MIN_DENSITY_OCCURRENCES && emDash.rate >= emDashThreshold) {
           findings.push({
             severity: ctx.severityDefault,
             category: 'style',

@@ -269,6 +269,16 @@ export function findAiTells(text, opts = {}) {
 // prose independent of vocabulary choice.
 // ---------------------------------------------------------------------------
 
+// Shared raw-occurrence floor for rate/density gates below (negative-assertion
+// density here, em-dash density further down, and re-used by the registered
+// `prose.burstiness` check's own em-dash finding in checks/slop.js). A pure
+// rate check with no minimum count reads a SINGLE ordinary occurrence in a
+// short section as "dense" purely because the section is short enough to push
+// the rate over threshold (e.g. 1 em dash in 65 words = 15.4/1000, over the 15
+// default) — caught in review. Requiring at least 2 raw hits before applying
+// the rate threshold keeps a lone, unremarkable occurrence from ever qualifying.
+export const MIN_DENSITY_OCCURRENCES = 2;
+
 const NOT_JUST_BUT_RE = /\bnot\s+(?:just|only)\b[^.!?\n]{1,100}?\bbut\b(?:\s+also)?[^.!?\n]{1,100}?[.!?]/gi;
 // [''] accepts both the straight apostrophe and the curly one word processors
 // (Word/Scrivener/Google Docs) auto-substitute — manuscript text is not
@@ -393,9 +403,13 @@ export function findTriadicShortSentences(text, opts = {}) {
 
 /**
  * Combined structural-tic scan — merges the four per-pattern detectors above,
- * plus a density-gated negative-assertion entry (only included when the
- * `did not [verb]` rate crosses `negativeAssertionDensityPer1000`, since that
- * signal is a rate, not a per-hit tic). Position-ordered.
+ * plus a density-gated negative-assertion entry (only included when there are
+ * at least `MIN_DENSITY_OCCURRENCES` raw hits AND the `did not [verb]` rate
+ * crosses `negativeAssertionDensityPer1000` — the raw-count floor keeps a
+ * single ordinary negation in a short section from reading as a "dense run"
+ * just because the section is short enough to push its rate over the
+ * threshold; that signal is a rate ACROSS repetition, not a per-hit tic).
+ * Position-ordered.
  * @param {string} text
  * @param {{ maxWords?: number, minRun?: number, negativeAssertionDensityPer1000?: number }} [opts]
  * @returns {Array<{ type: string, index: number, anchor: string, count?: number, density?: number }>}
@@ -409,7 +423,7 @@ export function findStructuralTics(text, opts = {}) {
     ...findTriadicShortSentences(text, opts).map((h) => ({ type: 'triadic-short-sentences', ...h })),
   ];
   const negAssertions = findNegativeAssertions(text);
-  if (negAssertions.length) {
+  if (negAssertions.length >= MIN_DENSITY_OCCURRENCES) {
     const words = tokenizeWords(text).length;
     const density = words > 0 ? (negAssertions.length / words) * 1000 : 0;
     const threshold = typeof opts.negativeAssertionDensityPer1000 === 'number'
@@ -590,7 +604,7 @@ export function computeSlopPenalty(text, opts = {}) {
   penalty += Math.min(findStructuralTics(text, opts).length * w.structuralTicPerHit, w.structuralTicCap);
 
   const emDash = emDashDensityPer1000(text);
-  if (emDash.rate >= w.emDashThresholdPer1000) penalty += w.emDashPenalty;
+  if (emDash.count >= MIN_DENSITY_OCCURRENCES && emDash.rate >= w.emDashThresholdPer1000) penalty += w.emDashPenalty;
 
   const rhythm = measureSentenceRhythm(text);
   if (rhythm && rhythm.cv < w.lowSentenceCvThreshold) penalty += w.lowSentenceCvPenalty;

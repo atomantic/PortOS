@@ -20,6 +20,7 @@ import {
   paragraphLengthUniformity,
   countSectionBreaks,
   computeSlopPenalty,
+  MIN_DENSITY_OCCURRENCES,
 } from './slopScore.js';
 
 describe('findBannedWordsTier1', () => {
@@ -266,6 +267,15 @@ describe('findStructuralTics', () => {
   it('returns an empty array for clean prose', () => {
     expect(findStructuralTics('She opened the door and stepped inside, unsure of what she would find.')).toHaveLength(0);
   });
+
+  it('does NOT flag a single negative assertion in a short section, even if its rate crosses the threshold (regression)', () => {
+    // 1 hit in ~204 words -> 4.9/1000, over the 4/1000 default threshold on
+    // rate alone — but a single ordinary negation is not a "dense run".
+    // Caught in codex review; MIN_DENSITY_OCCURRENCES gates this.
+    const text = `She did not flinch. ${'word '.repeat(200)}`;
+    const tics = findStructuralTics(text);
+    expect(tics.find((t) => t.type === 'negative-assertion-density')).toBeUndefined();
+  });
 });
 
 describe('emDashDensityPer1000', () => {
@@ -369,6 +379,15 @@ describe('computeSlopPenalty', () => {
     const repeated = 'delve '.repeat(50); // far more hits than tier1Cap / tier1PerHit
     const penalty = computeSlopPenalty(repeated);
     expect(penalty).toBeLessThanOrEqual(SLOP_PENALTY_WEIGHTS.tier1Cap + 0.01);
+  });
+
+  it('does NOT add the em-dash penalty for a single dash in a short passage, even though its rate crosses the threshold (regression)', () => {
+    // 1 em dash in 65 words -> 15.4/1000, over the 15/1000 default threshold
+    // on rate alone — but one ordinary em dash is not "heavy reliance".
+    // Caught in codex review; MIN_DENSITY_OCCURRENCES gates this.
+    const text = `one two three — ${'word '.repeat(62)}`;
+    expect(MIN_DENSITY_OCCURRENCES).toBeGreaterThan(1);
+    expect(computeSlopPenalty(text)).toBeLessThan(SLOP_PENALTY_WEIGHTS.emDashPenalty);
   });
 
   it('adds the section-break penalty for an over-fragmented rate of scene breaks', () => {

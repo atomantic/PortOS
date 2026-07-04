@@ -49,6 +49,7 @@ import {
   transitionOpenerRatio,
   paragraphLengthUniformity,
   countSectionBreaks,
+  MIN_DENSITY_OCCURRENCES,
 } from './slopScore.js';
 import {
   analyzePanelRhythm,
@@ -60,6 +61,7 @@ import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } fro
 // Re-exported so ./checks/*.js and ./checkRegistry.js import everything from here.
 export {
   DEFAULT_LETTERING_THRESHOLDS,
+  MIN_DENSITY_OCCURRENCES,
   analyzeBalloonAttribution,
   analyzeComicLettering,
   analyzeNamePair,
