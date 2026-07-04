@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
   getPostSessions: vi.fn(),
@@ -84,6 +84,55 @@ describe('PostHistory analytics dashboard', () => {
     render(<PostHistory onBack={() => {}} />);
     await waitFor(() => expect(screen.getByText('No sessions found for this range.')).toBeTruthy());
     expect(screen.queryByText('Drill Breakdown')).toBeNull();
+  });
+
+  describe('session row keyboard accessibility', () => {
+    it('exposes a collapsed session row as a disclosure control with aria-expanded=false', async () => {
+      render(<PostHistory onBack={() => {}} />);
+      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+      expect(row).toHaveAttribute('tabindex', '0');
+    });
+
+    it('expands a row via a click, flipping aria-expanded and revealing task detail', async () => {
+      render(<PostHistory onBack={() => {}} />);
+      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+      const table = screen.getByRole('table');
+      expect(within(table).queryByText('Multiplication')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /Session 2026-06-01/ }));
+      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
+      expect(within(table).getByText('Multiplication')).toBeTruthy();
+    });
+
+    it('expands and collapses a row via the Enter key, without scrolling the page (default prevented)', async () => {
+      render(<PostHistory onBack={() => {}} />);
+      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+      const table = screen.getByRole('table');
+      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+      fireEvent.keyDown(row, { key: 'Enter' });
+      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
+      expect(within(table).getByText('Multiplication')).toBeTruthy();
+      fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: 'Enter' });
+      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'false');
+      expect(within(table).queryByText('Multiplication')).toBeNull();
+    });
+
+    it('expands a row via the Space key', async () => {
+      render(<PostHistory onBack={() => {}} />);
+      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+      fireEvent.keyDown(row, { key: ' ' });
+      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('ignores unrelated keys — a row does not expand on an arbitrary keypress', async () => {
+      render(<PostHistory onBack={() => {}} />);
+      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+      fireEvent.keyDown(row, { key: 'a' });
+      expect(row).toHaveAttribute('aria-expanded', 'false');
+    });
   });
 });
 

@@ -242,11 +242,22 @@ export default function PostHistory({ onBack }) {
               const expanded = expandedId === s.id;
               const durationMin = Math.round((s.durationMs || 0) / 60000);
 
+              const toggleExpanded = () => setExpandedId(expanded ? null : s.id);
+
               const rows = [
                 <tr
                   key={s.id}
-                  onClick={() => setExpandedId(expanded ? null : s.id)}
-                  className="border-b border-port-border/50 hover:bg-port-bg/50 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={expanded}
+                  aria-label={`Session ${s.date}, score ${s.score}. ${expanded ? 'Collapse' : 'Expand'} details.`}
+                  onClick={toggleExpanded}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    toggleExpanded();
+                  }}
+                  className="border-b border-port-border/50 hover:bg-port-bg/50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-port-accent focus:ring-inset"
                 >
                   <td className="px-4 py-2 text-gray-500">
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
