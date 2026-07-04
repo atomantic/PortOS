@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle, Save, ArrowLeft, ChevronDown, ChevronUp, Dumbbell } from 'lucide-react';
-import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS } from './constants';
+import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 import DrillQuestionReview from './DrillQuestionReview';
 
 export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
@@ -74,14 +74,36 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
               const summary = result.evaluation?.summary;
               subtitle = summary || `${result.responses?.length || 0} responses`;
             } else {
-              const correct = (result.questions || []).filter(q => q.correct).length;
-              const total = (result.questions || []).length;
-              const accuracyPct = total > 0 ? Math.round((correct / total) * 100) : 0;
-              const answered = (result.questions || []).filter(q => q.answered !== null);
-              const avgMs = answered.length > 0
-                ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length)
-                : 0;
-              subtitle = `${accuracyPct}% accuracy · ${(avgMs / 1000).toFixed(1)}s avg`;
+              // Accuracy (answered-only) and speed are shown separately from the
+              // blended score (issue #2094). Prefer the server-persisted metrics;
+              // this pre-save view falls back to deriving from questions[] since
+              // the session hasn't been scored server-side yet. n-back is a go/no-go
+              // task: a withheld press ("answered: null") is a deliberate no-match
+              // decision, not an unreached trial — every trial counts as reached
+              // (completion 100%, matching the server's completion=1), and its
+              // accuracy fallback is the balanced signal-detection derivation
+              // (raw `correct` averaging would pay ~70% for never pressing).
+              const questions = result.questions || [];
+              const noGo = result.type === 'n-back';
+              const reached = noGo ? questions : questions.filter(q => q.answered !== null);
+              const derivedAcc = noGo
+                ? nBackBalancedAccuracy(questions)
+                : (reached.length > 0 ? reached.filter(q => q.correct).length / reached.length : null);
+              const accPct = result.accuracy != null
+                ? Math.round(result.accuracy * 100)
+                : (derivedAcc != null ? Math.round(derivedAcc * 100) : null);
+              const compPct = result.completion != null
+                ? Math.round(result.completion * 100)
+                : (questions.length > 0 ? Math.round((reached.length / questions.length) * 100) : null);
+              const timed = reached.filter(q => q.responseMs > 0);
+              const avgMs = result.avgResponseMs != null
+                ? result.avgResponseMs
+                : (timed.length > 0 ? Math.round(timed.reduce((s, q) => s + q.responseMs, 0) / timed.length) : null);
+              const parts = [];
+              if (accPct != null) parts.push(`${accPct}% acc`);
+              if (avgMs != null) parts.push(`${(avgMs / 1000).toFixed(1)}s`);
+              if (compPct != null && compPct < 100) parts.push(`${compPct}% done`);
+              subtitle = parts.join(' · ') || `${questions.length} questions`;
             }
 
             const drillScoreColor = (result.score || 0) >= 80 ? 'text-port-success' :

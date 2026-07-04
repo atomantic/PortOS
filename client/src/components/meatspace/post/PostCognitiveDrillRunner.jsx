@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Check, X } from 'lucide-react';
-import { DRILL_LABELS } from './constants';
+import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 
 /**
  * Interactive runner for deterministic cognitive drills (n-back, digit-span,
@@ -60,6 +60,33 @@ export function localAccuracyScore(questions) {
   return Math.round((correct / questions.length) * 100);
 }
 
+// Pre-save mirror of the server's signal-detection n-back score (issue #2094):
+// balanced accuracy over targets (hit rate) and non-targets (correct-rejection
+// rate), so the results screen matches what the save persists instead of raw
+// position accuracy (which pays ~70% for never pressing). Delegates to the
+// shared answered+correct derivation in constants.js (buildNBackQuestions marks
+// `correct` with exactly the identity that derivation relies on).
+export function localNBackScore(_drill, questions) {
+  const accuracy = nBackBalancedAccuracy(questions);
+  return accuracy == null ? 0 : Math.min(100, Math.max(0, Math.round(accuracy * 100)));
+}
+
+// Pre-save mirror of the server's latency-based reaction-time score (issue
+// #2094): median RT of VALID trials against the mode's reference curve, scaled
+// by the valid-trial rate so false starts pull the headline number down.
+export function localReactionTimeScore(drill, questions) {
+  const mode = drill?.config?.mode === 'choice' ? 'choice' : 'simple';
+  const refMs = mode === 'choice' ? 1200 : 600;
+  const fastMs = mode === 'choice' ? 400 : 200;
+  const valid = questions.filter(q => q.correct && !q.falseStart && (q.responseMs || 0) > 0);
+  if (!questions.length || !valid.length) return 0;
+  const sorted = valid.map(q => Math.min(q.responseMs, refMs * 3)).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const medianMs = sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+  const latencyScore = Math.min(100, Math.max(0, (100 * (refMs - medianMs)) / (refMs - fastMs)));
+  return Math.round(latencyScore * (valid.length / questions.length));
+}
+
 // Renders a `[x, y]` cell list (mental-rotation shapes) as a small filled-cell
 // grid within a `size x size` box — no images/canvas, just CSS grid squares.
 function ShapeGrid({ cells, size = 4, cellPx = 14 }) {
@@ -86,13 +113,22 @@ function ShapeGrid({ cells, size = 4, cellPx = 14 }) {
 // mirror, and its `index`/`answered`/`responseMs` fields are what that
 // rescoring depends on.
 export function buildCognitiveResult({ type, drill, questions, totalMs }) {
+  // n-back and reaction-time mirror the server's rescoring semantics (SDT
+  // balanced accuracy / valid-median latency, issue #2094) so the pre-save
+  // results screen doesn't show a number that jumps on save. Other types keep
+  // the raw-accuracy approximation (server adds only a small speed bonus).
+  const score = type === 'n-back'
+    ? localNBackScore(drill, questions)
+    : type === 'reaction-time'
+      ? localReactionTimeScore(drill, questions)
+      : localAccuracyScore(questions);
   return {
     module: 'cognitive',
     type,
     config: drill.config,
     drillData: drill,
     questions,
-    score: localAccuracyScore(questions),
+    score,
     totalMs,
   };
 }

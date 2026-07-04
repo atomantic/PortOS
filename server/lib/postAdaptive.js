@@ -23,9 +23,10 @@ export const ADAPTIVE_SPECS = {
 };
 
 export const ADAPTIVE_DEFAULTS = {
-  highScore: 90, // >= this over enough samples → bump difficulty up one step
+  highScore: 90, // >= this ACCURACY (0-100, answered-only) over enough samples → harder
   lowScore: 50, // <= this → ease difficulty down one step
   minSamples: 3, // need at least this many scored samples before adapting
+  minCompletion: 0.5, // skip adaptation when avg completion < this — too little signal
   windowDays: 30, // stats window the signal is read over
 };
 
@@ -49,9 +50,9 @@ export function scoreToDirection(score, { highScore, lowScore } = ADAPTIVE_DEFAU
  *
  * @param {string} type - math drill type
  * @param {object} baseConfig - the user's configured drill params
- * @param {{score?: number|null, samples?: number}} signal - recent performance
+ * @param {{score?: number|null, samples?: number, completion?: number|null}} signal - recent performance
  * @param {object} [opts] - override ADAPTIVE_DEFAULTS thresholds
- * @returns {{config: object, type, field, from, to, direction, applied, score, samples, reason}}
+ * @returns {{config: object, type, field, from, to, direction, applied, score, samples, completion, reason}}
  */
 export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) {
   const spec = ADAPTIVE_SPECS[type];
@@ -59,6 +60,7 @@ export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) 
   const base = { ...(baseConfig || {}) };
   const samples = Number.isFinite(signal?.samples) ? signal.samples : 0;
   const score = signal?.score == null || Number.isNaN(signal.score) ? null : signal.score;
+  const completion = signal?.completion == null || Number.isNaN(signal.completion) ? null : signal.completion;
 
   const out = {
     config: base,
@@ -70,6 +72,7 @@ export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) 
     applied: false,
     score,
     samples,
+    completion,
     reason: 'unsupported',
   };
 
@@ -84,6 +87,18 @@ export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) 
     // Adaptive not engaged yet — leave the manual config untouched (the manual
     // value stays the override until there's enough signal to manage difficulty).
     out.reason = 'insufficient-samples';
+    return out;
+  }
+
+  const lowCompletion = completion != null && completion < options.minCompletion;
+  if (lowCompletion && scoreToDirection(score, options) !== -1) {
+    // The user barely reached this drill (timed out on most of it) — accuracy off
+    // a handful of answers isn't a trustworthy signal to HOLD or go HARDER on, so
+    // keep the manual config until they complete more of it (issue #2094). The
+    // EASIER direction is deliberately allowed through: chronic low completion is
+    // itself evidence the drill is too hard/long, and blocking the ease would
+    // deadlock difficulty (low completion → no adaptation → completion stays low).
+    out.reason = 'insufficient-completion';
     return out;
   }
 
