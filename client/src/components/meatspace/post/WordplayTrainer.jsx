@@ -9,7 +9,7 @@ import ProviderModelSelector from '../../ProviderModelSelector';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar, scoreWordplayResponse } from './WordplayDrillUI';
-import { countLlmCorrect } from './constants';
+import { countLlmCorrect, LLM_TRAINING_CORRECT_THRESHOLD } from './constants';
 
 // Coarse module bucket for training-log entries — matches the module
 // PostLlmDrillRunner's in-session runner logs LLM/wordplay drills under
@@ -217,13 +217,22 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     e?.preventDefault();
     const responseMs = Date.now() - questionStartRef.current;
 
+    // A human-readable label for the prompt this response answers, sourced
+    // from the current challenge/puzzle regardless of mode. Bridge Word has
+    // no single rootWord/word/idiom field — its prompt is the clue set the
+    // player was shown — so it needs its own fallback rather than falling
+    // through to '' (which left the persisted training-log breakdown unable
+    // to identify which bridge puzzle was missed).
+    const promptLabel = currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom
+      || (currentPrompt?.clues || []).join(' / ') || '';
+
     let responseObj;
     if (selectedMode === 'compound-chain') {
-      responseObj = { questionIndex, items, responseMs };
+      responseObj = { questionIndex, prompt: promptLabel, items, responseMs };
     } else {
       responseObj = {
         questionIndex,
-        prompt: currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
+        prompt: promptLabel,
         response: inputValue.trim(),
         responseMs,
       };
@@ -258,12 +267,25 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
       // that practice happened anywhere (issue #2097). Fire-and-forget, same
       // pattern as MorseTrainer's logTraining: a failed background write
       // shouldn't interrupt the results screen the user is already seeing.
+      // `questions` carries the per-question breakdown already computed in
+      // `results` (issue #2114) — the drill cache means these prompts are
+      // reusable, so a future progress dashboard can trend which individual
+      // wordplay prompts get missed rather than only the round aggregate.
       submitTrainingEntry({
         module: TRAINING_MODULE,
         drillType: selectedMode,
         questionCount: results.length,
         correctCount: countLlmCorrect(results),
         totalMs: Date.now() - roundStartRef.current,
+        questions: results.map(r => ({
+          prompt: r.prompt,
+          response: r.response,
+          items: r.items,
+          responseMs: r.responseMs,
+          score: r.score,
+          feedback: r.feedback,
+          correct: (r.score ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+        })),
       }).catch(() => {});
     } else {
       setQuestionIndex(questionIndex + 1);

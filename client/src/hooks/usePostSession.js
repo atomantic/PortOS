@@ -1,7 +1,10 @@
 import { useState, useCallback, useRef } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
-import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect } from '../components/meatspace/post/constants';
+import {
+  LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
+  WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD,
+} from '../components/meatspace/post/constants';
 
 function computeSessionScoreFromResults(results) {
   if (!results.length) return 0;
@@ -325,12 +328,31 @@ export function usePostSession() {
         const correctCount = isLlmDrill
           ? countLlmCorrect(r.responses || [])
           : (r.questions?.filter(q => q.correct)?.length ?? 0);
+        // Per-question breakdown (issue #2114) — the standalone Wordplay tab
+        // (WordplayTrainer.jsx) already threads this through; extend the same
+        // breakdown to the in-session runner's completed wordplay rounds so
+        // both entry points populate it, not just the standalone tab. Scoped
+        // to the four wordplay types since those are the only ones whose
+        // `r.responses` entries (post-completeLlmDrill) carry a prompt/response
+        // shape a future dashboard could render per-question.
+        const questions = WORDPLAY_LLM_DRILL_TYPES.includes(r.type)
+          ? (r.responses || []).map(resp => ({
+            prompt: resp.prompt,
+            response: resp.response,
+            items: resp.items,
+            responseMs: resp.responseMs,
+            score: resp.llmScore != null ? resp.llmScore : undefined,
+            feedback: resp.llmFeedback,
+            correct: (resp.llmScore ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+          }))
+          : undefined;
         await submitTrainingEntry({
           module: r.module,
           drillType: r.type,
           questionCount,
           correctCount,
           totalMs: r.totalMs || 0,
+          ...(questions ? { questions } : {}),
         }).catch(() => {});
       }
       toast.success('Training session logged');

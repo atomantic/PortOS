@@ -119,6 +119,42 @@ describe('trainingEntrySchema wordplay drill types (issue #2097)', () => {
   });
 });
 
+describe('trainingEntrySchema per-question breakdown (issue #2114)', () => {
+  // Follow-up to #2097: the training log previously kept only round-level
+  // aggregates. `questions` is optional/additive so legacy entries with no
+  // breakdown stay valid.
+  it('accepts a training entry with no questions field (back-compat)', () => {
+    const parsed = trainingEntrySchema.parse({
+      module: 'llm-drills', drillType: 'compound-chain', questionCount: 5, correctCount: 4, totalMs: 60000
+    });
+    expect(parsed.questions).toBeUndefined();
+  });
+
+  it('accepts and preserves a per-question breakdown for a wordplay entry', () => {
+    const parsed = trainingEntrySchema.parse({
+      module: 'llm-drills',
+      drillType: 'bridge-word',
+      questionCount: 2,
+      correctCount: 1,
+      totalMs: 45000,
+      questions: [
+        { prompt: 'news___', response: 'paper', responseMs: 4200, score: 85, feedback: 'Nice.', correct: true },
+        { items: ['firehouse', 'firewall'], responseMs: 5100, score: 40, feedback: 'Partial credit.', correct: false },
+      ],
+    });
+    expect(parsed.questions).toHaveLength(2);
+    expect(parsed.questions[0]).toMatchObject({ prompt: 'news___', response: 'paper', score: 85, correct: true });
+    expect(parsed.questions[1]).toMatchObject({ items: ['firehouse', 'firewall'], score: 40, correct: false });
+  });
+
+  it('rejects a question entry with an out-of-range score', () => {
+    expect(() => trainingEntrySchema.parse({
+      module: 'llm-drills', drillType: 'bridge-word', questionCount: 1, correctCount: 0, totalMs: 1000,
+      questions: [{ prompt: 'x', score: 150 }],
+    })).toThrow();
+  });
+});
+
 describe('questionResultSchema chunkId/element (issue #2016)', () => {
   // Regression: memory-sequence/memory-element-flash answers must carry
   // chunkId/element through postSessionSubmitSchema so submitPostSession can
