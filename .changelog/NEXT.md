@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Creative Writing Quality Engine
+
+- **[issue-2165] Editorial review now catches recognizable "AI slop" writing tells automatically.** Four new deterministic editorial checks join the existing 68: a tiered banned-word scan (hard-bans like "delve"/"myriad"/"utilize"; suspicious words like "robust"/"seamless" only flagged when 3+ cluster in one paragraph), fiction-specific AI-tell idioms ("a sense of dread", "couldn't help but", "eyes widened", "a wave of relief washed over him"), rhetorical structural tics ("not just X, but Y", runs of "did not [verb]", punchy three-sentence-in-a-row bursts like "Fast. Precise. Deadly."), and structural burstiness (em-dash overuse, essay-style transition-word openers, mechanically uniform paragraph lengths). Each surfaces as an editorial finding with the exact offending quote, same as the existing prose checks — configurable thresholds and house-style allowlists included.
+
 ## Human Activity Tracking
 
 - **[issue-2150] Activity timeline** — a new `/timeline` page shows a unified, day-by-day view of your activity (emails sent/received and calendar events, with more sources coming), backed by a machine-local `human_activity_events` store that your existing message and calendar syncs populate automatically. Pick any day (deep-linkable via `/timeline/:date`), see an hourly activity histogram and per-source tallies, and browse the day's events. Only metadata and a short summary line are stored — full message bodies stay in their per-source caches — and the timeline is machine-local (never federated to peers), like Tribe.
