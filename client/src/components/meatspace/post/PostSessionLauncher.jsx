@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight } from 'lucide-react';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, Layers } from 'lucide-react';
 import { getProviders, getPostReviewReps, getPostRecommendations } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
@@ -137,9 +137,13 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // opt-in (CLAUDE.md AI-provider policy). An empty/absent list means "all
   // enabled" (back-compat). Focus-practice on a specific weak domain bypasses
   // this filter (it's an explicit user choice, not a default composition).
-  const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : [];
+  // `null` = no sessionModules set (legacy/absent) → include all enabled
+  // (back-compat). An explicit array — INCLUDING an empty one — is honored as-is:
+  // unchecking every module in Config is a deliberate "no composed sessions"
+  // choice, not the same as never having set it (issue #2100 review).
+  const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : null;
   const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive' };
-  const moduleAllowed = (source) => sessionModules.length === 0 || sessionModules.includes(SOURCE_TO_MODULE[source]);
+  const moduleAllowed = (source) => sessionModules === null || sessionModules.includes(SOURCE_TO_MODULE[source]);
 
   function handleStart() {
     const mathConfigs = (moduleAllowed('math') ? enabledMathDrills : []).map(([type, cfg]) => ({
@@ -326,6 +330,14 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // Quick-session domain count reflects the sessionModules-filtered set, so the
   // "Quick 5 Min (N domains)" button matches what it will actually run.
   const domainCount = Object.keys(sessionEnabledDomains).length;
+  // A COMPOSED session (Full/Quick) only has drills to run if the
+  // sessionModules-filtered set is non-empty — the buttons gate on this, not on
+  // the unfiltered `hasAnyDrills`, so selecting only empty modules disables them
+  // instead of failing with "No drills configured" (issue #2100 review).
+  const hasSessionDrills = domainCount > 0;
+  // Drills are configured/enabled but the Session Composition filter excludes
+  // them all — surface why the start buttons are disabled.
+  const compositionExcludesAll = hasAnyDrills && !hasSessionDrills;
 
   // Analytics derived from the 30-day stats window. Streaks span all history.
   const hasStats = stats && stats.sessionCount > 0;
@@ -597,12 +609,21 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             </div>
           )}
 
+          {/* Composition-excludes-everything notice — the start buttons below are
+              disabled because Session Composition filtered out all enabled drills. */}
+          {compositionExcludesAll && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
+              <Layers size={16} className="mt-0.5 shrink-0" />
+              <span>Your Session Composition excludes every enabled drill — adjust it under Config → Session Composition to run a session.</span>
+            </div>
+          )}
+
           {/* Start Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             {domainCount >= 2 && (
               <button
                 onClick={handleQuickSession}
-                disabled={!hasAnyDrills}
+                disabled={!hasSessionDrills}
                 className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
                   mode === 'train'
                     ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
@@ -615,7 +636,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             )}
             <button
               onClick={handleStart}
-              disabled={!hasAnyDrills}
+              disabled={!hasSessionDrills}
               className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
                 mode === 'train'
                   ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'

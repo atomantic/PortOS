@@ -166,6 +166,18 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(screen.queryByText('Goals')).toBeNull();
   });
 
+  it('disables the start buttons when Session Composition excludes every enabled drill', async () => {
+    const onStart = vi.fn();
+    renderLauncher({ onStart, config: { ...baseConfig, sessionModules: [] } });
+    await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
+    // An explicit empty selection means "no composed sessions" — Full POST is
+    // disabled (not silently including all drills), with an explanatory notice.
+    expect(screen.getByText('Full POST').closest('button').disabled).toBe(true);
+    expect(screen.getByText(/Session Composition excludes every enabled drill/i)).toBeTruthy();
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it('excludes LLM drills from Full POST when sessionModules omits llm-drills', async () => {
     const onStart = vi.fn();
     renderLauncher({
