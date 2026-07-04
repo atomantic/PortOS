@@ -13,6 +13,13 @@ import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
+import {
+  cognitiveLadder,
+  cognitiveLevelConfig,
+  resolveCognitiveProgression,
+  COGNITIVE_LADDER_TYPES,
+  COGNITIVE_MASTERY_DEFAULTS,
+} from '../lib/postProgression.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
 import { advanceScheduleFromSession, mergeMasteryFromSession } from './meatspacePostMemory.js';
 
@@ -61,14 +68,18 @@ const DEFAULT_CONFIG = {
   // No provider calls — enabled by default since they're free to run. No
   // timeLimitSec — these drills are self-paced/stimulus-driven and never
   // enforce a countdown (see client PostCognitiveDrillRunner.jsx / issue #2008).
+  // `progressive` (default ON for laddered drills) ramps difficulty via the
+  // per-skill ladders in server/lib/postProgression.js instead of a fixed knob;
+  // the manual knobs (incl. stimulusMs/showMs) are the fallback when it's off.
+  // reaction-time is a measurement baseline (no ladder, no progressive).
   cognitive: {
     enabled: true,
     drillTypes: {
-      'n-back': { enabled: true, n: 2, length: 20 },
-      'digit-span': { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
-      'stroop': { enabled: true, count: 15 },
-      'schulte-table': { enabled: true, size: 5 },
-      'mental-rotation': { enabled: true, count: 8 },
+      'n-back': { enabled: true, progressive: true, n: 2, length: 20, stimulusMs: 2500 },
+      'digit-span': { enabled: true, progressive: true, direction: 'forward', startLength: 3, maxLength: 8, showMs: 1000 },
+      'stroop': { enabled: true, progressive: true, count: 15 },
+      'schulte-table': { enabled: true, progressive: true, size: 5 },
+      'mental-rotation': { enabled: true, progressive: true, count: 8 },
       'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 }
     }
   },
@@ -655,6 +666,72 @@ export async function getMultiplicationProgress() {
 }
 
 /**
+ * Aggregate a laddered cognitive drill's performance per level from scored
+ * history so its ladder can decide whether each rung is mastered. Cognitive
+ * mastery is accuracy-only, and a "sample" is one completed drill (not one
+ * answered question) — so each task contributes its stamped level and its
+ * task-level `accuracy` (the balanced/SDT accuracy for n-back, #2094; the
+ * answered accuracy elsewhere), which is what a raw per-question ratio can't
+ * express (it would reward n-back's do-nothing exploit).
+ *
+ * Returns the windowed per-level stats plus the all-time `floorLevel` (the
+ * highest rung ever reached), the anti-demotion signal for resolveLevel.
+ *
+ * @returns {Promise<{stats: Record<number, {samples,accuracy,avgResponseMs}>, floorLevel: number}>}
+ */
+async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAULTS.windowDays) {
+  const sessions = await getPostSessions();
+  let cutoffStr = null;
+  if (windowDays > 0) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - windowDays);
+    cutoffStr = cutoff.toISOString().split('T')[0];
+  }
+
+  const byLevel = {};
+  let floorLevel = 0;
+  for (const session of sessions) {
+    for (const task of session.tasks || []) {
+      if (task.type !== type) continue;
+      const level = Number.isInteger(task.config?.level) ? task.config.level : null;
+      if (level == null) continue; // pre-#2095 tasks carry no level
+      // All-time floor: any reached (non-empty) drill at this level proves the
+      // user earned the rung, regardless of the window.
+      const reached = ((task.totalCount ?? (task.questions?.length || 0)) > 0);
+      if (reached && level > floorLevel) floorLevel = level;
+      // Mastery stats are windowed.
+      if (cutoffStr && session.date < cutoffStr) continue;
+      const acc = Number.isFinite(task.accuracy) ? task.accuracy : null;
+      if (acc == null) continue;
+      const bucket = byLevel[level] || (byLevel[level] = { samples: 0, accSum: 0 });
+      bucket.samples += 1;
+      bucket.accSum += acc;
+    }
+  }
+
+  const stats = {};
+  for (const [level, b] of Object.entries(byLevel)) {
+    // avgResponseMs is 0 (unused) — cognitive mastery is accuracy-only.
+    stats[level] = { samples: b.samples, accuracy: b.samples ? b.accSum / b.samples : 0, avgResponseMs: 0 };
+  }
+  return { stats, floorLevel };
+}
+
+/**
+ * Resolve the current progressive difficulty for every laddered cognitive drill
+ * from history — the current rung + per-rung mastery for the config/preview UI.
+ * Keyed by drill type (`{ 'n-back': {...}, 'digit-span': {...}, … }`).
+ */
+export async function getCognitiveProgress() {
+  const out = {};
+  for (const type of COGNITIVE_LADDER_TYPES) {
+    const { stats, floorLevel } = await getCognitiveLevelStats(type);
+    out[type] = resolveCognitiveProgression(type, stats, floorLevel);
+  }
+  return out;
+}
+
+/**
  * Resolve the effective drill config for generation.
  *
  * - Multiplication with the progressive ladder ON (default): factor structure
@@ -687,6 +764,27 @@ export async function resolveDrillConfig(type, requestedConfig = {}) {
       };
       return { config: effective, adaptive: null, progression };
     }
+  }
+
+  // Progressive cognitive ladders (default ON) — per-skill difficulty rungs
+  // (n-back n/stimulusMs, digit-span span/direction, schulte grid, mental-
+  // rotation/stroop trial count). Selects the rung by sustained-accuracy
+  // mastery so the drill ramps up; when off, the caller's manual knobs
+  // (incl. stimulusMs/showMs) pass through unchanged. reaction-time has no
+  // ladder and always passes through (issue #2095).
+  if (cognitiveLadder(type)) {
+    const cogCfg = config?.cognitive?.drillTypes?.[type] || {};
+    if (cogCfg.progressive !== false) {
+      const { stats, floorLevel } = await getCognitiveLevelStats(type);
+      const progression = resolveCognitiveProgression(type, stats, floorLevel);
+      const effective = {
+        ...requestedConfig,
+        ...cognitiveLevelConfig(type, progression.level),
+        level: progression.level,
+      };
+      return { config: effective, adaptive: null, progression };
+    }
+    return { config: requestedConfig, adaptive: null };
   }
 
   if (!config?.adaptive?.enabled || !ADAPTIVE_SPECS[type]) {

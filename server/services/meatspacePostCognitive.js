@@ -358,22 +358,37 @@ export function generateReactionTime(config = {}) {
 }
 
 export function generateCognitiveDrill(type, config = {}) {
+  let drill;
   switch (type) {
     case 'n-back':
-      return generateNBack(config);
+      drill = generateNBack(config);
+      break;
     case 'digit-span':
-      return generateDigitSpan(config);
+      drill = generateDigitSpan(config);
+      break;
     case 'stroop':
-      return generateStroop(config);
+      drill = generateStroop(config);
+      break;
     case 'schulte-table':
-      return generateSchulteTable(config);
+      drill = generateSchulteTable(config);
+      break;
     case 'mental-rotation':
-      return generateMentalRotation(config);
+      drill = generateMentalRotation(config);
+      break;
     case 'reaction-time':
-      return generateReactionTime(config);
+      drill = generateReactionTime(config);
+      break;
     default:
       return null;
   }
+  // Stamp the effective progression level into the generated drill's config so
+  // it round-trips through the client and is persisted per-task on session
+  // submit — the difficulty stamp that lets stats bucket by rung (n=2 vs n=3),
+  // exactly as multiplication stamps `config.level` (issue #2095).
+  if (drill && Number.isInteger(config.level)) {
+    drill.config = { ...drill.config, level: config.level };
+  }
+  return drill;
 }
 
 // =============================================================================

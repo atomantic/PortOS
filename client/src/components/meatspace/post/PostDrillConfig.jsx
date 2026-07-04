@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
@@ -156,15 +156,21 @@ const COGNITIVE_DRILL_META = {
   'n-back': {
     label: 'N-Back',
     desc: 'Signal when a letter matches the one N steps back — working memory',
+    // `progressive: true` marks a laddered drill — the ProgressiveBadge + toggle
+    // render, and every listed field is ladder-managed (hidden while progressive
+    // is on; shown, incl. stimulusMs, in manual mode). See server/lib/postProgression.js.
+    progressive: true,
     fields: [
       { key: 'n', label: 'N (steps back)', type: 'number', min: 1, max: 3 },
       { key: 'length', label: 'Sequence Length', type: 'number', min: 6, max: 60 },
+      { key: 'stimulusMs', label: 'Stimulus (ms)', type: 'number', min: 1000, max: 5000 },
     ],
-    defaults: { enabled: true, n: 2, length: 20 },
+    defaults: { enabled: true, progressive: true, n: 2, length: 20, stimulusMs: 2500 },
   },
   'digit-span': {
     label: 'Digit Span',
     desc: 'Recall a shown digit sequence forward or backward',
+    progressive: true,
     fields: [
       { key: 'direction', label: 'Direction', type: 'select', options: [
         { value: 'forward', label: 'Forward' },
@@ -172,32 +178,36 @@ const COGNITIVE_DRILL_META = {
       ] },
       { key: 'startLength', label: 'Start Length', type: 'number', min: 3, max: 9 },
       { key: 'maxLength', label: 'Max Length', type: 'number', min: 3, max: 12 },
+      { key: 'showMs', label: 'Show Time (ms)', type: 'number', min: 400, max: 4000 },
     ],
-    defaults: { enabled: true, direction: 'forward', startLength: 3, maxLength: 8 },
+    defaults: { enabled: true, progressive: true, direction: 'forward', startLength: 3, maxLength: 8, showMs: 1000 },
   },
   'stroop': {
     label: 'Stroop',
     desc: 'Name the ink color of a color-word — attention & inhibition',
+    progressive: true,
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 5, max: 40 },
     ],
-    defaults: { enabled: true, count: 15 },
+    defaults: { enabled: true, progressive: true, count: 15 },
   },
   'schulte-table': {
     label: 'Schulte Table',
     desc: 'Scan a shuffled grid and tap 1, 2, 3... in order — visual attention & speed',
+    progressive: true,
     fields: [
       { key: 'size', label: 'Grid Size (NxN)', type: 'number', min: 3, max: 7 },
     ],
-    defaults: { enabled: true, size: 5 },
+    defaults: { enabled: true, progressive: true, size: 5 },
   },
   'mental-rotation': {
     label: 'Mental Rotation',
     desc: 'Pick the shape that’s the same, just rotated — spatial reasoning',
+    progressive: true,
     fields: [
       { key: 'count', label: 'Trials', type: 'number', min: 4, max: 20 },
     ],
-    defaults: { enabled: true, count: 8 },
+    defaults: { enabled: true, progressive: true, count: 8 },
   },
   'reaction-time': {
     label: 'Reaction Time',
@@ -317,9 +327,11 @@ function AdaptiveBadge({ info }) {
   );
 }
 
-// Compact ladder status for progressive multiplication: current rung, mastery
-// dots for every rung, and the speed/accuracy gate that unlocks the next one.
-function ProgressiveBadge({ info }) {
+// Compact ladder status for a progressive drill: current rung, mastery dots for
+// every rung, and the accuracy (+ optional speed) gate that unlocks the next
+// one. Shared by multiplication (speed-gated) and the cognitive ladders
+// (accuracy-only); `managedLabel` names the manual knob(s) the ladder overrides.
+function ProgressiveBadge({ info, speedGated = false, managedLabel = 'Manual knobs' }) {
   if (!info || !Array.isArray(info.levels)) return null;
   const pct = Math.round((info.thresholds?.targetAccuracy ?? 0.9) * 100);
   return (
@@ -343,7 +355,7 @@ function ProgressiveBadge({ info }) {
         ))}
       </div>
       <p className="text-xs text-gray-500">
-        Advances to the next rung after ≥{pct}% accuracy and fast responses at this one. Max Digits is ignored while progressive is on.
+        Advances to the next rung after {speedGated ? `≥${pct}% accuracy and fast responses` : `sustained ≥${pct}% accuracy`} at this one. {managedLabel} {managedLabel.endsWith('s') ? 'are' : 'is'} ignored while progressive is on.
       </p>
     </div>
   );
@@ -375,9 +387,13 @@ function GroupBulkToggle({ groupLabel, onEnableAll, onDisableAll }) {
   );
 }
 
-function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo, progressive, onToggleProgressive, progressInfo }) {
+function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField, adaptiveInfo, progressive, onToggleProgressive, progressInfo, managedFieldKeys = [], speedGated = false, managedLabel = 'Manual knobs' }) {
   const supportsProgressive = typeof progressive === 'boolean';
-  const hideMaxDigits = supportsProgressive && progressive;
+  // Fields the ladder drives (hidden while progressive is on; shown in manual
+  // mode). Multiplication hides only Max Digits; a cognitive drill hides every
+  // difficulty knob (incl. the newly-exposed stimulusMs/showMs).
+  const managed = new Set(managedFieldKeys);
+  const hideManaged = supportsProgressive && progressive;
   const activeBorder = accent === 'accent-2' ? 'border-port-accent-2/30' : 'border-port-border';
   const toggleBg = accent === 'accent-2' ? 'bg-port-accent-2' : 'bg-port-accent';
   return (
@@ -415,7 +431,7 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
             type="button"
             role="switch"
             aria-checked={progressive}
-            aria-label="Progressive difficulty"
+            aria-label={`Progressive difficulty — ${meta.label}`}
             onClick={onToggleProgressive}
             className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
               progressive ? toggleBg : 'bg-port-border'
@@ -430,7 +446,7 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
 
       {enabled && (
         <div className="grid grid-cols-2 gap-3">
-          {meta.fields.filter(field => !(hideMaxDigits && field.key === 'maxDigits')).map(field => (
+          {meta.fields.filter(field => !(hideManaged && managed.has(field.key))).map(field => (
             <FormField key={field.key} label={field.label} labelClassName="text-xs text-gray-500 mb-1 block">
               {field.type === 'select' ? (
                 <select
@@ -457,7 +473,7 @@ function DrillCard({ meta, drillConfig, enabled, accent, onToggle, onUpdateField
         </div>
       )}
 
-      {enabled && supportsProgressive && progressive && <ProgressiveBadge info={progressInfo} />}
+      {enabled && supportsProgressive && progressive && <ProgressiveBadge info={progressInfo} speedGated={speedGated} managedLabel={managedLabel} />}
       {enabled && !(supportsProgressive && progressive) && <AdaptiveBadge info={adaptiveInfo} />}
     </div>
   );
@@ -490,6 +506,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   );
   const [adaptivePreview, setAdaptivePreview] = useState(null);
   const [multiplicationProgress, setMultiplicationProgress] = useState(null);
+  const [cognitiveProgress, setCognitiveProgress] = useState(null);
   // Opt-in daily reminder — off by default; see server/services/meatspacePostReminder.js.
   const [reminderEnabled, setReminderEnabled] = useState(
     () => config?.reminder?.enabled === true
@@ -529,6 +546,22 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       .catch(err => console.warn('⚠️ Failed to load multiplication progress: ' + err.message));
     return () => { cancelled = true; };
   }, [multiplicationProgressive]);
+
+  // Progressive cognitive-ladder status (per drill type), same pattern as the
+  // multiplication badge. Fetched whenever the cognitive section is on and any
+  // cognitive drill is progressive — the badge is a transparency aid, so the
+  // saved server state (not the unsaved form) drives it.
+  const anyCognitiveProgressive = cognitiveEnabled && COGNITIVE_TYPES.some(
+    type => COGNITIVE_DRILL_META[type].progressive && cognitiveDrillTypes[type]?.progressive !== false
+  );
+  useEffect(() => {
+    if (!anyCognitiveProgressive) { setCognitiveProgress(null); return; }
+    let cancelled = false;
+    getPostCognitiveProgress()
+      .then(p => { if (!cancelled) setCognitiveProgress(p); })
+      .catch(err => console.warn('⚠️ Failed to load cognitive progress: ' + err.message));
+    return () => { cancelled = true; };
+  }, [anyCognitiveProgressive]);
 
   function toggleDrill(type) {
     setDrillTypes(prev => ({
@@ -575,6 +608,13 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     setCognitiveDrillTypes(prev => ({
       ...prev,
       [type]: { ...prev[type], enabled: !(prev[type]?.enabled !== false) }
+    }));
+  }
+
+  function toggleCognitiveProgressive(type) {
+    setCognitiveDrillTypes(prev => ({
+      ...prev,
+      [type]: { ...prev[type], progressive: !(prev[type]?.progressive !== false) }
     }));
   }
 
@@ -790,6 +830,9 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 progressive={isMultiplication ? multiplicationProgressive : undefined}
                 onToggleProgressive={isMultiplication ? toggleProgressive : undefined}
                 progressInfo={isMultiplication ? multiplicationProgress : null}
+                managedFieldKeys={isMultiplication ? ['maxDigits'] : []}
+                speedGated={isMultiplication}
+                managedLabel="Max Digits"
               />
             );
           })}
@@ -829,6 +872,11 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
         <div className={CARD_GRID}>
           {Object.entries(COGNITIVE_DRILL_META).map(([type, meta]) => {
             const drillConfig = cognitiveDrillTypes[type] || {};
+            // Laddered cognitive drills expose a Progressive toggle + rung badge
+            // (reaction-time has no ladder). When on, every difficulty knob is
+            // ladder-managed and hidden (issue #2095).
+            const supportsProgressive = meta.progressive === true;
+            const progressive = supportsProgressive ? drillConfig.progressive !== false : undefined;
             return (
               <DrillCard
                 key={type}
@@ -838,6 +886,12 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 accent="accent"
                 onToggle={() => toggleCognitiveDrill(type)}
                 onUpdateField={(key, value) => updateCognitiveField(type, key, value)}
+                progressive={progressive}
+                onToggleProgressive={supportsProgressive ? () => toggleCognitiveProgressive(type) : undefined}
+                progressInfo={supportsProgressive ? cognitiveProgress?.[type] : null}
+                managedFieldKeys={supportsProgressive ? meta.fields.map(f => f.key) : []}
+                speedGated={false}
+                managedLabel="Manual knobs"
               />
             );
           })}

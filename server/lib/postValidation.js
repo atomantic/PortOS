@@ -106,10 +106,14 @@ const drillTypeConfigSchema = z.object({
   // keeps a conservative fixed floor of 6 and lets the generator clamp up.
   // (timeLimitSec above is validated but NOT enforced for these drill types —
   // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
-  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
-  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
-  // keep their own internal defaults regardless.
+  // stimulusMs (n-back) / showMs (digit-span) are the presentation-speed knobs.
+  // The progressive ladder (default ON) drives them per rung; manual mode
+  // (progressive off) exposes them in the config UI (issue #2095), so they must
+  // survive validation. Bounds mirror the generator clamps in
+  // meatspacePostCognitive.js (generateNBack / generateDigitSpan).
   n: z.number().int().min(1).max(3).optional(),
+  stimulusMs: z.number().int().min(1000).max(5000).optional(),
+  showMs: z.number().int().min(400).max(4000).optional(),
   length: z.number().int().min(6).max(60).optional(),
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(3).max(9).optional(),

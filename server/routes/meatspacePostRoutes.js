@@ -172,6 +172,17 @@ router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/meatspace/post/cognitive-progress
+ * Per-drill progressive-ladder level + per-rung mastery for the laddered
+ * cognitive drills (n-back / digit-span / schulte / mental-rotation / stroop),
+ * keyed by drill type, so the config UI can show each drill's current rung.
+ */
+router.get('/post/cognitive-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getCognitiveProgress();
+  res.json(progress);
+}));
+
+/**
  * GET /api/meatspace/post/adaptive-preview
  * Transparent per-type preview of effective adaptive difficulty for math drills,
  * so the config UI can show what Adaptive will do before a session starts.

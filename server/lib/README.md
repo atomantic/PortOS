@@ -214,7 +214,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |
 | `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
 | `postAdaptive.js` | Pure POST adaptive-difficulty policy — nudges a math drill's primary knob (`steps`/`maxDigits`/`maxExponent`/`tolerancePct`) up/down within clamped bounds from recent scored performance. Opt-in via the config Adaptive toggle. |
-| `postMultiplicationLadder.js` | Pure progressive multiplication ladder — mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …). Resolves the user's current level from per-level speed+accuracy stats so the plain multiplication drill ramps up instead of starting at a fixed hard difficulty. On by default. |
+| `postMultiplicationLadder.js` | Pure progressive multiplication ladder — mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …). Resolves the user's current level from per-level speed+accuracy stats so the plain multiplication drill ramps up instead of starting at a fixed hard difficulty. On by default. Built on `postProgression.js`. |
+| `postProgression.js` | Generic mastery-gated progression ladder (extracted from `postMultiplicationLadder.js`) — `createProgression({ levels, describeLevel, speedTargetForLevel? })` resolves a user's current rung from per-level stats with an anti-demotion floor. Also defines the cognitive-drill ladders (n-back / digit-span / schulte / mental-rotation / stroop) and their level→generator-config mapping. |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |

@@ -18,7 +18,14 @@
  * Progression is derived from scored session history: each generated drill
  * stamps its `level` into the task config, so later we can bucket answered
  * questions by level and measure per-level accuracy + response time.
+ *
+ * The generic mastery/floor machinery lives in `postProgression.js` (shared
+ * with the cognitive-drill ladders); this module is the multiplication-specific
+ * ladder + the speed-target curve, wired onto that helper. Its public API is
+ * unchanged — it is the reference ladder the shared helper was extracted from.
  */
+
+import { createProgression, PROGRESSION_MASTERY_DEFAULTS } from './postProgression.js';
 
 // Ordered difficulty ladder. Each entry lists the digit-count of every factor
 // in a problem, so `[1, 2]` = single-digit × double-digit and `[1, 1, 1]` =
@@ -58,11 +65,6 @@ export const MASTERY_DEFAULTS = {
   responseMsCap: 120000,
 };
 
-export function clampMultiplicationLevel(level) {
-  const n = Number.isInteger(level) ? level : 0;
-  return Math.min(MAX_MULTIPLICATION_LEVEL, Math.max(0, n));
-}
-
 /**
  * The factor-digit spec for a ladder level (clamped into range).
  * @returns {number[]} e.g. [1, 2]
@@ -78,14 +80,36 @@ export function describeMultiplicationLevel(level) {
   return `${ladderFactors(level).join('×')}-digit`;
 }
 
+// Per-level response-time target (ms): scales with the total number of digits
+// across all factors, floored at `minTargetMs`. This is the multiplication
+// ladder's speed curve, handed to the shared helper so it can gate mastery on
+// speed (fast AND accurate) rather than accuracy alone.
+function multiplicationSpeedTarget(level, opts) {
+  const options = { ...MASTERY_DEFAULTS, ...opts };
+  const totalDigits = MULTIPLICATION_LADDER[level].reduce((a, b) => a + b, 0);
+  return Math.max(options.minTargetMs, options.baseMsPerFactorDigit * totalDigits);
+}
+
+// Shared progression resolver for the multiplication ladder. `mastery` carries
+// the extra `baseMsPerFactorDigit`/`minTargetMs` fields the speed curve reads;
+// the generic helper ignores keys it doesn't use.
+const progression = createProgression({
+  levels: MULTIPLICATION_LADDER,
+  describeLevel: describeMultiplicationLevel,
+  mastery: { ...PROGRESSION_MASTERY_DEFAULTS, ...MASTERY_DEFAULTS },
+  speedTargetForLevel: multiplicationSpeedTarget,
+});
+
+export function clampMultiplicationLevel(level) {
+  return progression.clampLevel(level);
+}
+
 /**
  * Per-question response-time target (ms) for a level. Scales with the total
  * number of digits across all factors, floored at `minTargetMs`.
  */
 export function speedTargetMs(level, opts = MASTERY_DEFAULTS) {
-  const options = { ...MASTERY_DEFAULTS, ...opts };
-  const totalDigits = ladderFactors(level).reduce((a, b) => a + b, 0);
-  return Math.max(options.minTargetMs, options.baseMsPerFactorDigit * totalDigits);
+  return progression.speedTargetMs(level, opts);
 }
 
 /**
@@ -94,15 +118,7 @@ export function speedTargetMs(level, opts = MASTERY_DEFAULTS) {
  * @param {{samples?: number, accuracy?: number, avgResponseMs?: number}} stat
  */
 export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
-  const options = { ...MASTERY_DEFAULTS, ...opts };
-  const samples = Number.isFinite(stat?.samples) ? stat.samples : 0;
-  const accuracy = Number.isFinite(stat?.accuracy) ? stat.accuracy : 0;
-  const avgResponseMs = Number.isFinite(stat?.avgResponseMs) ? stat.avgResponseMs : 0;
-  if (samples < options.minSamples) return false;
-  if (accuracy < options.targetAccuracy) return false;
-  // avgResponseMs of 0 means no timed samples — never treat as "instant mastery".
-  if (avgResponseMs <= 0) return false;
-  return avgResponseMs <= speedTargetMs(level, options);
+  return progression.isLevelMastered(stat, level, opts);
 }
 
 /**
@@ -118,9 +134,7 @@ export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
  * windowed). It is the anti-demotion floor: because mastery is judged over a
  * rolling window, a rung's samples fall to 0 once its evidence ages out — but
  * you only ever reach a higher rung by having cleared the ones below it, so
- * earned progress must not be lost when it ages out. Without this floor a user
- * grinding level 3 would snap back to level 0 (`7 × 8`) the day their earliest
- * level-0 sessions crossed the window cutoff.
+ * earned progress must not be lost when it ages out.
  *
  * @param {Record<number|string, {samples:number, accuracy:number, avgResponseMs:number}>} levelStats
  * @param {object} [opts] - override MASTERY_DEFAULTS thresholds
@@ -128,48 +142,25 @@ export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
  * @returns {{level, factors, label, atHardest, currentMastered, floorLevel, levels}}
  */
 export function resolveMultiplicationLevel(levelStats = {}, opts = {}, floorLevel = 0) {
-  const options = { ...MASTERY_DEFAULTS, ...opts };
-  const floor = clampMultiplicationLevel(floorLevel);
-  const levels = MULTIPLICATION_LADDER.map((factors, level) => {
-    const stat = levelStats?.[level] || levelStats?.[String(level)] || {};
-    const samples = Number.isFinite(stat.samples) ? stat.samples : 0;
-    const accuracy = Number.isFinite(stat.accuracy) ? stat.accuracy : 0;
-    const avgResponseMs = Number.isFinite(stat.avgResponseMs) ? stat.avgResponseMs : 0;
-    const targetMs = speedTargetMs(level, options);
-    return {
-      level,
-      factors,
-      label: describeMultiplicationLevel(level),
-      samples,
-      accuracy,
-      avgResponseMs,
-      targetMs,
-      mastered: isLevelMastered({ samples, accuracy, avgResponseMs }, level, options),
-    };
-  });
-
-  // Advance from the earned floor while the current rung's recent performance
-  // clears the mastery bar. Starting at `floor` (not 0) prevents involuntary
-  // demotion of rungs whose window evidence has aged out.
-  let level = floor;
-  while (level < MAX_MULTIPLICATION_LEVEL && levels[level].mastered) level += 1;
-
-  // For the UI: every rung strictly below the resolved level has been cleared
-  // (you can't be on rung N without having passed the ones beneath it), so mark
-  // it mastered even if its recent window is empty — otherwise the ladder dots
-  // would falsely show a cleared rung as un-mastered after it ages out.
-  for (const rung of levels) {
-    if (rung.level < level) rung.mastered = true;
-  }
-
-  const current = levels[level];
+  const res = progression.resolveLevel(levelStats, opts, floorLevel);
   return {
-    level,
-    factors: current.factors,
-    label: current.label,
-    atHardest: level >= MAX_MULTIPLICATION_LEVEL,
-    currentMastered: current.mastered,
-    floorLevel: floor,
-    levels,
+    level: res.level,
+    factors: MULTIPLICATION_LADDER[res.level],
+    label: res.label,
+    atHardest: res.atHardest,
+    currentMastered: res.currentMastered,
+    floorLevel: res.floorLevel,
+    // Re-key each rung to the multiplication shape (`factors` from the generic
+    // `descriptor`), preserving the exact fields the ladder always exposed.
+    levels: res.levels.map(rung => ({
+      level: rung.level,
+      factors: rung.descriptor,
+      label: rung.label,
+      samples: rung.samples,
+      accuracy: rung.accuracy,
+      avgResponseMs: rung.avgResponseMs,
+      targetMs: rung.targetMs,
+      mastered: rung.mastered,
+    })),
   };
 }
