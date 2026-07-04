@@ -195,11 +195,26 @@ export function findSuspiciousWordClusters(text, opts = {}) {
 // occurrence) — a recurring idiom is one tic to fix, not many, mirroring
 // cliches.js's dedupe-to-first-occurrence philosophy.
 // ---------------------------------------------------------------------------
+// Abstract/atmospheric/emotional nouns that make "a sense of X" the vague AI
+// tell it's meant to catch. Deliberately NOT a bare "any word(s)" match —
+// ordinary English idioms ("a sense of humor", "a sense of direction", "a
+// sense of purpose", "a sense of self") are common, unremarkable prose, not a
+// tell; a bare match fired on "she had a sense of humor about the whole
+// thing" (caught in codex review). Curated, not exhaustive.
+const SENSE_OF_WORDS = [
+  'dread', 'unease', 'uneasiness', 'foreboding', 'wrongness', 'calm', 'peace',
+  'urgency', 'loss', 'longing', 'dislocation', 'disquiet', 'malaise',
+  'dissonance', 'emptiness', 'finality', 'inevitability', 'wonder', 'awe',
+  'danger', 'doom', 'melancholy', 'nostalgia', 'belonging', 'isolation',
+  'alienation', 'vertigo', 'menace', 'warmth', 'unreality', 'otherness',
+  'relief', 'anticipation', 'anxiety', 'foreignness', 'displacement',
+];
+
 export const AI_TELL_PATTERNS = Object.freeze([
   {
     id: 'sense-of',
     label: 'vague "a sense of X" telling',
-    re: /\ba sense of\s+[a-z]+(?:\s+[a-z]+){0,2}/gi,
+    re: new RegExp(`\\ba sense of\\s+(?:${SENSE_OF_WORDS.join('|')})\\b`, 'gi'),
     suggestion: 'Replace the vague abstraction with a concrete, dramatized detail specific to this moment.',
   },
   {
@@ -610,7 +625,7 @@ export function computeSlopPenalty(text, opts = {}) {
   if (rhythm && rhythm.cv < w.lowSentenceCvThreshold) penalty += w.lowSentenceCvPenalty;
 
   const transitions = transitionOpenerRatio(text, opts);
-  if (transitions.total > 0 && transitions.ratio > w.transitionRatioThreshold) penalty += w.highTransitionRatioPenalty;
+  if (transitions.count >= MIN_DENSITY_OCCURRENCES && transitions.ratio > w.transitionRatioThreshold) penalty += w.highTransitionRatioPenalty;
 
   if (paragraphLengthUniformity(text, opts).length > 0) penalty += w.paragraphUniformityPenalty;
 

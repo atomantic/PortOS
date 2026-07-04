@@ -129,6 +129,15 @@ describe('findAiTells', () => {
     expect(findAiTells('The door creaked open and she stepped through.')).toHaveLength(0);
   });
 
+  it('does NOT flag ordinary "sense of" idioms — humor, direction, purpose, self (regression)', () => {
+    // The original bare `[a-z]+` match fired on any noun phrase after "a sense
+    // of", including common non-tell idioms. Caught in codex review.
+    expect(findAiTells('She had a sense of humor about the whole thing.')).toHaveLength(0);
+    expect(findAiTells('He always had a good sense of direction.')).toHaveLength(0);
+    expect(findAiTells('It gave her life a sense of purpose.')).toHaveLength(0);
+    expect(findAiTells('He never lost his sense of self.')).toHaveLength(0);
+  });
+
   it('"couldn\'t help but" matches the typographic curly apostrophe too', () => {
     // ’ is the curly apostrophe Word/Scrivener/Google Docs auto-substitute.
     const hits = findAiTells('She couldn’t help but smile at the memory.');
@@ -388,6 +397,14 @@ describe('computeSlopPenalty', () => {
     const text = `one two three — ${'word '.repeat(62)}`;
     expect(MIN_DENSITY_OCCURRENCES).toBeGreaterThan(1);
     expect(computeSlopPenalty(text)).toBeLessThan(SLOP_PENALTY_WEIGHTS.emDashPenalty);
+  });
+
+  it('does NOT add the transition-opener penalty for a single transition sentence, even though its ratio is 1 (regression)', () => {
+    // A lone sentence opening with a transition word gives ratio=1 — the
+    // degenerate "100% of 1 sentence" case, not repeated essay-style
+    // signposting. Caught in codex review; MIN_DENSITY_OCCURRENCES gates this.
+    const text = 'Meanwhile, she waited. She smiled and walked home slowly through the quiet evening street.';
+    expect(computeSlopPenalty(text)).toBeLessThan(SLOP_PENALTY_WEIGHTS.highTransitionRatioPenalty);
   });
 
   it('adds the section-break penalty for an over-fragmented rate of scene breaks', () => {

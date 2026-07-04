@@ -281,7 +281,7 @@ export const slopChecks = [
         }
 
         const transitions = transitionOpenerRatio(text);
-        if (findings.length < max && transitions.total > 0 && transitions.ratio > transitionThreshold) {
+        if (findings.length < max && transitions.count >= MIN_DENSITY_OCCURRENCES && transitions.ratio > transitionThreshold) {
           findings.push({
             severity: ctx.severityDefault,
             category: 'style',
