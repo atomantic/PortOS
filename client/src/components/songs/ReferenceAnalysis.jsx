@@ -31,7 +31,7 @@ import ScoreSheet from './ScoreSheet.jsx';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
-import { scoreHasMusic } from '../../lib/scoreNotation';
+import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
 import { harmonyPartLabel } from '../../lib/songCraft';
 
 // Client-side guard for the base64-JSON upload path: the server body limit is
@@ -359,11 +359,18 @@ export default function ReferenceAnalysis({
     setExtracting(true);
     // Yield a frame so the button's busy state paints before the O(n·lag) DSP.
     setTimeout(() => {
+      // Transcribe on the round's own meter — a 3/4 or 6/8 round quantized and
+      // bar-grouped as 4/4 would diff the wrong measures and, when applied,
+      // silently change the part's time signature. parseScore defaults to 4/4
+      // when the base score declares none.
+      const { beats: beatsPerBar, beatValue } = parseScore(baseScore).time;
       const { text } = proposeSegmentScore(decoded.samples, decoded.sampleRate, {
         startMs: seg.startMs,
         endMs: seg.endMs,
         bpm: Number.isFinite(tempo) && tempo > 0 ? tempo : undefined,
         key: songKey || 'C',
+        beatsPerBar,
+        beatValue,
       });
       setExtracting(false);
       if (!text) {
@@ -385,7 +392,7 @@ export default function ReferenceAnalysis({
         setCompareId(match?.id || '');
       }
     }, 30);
-  }, [decoded, tempo, songKey, scoreParts]);
+  }, [decoded, tempo, songKey, scoreParts, baseScore]);
 
   const comparePart = useMemo(() => {
     if (compareId === BASE_TARGET) {

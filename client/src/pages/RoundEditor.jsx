@@ -219,7 +219,19 @@ export default function RoundEditor() {
       layers: (song.layers || []).map(stripTempId),
       scoreParts: (song.scoreParts || []).map(stripTempId),
       recordings: (song.recordings || []).map(stripTempId),
-      references: (song.references || []).map(stripTempId),
+      // References also blank any segment layerId that points at a temp layer
+      // id — the server re-mints that layer's id on save, so the link would
+      // dangle after reload; an unassigned segment is the honest state.
+      references: (song.references || []).map((r) => {
+        const ref = stripTempId(r);
+        if (!ref.segments?.length) return ref;
+        return {
+          ...ref,
+          segments: ref.segments.map((s) => (
+            TEMP_ID_RE.test(s.layerId || '') ? { ...s, layerId: '' } : s
+          )),
+        };
+      }),
       partnerRoundIds: song.partnerRoundIds || [],
     };
     const data = await updateRound(id, patch, { silent: true });
@@ -433,7 +445,10 @@ export default function RoundEditor() {
         {analyzeId && (
           <ReferenceAnalysis
             reference={(song.references || []).find((r) => r.id === analyzeId) || null}
-            layers={song.layers || []}
+            // Only stable-id layers are offered as segment targets — a blank
+            // layer's temp id gets re-minted server-side on Save, which would
+            // orphan any segment linked to it.
+            layers={(song.layers || []).filter((l) => !TEMP_ID_RE.test(l.id))}
             scoreParts={song.scoreParts || []}
             baseScore={song.score || ''}
             tempo={song.tempo ?? null}
