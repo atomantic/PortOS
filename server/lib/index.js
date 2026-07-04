@@ -211,6 +211,7 @@ export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';
+export * from './arrayUtils.js';
 export * from './asyncMutex.js';
 export * from './authGate.js';
 export * from './domainAutonomy.js';

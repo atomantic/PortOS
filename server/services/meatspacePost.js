@@ -80,7 +80,10 @@ const DEFAULT_CONFIG = {
     }
   },
   sessionModules: ['mental-math'],
-  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0, 'cognitive': 1.0 } },
+  // Per-module weight applied to a session's blended score (issue #2099).
+  // Uniform 1.0 defaults reproduce the old unweighted-mean behavior exactly —
+  // a user only sees a change once they actually adjust a weight.
+  scoring: { weights: { 'mental-math': 1.0, 'llm-drills': 1.0, 'cognitive': 1.0, 'memory': 1.0 } },
   // Opt-in adaptive difficulty (default OFF). When enabled, math drills are
   // nudged harder/easier at generation time from recent scored performance.
   adaptive: { enabled: false },
@@ -225,7 +228,7 @@ export async function submitPostSession(sessionData) {
     cadence: sessionData.cadence || 'daily',
     modules: sessionData.modules,
     tasks: rescoredTasks,
-    score: computeSessionScore(rescoredTasks),
+    score: computeSessionScore(rescoredTasks, config.scoring?.weights),
     tags: sessionData.tags || {}
   };
 
@@ -872,15 +875,31 @@ export async function resolveDrillConfig(type, requestedConfig = {}) {
  * Build a transparent per-type preview of the effective adaptive difficulty for
  * every supported math drill, so the config UI can show what Adaptive will do
  * before a session starts. `enabled` reflects the saved Adaptive toggle.
+ *
+ * Multiplication is a special case: `resolveDrillConfig` (above) hands
+ * multiplication's difficulty entirely to the progressive ladder whenever
+ * `progressive !== false` (the default) — the `maxDigits` Adaptive knob is
+ * short-circuited and never applied in that mode. Previewing it via
+ * `adaptDrillConfig` regardless would advertise a maxDigits adjustment that
+ * can never actually happen (issue #2099). So this mirrors resolveDrillConfig's
+ * own branch: ladder rung when progressive is on, the maxDigits Adaptive
+ * preview only when the user has turned progressive off.
  */
 export async function getAdaptivePreview() {
   const config = await getPostConfig();
   const enabled = !!config?.adaptive?.enabled;
   const stats = await getPostStats(ADAPTIVE_DEFAULTS.windowDays);
   const savedDrills = config?.mentalMath?.drillTypes || {};
+  const multiplicationProgressive = savedDrills.multiplication?.progressive !== false;
 
   const drills = {};
   for (const type of Object.keys(ADAPTIVE_SPECS)) {
+    if (type === 'multiplication' && multiplicationProgressive) {
+      // Same source of truth resolveDrillConfig uses for the ladder rung —
+      // not the generic maxDigits Adaptive signal.
+      drills[type] = { ladder: true, ...(await getMultiplicationProgress()) };
+      continue;
+    }
     const key = `${MATH_MODULE}:${type}`;
     const accuracy = stats.byDrillAccuracy?.[key];
     const completion = stats.byDrillCompletion?.[key];
@@ -986,10 +1005,27 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   };
 }
 
-function computeSessionScore(tasks) {
+/**
+ * Blend a session's per-task scores into one headline number, weighted by
+ * each task's module (`config.scoring.weights`, issue #2099). A module absent
+ * from `weights` (or a non-numeric entry) defaults to 1.0, so an all-uniform
+ * (or empty/missing) weights map reproduces the exact old unweighted mean —
+ * existing configs and sessions score identically until a user actually
+ * adjusts a weight.
+ */
+function computeSessionScore(tasks, weights = {}) {
   const valid = (tasks || []).filter(t => typeof t.score === 'number' && !Number.isNaN(t.score));
   if (!valid.length) return 0;
-  const totalScore = valid.reduce((sum, t) => sum + t.score, 0);
-  return Math.round(totalScore / valid.length);
+  let totalWeighted = 0;
+  let totalWeight = 0;
+  for (const t of valid) {
+    const w = typeof weights?.[t.module] === 'number' ? weights[t.module] : 1.0;
+    totalWeighted += t.score * w;
+    totalWeight += w;
+  }
+  // All-zero weights (every touched module explicitly zeroed) would otherwise
+  // divide by zero — fall back to 0 rather than NaN.
+  if (!totalWeight) return 0;
+  return Math.round(totalWeighted / totalWeight);
 }
 

@@ -256,6 +256,191 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
   });
 });
 
+// Covers issue #2116: generateFillBlank questions carry acceptable answers as
+// `answers[]` OBJECTS ({ index, word, element }), not scalar strings.
+// submitAnswer's fill-blank branch used to compare via `String(a)` on each
+// object, which always stringifies to "[object Object]" — so a fill-blank
+// answer could never be marked correct no matter what the user typed. It must
+// now compare against each acceptable answer's `.word`.
+describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function fillBlankDrill(answers) {
+    return {
+      type: 'memory-fill-blank',
+      memoryItemId: 'song-1',
+      config: {},
+      questions: [{
+        prompt: 'The ____ fox',
+        fullText: 'The quick fox',
+        expected: answers[0]?.word ?? null,
+        answers,
+        chunkId: 'verse-1',
+      }],
+    };
+  }
+
+  it('marks a fill-blank answer correct when it matches an acceptable answer word', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('quick');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0].correct).toBe(true);
+    expect(task.module).toBe('memory');
+    expect(task.memoryItemId).toBe('song-1');
+  });
+
+  it('is case/whitespace-insensitive, matching any of several acceptable blanked words', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([
+        { index: 1, word: 'quick', element: null },
+        { index: 2, word: 'fox', element: null },
+      ])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('  FOX  ');
+    });
+
+    expect(result.current.drillResults[0].questions[0].correct).toBe(true);
+  });
+
+  it('marks a fill-blank answer incorrect when it matches none of the acceptable words', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('slow');
+    });
+
+    expect(result.current.drillResults[0].questions[0].correct).toBe(false);
+  });
+
+  // Regression (codex review of issue #2099): a correct fill-blank match on
+  // an element-name blank must carry that element through to the answer so
+  // mergeMasteryFromSession can credit item.mastery.elements — previously
+  // only chunkId (question-level) survived; the per-answer element was
+  // silently dropped because memoryAttribution(q) only reads q.element,
+  // which fill-blank questions never carry (only answers[i].element does).
+  it('attributes the matched answer\'s element on a correct match', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([
+        { index: 1, word: 'hydrogen', element: 'H' },
+        { index: 3, word: 'fox', element: null },
+      ])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('hydrogen');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(true);
+    expect(q.element).toBe('H');
+  });
+
+  it('omits element on an incorrect match — which blank was intended is ambiguous', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'hydrogen', element: 'H' }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('nope');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(false);
+    expect(q).not.toHaveProperty('element');
+  });
+
+  it('omits element when the matched answer has none (a plain-word blank)', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('quick');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(true);
+    expect(q).not.toHaveProperty('element');
+    // chunkId still comes through via memoryAttribution(q) regardless.
+    expect(q.chunkId).toBe('verse-1');
+  });
+});
+
+// Regression (codex review of issue #2099): saveSession's returned session
+// score (now module-weighted server-side, see meatspacePost.js
+// computeSessionScore) must replace the pre-save local estimate
+// (computeSessionScoreFromResults — a plain per-domain average that never
+// reads config.scoring.weights), or the results screen keeps showing the
+// stale unweighted estimate even after the weighted score was toasted/saved.
+describe('usePostSession — sessionScore syncs to the server score on save (issue #2099)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('replaces the local pre-save score estimate with the server-computed session.score', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain',
+      config: { startValue: 2, steps: 1 },
+      questions: [{ prompt: '2 x 2', expected: 4 }],
+    });
+    // Server's weighted score (e.g. a de-emphasized module) diverges from
+    // whatever the client's local per-domain estimate computed pre-save.
+    submitPostSession.mockResolvedValue({ id: 'session-1', score: 37 });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('4');
+    });
+
+    expect(result.current.sessionScore).not.toBe(37); // the local estimate, pre-save
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    expect(result.current.sessionScore).toBe(37);
+  });
+});
+
 describe('usePostSession — LLM training-log correctCount (issue #2097)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
