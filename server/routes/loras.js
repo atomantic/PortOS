@@ -25,6 +25,7 @@ import { getVideoSuggestions } from '../services/videoLoraSuggestions.js';
 import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
+import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -138,6 +139,41 @@ router.post('/install/huggingface', asyncHandler(async (req, res) => {
   const data = validateRequest(hfInstallSchema, req.body);
   const sidecar = await installFromHuggingface(data);
   res.status(201).json(sidecar);
+}));
+
+// Streaming variant of the HF install for the manager UI. Same install, but
+// emits byte-level download `progress` frames over SSE so the form can show a
+// percentage instead of a static "Downloading…" (matching the image/video
+// model download badge UX). EventSource is GET-only, so url/family ride in the
+// query string; the HF token always comes from settings/env (never the query,
+// to keep it out of URLs and access logs). Terminal frames:
+// `{type:'complete', sidecar}` or `{type:'error', message, code}` — the client
+// re-uses `code` (e.g. HF_UNKNOWN_FAMILY) to drive the inline family-confirm
+// retry, exactly as the POST path's thrown error does.
+const hfInstallStreamSchema = z.object({
+  url: z.string().min(1).max(1024),
+  family: z.enum(Object.values(VIDEO_LORA_FAMILIES)).optional(),
+});
+router.get('/install/huggingface/stream', asyncHandler(async (req, res) => {
+  const data = validateRequest(hfInstallStreamSchema, req.query);
+  const { send, safeEnd } = openSseStream(res);
+  // Headers are already flushed once the stream is open, so an install failure
+  // must NOT bubble to the error middleware (it would try to re-set status on a
+  // committed response). Catch and forward as an SSE `error` frame instead —
+  // the sanctioned SSE-boundary exception to the no-try/catch rule.
+  let aborted = false;
+  req.on('close', () => { aborted = true; });
+  await installFromHuggingface(data, {
+    onProgress: ({ received, total }) => {
+      if (aborted) return;
+      send({ type: 'progress', received, total, progress: total > 0 ? received / total : null });
+    },
+  })
+    .then((sidecar) => { if (!aborted) send({ type: 'complete', sidecar }); })
+    .catch((err) => {
+      if (!aborted) send({ type: 'error', message: err?.message || 'HuggingFace install failed', code: err?.code || null });
+    });
+  safeEnd();
 }));
 
 // Trained LoRAs linked to a universe character — used by the character card
