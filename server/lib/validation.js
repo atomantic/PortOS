@@ -612,6 +612,7 @@ export * from './creativeDirectorValidation.js';
 export * from './musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
+export * from './privacyValidation.js';
 export * from './agentValidation.js';
 export * from './cosValidation.js';
 export * from './mediaValidation.js';

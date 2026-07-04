@@ -34,6 +34,7 @@ export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as pipelineValidation from './pipelineValidation.js';
 export * as postValidation from './postValidation.js';
+export * as privacyValidation from './privacyValidation.js';
 export * as socketValidation from './socketValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
@@ -196,6 +197,7 @@ export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
 export * from './textUtils.js';
+export * from './vaultCrypto.js';
 
 // === Model & config ===
 export * from './browserConfig.js';

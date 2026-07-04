@@ -42,6 +42,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
 | `postValidation.js` | MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill generation/scoring, sessions, memory builder, training log. |
+| `privacyValidation.js` | Privacy Center PII Vault schemas (issue #2140) — vault record create/update (partial PUT), list query, UUID params; the vault type/status vocabularies + the sensitive-type (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type scan defaults. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
@@ -220,6 +221,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |
+| `vaultCrypto.js` | Privacy Center PII Vault field-level encryption (issue #2140). AES-256-GCM `encryptValue`/`decryptValue` (`v1:<iv>:<tag>:<ct>` format, per-value 12-byte IV), `ensureVaultKey()` self-heal (generates `PRIVACY_VAULT_KEY` into the install root's `.env` on first write, replacing any invalid line; never logs the value), key resolution that falls back to reading `.env` so decrypt/status survive a server restart, `isVaultKeyConfigured()`, and the per-type `maskValue(type, plaintext)` display masking (last-4 / domain-visible / street-masked). Plaintext must never be logged by callers. |
 
 ## Model & config
 
