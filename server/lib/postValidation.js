@@ -391,6 +391,23 @@ export const postProgressQuerySchema = z.object({
   bucket: z.enum(['day']).optional().default('day'),
 });
 
+// Per-question breakdown for a training-log entry (issue #2114 — follow-up to
+// #2097, which only persisted round-level aggregates). Optional and additive:
+// entries without it (legacy rows, and non-wordplay training modules that
+// never populate it) must stay valid. Field names mirror llmResponseSchema
+// above (the shape scored POST sessions store per LLM-drill question) so a
+// future progress dashboard can render training-log and scored-session
+// breakdowns with the same renderer rather than inventing a training-only shape.
+const trainingQuestionSchema = z.object({
+  prompt: z.string().optional(),
+  response: z.string().optional(),
+  items: z.array(z.string()).optional(),
+  responseMs: z.number().min(0).optional(),
+  score: z.number().min(0).max(100).optional(),
+  feedback: z.string().optional(),
+  correct: z.boolean().optional(),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
@@ -402,6 +419,7 @@ export const trainingEntrySchema = z.object({
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
+  questions: z.array(trainingQuestionSchema).optional(),
 });
 
 export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };

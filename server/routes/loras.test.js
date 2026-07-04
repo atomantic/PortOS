@@ -9,6 +9,11 @@ vi.mock('../services/loras.js', () => ({
   deleteLora: vi.fn(),
   getLora: vi.fn(),
   installFromCivitai: vi.fn(),
+  installFromHuggingface: vi.fn(async (_input, { onProgress } = {}) => {
+    onProgress?.({ received: 4, total: 8 });
+    onProgress?.({ received: 8, total: 8 });
+    return { filename: 'lora-x-hf.safetensors', name: 'X', runnerFamily: 'ltx-video' };
+  }),
   listLoras: vi.fn(async () => []),
   patchLoraSidecar: vi.fn(),
   resolveCivitaiKey: vi.fn(async () => null),
@@ -35,6 +40,13 @@ vi.mock('../services/settings.js', () => ({
 
 const { default: lorasRoutes } = await import('./loras.js');
 const { searchLorasInFamily } = await import('../services/civitaiSuggestions.js');
+const { installFromHuggingface } = await import('../services/loras.js');
+
+// Parse an SSE response body into an array of decoded frame objects.
+const parseSseFrames = (text) => text
+  .split('\n\n')
+  .filter((b) => b.startsWith('data: '))
+  .map((b) => JSON.parse(b.slice('data: '.length)));
 
 const makeApp = () => {
   const app = express();
@@ -43,6 +55,45 @@ const makeApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('POST /api/loras/install/huggingface/stream', () => {
+  it('streams byte-progress frames then a complete frame carrying the sidecar', async () => {
+    const res = await request(makeApp())
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'fal/ltx2.3-audio-reactive-lora' });
+    expect(res.status).toBe(200);
+    const frames = parseSseFrames(res.text);
+    // The service double emitted 4/8 then 8/8 → progress 0.5 then 1.
+    expect(frames.filter((f) => f.type === 'progress').map((f) => f.progress)).toEqual([0.5, 1]);
+    const complete = frames.find((f) => f.type === 'complete');
+    expect(complete?.sidecar?.runnerFamily).toBe('ltx-video');
+    // The body carries through to the service, with an AbortSignal + progress cb.
+    expect(installFromHuggingface).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'fal/ltx2.3-audio-reactive-lora' }),
+      expect.objectContaining({ onProgress: expect.any(Function), signal: expect.any(Object) }),
+    );
+  });
+
+  it('forwards an install failure as an SSE error frame (not a thrown 500)', async () => {
+    installFromHuggingface.mockRejectedValueOnce(
+      Object.assign(new Error('could not classify'), { code: 'HF_UNKNOWN_FAMILY' }),
+    );
+    const res = await request(makeApp())
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'someone/mystery' });
+    expect(res.status).toBe(200); // headers already flushed — error is a frame, not a status
+    const err = parseSseFrames(res.text).find((f) => f.type === 'error');
+    expect(err.code).toBe('HF_UNKNOWN_FAMILY');
+    expect(err.message).toBe('could not classify');
+  });
+
+  it('rejects an invalid family override before opening the stream', async () => {
+    const res = await request(makeApp())
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'x/y', family: 'bogus' });
+    expect(res.status).toBe(400);
+  });
+});
 
 describe('GET /api/loras/search', () => {
   it('dispatches a valid runner + keyword + cursor to the service', async () => {

@@ -41,6 +41,13 @@ export async function submitTrainingEntry(entry) {
     correctCount: entry.correctCount ?? 0,
     totalMs: entry.totalMs ?? 0,
   };
+  // Per-question breakdown (issue #2114) is optional — only wordplay training
+  // currently supplies it. Gate on Array.isArray (not truthiness/length) so an
+  // absent field stays absent rather than being coerced to `[]`, keeping
+  // legacy/no-breakdown entries indistinguishable from before this change.
+  if (Array.isArray(entry.questions)) {
+    record.questions = entry.questions;
+  }
 
   data.entries.push(record);
   await saveTrainingLog(data);
