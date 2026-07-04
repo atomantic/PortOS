@@ -365,6 +365,27 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
+  // Launch a single due maintenance-review rep from an "Up next" skill-review
+  // recommendation (issue #2100). The rep carries the `review`/`reviewSkillId`
+  // markers the server needs to record the re-verification — a plain focus
+  // session would NOT resolve the scheduled review. Falls back to a Full POST
+  // when no runnable rep matches (e.g. reps not yet loaded).
+  function startReviewRep(rec) {
+    const skillId = rec.id.replace(/^skill-review:/, '');
+    const rep = reviewReps.find(r => r.skillId === skillId);
+    if (!rep) return hasSessionDrills ? handleStart() : undefined;
+    const drillConfig = {
+      type: rep.type,
+      domain: DRILL_TO_DOMAIN[rep.type],
+      config: rep.config,
+      timeLimitSec: DOMAINS[DRILL_TO_DOMAIN[rep.type]]?.timeBudgetSec,
+      isReview: true,
+      reviewLabel: rep.label,
+      ...(rep.providerId && { providerId: rep.providerId }),
+    };
+    onStart([drillConfig], buildCleanTags(tags), mode === 'train');
+  }
+
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
   // Quick-session domain count reflects the sessionModules-filtered set, so the
   // "Quick 5 Min (N domains)" button matches what it will actually run.
@@ -519,11 +540,17 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                   // a runnable one, else start a Full POST. Routed recs
                   // (/post/memory, /post/morse/copy) stay navigational links.
                   if (rec.deepLink === '/post/launcher') {
-                    const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
-                    const canFocus = domainKey && sessionEnabledDomains[domainKey];
-                    const onClick = canFocus
-                      ? () => handleFocusDomain(domainKey)
-                      : (hasSessionDrills ? handleStart : null);
+                    let onClick;
+                    if (rec.kind === 'skill-review') {
+                      // Launch the actual review rep (with markers), not plain practice.
+                      onClick = () => startReviewRep(rec);
+                    } else {
+                      const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
+                      const canFocus = domainKey && sessionEnabledDomains[domainKey];
+                      onClick = canFocus
+                        ? () => handleFocusDomain(domainKey)
+                        : (hasSessionDrills ? handleStart : null);
+                    }
                     return (
                       <button key={rec.id} type="button" onClick={onClick || undefined} disabled={!onClick} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
                         {inner}

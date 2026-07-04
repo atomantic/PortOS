@@ -13,7 +13,7 @@ vi.mock('../../../services/api', () => ({
 }));
 
 import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
-import { getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
+import { getPostRecommendations, getMorseProgress, getPostProgress, getPostReviewReps } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10). Both were lifted from component-body closures to module
@@ -141,6 +141,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [] });
     getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
     getPostProgress.mockResolvedValue({ series: { byDay: [] } });
   });
@@ -177,6 +178,24 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     fireEvent.click(row);
     expect(onStart).toHaveBeenCalledTimes(1);
     expect(onStart.mock.calls[0][0].some(d => d.type === 'multiplication')).toBe(true);
+  });
+
+  it('launches a review rep (with markers) for a skill-review recommendation', async () => {
+    const onStart = vi.fn();
+    getPostReviewReps.mockResolvedValue({ reps: [
+      { skillId: 'multiplication:L1', label: 'Multiplication 1×2', type: 'multiplication', module: 'mental-math', config: { count: 5, level: 1, review: true, reviewSkillId: 'multiplication:L1' } },
+    ] });
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'skill-review:multiplication:L1', kind: 'skill-review', title: 'Re-verify Multiplication 1×2', detail: 'Maintenance rep due', deepLink: '/post/launcher', drillType: 'multiplication', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Re-verify Multiplication 1×2')).toBeTruthy());
+    fireEvent.click(screen.getByText('Re-verify Multiplication 1×2').closest('button'));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    const drills = onStart.mock.calls[0][0];
+    expect(drills).toHaveLength(1);
+    expect(drills[0].isReview).toBe(true);
+    expect(drills[0].config.reviewSkillId).toBe('multiplication:L1');
   });
 
   it('counts training-log time toward the daily-minutes goal', async () => {
