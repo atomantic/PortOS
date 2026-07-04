@@ -115,9 +115,26 @@ Coverage audit (2026-07-04) found PortOS built the **editor** — the 68 checks 
 
 autonovel scores its foundation (world / characters / outline) against a 13-dimension weighted rubric (lore 40% / character 30% / structure 20% / craft 10%) and iterates until ≥ 7.5 **before drafting a single chapter**. PortOS autopilot has `verifyArc` (structure only) but drafts against an unscored universe/cast. Add a `foundationGate` autopilot step after arc/episode generation and before beat sheets: judge the universe canon + character records + arc against the Phase 10 doctrine (weighted rubric, calibration ladder), run a bounded improve loop (like `verifyArc`'s `MAX_ARC_VERIFY_ROUNDS`) targeting the weakest dimension, pause with residual findings if it can't converge. This is the "correct it up-front, not in editor mode" mechanism for autonomous runs.
 
+### Phase 12 — Cross-issue prose continuity injection
+
+Second coverage audit (2026-07-04) confirmed: `priorIssue`/`nextIssue` context (`textStages.js` `shapeNeighborForIdeaPrompt`) carries only idea-stage beats/synopsis and feeds only `pipeline-idea-expansion.md`. The **prose** stage never sees the previous issue's actual closing prose or the next issue's opening beats — autonovel injected the previous chapter's tail (last ~2000 chars) and the next chapter's outline head into every draft so boundaries flow and the voice carries across chapters. Add both to the prose stage context (token-budgeted via `contextBudget.js`), plus "end this issue so it flows into the next; do not repeat the previous issue's closing image" guidance.
+
+### Phase 13 — Reveal-gated canon (information economy / spoiler scoping)
+
+Canon context assembly injects everything — including character secrets and late-story facts — into every issue's prompt, so the writer model can leak a reveal issues before it's due. autonovel keeps its MYSTERY.md out of drafting context entirely ("not for AI agent context during drafting"). Add optional reveal timing to canon entries (`revealedInIssue` / spoiler flag), filter them out of `buildStageContext` for issues before the reveal point (replace with the surface-level descriptor), and add a `continuity.premature-reveal` editorial check that scans drafted prose for gated facts appearing early. Schema change is backward-compatible (absent = always visible).
+
+### Phase 14 — Series voice discovery + exemplar passages (the tuning fork)
+
+The style guide has tense/POV/tone controls but no exemplar prose. autonovel's voice.md carries per-novel **exemplar passages** ("the tuning fork") and **anti-exemplars**, discovered by writing ~5 trial passages in different registers and picking; exemplars are injected into every draft/revision prompt and do more to anchor voice than any adjective list. Add exemplar/anti-exemplar fields to the series style guide, inject into prose/revision prompts, and add an optional voice-discovery step (generate trial passages in distinct registers → user or judge picks → store).
+
+### Phase 15 — Multi-concept seed ideation with anti-generic constraints
+
+`story-builder-idea-expand.md` faithfully expands the user's seed (correct by design), and `pipeline-series-generate.md` honors universe embrace/avoid influences — but autonomous series invention generates ONE concept with no anti-generic pressure. autonovel's seed stage generates 10 concepts at temperature 1.0 under an explicit banlist (no chosen-one prophecies, no dark lord, no medieval-Europe-with-elves, no magic academies, no love triangles) with required HOOK / WORLD / MAGIC+COST / TENSION (personal AND cosmic) / THEME per concept, then selects. Add multi-concept generation + anti-generic banlist to series invention, with user pick in interactive mode and judge pick in autonomous mode.
+
 ### Future (parked)
 
 - **Scheduled autopilot runs** — cron-scheduled Series Autopilot via the task scheduler; sanctioned under the AI policy as a user-configured scheduled automation, but needs an explicit setup UI naming provider/model + budget cap.
+- **Prose manuscript export (ePub / print-interior PDF)** — `comicPdf.js`/`volumePdf.js` assemble comic pages only; a prose series has no shipping path (clean manuscript, ePub, trade-paperback interior). autonovel's typeset stage (markdown → LaTeX → PDF + ePub) is the reference.
 - Audiobook generation from finished manuscripts (autonovel's ElevenLabs speaker-attribution pipeline) — separate epic if wanted.
 - Graduated per-stage sampling parameters as a first-class stage-config feature (blocked on provider-path support for sampling params).
 
