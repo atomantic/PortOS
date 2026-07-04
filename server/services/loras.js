@@ -262,9 +262,15 @@ export const resolveCivitaiKey = async () => {
 // as SSE `progress` frames so the UI can show a percentage. `total` is 0 when
 // the response carries no Content-Length (chunked / some CDN redirects), in
 // which case the client renders an indeterminate bar.
-const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai', onProgress = null } = {}) => {
+const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai', onProgress = null, signal = null } = {}) => {
   const tmpPath = `${destPath}.${randomBytes(6).toString('hex')}.partial`;
-  const res = await fetchImpl(url, { headers, redirect: 'follow' });
+  // `signal` (optional) aborts the fetch + stream mid-download — the streaming
+  // install route passes it so an SSE client disconnect actually cancels a
+  // multi-GB transfer instead of letting it run to completion unwatched. On
+  // abort the fetch rejects (or the body stream errors), the pipeline().catch
+  // below unlinks the .partial, and the throw propagates before any sidecar is
+  // written — so a cancelled install leaves nothing behind.
+  const res = await fetchImpl(url, { headers, redirect: 'follow', signal });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
       // HuggingFace LoRAs: a 401/403 means the repo is gated and the token is
@@ -446,7 +452,7 @@ const VIDEO_LORA_FAMILY_VALUES = new Set(Object.values(VIDEO_LORA_FAMILIES));
 // sidecar. The family is auto-detected from the repo id / tags / base_model,
 // or taken from an explicit `input.family` override (validated against the
 // known video families). Returns the new sidecar JSON.
-export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null } = {}) => {
+export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null, signal = null } = {}) => {
   const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
   // Stored/env/CLI HF token — only needed for gated repos, but harmless to
   // send on public ones (HF ignores a bearer it doesn't require).
@@ -498,6 +504,7 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
     hasApiKey: !!token,
     source: 'huggingface',
     onProgress,
+    signal,
   });
 
   const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });

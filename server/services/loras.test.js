@@ -505,6 +505,27 @@ describe('installFromHuggingface', () => {
     expect(ticks[ticks.length - 1]).toEqual({ received: 7, total: 0 });
   });
 
+  it('forwards an AbortSignal to the download fetch so an SSE disconnect can cancel it', async () => {
+    const controller = new AbortController();
+    let sawSignal;
+    const fetchImpl = async (url, opts) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        sawSignal = opts?.signal;
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl, signal: controller.signal },
+    );
+    // The controller's signal must reach the actual weights download (not just
+    // the metadata fetch) — that's the transfer a disconnect needs to cancel.
+    expect(sawSignal).toBe(controller.signal);
+  });
+
   it('accepts an explicit family override', async () => {
     const fetchImpl = async (url) => {
       if (url.startsWith('https://huggingface.co/api/models/')) {

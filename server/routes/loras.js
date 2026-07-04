@@ -161,9 +161,15 @@ router.get('/install/huggingface/stream', asyncHandler(async (req, res) => {
   // must NOT bubble to the error middleware (it would try to re-set status on a
   // committed response). Catch and forward as an SSE `error` frame instead —
   // the sanctioned SSE-boundary exception to the no-try/catch rule.
+  // On client disconnect (tab close, navigation, dropped connection) actually
+  // ABORT the download via the controller — not just suppress frames — so a
+  // multi-GB LoRA transfer doesn't keep running unwatched and a retry can't race
+  // a still-in-flight install.
+  const controller = new AbortController();
   let aborted = false;
-  req.on('close', () => { aborted = true; });
+  req.on('close', () => { aborted = true; controller.abort(); });
   await installFromHuggingface(data, {
+    signal: controller.signal,
     onProgress: ({ received, total }) => {
       if (aborted) return;
       send({ type: 'progress', received, total, progress: total > 0 ? received / total : null });
