@@ -217,6 +217,7 @@ const CHECK_ORDER = Object.freeze([
   'dialogue.on-the-nose',
   'dialogue.voice-distinctiveness',
   'style.voice-consistency',
+  'style.voice-drift',
   'prose.kill-your-darlings',
   'prose.italic-thoughts',
   'endings.cliffhanger',

@@ -36,6 +36,7 @@ import {
   styleGuideExpectations,
   z,
 } from '../checkInfra.js';
+import { computeVoiceDrift, describeDrift, parseVoiceWells } from '../voiceFingerprint.js';
 
 export const proseStyleChecks = [
   {
@@ -998,6 +999,95 @@ export const proseStyleChecks = [
           + 'sentence rhythm, and emotional temperature. Carry these per-issue fingerprints forward so a later issue\'s '
           + "narration can be judged against the tone the series established earlier and against the style guide's intended voice.",
       });
+    },
+  },
+  {
+    id: 'style.voice-drift',
+    sources: ['manuscript'],
+    label: 'Statistical voice drift (deterministic)',
+    description:
+      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the series mean, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. Gates off with fewer than 3 issues drafted (σ is meaningless). No LLM cost.",
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'style',
+    // A drift is a texture concern like its LLM sibling; a moderate wobble floors
+    // at 'low' and a strong (≥2.5σ) outlier escalates one rank in run().
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (its per-issue `# Issue N` sections) — so the
+    // runner only pays the section-collection I/O when a manuscript check is on.
+    needsManuscript: true,
+    configSchema: z.object({
+      // How many σ from the series mean before an issue's metric is flagged.
+      sigmaThreshold: z.number().min(0.5).max(4).default(1.5),
+      // Minimum issues drafted before the check runs (σ is meaningless below 3).
+      minIssues: z.number().int().min(3).max(30).default(3),
+      // Cap findings per run so a wildly-uneven series can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+      // Optional vocabulary "wells" — register categories to track coverage of,
+      // as `name: word, word; name2: word` (series-configurable per-check).
+      vocabularyWells: z.string().max(2000).default(''),
+    }),
+    configFields: [
+      {
+        key: 'sigmaThreshold',
+        label: 'Drift threshold (σ)',
+        type: 'number',
+        min: 0.5,
+        max: 4,
+        step: 0.1,
+        help: 'How far from the series mean (in standard deviations) an issue must sit on a metric before it is flagged. Lower = more sensitive.',
+      },
+      {
+        key: 'minIssues',
+        label: 'Minimum issues to run',
+        type: 'number',
+        min: 3,
+        max: 30,
+        step: 1,
+        help: 'The check stays off until at least this many issues are drafted — below 3 the standard deviation is meaningless and every issue reads as an outlier.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings (most significant drift first) so a wildly uneven series can not flood the review.',
+      },
+      {
+        key: 'vocabularyWells',
+        label: 'Vocabulary wells (optional)',
+        type: 'text',
+        help: 'Register categories to track per issue, as "name: word, word; name2: word". Each becomes a tracked metric (coverage per 1k words) so a series can flag an issue that drops its trade/body/musical register.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const wells = parseVoiceWells(cfg.vocabularyWells || '');
+      const drift = computeVoiceDrift(ctx.manuscript, {
+        threshold: cfg.sigmaThreshold ?? 1.5,
+        minIssues: cfg.minIssues ?? 3,
+        wells,
+      });
+      if (drift.gatedOff) return [];
+      const cap = cfg.maxFindings ?? 12;
+      return drift.outliers.slice(0, cap).map((o) => ({
+        // A strong outlier (≥2.5σ) reads as real drift, not noise — escalate it a
+        // rank above the low floor; a marginal one stays low.
+        severity: escalateSeverity(ctx.severityDefault, Math.abs(o.z) >= 2.5 ? 1 : 0),
+        category: 'style',
+        location: `Issue ${o.issue} — narrative voice`,
+        problem: describeDrift(o),
+        suggestion:
+          `Reread Issue ${o.issue} for its ${o.label} against the rest of the series. `
+          + 'If the shift is a scene the story earns (a grimmer, terser chapter), leave it; '
+          + 'if it is unintentional drift, revise toward the series voice.',
+        anchorQuote: null,
+        issueNumber: o.issue,
+      }));
     },
   },
   {
