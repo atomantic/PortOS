@@ -618,10 +618,13 @@ describe('submitPostSession — memory drill schedule advance', () => {
     });
 
     const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
-    // One write for the schedule advance, one for the mastery merge.
-    expect(memoryWrites.length).toBe(2);
+    // Consolidated apply: schedule advance + mastery merge share a single
+    // read-modify-write per submit (issue #2098), not one write each.
+    expect(memoryWrites.length).toBe(1);
     const masteryWrite = memoryWrites[memoryWrites.length - 1];
     const updatedItem = masteryWrite[1].items.find(i => i.id === 'song-1');
+    // Both effects land on the one written item: schedule advanced AND mastery merged.
+    expect(updatedItem.schedule.lastReviewed).toBeTruthy();
     expect(updatedItem.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 2, lastPracticed: expect.any(String) });
   });
 
@@ -681,6 +684,91 @@ describe('submitPostSession — memory drill schedule advance', () => {
 
     const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
     expect(memoryWrite).toBeUndefined();
+  });
+});
+
+describe('submitPostSession — idempotent upsert by client id (issue #2098)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // A shared in-memory sessions store so a re-submit sees the first write.
+    let sessionsStore = { sessions: [] };
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve(sessionsStore);
+      return Promise.resolve(defaultValue);
+    });
+    atomicWrite.mockImplementation((path, data) => {
+      if (String(path).includes('post-sessions')) sessionsStore = data;
+      return Promise.resolve(undefined);
+    });
+  });
+
+  const ID = '11111111-1111-4111-8111-111111111111';
+  const buildBody = () => ({
+    id: ID,
+    cadence: 'daily',
+    modules: ['mental-math'],
+    tasks: [{
+      module: 'mental-math',
+      type: 'doubling-chain',
+      config: { startValue: 2, steps: 1 },
+      questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 500 }],
+      totalMs: 500,
+    }],
+    tags: {},
+  });
+
+  it('re-submitting the same id upserts (no duplicate record)', async () => {
+    const first = await submitPostSession(buildBody());
+    const second = await submitPostSession(buildBody());
+    expect(first.id).toBe(ID);
+    expect(second.id).toBe(ID);
+    const lastWrite = atomicWrite.mock.calls.filter(([p]) => String(p).includes('post-sessions')).pop();
+    const stored = lastWrite[1].sessions.filter(s => s.id === ID);
+    expect(stored.length).toBe(1);
+  });
+
+  it('assigns a server uuid when the client omits an id', async () => {
+    const { id, ...noId } = buildBody();
+    const session = await submitPostSession(noId);
+    expect(session.id).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe('submitPostSession — memory post-processing never 500s a saved session (issue #2098)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-memory-items')) {
+        // Malformed item (no mastery / schedule) so the mastery merge throws
+        // when it dereferences item.mastery.chunks — exercising the isolation.
+        return Promise.resolve({ items: [{ id: 'song-1', title: 'Broken' }] });
+      }
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      return Promise.resolve(defaultValue);
+    });
+  });
+
+  it('returns the saved session (does not throw) when memory post-processing fails', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-sequence',
+        memoryItemId: 'song-1',
+        questions: [{ prompt: 'x', expected: 'y', answered: 'y', correct: true, responseMs: 500, chunkId: 'verse-1' }],
+        score: 100,
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+    // The session itself persisted (200-equivalent) despite the memory throw.
+    expect(session).toBeTruthy();
+    const sessionWrite = atomicWrite.mock.calls.find(([p]) => String(p).includes('post-sessions'));
+    expect(sessionWrite).toBeTruthy();
+    expect(sessionWrite[1].sessions.length).toBe(1);
   });
 });
 

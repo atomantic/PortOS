@@ -60,8 +60,14 @@ const GAME_MODES = [
   },
 ];
 
-export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
-  const [selectedMode, setSelectedMode] = useState(null);
+export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode = null, onSelectMode, onExitMode }) {
+  // Selected mode is driven by the `/post/wordplay/:mode` URL param (source of
+  // truth), not local state — deep-linkable and refresh-safe like MorseTrainer.
+  // An unknown segment degrades to the mode grid instead of a blank screen.
+  const selectedMode = GAME_MODES.some(m => m.id === mode) ? mode : null;
+  // Which mode we've already kicked off generation for, so the URL-driven
+  // effect below doesn't regenerate on every render.
+  const initiatedRef = useRef(null);
   const [drill, setDrill] = useState(null);
   const [loading, setLoading] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -111,6 +117,28 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   const providerId = config?.llmDrills?.providerId || null;
   const model = config?.llmDrills?.model || null;
 
+  // Generate the drill for the mode named in the URL (fresh load / deep link /
+  // refresh). Warm cache → generate silently. Cold cache reached via a direct
+  // URL → bounce back to the grid so the consent modal (which names the
+  // provider before any LLM call) governs the first fill, per the
+  // no-surprise-LLM-calls rule. `initiatedRef` prevents re-generating on
+  // unrelated re-renders and after a consent-driven start.
+  useEffect(() => {
+    if (!selectedMode) return;
+    if (initiatedRef.current === selectedMode) return;
+    if (drill || loading) { initiatedRef.current = selectedMode; return; }
+    // Wait for the cache-status fetch before deciding cold vs warm — null means
+    // "not loaded yet", which must NOT be treated as cold (would bounce a warm
+    // mode back to the grid on every fresh load).
+    if (cacheStatus == null) return;
+    const isCold = cacheStatus?.[selectedMode]?.cold ?? true;
+    if (isCold && !primedModes.has(selectedMode)) {
+      onExitMode?.();
+      return;
+    }
+    runMode(selectedMode, providerId, model);
+  }, [selectedMode, cacheStatus, primedModes, drill, loading]);
+
   // The provider/model that generated the CURRENT drill — tracked separately
   // from the config-derived providerId/model above. handleConfirmFill saves
   // a newly-chosen provider to config asynchronously and doesn't await it
@@ -125,7 +153,9 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   const currentPrompt = prompts[questionIndex];
 
   async function runMode(modeId, useProviderId, useModel) {
-    setSelectedMode(modeId);
+    // Mark this mode as initiated synchronously (before any await) so the
+    // URL-driven effect never fires a second generation for the same mode.
+    initiatedRef.current = modeId;
     setLoading(true);
     setDrill(null);
     setQuestionIndex(0);
@@ -144,6 +174,23 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
       roundStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 100);
     }
+  }
+
+  // Grid click: a cold+unprimed mode opens the consent modal ON the grid
+  // (naming the provider) before navigating; a warm/primed mode navigates
+  // straight to its `/post/wordplay/:mode` URL, where the effect above
+  // generates. Play Again reuses runMode directly (already on the mode URL).
+  function handleModeSelect(modeId) {
+    const isCold = cacheStatus?.[modeId]?.cold ?? true;
+    if (isCold && !primedModes.has(modeId)) {
+      const savedProviderId = config?.llmDrills?.providerId || '';
+      const savedIsSelectable = providers.some(p => p.id === savedProviderId);
+      setFillProviderId(savedIsSelectable ? savedProviderId : '');
+      setFillModel(savedIsSelectable ? (config?.llmDrills?.model || '') : '');
+      setPendingMode(modeId);
+      return;
+    }
+    onSelectMode?.(modeId);
   }
 
   function startMode(modeId) {
@@ -178,7 +225,11 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   }
 
   function handleSkipFill() {
-    runMode(closePendingMode(), providerId, model);
+    const modeId = closePendingMode();
+    // runMode sets initiatedRef synchronously, so navigating to the mode URL
+    // afterward won't trigger a second generation from the URL effect.
+    runMode(modeId, providerId, model);
+    onSelectMode?.(modeId);
   }
 
   async function handleConfirmFill() {
@@ -200,17 +251,21 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     // guarantees the drill request also misses and generates on demand) —
     // exactly the concurrent-LLM-calls problem this consent flow exists to
     // prevent, and especially bad for a single-session TUI provider.
-    await runMode(modeId, chosenProviderId, chosenModel);
+    const gen = runMode(modeId, chosenProviderId, chosenModel); // sync-sets initiatedRef
+    onSelectMode?.(modeId); // reflect the mode in the URL; effect won't double-generate
+    await gen;
     const providerLabel = providers.find(p => p.id === chosenProviderId)?.name || 'the default provider';
     toast(`Filling ${modeId.replace(/-/g, ' ')} cache in the background using ${providerLabel}`);
     fillPostDrillCache([modeId], chosenProviderId, chosenModel).catch(() => {});
   }
 
   function handleBackToModes() {
-    setSelectedMode(null);
     setDrill(null);
     setFeedback(null);
     setResults([]);
+    initiatedRef.current = null;
+    // URL is the source of truth — exit the mode by navigating back to the grid.
+    onExitMode?.();
   }
 
   const handleSubmit = useCallback(async (e) => {
@@ -305,7 +360,7 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
             return (
               <button
                 key={mode.id}
-                onClick={() => startMode(mode.id)}
+                onClick={() => handleModeSelect(mode.id)}
                 className="bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent transition-colors group"
               >
                 <div className="flex items-center gap-3 mb-2">
@@ -341,8 +396,11 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
 
   const modeInfo = GAME_MODES.find(m => m.id === selectedMode);
 
-  // Loading state
-  if (loading) {
+  // Loading state — either mid-generation (`loading`), or freshly deep-linked
+  // into a mode whose URL effect hasn't kicked off generation yet (cache status
+  // still resolving). Both show the loader rather than the "failed to generate"
+  // fallback below, which is reserved for a genuine generation failure.
+  if (loading || (selectedMode && initiatedRef.current !== selectedMode && !drill)) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
         <ModeHeader modeInfo={modeInfo} onBack={handleBackToModes} />

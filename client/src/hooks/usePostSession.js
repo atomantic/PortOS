@@ -1,7 +1,53 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect } from '../components/meatspace/post/constants';
+
+// sessionStorage key for the single in-progress run. Single-user tool → one
+// active run at a time, so a single key is enough. Restored on refresh so a
+// mid-drill reload resumes the same drill queue + completed results, and a
+// reload on the completed-but-unsaved results screen keeps the results.
+const RUN_STORAGE_KEY = 'post.activeRun';
+// Only an active or completed-unsaved run is worth resuming. A run that was
+// still generating a drill (`loading`) lost its in-flight request to the
+// reload, and an `idle`/`saved` run has nothing live to restore.
+const RESTORABLE_STATES = new Set(['drilling', 'between-drills', 'complete']);
+
+// uuid v4 usable in non-secure contexts. `crypto.randomUUID` only exists in a
+// secure context (HTTPS / localhost) — PortOS is commonly reached over plain
+// HTTP via Tailscale, where it's undefined — but `crypto.getRandomValues` is
+// available there too, so derive a spec-valid v4 from it (the server validates
+// the id with Zod `.uuid()`). Math.random is the last-ditch fallback.
+function newRunId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const b = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+  const h = [...b].map(x => x.toString(16).padStart(2, '0'));
+  return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
+}
+
+function loadRunSnapshot() {
+  if (typeof sessionStorage === 'undefined') return null;
+  const raw = sessionStorage.getItem(RUN_STORAGE_KEY);
+  if (!raw) return null;
+  let snap = null;
+  try { snap = JSON.parse(raw); } catch { return null; } // corrupt storage → start fresh
+  if (!snap || typeof snap !== 'object') return null;
+  // A run persisted mid-save reads back as still-completed; the idempotent
+  // submit (client-supplied id) makes a re-save safe.
+  if (snap.state === 'saving') snap.state = 'complete';
+  if (!RESTORABLE_STATES.has(snap.state)) return null;
+  return snap;
+}
+
+function clearRunSnapshot() {
+  if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(RUN_STORAGE_KEY);
+}
 
 function computeSessionScoreFromResults(results) {
   if (!results.length) return 0;
@@ -51,22 +97,44 @@ const STATES = {
 };
 
 export function usePostSession() {
-  const [state, setState] = useState(STATES.IDLE);
-  const [drills, setDrills] = useState([]); // queued drill configs
-  const [currentDrillIndex, setCurrentDrillIndex] = useState(0);
-  const [currentDrill, setCurrentDrill] = useState(null); // generated questions
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState([]); // answers for current drill
-  const [drillResults, setDrillResults] = useState([]); // completed drill results
-  const [sessionScore, setSessionScore] = useState(0);
+  // Seed once from any persisted in-progress run so a refresh mid-drill (or on
+  // the completed-unsaved results screen) resumes instead of dropping the run.
+  const [restored] = useState(loadRunSnapshot);
+  const [state, setState] = useState(restored?.state ?? STATES.IDLE);
+  const [drills, setDrills] = useState(restored?.drills ?? []); // queued drill configs
+  const [currentDrillIndex, setCurrentDrillIndex] = useState(restored?.currentDrillIndex ?? 0);
+  const [currentDrill, setCurrentDrill] = useState(restored?.currentDrill ?? null); // generated questions
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(restored?.currentQuestionIndex ?? 0);
+  const [answers, setAnswers] = useState(restored?.answers ?? []); // answers for current drill
+  const [drillResults, setDrillResults] = useState(restored?.drillResults ?? []); // completed drill results
+  const [sessionScore, setSessionScore] = useState(restored?.sessionScore ?? 0);
   const [savedSession, setSavedSession] = useState(null);
-  const [isTraining, setIsTraining] = useState(false);
+  const [isTraining, setIsTraining] = useState(restored?.isTraining ?? false);
+  // Run id doubles as the client-generated session id (idempotent submit) and
+  // the /post/session/:id results URL — so a saved session's URL === its run id.
+  const [runId, setRunId] = useState(restored?.runId ?? null);
+  const [tags, setTags] = useState(restored?.tags ?? {}); // session tags captured at launch
   const [lastAnswer, setLastAnswer] = useState(null); // { correct, expected, answered } for training feedback
   const questionStartRef = useRef(Date.now());
   const drillStartRef = useRef(Date.now());
   const finishDrillRef = useRef(null);
 
-  const startSession = useCallback(async (drillConfigs, training = false) => {
+  // Persist the live run to sessionStorage on every meaningful change; clear it
+  // once idle/saved (nothing live to resume). Kept minimal — only the fields
+  // needed to rebuild the runner and results screen after a reload.
+  useEffect(() => {
+    if (state === STATES.IDLE || state === STATES.SAVED) {
+      clearRunSnapshot();
+      return;
+    }
+    if (typeof sessionStorage === 'undefined') return;
+    sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
+      runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,
+      answers, drillResults, sessionScore, isTraining, tags,
+    }));
+  }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, tags]);
+
+  const startSession = useCallback(async (drillConfigs, training = false, sessionTags = {}) => {
     // drillConfigs: [{ type, config, timeLimitSec }]
     if (!drillConfigs?.length) {
       toast.error('No drills configured');
@@ -79,6 +147,10 @@ export function usePostSession() {
     setDrillResults([]);
     setSavedSession(null);
     setLastAnswer(null);
+    // New run → new client-side id (also the future /post/session/:id) and the
+    // tags to submit, so both survive a mid-run refresh via the snapshot.
+    setRunId(newRunId());
+    setTags(sessionTags || {});
 
     const first = drillConfigs[0];
     const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model, { silent: true }).catch(err => {
@@ -306,8 +378,11 @@ export function usePostSession() {
     }
   }, [drillResults, currentDrillIndex, drills]);
 
-  const saveSession = useCallback(async (tags = {}) => {
+  const saveSession = useCallback(async (overrideTags = {}) => {
     setState(STATES.SAVING);
+    // Prefer the tags captured at launch (survive a refresh via the snapshot);
+    // an explicit arg still wins per-key for a live save.
+    const finalTags = { ...tags, ...(overrideTags || {}) };
 
     // Training mode: log each drill to the training log, don't save scored session
     if (isTraining) {
@@ -340,10 +415,13 @@ export function usePostSession() {
 
     const modules = [...new Set(drillResults.map(r => r.module))];
     const session = await submitPostSession({
+      // Client-generated id → an auto-retry after a dropped response upserts the
+      // same record server-side instead of double-recording the session.
+      id: runId || newRunId(),
       cadence: 'daily',
       modules,
       tasks: drillResults,
-      tags
+      tags: finalTags
     }, { silent: true }).catch(err => {
       toast.error(`Failed to save session: ${err.message}`);
       setState(STATES.COMPLETE);
@@ -354,7 +432,7 @@ export function usePostSession() {
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);
     return session;
-  }, [drillResults, isTraining]);
+  }, [drillResults, isTraining, tags, runId]);
 
   const reset = useCallback(() => {
     setState(STATES.IDLE);
@@ -367,7 +445,10 @@ export function usePostSession() {
     setSessionScore(0);
     setSavedSession(null);
     setIsTraining(false);
+    setRunId(null);
+    setTags({});
     setLastAnswer(null);
+    clearRunSnapshot();
   }, []);
 
   return {
@@ -382,6 +463,7 @@ export function usePostSession() {
     sessionScore,
     savedSession,
     isTraining,
+    runId,
     lastAnswer,
     startSession,
     submitAnswer,

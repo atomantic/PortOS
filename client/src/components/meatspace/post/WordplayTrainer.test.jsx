@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Stub every API call WordplayTrainer (and the shared WordplayDrillUI scoring
@@ -18,6 +19,23 @@ import WordplayTrainer from './WordplayTrainer';
 import {
   generatePostDrill, scorePostLlmDrill, getPostDrillCacheStatus, submitTrainingEntry,
 } from '../../../services/api';
+
+// The selected mode now lives in the URL (`/post/wordplay/:mode`) — PostTab
+// owns that param and passes it down. This harness stands in for that routing:
+// clicking a mode button calls onSelectMode, which sets the `mode` prop, and the
+// component's URL-driven effect then generates the drill (mirroring a real
+// navigation to the mode's route).
+function TrainerHarness(props) {
+  const [mode, setMode] = useState(null);
+  return (
+    <WordplayTrainer
+      {...props}
+      mode={mode}
+      onSelectMode={setMode}
+      onExitMode={() => setMode(null)}
+    />
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -40,7 +58,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
       evaluation: { scores: [{ score: 85, feedback: 'Nice compounds!' }] },
     });
 
-    render(<WordplayTrainer onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
 
     fireEvent.click(await screen.findByText('Compound Chain'));
 
@@ -81,7 +99,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
       evaluation: { scores: [{ score: 40, feedback: 'Not quite' }] },
     });
 
-    render(<WordplayTrainer onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
 
     fireEvent.click(await screen.findByText('Bridge Word'));
 

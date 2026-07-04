@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 vi.mock('../../../services/api', () => ({
   getPostSessions: vi.fn(),
@@ -10,6 +11,23 @@ vi.mock('../../../services/api', () => ({
 // assertions below target the non-chart DOM (stat cards + drill breakdown).
 import PostHistory from './PostHistory';
 import { getPostSessions, getPostStats } from '../../../services/api';
+
+// Surfaces the current router path so navigation-on-row-click can be asserted —
+// rows now open the deep-linkable /post/session/:id detail (issue #2098) rather
+// than expanding inline.
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname}</div>;
+}
+
+function renderHistory() {
+  return render(
+    <MemoryRouter initialEntries={['/post/history']}>
+      <PostHistory onBack={() => {}} />
+      <LocationProbe />
+    </MemoryRouter>
+  );
+}
 
 // Runners save COARSE module keys (`mental-math`, `llm-drills`) — not DOMAINS
 // keys — so getPostStats keys byModule/byDrill by those. The dashboard must
@@ -48,7 +66,7 @@ beforeEach(() => {
 
 describe('PostHistory analytics dashboard', () => {
   it('surfaces streaks and overall stats without opening a session', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('Current Streak')).toBeTruthy());
     expect(screen.getByText('Longest Streak')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy(); // current streak
@@ -57,7 +75,7 @@ describe('PostHistory analytics dashboard', () => {
   });
 
   it('renders per-domain and per-drill breakdowns from getPostStats', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('Drill Breakdown')).toBeTruthy());
     // Domain labels come from DOMAINS metadata, not raw keys.
     expect(screen.getAllByText('Mental Math').length).toBeGreaterThan(0);
@@ -65,14 +83,10 @@ describe('PostHistory analytics dashboard', () => {
     // Per-drill labels render inside the breakdown.
     expect(screen.getByText('Multiplication')).toBeTruthy();
     expect(screen.getByText('Pun & Wordplay')).toBeTruthy();
-    // The 'Mental Math' / 'Wordplay' domain labels above can ONLY appear when the
-    // domain is derived from the drill TYPE (multiplication→math, pun-wordplay→
-    // wordplay). The coarse `byModule`/byDrill keys are 'mental-math'/'llm-drills',
-    // so the earlier byModule-keyed implementation would have rendered those raw.
   });
 
   it('reloads stats when the range selector changes', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(30));
     fireEvent.click(screen.getByText('7d'));
     await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(7));
@@ -81,104 +95,48 @@ describe('PostHistory analytics dashboard', () => {
   it('shows an empty state when no sessions are in range', async () => {
     getPostSessions.mockResolvedValue([]);
     getPostStats.mockResolvedValue({ ...STATS, sessionCount: 0, overall: null, byModule: {}, byDrill: {} });
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('No sessions found for this range.')).toBeTruthy());
     expect(screen.queryByText('Drill Breakdown')).toBeNull();
   });
-
-  describe('session row keyboard accessibility', () => {
-    it('exposes a collapsed session row as a disclosure control with aria-expanded=false', async () => {
-      render(<PostHistory onBack={() => {}} />);
-      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
-      expect(row).toHaveAttribute('aria-expanded', 'false');
-      expect(row).toHaveAttribute('tabindex', '0');
-    });
-
-    it('expands a row via a click, flipping aria-expanded and revealing task detail', async () => {
-      render(<PostHistory onBack={() => {}} />);
-      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-      const table = screen.getByRole('table');
-      expect(within(table).queryByText('Multiplication')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: /Session 2026-06-01/ }));
-      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
-      expect(within(table).getByText('Multiplication')).toBeTruthy();
-    });
-
-    it('expands and collapses a row via the Enter key, without scrolling the page (default prevented)', async () => {
-      render(<PostHistory onBack={() => {}} />);
-      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-      const table = screen.getByRole('table');
-      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
-      fireEvent.keyDown(row, { key: 'Enter' });
-      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
-      expect(within(table).getByText('Multiplication')).toBeTruthy();
-      fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: 'Enter' });
-      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'false');
-      expect(within(table).queryByText('Multiplication')).toBeNull();
-    });
-
-    it('expands a row via the Space key', async () => {
-      render(<PostHistory onBack={() => {}} />);
-      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
-      fireEvent.keyDown(row, { key: ' ' });
-      expect(screen.getByRole('button', { name: /Session 2026-06-01/ })).toHaveAttribute('aria-expanded', 'true');
-    });
-
-    it('ignores unrelated keys — a row does not expand on an arbitrary keypress', async () => {
-      render(<PostHistory onBack={() => {}} />);
-      await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
-      const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
-      fireEvent.keyDown(row, { key: 'a' });
-      expect(row).toHaveAttribute('aria-expanded', 'false');
-    });
-  });
 });
 
-// Issue #2093 — expanding a past session must reuse DrillQuestionReview so
-// history teaches from mistakes exactly like the just-finished session does.
-describe('PostHistory expanded session review', () => {
-  const REVIEW_SESSIONS = [
-    {
-      id: 'c', date: '2026-06-03', score: 70, durationMs: 60000, modules: ['mental-math'],
-      tasks: [
-        {
-          module: 'mental-math', type: 'multiplication', score: 50,
-          questions: [
-            { prompt: '6 x 7', expected: 42, answered: 41, correct: false, responseMs: 2000 },
-            { prompt: '3 x 3', expected: 9, answered: 9, correct: true, responseMs: 1200 },
-          ],
-        },
-        { module: 'llm-drills', type: 'pun-wordplay', score: 64, responses: [{}] },
-      ],
-    },
-  ];
-
-  it('reuses DrillQuestionReview inside an expanded session for a non-LLM task', async () => {
-    getPostSessions.mockResolvedValue(REVIEW_SESSIONS);
-    render(<PostHistory onBack={() => {}} />);
-    await waitFor(() => expect(screen.getByText('2026-06-03')).toBeTruthy());
-
-    fireEvent.click(screen.getByText('2026-06-03'));
-
-    // The missed-item summary + per-question table (shared with PostSessionResults).
-    // "6 x 7" appears twice once expanded: once in the missed-items chip,
-    // once in the per-question table row.
-    await waitFor(() => expect(screen.getByText('1 missed')).toBeTruthy());
-    expect(screen.getAllByText('6 x 7').length).toBe(2);
-    expect(screen.getByText('42')).toBeTruthy();
+// Rows are now navigation controls into the deep-linkable session detail
+// (/post/session/:id) — the per-question review (#2093) lives on that page now.
+describe('PostHistory session rows navigate to the detail route (issue #2098)', () => {
+  it('exposes each session row as a keyboard-focusable navigation control', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+    expect(row).toHaveAttribute('tabindex', '0');
+    expect(row).not.toHaveAttribute('aria-expanded');
   });
 
-  it('does not render a review for an LLM task (unchanged summary-only behavior)', async () => {
-    getPostSessions.mockResolvedValue(REVIEW_SESSIONS);
-    render(<PostHistory onBack={() => {}} />);
-    await waitFor(() => expect(screen.getByText('2026-06-03')).toBeTruthy());
+  it('navigates to /post/session/:id on click', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Session 2026-06-01/ }));
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
+  });
 
-    fireEvent.click(screen.getByText('2026-06-03'));
+  it('navigates via the Enter key (default prevented so the page does not scroll)', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-02')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-02/ }), { key: 'Enter' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/b');
+  });
 
-    await waitFor(() => expect(screen.getByText('1 responses')).toBeTruthy());
-    // No missed-item summary rendered twice — only the one math task produces it.
-    expect(screen.getAllByText(/missed/).length).toBe(1);
+  it('navigates via the Space key', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: ' ' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
+  });
+
+  it('ignores unrelated keys — a row does not navigate on an arbitrary keypress', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: 'a' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/history');
   });
 });

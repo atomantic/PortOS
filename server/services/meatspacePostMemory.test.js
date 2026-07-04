@@ -19,6 +19,7 @@ import {
   submitPractice,
   advanceScheduleFromSession,
   mergeMasteryFromSession,
+  applySessionToMemoryItems,
   getMastery,
   generateMemoryDrill,
   getDueMemoryItems,
@@ -447,6 +448,62 @@ describe('mergeMasteryFromSession', () => {
     ], now);
 
     expect(result.overallPct).toBeGreaterThan(0);
+  });
+});
+
+describe('applySessionToMemoryItems (consolidated one-pass, issue #2098)', () => {
+  const now = new Date('2026-07-01T00:00:00.000Z');
+
+  const seedItem = () => ({
+    ...ELEMENTS_SONG,
+    schedule: { ease: 2.5, intervalDays: 0, nextReview: now.toISOString(), lastReviewed: null },
+    mastery: { overallPct: 0, chunks: {}, elements: {} },
+  });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reads and writes the memory file exactly once regardless of task count', async () => {
+    readJSONFile.mockResolvedValueOnce({ items: [seedItem()] });
+    await applySessionToMemoryItems([
+      { memoryItemId: 'elements-song', questions: [{ chunkId: 'verse-1', correct: true }] },
+      { memoryItemId: 'elements-song', questions: [{ chunkId: 'verse-2', correct: true }] },
+    ], now);
+    expect(readJSONFile).toHaveBeenCalledTimes(1);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the write entirely for a session with no memory tasks', async () => {
+    const result = await applySessionToMemoryItems([{ type: 'doubling-chain' }], now);
+    expect(result).toEqual({ updated: 0 });
+    expect(readJSONFile).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('produces schedule + mastery IDENTICAL to the legacy two-pass path', async () => {
+    const questions = [
+      { chunkId: 'verse-1', correct: true },
+      { chunkId: 'verse-1', correct: false },
+      { chunkId: 'verse-2', correct: true },
+    ];
+    const ratio = questions.filter(q => q.correct).length / questions.length;
+
+    // Legacy path: advanceScheduleFromSession THEN mergeMasteryFromSession, each
+    // its own load+save. Feed a fresh item to each call (mocked reads).
+    readJSONFile.mockResolvedValueOnce({ items: [seedItem()] }); // advance schedule read
+    const legacySchedule = await advanceScheduleFromSession('elements-song', ratio, now);
+    readJSONFile.mockResolvedValueOnce({ items: [seedItem()] }); // mastery merge read
+    const legacyMastery = await mergeMasteryFromSession('elements-song', questions, now);
+
+    // Consolidated path: single load+save applying both.
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValueOnce({ items: [seedItem()] });
+    await applySessionToMemoryItems([{ memoryItemId: 'elements-song', questions }], now);
+    const written = atomicWrite.mock.calls[0][1].items.find(i => i.id === 'elements-song');
+
+    expect(written.schedule).toEqual(legacySchedule);
+    expect(written.mastery.chunks).toEqual(legacyMastery.chunks);
+    expect(written.mastery.elements).toEqual(legacyMastery.elements);
+    expect(written.mastery.overallPct).toEqual(legacyMastery.overallPct);
   });
 });
 

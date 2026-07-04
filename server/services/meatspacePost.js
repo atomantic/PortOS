@@ -14,7 +14,7 @@ import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
-import { advanceScheduleFromSession, mergeMasteryFromSession } from './meatspacePostMemory.js';
+import { applySessionToMemoryItems } from './meatspacePostMemory.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -209,8 +209,17 @@ export async function submitPostSession(sessionData) {
     return { ...rest, ...scored };
   });
 
+  // Idempotent submit: the client generates the session id (uuid) and sends it,
+  // so a retry after a dropped response upserts the SAME record instead of
+  // pushing a duplicate. An id is only trusted here to key the upsert — every
+  // scored field is still recomputed server-side above. Absent id (legacy
+  // clients / direct service callers) falls back to a fresh uuid.
+  const sessionId = sessionData.id || randomUUID();
+  const existingIndex = data.sessions.findIndex(s => s.id === sessionId);
+  const isNewSession = existingIndex < 0;
+
   const session = {
-    id: randomUUID(),
+    id: sessionId,
     date: now.split('T')[0],
     startedAt: now,
     completedAt: now,
@@ -222,35 +231,34 @@ export async function submitPostSession(sessionData) {
     tags: sessionData.tags || {}
   };
 
-  data.sessions.push(session);
+  if (isNewSession) data.sessions.push(session);
+  else data.sessions[existingIndex] = session;
   data.sessions.sort((a, b) => a.date.localeCompare(b.date));
   await ensureMeatspaceDir();
   await atomicWrite(SESSIONS_FILE, data);
-  console.log(`🧪 POST session saved: score=${session.score} modules=${session.modules.join(',')}`);
+  console.log(`🧪 POST session ${isNewSession ? 'saved' : 'updated'}: score=${session.score} modules=${session.modules.join(',')}`);
 
   // A memory drill completed inside this session IS a review — mirror the
   // dedicated MemoryBuilder practice flow (submitPractice) and advance each
-  // drilled item's spaced-repetition schedule, so it reschedules and clears
-  // from "Due Today" just like a direct MemoryBuilder practice session would.
-  // Ratio comes from raw correctness (not `score`, which also folds in a speed
-  // bonus) to match the accuracy signal `advanceSchedule` expects. Chunk/element
-  // MASTERY is also merged (mergeMasteryFromSession) using the chunkId/element
-  // attribution usePostSession.js's submitAnswer now preserves per-question —
-  // the other half of submitPractice's bookkeeping, deferred out of #2010 into
-  // #2016 until the client carried that attribution.
-  // Sequential, not Promise.all: advanceScheduleFromSession/mergeMasteryFromSession
-  // each do a full read-modify-write of the shared memory-items file with no
-  // write queue, so two tasks (or two calls for the same task) resolved
-  // concurrently could race and drop an update (last write wins). A session
-  // rarely has more than 1-2 memory tasks, so the latency cost of awaiting
-  // each is negligible.
-  for (const task of rescoredTasks) {
-    if (!POST_SUPPORTED_MEMORY_TYPES.includes(task.type) || !task.memoryItemId) continue;
-    const total = task.questions?.length || 0;
-    const correct = task.questions?.filter(q => q.correct).length || 0;
-    const ratio = total ? correct / total : 0;
-    await advanceScheduleFromSession(task.memoryItemId, ratio, new Date(now));
-    await mergeMasteryFromSession(task.memoryItemId, task.questions, new Date(now));
+  // drilled item's spaced-repetition schedule (plus chunk/element mastery from
+  // the per-question attribution usePostSession's submitAnswer preserves), so it
+  // reschedules and clears from "Due Today". applySessionToMemoryItems reads and
+  // writes the shared memory-items file exactly once for the whole session.
+  //
+  // Two invariants around this call:
+  //  1. Only on a NEW session — a retry (same id) re-upserts the durable record
+  //     but must NOT re-advance schedules a second time, or a dropped-response
+  //     retry would double-count the review.
+  //  2. Isolated so it can NEVER 500 an already-persisted session. This runs
+  //     AFTER the durable write, so a memory-file failure here is post-response
+  //     bookkeeping — log it single-line and still return 200. (Sanctioned
+  //     try/catch: the session is already saved; there is nothing to roll back.)
+  if (isNewSession) {
+    try {
+      await applySessionToMemoryItems(rescoredTasks, new Date(now));
+    } catch (err) {
+      console.error(`❌ POST session memory post-processing failed (session ${sessionId} still saved): ${err.message}`);
+    }
   }
 
   return session;

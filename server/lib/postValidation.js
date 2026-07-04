@@ -169,6 +169,11 @@ const taskResultSchema = z.object({
 
 // Full session submission
 export const postSessionSubmitSchema = z.object({
+  // Client-generated session id (uuid) — keys the idempotent upsert in
+  // submitPostSession so a retry after a dropped response can't double-record.
+  // Optional for back-compat: legacy clients and direct service callers that
+  // omit it get a server-assigned uuid.
+  id: z.string().uuid().optional(),
   cadence: z.enum(['daily', 'weekly', 'monthly']).optional().default('daily'),
   modules: z.array(z.string()).min(1),
   tasks: z.array(taskResultSchema).min(1),
