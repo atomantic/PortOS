@@ -28,6 +28,8 @@ import {
   postConfigEvents,
   resolveDrillConfig,
   getMultiplicationProgress,
+  getCognitiveProgress,
+  generateDrill,
   getAdaptivePreview,
   getPostStats,
   getAdaptivePreview,
@@ -982,6 +984,147 @@ describe('resolveDrillConfig — progressive multiplication', () => {
 });
 
 // =============================================================================
+// PROGRESSIVE COGNITIVE LADDERS — resolveDrillConfig / getCognitiveProgress /
+// difficulty stamping through submitPostSession (issue #2095)
+// =============================================================================
+
+describe('progressive cognitive drills', () => {
+  const today = new Date().toISOString().split('T')[0];
+  const oldDate = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0];
+
+  // A completed cognitive drill at `level` with a given task-level accuracy —
+  // the shape getCognitiveLevelStats buckets by (accuracy-only mastery).
+  function cognitiveSession(type, level, accuracy, date = today, count = 20) {
+    return {
+      date,
+      tasks: [{
+        module: 'cognitive',
+        type,
+        config: { level },
+        accuracy,
+        totalCount: count,
+        questions: Array.from({ length: count }, () => ({ answered: 'x' })),
+      }],
+    };
+  }
+
+  function mockSessions(sessions, configOverride) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions });
+      if (p.includes('post-config')) return Promise.resolve(configOverride ?? defaultValue);
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('starts a fresh user at n-back level 0 (1-back) and stamps the rung knobs', async () => {
+    mockSessions([]);
+    const { config, progression } = await resolveDrillConfig('n-back', { length: 20 });
+    expect(progression.level).toBe(0);
+    expect(config.level).toBe(0);
+    expect(config.n).toBe(1);
+    expect(config.stimulusMs).toBe(2500);
+  });
+
+  it('advances a cognitive rung on sustained balanced accuracy', async () => {
+    // 3 clean 1-back runs at 90% balanced accuracy → clears level 0.
+    mockSessions([
+      cognitiveSession('n-back', 0, 0.9),
+      cognitiveSession('n-back', 0, 0.92),
+      cognitiveSession('n-back', 0, 0.95),
+    ]);
+    const { config, progression } = await resolveDrillConfig('n-back', {});
+    expect(progression.level).toBe(1);
+    expect(config.n).toBe(2);
+  });
+
+  it('does not advance on high-accuracy but low-completion runs (skipped hard trials)', async () => {
+    // Answered only the easy sequence (100% accuracy) but left the rest blank —
+    // low completion must not bank a mastery sample (issue #2095 review).
+    const lowCompletion = (level, date = today) => ({
+      date,
+      tasks: [{ module: 'cognitive', type: 'digit-span', config: { level }, accuracy: 1, completion: 0.25, totalCount: 4, questions: [{ answered: '1' }] }],
+    });
+    mockSessions([lowCompletion(0), lowCompletion(0), lowCompletion(0)]);
+    const { progression } = await resolveDrillConfig('digit-span', {});
+    expect(progression.level).toBe(0);
+  });
+
+  it('does not advance when accuracy is below the mastery bar', async () => {
+    mockSessions([
+      cognitiveSession('n-back', 0, 0.6),
+      cognitiveSession('n-back', 0, 0.7),
+      cognitiveSession('n-back', 0, 0.5),
+    ]);
+    const { progression } = await resolveDrillConfig('n-back', {});
+    expect(progression.level).toBe(0);
+  });
+
+  it('never demotes below the earned floor when the window aged out', async () => {
+    mockSessions([
+      cognitiveSession('digit-span', 3, 0.9, oldDate),
+      cognitiveSession('digit-span', 3, 0.95, oldDate),
+      cognitiveSession('digit-span', 3, 0.9, oldDate),
+    ]);
+    const { progression, config } = await resolveDrillConfig('digit-span', {});
+    expect(progression.level).toBe(3);
+    expect(progression.floorLevel).toBe(3);
+    expect(config.direction).toBe('backward');
+  });
+
+  it('passes config through unchanged when the drill Progressive toggle is off', async () => {
+    mockSessions([], { cognitive: { drillTypes: { 'n-back': { progressive: false } } } });
+    const { config, progression } = await resolveDrillConfig('n-back', { n: 3, stimulusMs: 1200 });
+    expect(progression == null).toBe(true);
+    expect(config).toEqual({ n: 3, stimulusMs: 1200 });
+  });
+
+  it('reaction-time has no ladder — always passes config through', async () => {
+    mockSessions([]);
+    const { config, progression } = await resolveDrillConfig('reaction-time', { mode: 'choice' });
+    expect(progression == null).toBe(true);
+    expect(config).toEqual({ mode: 'choice' });
+  });
+
+  it('generateDrill stamps the resolved level into the generated cognitive config', async () => {
+    mockSessions([]);
+    const { config } = await resolveDrillConfig('n-back', { length: 12 });
+    const drill = generateDrill('n-back', config);
+    expect(drill.config.level).toBe(0);
+    expect(drill.config.n).toBe(1);
+  });
+
+  it('getCognitiveProgress separates per-level history (n=2 vs n=3 recoverable)', async () => {
+    mockSessions([
+      cognitiveSession('n-back', 1, 0.9),
+      cognitiveSession('n-back', 1, 0.95),
+      cognitiveSession('n-back', 1, 0.92),
+    ]);
+    const progress = await getCognitiveProgress();
+    expect(progress['n-back'].level).toBe(2); // level-1 mastered → sits on level 2
+    expect(progress['n-back'].levels[1].mastered).toBe(true);
+    expect(progress['n-back'].levels[2].mastered).toBe(false);
+    // Every laddered type reports; reaction-time is absent.
+    expect(Object.keys(progress).sort()).toEqual(['digit-span', 'mental-rotation', 'n-back', 'schulte-table', 'stroop']);
+  });
+
+  it('difficulty stamp survives submitPostSession (stored task carries config.level)', async () => {
+    mockSessions([]);
+    const { config } = await resolveDrillConfig('schulte-table', {});
+    const drill = generateDrill('schulte-table', config);
+    // Client submits the served drill's config (with level) + drillData.
+    const questions = drill.cells.map((_, i) => ({ index: i, answered: i + 1, responseMs: 500 }));
+    const session = await submitPostSession({
+      modules: ['cognitive'],
+      tasks: [{ module: 'cognitive', type: 'schulte-table', config: drill.config, drillData: drill, questions, totalMs: 5000 }],
+    });
+    const stored = session.tasks[0];
+    expect(stored.config.level).toBe(0);
+    expect(Number.isFinite(stored.accuracy)).toBe(true);
 // ADAPTIVE PREVIEW / resolveDrillConfig PARITY — multiplication (issue #2099, fix #2)
 //
 // getAdaptivePreview used to always build multiplication's preview off the

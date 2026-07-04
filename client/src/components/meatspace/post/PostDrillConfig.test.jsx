@@ -6,11 +6,12 @@ vi.mock('../../../services/api', () => ({
   getProviders: vi.fn(),
   getPostAdaptivePreview: vi.fn(),
   getPostMultiplicationProgress: vi.fn(),
+  getPostCognitiveProgress: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
 import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
 // The generatable LLM drill types + labels, imported from the canonical
@@ -56,6 +57,17 @@ beforeEach(() => {
     ],
     thresholds: { minSamples: 12, targetAccuracy: 0.9 },
     windowDays: 30,
+  });
+  getPostCognitiveProgress.mockResolvedValue({
+    'n-back': {
+      type: 'n-back', level: 1, label: '2-back @ 2500ms', atHardest: false, currentMastered: false,
+      levels: [
+        { level: 0, label: '1-back @ 2500ms', mastered: true },
+        { level: 1, label: '2-back @ 2500ms', mastered: false },
+        { level: 2, label: '3-back @ 2500ms', mastered: false },
+      ],
+      thresholds: { minSamples: 3, targetAccuracy: 0.85 }, windowDays: 30,
+    },
   });
 });
 
@@ -184,7 +196,7 @@ describe('PostDrillConfig', () => {
 
   it('multiplication defaults to Progressive difficulty on, hiding Max Digits and showing the ladder', async () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
-    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty' });
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty — Multiplication' });
     expect(toggle.getAttribute('aria-checked')).toBe('true');
     // Max Digits is ignored while progressive is on, so its field is hidden.
     expect(screen.queryByText('Max Digits')).toBeNull();
@@ -195,11 +207,33 @@ describe('PostDrillConfig', () => {
 
   it('toggling Progressive off reveals Max Digits and persists progressive=false', async () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
-    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — Multiplication' }));
     expect(screen.getByText('Max Digits')).toBeTruthy();
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
     expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.multiplication.progressive).toBe(false);
+  });
+
+  it('cognitive drills default to Progressive on — n-back hides its knobs and shows its rung', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty — N-Back' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    // Progressive on → the ladder-managed knobs (incl. Stimulus) are hidden.
+    expect(screen.queryByText('Stimulus (ms)')).toBeNull();
+    await waitFor(() => expect(getPostCognitiveProgress).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/Level 2 of 3 · 2-back @ 2500ms/)).toBeTruthy());
+    // `length` is NOT ladder-managed, so it stays visible + editable even under
+    // progressive (only n/stimulusMs are hidden) — the knob is honestly forwarded.
+    expect(screen.getByText('Sequence Length')).toBeTruthy();
+  });
+
+  it('turning n-back Progressive off exposes the Stimulus (ms) knob and persists progressive=false', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — N-Back' }));
+    expect(screen.getByText('Stimulus (ms)')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].cognitive.drillTypes['n-back'].progressive).toBe(false);
   });
 
   it('toggling Adaptive on persists enabled=true', async () => {

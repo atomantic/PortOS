@@ -190,6 +190,7 @@ export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';
 export * from './postMultiplicationLadder.js';
+export * from './postProgression.js';
 export * from './postStreak.js';
 export * from './planIds.js';
 export * from './renderSlot.js';

@@ -192,6 +192,7 @@ export const getPostProgress = (days, options = {}) => request(
 );
 export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
+export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');
 export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {
   method: 'POST',
   body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) }),
