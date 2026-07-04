@@ -9,10 +9,13 @@ export const detectStartSchema = z.object({
   path: z.string().min(1, 'path is required')
 });
 
-// standardize:start — repo path and optional provider
+// standardize:start — repo path and optional provider.
+// `overwriteEcosystem: true` is the explicit opt-in to regenerate an existing,
+// non-PortOS-generated ecosystem.config.cjs (default false preserves it).
 export const standardizeStartSchema = z.object({
   repoPath: z.string().min(1, 'repoPath is required'),
-  providerId: z.string().min(1).optional()
+  providerId: z.string().min(1).optional(),
+  overwriteEcosystem: z.boolean().optional()
 });
 
 // logs:subscribe — process name and optional line count
@@ -62,9 +65,12 @@ export const appUpdateSchema = z.object({
   appId: z.string().min(1, 'appId is required')
 });
 
-// app:standardize — app ID for PM2 standardization
+// app:standardize — app ID for PM2 standardization.
+// `overwriteEcosystem: true` is the explicit opt-in to regenerate an existing,
+// non-PortOS-generated ecosystem.config.cjs (default false preserves it).
 export const appStandardizeSchema = z.object({
-  appId: z.string().min(1, 'appId is required')
+  appId: z.string().min(1, 'appId is required'),
+  overwriteEcosystem: z.boolean().optional()
 });
 
 // app:deploy — app ID and optional flags for Xcode deploy
