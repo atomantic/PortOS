@@ -22,6 +22,7 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
+import { isOllamaClaudeProvider, isClaudeCommand, leanClaudeAuthEnv } from '../lib/providerModels.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
@@ -331,13 +332,28 @@ export async function spawnAgentForTask(task) {
 
     const isTui = isTuiProvider(provider);
 
+    // Lean mode: an Ollama-backed Claude session gets `--bare --strict-mcp-config`
+    // (see applyLeanClaudeArgs) so the user's personal environment — hooks,
+    // plugins, MCP servers, global CLAUDE.md — doesn't drown the small local
+    // model. Lean sessions also split the prompt: the PortOS operating contract
+    // rides in a system-prompt file (`--append-system-prompt-file`) while the
+    // pasted/stdin prompt carries only the task itself. Split stays gated on
+    // lean mode until `--append-system-prompt-file` is validated on the
+    // standard interactive claude providers.
+    const leanMode = isOllamaClaudeProvider(provider);
+    const splitSystemPrompt = leanMode && isClaudeCommand(provider.command);
+
     // Build the agent prompt. `provider.type` drives the light-vs-full split
     // inside buildAgentPrompt — see its doc comment.
-    const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
+    const promptResult = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
       providerType: provider.type,
       providerId: provider.id,
-      providerCommand: provider.command
+      providerCommand: provider.command,
+      leanMode,
+      split: splitSystemPrompt
     });
+    const prompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
 
     // Create agent directory
     const agentDir = join(AGENTS_DIR, agentId);
@@ -347,6 +363,11 @@ export async function spawnAgentForTask(task) {
 
     // Save prompt to file
     await writeFile(join(agentDir, 'prompt.txt'), prompt);
+    let systemPromptFile = null;
+    if (systemPrompt) {
+      systemPromptFile = join(agentDir, 'system-prompt.md');
+      await writeFile(systemPromptFile, systemPrompt);
+    }
 
     // Create run entry for usage tracking
     const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
@@ -444,8 +465,8 @@ export async function spawnAgentForTask(task) {
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
     const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(provider, selectedModel)
-      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv);
+      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile })
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,
@@ -608,7 +629,10 @@ export async function spawnViaRunner(agentId, task, opts) {
     prompt,
     workspacePath,
     model,
-    envVars: { ...claudeSettingsEnv, ...provider.envVars },
+    // leanClaudeAuthEnv: `--bare` (lean-mode Ollama claude) reads auth strictly
+    // from ANTHROPIC_API_KEY — mirror the auth token in before provider.envVars
+    // so an explicit user-configured key wins.
+    envVars: { ...claudeSettingsEnv, ...leanClaudeAuthEnv(provider), ...provider.envVars },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });

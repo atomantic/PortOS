@@ -12,7 +12,12 @@ import {
   toBedrockModelId,
   resolveBedrockCliModel,
   prefixOpencodeModel,
-  isOpencodeCommand
+  isOpencodeCommand,
+  isClaudeCommand,
+  isOllamaClaudeProvider,
+  applyLeanClaudeArgs,
+  leanClaudeAuthEnv,
+  LEAN_CLAUDE_ARGS
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -353,6 +358,78 @@ describe('providerModels', () => {
         .toBe('us.anthropic.claude-opus-4-7-v1:0');
       expect(spy).not.toHaveBeenCalled();
       spy.mockRestore();
+    });
+  });
+
+  describe('isClaudeCommand', () => {
+    it('matches bare, pathed, and Windows forms of the claude binary', () => {
+      expect(isClaudeCommand('claude')).toBe(true);
+      expect(isClaudeCommand('/opt/homebrew/bin/claude')).toBe(true);
+      expect(isClaudeCommand('C:\\tools\\Claude.EXE')).toBe(true);
+    });
+
+    it('treats an empty/null command as claude (the spawners default to it)', () => {
+      expect(isClaudeCommand('')).toBe(true);
+      expect(isClaudeCommand(null)).toBe(true);
+      expect(isClaudeCommand(undefined)).toBe(true);
+    });
+
+    it('rejects other binaries and non-strings', () => {
+      expect(isClaudeCommand('opencode')).toBe(false);
+      expect(isClaudeCommand('codex')).toBe(false);
+      expect(isClaudeCommand('/usr/bin/claudette')).toBe(false);
+      expect(isClaudeCommand(42)).toBe(false);
+    });
+  });
+
+  describe('isOllamaClaudeProvider', () => {
+    it('requires BOTH the ollamaBacked marker and a claude command', () => {
+      expect(isOllamaClaudeProvider({ ollamaBacked: true, command: 'claude' })).toBe(true);
+      expect(isOllamaClaudeProvider({ ollamaBacked: true, command: 'opencode' })).toBe(false);
+      expect(isOllamaClaudeProvider({ command: 'claude' })).toBe(false);
+      expect(isOllamaClaudeProvider(null)).toBe(false);
+    });
+
+    it('honors an explicitly resolved command over provider.command', () => {
+      expect(isOllamaClaudeProvider({ ollamaBacked: true, command: '' }, 'claude')).toBe(true);
+      expect(isOllamaClaudeProvider({ ollamaBacked: true, command: '' }, 'codex')).toBe(false);
+    });
+  });
+
+  describe('applyLeanClaudeArgs', () => {
+    const ollamaClaude = { ollamaBacked: true, command: 'claude' };
+
+    it('appends --bare and --strict-mcp-config for Ollama-backed claude providers', () => {
+      expect(applyLeanClaudeArgs(ollamaClaude, ['--dangerously-skip-permissions']))
+        .toEqual(['--dangerously-skip-permissions', ...LEAN_CLAUDE_ARGS]);
+    });
+
+    it('is idempotent against user-baked lean flags', () => {
+      expect(applyLeanClaudeArgs(ollamaClaude, ['--bare'])).toEqual(['--bare', '--strict-mcp-config']);
+      expect(applyLeanClaudeArgs(ollamaClaude, [...LEAN_CLAUDE_ARGS])).toEqual([...LEAN_CLAUDE_ARGS]);
+    });
+
+    it('is a no-op for non-Ollama or non-claude providers', () => {
+      const args = ['--dangerously-skip-permissions'];
+      expect(applyLeanClaudeArgs({ command: 'claude' }, args)).toBe(args);
+      expect(applyLeanClaudeArgs({ ollamaBacked: true, command: 'opencode' }, args)).toBe(args);
+    });
+  });
+
+  describe('leanClaudeAuthEnv', () => {
+    it('mirrors ANTHROPIC_AUTH_TOKEN into ANTHROPIC_API_KEY for bare mode', () => {
+      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude', envVars: { ANTHROPIC_AUTH_TOKEN: 'ollama' } }))
+        .toEqual({ ANTHROPIC_API_KEY: 'ollama' });
+    });
+
+    it('falls back to the literal "ollama" when no auth token is configured', () => {
+      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude' }))
+        .toEqual({ ANTHROPIC_API_KEY: 'ollama' });
+    });
+
+    it('yields nothing when the provider already sets ANTHROPIC_API_KEY or is not lean', () => {
+      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude', envVars: { ANTHROPIC_API_KEY: 'real' } })).toEqual({});
+      expect(leanClaudeAuthEnv({ command: 'claude' })).toEqual({});
     });
   });
 });

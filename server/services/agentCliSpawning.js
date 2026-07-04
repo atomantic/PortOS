@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, leanClaudeAuthEnv } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -241,7 +241,7 @@ export function createStreamJsonParser() {
  * merge) — without it, a settings-only Bedrock box would map against an env
  * missing the flag and still emit a bare, Bedrock-invalid `--model`.
  */
-export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
+export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null } = {}) {
   const providerId = provider?.id || 'claude-code';
   const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
 
@@ -301,15 +301,21 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
     };
   }
 
-  // Default: Claude Code CLI
-  const args = [
+  // Default: Claude Code CLI. applyLeanClaudeArgs adds `--bare
+  // --strict-mcp-config` for Ollama-backed claude sessions (no-op otherwise,
+  // idempotent against user-baked flags); the system-prompt contract file
+  // rides via --append-system-prompt-file.
+  const args = applyLeanClaudeArgs(provider, [
     '--dangerously-skip-permissions', // Unrestricted mode
     '--print',                          // Print output and exit
     '--output-format', 'stream-json',   // Stream JSON events for live output
     '--verbose',                        // Required for stream-json
     '--include-partial-messages',       // Include incremental text deltas
     ...(provider?.args || []),          // User-configured provider args
-  ];
+  ], provider?.command || 'claude');
+  if (systemPromptFile) {
+    args.push('--append-system-prompt-file', systemPromptFile);
+  }
   if (effectiveModel) {
     // Bedrock box: map a bare Claude id to its region-prefixed Bedrock form
     // just-in-time (no-op off Bedrock / for already-prefixed or non-Claude ids).
@@ -418,7 +424,10 @@ export async function spawnDirectly({
     // The pm2 shim must be prepended onto the FINAL PATH (after any
     // provider.envVars override) so a `--dangerously-skip-permissions` agent
     // can't `pm2 kill` the shared daemon.
-    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
+    // leanClaudeAuthEnv: `--bare` reads auth strictly from ANTHROPIC_API_KEY, so
+    // Ollama-backed claude sessions get one mirrored from their auth token
+    // (before provider.envVars so an explicit user-configured key wins).
+    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...leanClaudeAuthEnv(provider), ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {

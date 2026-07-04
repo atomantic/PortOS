@@ -97,7 +97,11 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { root: '/tmp/portos-root' }
 }));
 
-vi.mock('../lib/providerModels.js', () => ({
+vi.mock('../lib/providerModels.js', async (importOriginal) => ({
+  // Pull the real module first so pure helpers added later (isClaudeCommand,
+  // applyLeanClaudeArgs, leanClaudeAuthEnv, …) don't silently vanish from the
+  // mock — only the fns below are stubbed/spied.
+  ...(await importOriginal()),
   // Mirror the real behaviour: pass through the model string, return null for
   // the codex-configured-default sentinel or null/undefined input.
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
@@ -254,6 +258,34 @@ describe('agent TUI spawning', () => {
     const config = buildTuiSpawnConfig({ id: 'codex-tui', command: 'codex', type: 'tui', args: [] }, null);
     expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
     expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude TUI', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'claude-ollama-tui', type: 'tui', command: 'claude', ollamaBacked: true,
+      args: ['--dangerously-skip-permissions'],
+    }, 'qwen3.6:35b', { systemPromptFile: '/data/cos/agents/agent-1/system-prompt.md' });
+    expect(config.args).toEqual([
+      '--dangerously-skip-permissions',
+      '--model', 'qwen3.6:35b',
+      '--bare', '--strict-mcp-config',
+      '--append-system-prompt-file', '/data/cos/agents/agent-1/system-prompt.md',
+    ]);
+  });
+
+  it('does NOT add lean flags to the standard claude TUI, and skips the system-prompt flag for non-claude commands', () => {
+    const standard = buildTuiSpawnConfig({
+      id: 'claude-code-tui', type: 'tui', command: 'claude', args: ['--dangerously-skip-permissions'],
+    }, 'claude-opus-4-8', { systemPromptFile: '/tmp/sys.md' });
+    expect(standard.args).not.toContain('--bare');
+    // Claude command still honors an explicitly provided system-prompt file.
+    expect(standard.args).toContain('--append-system-prompt-file');
+
+    const opencode = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [], ollamaBacked: true,
+    }, 'qwen3.6:35b', { systemPromptFile: '/tmp/sys.md' });
+    expect(opencode.args).not.toContain('--append-system-prompt-file');
+    expect(opencode.args).not.toContain('--bare');
   });
 });
 

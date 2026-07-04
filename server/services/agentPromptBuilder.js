@@ -457,6 +457,13 @@ export function buildCompletionGuidelineBullet({
  * @param {string} [options.providerCommand] - Provider launch command (e.g. `'opencode'`).
  *   Used to detect a slashdo-free TUI (OpenCode): such a TUI can't run `/do:pr` / `/do:push`,
  *   so its completion workflow falls back to plain `git`/`gh` commands.
+ * @param {boolean} [options.leanMode] - Ollama-backed Claude session launched with
+ *   `--bare` (see `applyLeanClaudeArgs`): the completion workflow drops slashdo
+ *   commands (bare mode skips command discovery) in favor of plain `git`/`gh`.
+ * @param {boolean} [options.split] - Light path only: return
+ *   `{ userPrompt, systemPrompt }` (see `buildLightContextPromptParts`) instead
+ *   of a single string, for providers spawned with `--append-system-prompt-file`.
+ *   Ignored on the full/api path, which always returns a string.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
   const providerType = options.providerType || PROVIDER_TYPES.API;
@@ -465,7 +472,10 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const isTui = providerType === PROVIDER_TYPES.TUI;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui, providerId, providerCommand });
+    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true };
+    return options.split === true
+      ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
+      : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
   }
 
   // Full path: API providers don't read CLAUDE.md natively, so always include it.
@@ -747,7 +757,33 @@ Begin working on the task now.`;
  * Falls back gracefully when worktree/jira/pipeline metadata is absent — only
  * the present sections render.
  */
-export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null } = {}) {
+export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options = {}) {
+  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options);
+  return [...taskSections, ...contractSections, BEGIN_WORKING_LINE].join('\n\n') + '\n';
+}
+
+/**
+ * Split variant of `buildLightContextPrompt` for providers with a real system
+ * channel (Claude Code's `--append-system-prompt-file`): the task-specific
+ * content (description, context, screenshots, attachments) becomes the user
+ * prompt, and the PortOS operating contract (worktree/pipeline/JIRA
+ * coordinates + completion workflow) rides in the system prompt where models
+ * weight it as instructions rather than conversation. Section content is
+ * byte-identical to the combined prompt — only the placement differs.
+ *
+ * @returns {{ userPrompt: string, systemPrompt: string|null }}
+ */
+export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options = {}) {
+  const { taskSections, contractSections } = buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, options);
+  return {
+    userPrompt: [...taskSections, BEGIN_WORKING_LINE].join('\n\n') + '\n',
+    systemPrompt: contractSections.length ? contractSections.join('\n\n') + '\n' : null,
+  };
+}
+
+const BEGIN_WORKING_LINE = 'Begin working on the task now.';
+
+function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false } = {}) {
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
@@ -764,13 +800,21 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   // Other CLI providers (codex, antigravity) can't — they get the legacy
   // commit-only block where PortOS handles push+PR on exit.
   const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
-  // A TUI that does NOT load Claude Code slash commands (OpenCode) can't run
-  // `/do:pr` / `/do:push`, so its completion workflow uses plain git/gh instead.
-  // Keyed on the launch command (not the id) so a path-configured or renamed
-  // OpenCode provider is still recognised — mirrors the arg-builder gate.
-  const tuiSlashdoFree = isTui && isOpencodeCommand(providerCommand);
+  // A TUI that does NOT load Claude Code slash commands can't run `/do:pr` /
+  // `/do:push`, so its completion workflow uses plain git/gh instead. Two ways
+  // to land here: an OpenCode TUI (keyed on the launch command, not the id, so
+  // a path-configured or renamed OpenCode provider is still recognised —
+  // mirrors the arg-builder gate), or a lean-mode Claude session (`--bare`
+  // skips project command discovery, and the small local models lean mode
+  // targets fumble multi-step slashdo flows anyway).
+  const tuiSlashdoFree = isTui && (isOpencodeCommand(providerCommand) || leanMode);
 
-  const sections = [];
+  const taskSections = [];
+  const contractSections = [];
+  // Alias preserving the original single-list flow below: task-block pushes go
+  // to `taskSections`, then `sections` is repointed at `contractSections` for
+  // the operating-contract blocks.
+  let sections = taskSections;
 
   // --- Task block --------------------------------------------------------
   // cwd is set by the spawner and the agent knows its own id from the
@@ -789,6 +833,11 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
 
   if (taskBlock.screenshots) sections.push(taskBlock.screenshots);
   if (taskBlock.attachments) sections.push(taskBlock.attachments);
+
+  // Everything below is the PortOS operating contract (not task content) —
+  // route it to `contractSections` so the split path can lift it into the
+  // system prompt.
+  sections = contractSections;
 
   // --- Worktree ----------------------------------------------------------
   if (worktreeInfo) {
@@ -844,8 +893,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
     sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
-  sections.push('Begin working on the task now.');
-  return sections.join('\n\n') + '\n';
+  return { taskSections, contractSections };
 }
 
 /**

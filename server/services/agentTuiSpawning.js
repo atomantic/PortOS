@@ -18,7 +18,7 @@ import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, leanClaudeAuthEnv } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -141,10 +141,13 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
     // claude's input-readiness only after this so the readiness probe's own
     // shell activity can't prematurely open the paste gate.
     onInitialCommandSent,
+    // leanClaudeAuthEnv: `--bare` reads auth strictly from ANTHROPIC_API_KEY,
+    // so Ollama-backed claude sessions get one mirrored from their auth token
+    // (spread FIRST so explicit provider envVars win).
     // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
-    env: { ...(provider.envVars || {}), ...agentGuardEnv() },
+    env: { ...leanClaudeAuthEnv(provider), ...(provider.envVars || {}), ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -197,10 +200,17 @@ function appendModelArgs(args, model, command, provider) {
   return [...args, '--model', injectedModel];
 }
 
-export function buildTuiSpawnConfig(provider, model) {
+export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  const args = appendModelArgs(baseArgs, model, command, provider);
+  let args = appendModelArgs(baseArgs, model, command, provider);
+  // Lean mode for Ollama-backed claude sessions (no-op otherwise) — must come
+  // before the system-prompt flag so `--bare` is present when the contract
+  // file rides along.
+  args = applyLeanClaudeArgs(provider, args, command);
+  if (systemPromptFile && isClaudeCommand(command)) {
+    args = [...args, '--append-system-prompt-file', systemPromptFile];
+  }
 
   return {
     command,

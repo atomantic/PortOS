@@ -215,6 +215,29 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
   });
 
+  it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude CLI', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'claude-ollama', command: 'claude', ollamaBacked: true },
+      'qwen3.6:35b',
+      {},
+      { systemPromptFile: '/data/cos/agents/agent-1/system-prompt.md' },
+    );
+
+    expect(config.args).toContain('--bare');
+    expect(config.args).toContain('--strict-mcp-config');
+    const idx = config.args.indexOf('--append-system-prompt-file');
+    expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-1/system-prompt.md');
+    // Lean flags must not disturb the model injection.
+    expect(config.args[config.args.indexOf('--model') + 1]).toBe('qwen3.6:35b');
+  });
+
+  it('does NOT add lean flags to the standard claude CLI provider', () => {
+    const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, 'claude-opus-4-8');
+    expect(config.args).not.toContain('--bare');
+    expect(config.args).not.toContain('--strict-mcp-config');
+    expect(config.args).not.toContain('--append-system-prompt-file');
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.

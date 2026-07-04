@@ -204,6 +204,80 @@ export function hasModelFlag(args) {
 }
 
 /**
+ * True when a provider command points at the Claude Code binary — the bare
+ * `claude` on PATH, an absolute/relative path to it, or an optional Windows
+ * `.exe` suffix (same matching rules as `isOpencodeCommand`). An empty/null
+ * command also counts as Claude: `buildCliSpawnConfig`'s default branch and
+ * the TUI `inferTuiCommand` fallback both resolve a blank command to `claude`.
+ * @param {string|null|undefined} command
+ * @returns {boolean}
+ */
+export function isClaudeCommand(command) {
+  if (command == null || command === '') return true;
+  if (typeof command !== 'string') return false;
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+  return base === 'claude';
+}
+
+/**
+ * True for an Ollama-backed provider that launches the Claude Code binary
+ * (`claude-ollama` / `claude-ollama-tui`). These sessions run a small local
+ * model that drowns in Claude Code's full personal environment — hooks,
+ * plugins, MCP servers, global CLAUDE.md — so the spawners put them in lean
+ * mode (see `applyLeanClaudeArgs`). Keyed on the `ollamaBacked` marker + the
+ * launch command, not provider ids, so renamed/custom local providers get the
+ * same treatment.
+ * @param {{command?:string, ollamaBacked?:boolean}|null|undefined} provider
+ * @param {string} [command] - resolved launch command when it differs from
+ *   `provider.command` (the TUI path may infer it from the provider id)
+ * @returns {boolean}
+ */
+export function isOllamaClaudeProvider(provider, command = provider?.command) {
+  return provider?.ollamaBacked === true && isClaudeCommand(command);
+}
+
+/**
+ * Lean-context flags for local-model Claude Code sessions:
+ * - `--bare` — skip hooks, plugin sync, auto-memory, and CLAUDE.md
+ *   auto-discovery (the user's personal environment derails small models).
+ * - `--strict-mcp-config` — with no `--mcp-config` given, load zero MCP
+ *   servers (their tool schemas alone can blow a small Ollama context).
+ */
+export const LEAN_CLAUDE_ARGS = ['--bare', '--strict-mcp-config'];
+
+/**
+ * Append the lean-context flags for Ollama-backed Claude providers. No-op for
+ * every other provider, and idempotent when the user already baked either
+ * flag into `provider.args`.
+ * @param {{command?:string, ollamaBacked?:boolean, args?:string[]}} provider
+ * @param {string[]} args - argv built so far
+ * @param {string} [command] - resolved launch command (see isOllamaClaudeProvider)
+ * @returns {string[]}
+ */
+export function applyLeanClaudeArgs(provider, args, command = provider?.command) {
+  if (!isOllamaClaudeProvider(provider, command)) return args;
+  return [...args, ...LEAN_CLAUDE_ARGS.filter(flag => !args.includes(flag))];
+}
+
+/**
+ * `--bare` reads Anthropic auth strictly from `ANTHROPIC_API_KEY` (or an
+ * apiKeyHelper) — OAuth and keychain are never consulted. The Ollama-backed
+ * Claude providers authenticate with `ANTHROPIC_AUTH_TOKEN=ollama` instead,
+ * so mirror that value into `ANTHROPIC_API_KEY` (Ollama ignores the key
+ * contents) unless the provider already sets one. Spread the result BEFORE
+ * `provider.envVars` so an explicit user-configured key always wins.
+ * @param {{command?:string, ollamaBacked?:boolean, envVars?:Object}} provider
+ * @param {string} [command]
+ * @returns {Object} `{ ANTHROPIC_API_KEY }` or `{}`
+ */
+export function leanClaudeAuthEnv(provider, command = provider?.command) {
+  if (!isOllamaClaudeProvider(provider, command)) return {};
+  const envVars = provider?.envVars || {};
+  if (envVars.ANTHROPIC_API_KEY) return {};
+  return { ANTHROPIC_API_KEY: envVars.ANTHROPIC_AUTH_TOKEN || 'ollama' };
+}
+
+/**
  * Extract the pinned model id from provider.args when a model flag is baked
  * in. Supports separated form (`--model X` / `-m X`) and joined form
  * (`--model=X` / `-m=X`). Returns null when no model flag is present or the
