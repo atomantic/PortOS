@@ -52,6 +52,25 @@ describe('localDayKey / localDayRangeUtc', () => {
     expect(localDayRangeUtc('not-a-date', 'UTC')).toBeNull();
     expect(localDayKey('not-a-date', 'UTC')).toBeNull();
   });
+  it('ends at the NEXT local midnight across DST transitions (25h fall-back, 23h spring-forward)', () => {
+    // 2026-11-01 America/Los_Angeles: clocks fall back — a 25-hour local day.
+    // start = midnight PDT (07:00Z); end = next midnight PST (08:00Z on 11-02).
+    const fallBack = localDayRangeUtc('2026-11-01', 'America/Los_Angeles');
+    expect(fallBack.start.toISOString()).toBe('2026-11-01T07:00:00.000Z');
+    expect(fallBack.end.toISOString()).toBe('2026-11-02T08:00:00.000Z');
+    expect(fallBack.end.getTime() - fallBack.start.getTime()).toBe(25 * 60 * 60 * 1000);
+    // 2026-03-08 America/Los_Angeles: clocks spring forward — a 23-hour local day.
+    const springForward = localDayRangeUtc('2026-03-08', 'America/Los_Angeles');
+    expect(springForward.start.toISOString()).toBe('2026-03-08T08:00:00.000Z');
+    expect(springForward.end.toISOString()).toBe('2026-03-09T07:00:00.000Z');
+    expect(springForward.end.getTime() - springForward.start.getTime()).toBe(23 * 60 * 60 * 1000);
+  });
+  it('rolls the end boundary over month and year edges', () => {
+    const monthEdge = localDayRangeUtc('2026-01-31', 'UTC');
+    expect(monthEdge.end.toISOString()).toBe('2026-02-01T00:00:00.000Z');
+    const yearEdge = localDayRangeUtc('2026-12-31', 'UTC');
+    expect(yearEdge.end.toISOString()).toBe('2027-01-01T00:00:00.000Z');
+  });
 });
 
 describe('participant normalization', () => {

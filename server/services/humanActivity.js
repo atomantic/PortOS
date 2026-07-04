@@ -47,17 +47,36 @@ export function localDayKey(when, timezone) {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
+// UTC instant of local midnight for a (y, m, d) calendar date in `timezone`.
+// The offset is sampled at the approximate midnight, then the candidate is
+// verified with the formatter-based getLocalParts and nudged by the exact
+// landed-vs-desired delta (the same DST correction pattern as nextLocalTime in
+// lib/timezone.js). getUtcOffsetMs alone is NOT re-sampled at the candidate —
+// its toLocaleString round-trip mis-parses ambiguous wall-clock times right at
+// a transition, which is exactly when the correction matters.
+function localMidnightUtc(y, mo, d, timezone) {
+  const approxUtc = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0));
+  const offset = getUtcOffsetMs(approxUtc, timezone);
+  let t = approxUtc.getTime() - offset;
+  const p = getLocalParts(new Date(t), timezone);
+  const desired = Date.UTC(y, mo - 1, d);
+  const landed = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  if (landed !== desired) t -= landed - desired;
+  return new Date(t);
+}
+
 // UTC [start, end) instants that bound a local calendar day (YYYY-MM-DD) in the
-// given timezone. Offset is sampled at local midnight; a DST transition mid-day
-// shifts the far boundary by ≤1h, which is acceptable for day bucketing.
+// given timezone. The end is the NEXT local date's midnight — not start + 24h —
+// so DST transition days keep their true 23h/25h length instead of leaking an
+// hour into (or dropping an hour from) the neighboring day.
 export function localDayRangeUtc(dateStr, timezone) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').trim());
   if (!m) return null;
   const [, y, mo, d] = m.map(Number);
-  const approxUtc = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0));
-  const offset = getUtcOffsetMs(approxUtc, timezone);
-  const start = new Date(approxUtc.getTime() - offset);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const start = localMidnightUtc(y, mo, d, timezone);
+  // Date.UTC rolls d+1 over month/year boundaries for us.
+  const next = new Date(Date.UTC(y, mo - 1, d + 1));
+  const end = localMidnightUtc(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), timezone);
   return { start, end };
 }
 
@@ -337,14 +356,19 @@ export async function listEvents({ from, to, source, kind, personId, limit } = {
 // source/kind tallies. `date` defaults to today in the user's timezone.
 export async function getDaySummary({ date } = {}) {
   const timezone = await getUserTimezone();
-  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : todayInTimezone(timezone);
+  // `today` is computed in the USER's configured timezone (not the browser's) and
+  // returned so the client can default the bare /timeline route and gate its
+  // Today/next-day controls on the server's notion of the current day.
+  const today = todayInTimezone(timezone);
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : today;
   const range = localDayRangeUtc(day, timezone);
-  if (!range) return { date: day, timezone, events: [], histogram: hourlyHistogram([], timezone), counts: summarizeCounts([]) };
+  if (!range) return { date: day, today, timezone, events: [], histogram: hourlyHistogram([], timezone), counts: summarizeCounts([]) };
   const events = await listEvents({ from: range.start.toISOString(), to: range.end.toISOString(), limit: 2000 });
   // listEvents returns newest-first; a day view reads better oldest-first.
   const ordered = [...events].reverse();
   return {
     date: day,
+    today,
     timezone,
     events: ordered,
     histogram: hourlyHistogram(ordered, timezone),

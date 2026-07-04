@@ -121,6 +121,9 @@ describe.skipIf(!dbReady)('humanActivity store (#2150)', () => {
     // then sanity-check the summary shape for the same day.
     const summary = await getDaySummary({ date: '2026-07-04' });
     expect(summary.date).toBe('2026-07-04');
+    // The server's "today" (user-timezone) ships with every summary so the
+    // client can gate its Today/next-day controls on the server's day.
+    expect(summary.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(summary.histogram).toHaveLength(24);
     expect(typeof summary.counts.total).toBe('number');
     expect(summary.counts.bySource).toBeTruthy();

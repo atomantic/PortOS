@@ -112,8 +112,11 @@ function EventRow({ event }) {
 export default function Timeline() {
   const { date: dateParam } = useParams();
   const navigate = useNavigate();
-  const today = localDateStr(new Date());
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : today;
+  // Bare /timeline sends NO date — the server defaults to "today" in the USER's
+  // configured timezone (which may differ from this browser's). The response
+  // carries both the resolved `date` and the server's `today`, so the display
+  // and the Today/next-day gates follow the server's day, not the browser's.
+  const urlDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam || '') ? dateParam : null;
 
   const [day, setDay] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -121,12 +124,17 @@ export default function Timeline() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api.getTimelineDay({ date, silent: true })
+    api.getTimelineDay(urlDate ? { date: urlDate, silent: true } : { silent: true })
       .then((result) => { if (active) setDay(result); })
       .catch((err) => { if (active) { setDay(null); toast.error(`Failed to load timeline: ${err.message}`); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [date]);
+  }, [urlDate]);
+
+  // Browser-local fallbacks cover only the loading/error window before the
+  // server response supplies the authoritative `date` and `today`.
+  const today = day?.today || localDateStr(new Date());
+  const date = day?.date || urlDate || today;
 
   const goto = (target) => navigate(target === today ? '/timeline' : `/timeline/${target}`);
 
