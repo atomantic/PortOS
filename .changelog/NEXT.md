@@ -7,6 +7,7 @@
 ## Privacy Center
 
 - **[issue-2140] Encrypted PII Vault** — PortOS can now store your identity facts (legal name, addresses, phones, emails, DOB, ID documents, financial-account stubs) in an encrypted-at-rest vault: values are AES-256-GCM encrypted with a key auto-provisioned into your `.env` on first use, the API only ever shows masked values (like `••••6789` or `j•••@example.com`) unless you explicitly reveal one, and sensitive document types can never be marked for use in the upcoming data-broker scans. This is Phase 1 of the Privacy Center (epic #2138) — the UI arrives in Phase 3.
+- **[issue-2141] Trusted Organizations registry** — the Privacy Center now has a place to track every organization that has (or had) your PII — banks, utilities, government, employers, subscriptions, medical, insurers, platforms — each with a trust stance (trusted/tolerated/unwanted) and per-org holdings linking to the exact vault records they hold. Holdings always show masked values, never plaintext, and deleting an organization or a vault record automatically cleans up its holdings. This is Phase 2 of the Privacy Center (epic #2138) — it's the data backbone for the upcoming change-of-address inventory and "who has my PII" view; the UI still arrives in Phase 3.
 
 ## Songs
 
