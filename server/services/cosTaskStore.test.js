@@ -198,6 +198,28 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.openPR).toBe(true);
   });
 
+  it('defaults a worktree USER task to openPR:true when openPR is unspecified', async () => {
+    const task = await addTask({ description: 'wt default pr', useWorktree: true }, 'user');
+    expect(task.metadata.useWorktree).toBe(true);
+    expect(task.metadata.openPR).toBe(true);
+  });
+
+  it('does NOT default openPR for a worktree INTERNAL task (automation keeps auto-merge)', async () => {
+    const task = await addTask({ description: 'wt internal', useWorktree: true }, 'internal');
+    expect(task.metadata.useWorktree).toBe(true);
+    expect(task.metadata.openPR).toBeUndefined();
+  });
+
+  it('respects an explicit openPR:false on a worktree task (no default override)', async () => {
+    const task = await addTask({ description: 'wt no pr', useWorktree: true, openPR: false }, 'user');
+    expect(task.metadata.openPR).toBe(false);
+  });
+
+  it('does not set openPR for a non-worktree task', async () => {
+    const task = await addTask({ description: 'no wt', useWorktree: false }, 'user');
+    expect(task.metadata.openPR).toBeUndefined();
+  });
+
   it('raw=true stores the pre-built object verbatim', async () => {
     const raw = { id: 'sys-raw', description: 'raw\nmultiline', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });

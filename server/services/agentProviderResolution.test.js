@@ -99,6 +99,29 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.selectedModel).toBe('m-default');
   });
 
+  it('honors an explicit user-specified model even when it is not in the provider list (no silent downgrade)', async () => {
+    // Regression: claude-code-tui lists the DATED haiku id, so an undated
+    // `claude-haiku-4-5` pin failed the includes() check and silently
+    // downgraded to the provider default (opus, the heaviest model).
+    const provider = { id: 'claude-code-tui', type: 'tui', models: ['claude-haiku-4-5-20251001', 'claude-opus-4-8'], defaultModel: 'claude-opus-4-8', heavyModel: 'claude-opus-4-8' };
+    getActiveProvider.mockResolvedValue(provider);
+    selectModelForTask.mockResolvedValue({ model: 'claude-haiku-4-5', tier: 'user-specified', reason: 'user-preference' });
+
+    const r = await resolveAgentProviderAndModel({ id: 't', metadata: { model: 'claude-haiku-4-5' } });
+    expect(r.ok).toBe(true);
+    expect(r.selectedModel).toBe('claude-haiku-4-5'); // honored, NOT downgraded to opus
+  });
+
+  it('still downgrades an AUTO-selected model that is not in the provider list to the tier default', async () => {
+    const provider = { id: 'p1', type: 'cli', models: ['m-default'], defaultModel: 'm-default', heavyModel: 'm-heavy' };
+    getActiveProvider.mockResolvedValue(provider);
+    selectModelForTask.mockResolvedValue({ model: 'bogus-auto', tier: 'heavy', reason: 'complex-task' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(true);
+    expect(r.selectedModel).toBe('m-heavy'); // auto-selected invalid model → tier fallback
+  });
+
   it('honors a pinned provider before the active-provider availability gate', async () => {
     // The active provider is down, but the task pins a different, healthy
     // provider. The pin must win without the active provider's unavailability

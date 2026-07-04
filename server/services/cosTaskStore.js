@@ -237,6 +237,15 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     else if (taskData.useWorktree === false) metadata.useWorktree = false;
     if (taskData.openPR === true) metadata.openPR = true;
     else if (taskData.openPR === false) metadata.openPR = false;
+    // Default a worktree-isolated USER task to opening a PR rather than
+    // auto-merging straight to the default branch — an unreviewed agent commit
+    // landing on main is the more dangerous default (see the local-model eval
+    // that auto-merged). Fires only when openPR wasn't explicitly set AND a
+    // worktree was explicitly requested; an explicit `openPR: false` above
+    // always wins, and internal/system tasks (autopilot, self-improvement) keep
+    // their existing auto-merge behavior so automation isn't silently gated on a
+    // human merging a PR.
+    else if (taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
     if (taskData.simplify === true) metadata.simplify = true;
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
