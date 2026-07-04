@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
 import { scorePostLlmDrill } from '../../../services/api';
-import { DRILL_LABELS } from './constants';
-import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI } from './WordplayDrillUI';
+import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
+import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, scoreWordplayResponse } from './WordplayDrillUI';
 
 export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, drillCount, onComplete, isTraining, providerId, model }) {
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -119,19 +119,29 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     const newResponses = [...responses, responseObj];
     setResponses(newResponses);
 
-    // Training mode: score this response immediately and show feedback
+    // Training mode: score this response immediately and show feedback.
+    // The four wordplay types (compound-chain/bridge-word/double-meaning/
+    // idiom-twist) delegate to scoreWordplayResponse — the same scoring core
+    // the standalone WordplayTrainer tab uses (issue #2097) — so both entry
+    // points share one scoring path. The other 10 LLM drill types keep their
+    // existing inline path unchanged.
     if (isTraining) {
       setTrainingFeedback({ scoring: true });
-      const scored = await scorePostLlmDrill(
-        drillType, drill, [responseObj], timeLimitMs, providerId, model
-      ).catch(() => null);
-      const fb = scored?.evaluation?.scores?.[0] || {};
-      setTrainingFeedback({
-        scoring: false,
-        score: fb.score ?? scored?.score ?? 0,
-        feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
-        missedExamples: fb.missedExamples,
-      });
+      if (WORDPLAY_LLM_DRILL_TYPES.includes(drillType)) {
+        const result = await scoreWordplayResponse(drillType, drill, responseObj, timeLimitMs, providerId, model);
+        setTrainingFeedback({ scoring: false, ...result });
+      } else {
+        const scored = await scorePostLlmDrill(
+          drillType, drill, [responseObj], timeLimitMs, providerId, model
+        ).catch(() => null);
+        const fb = scored?.evaluation?.scores?.[0] || {};
+        setTrainingFeedback({
+          scoring: false,
+          score: fb.score ?? scored?.score ?? 0,
+          feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
+          missedExamples: fb.missedExamples,
+        });
+      }
       return;
     }
 
