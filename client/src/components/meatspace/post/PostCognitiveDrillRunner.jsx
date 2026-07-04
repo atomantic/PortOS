@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Check, X } from 'lucide-react';
-import { DRILL_LABELS } from './constants';
+import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 
 /**
  * Interactive runner for deterministic cognitive drills (n-back, digit-span,
@@ -63,25 +63,11 @@ export function localAccuracyScore(questions) {
 // Pre-save mirror of the server's signal-detection n-back score (issue #2094):
 // balanced accuracy over targets (hit rate) and non-targets (correct-rejection
 // rate), so the results screen matches what the save persists instead of raw
-// position accuracy (which pays ~70% for never pressing).
-export function localNBackScore(drill, questions) {
-  const seq = drill?.sequence || [];
-  const n = drill?.config?.n ?? 2;
-  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
-  for (const q of questions) {
-    const isTarget = q.index >= n && seq[q.index] != null && seq[q.index] === seq[q.index - n];
-    const pressed = q.answered === 'match';
-    if (isTarget) { if (pressed) hits += 1; else misses += 1; }
-    else if (pressed) falseAlarms += 1;
-    else correctRejections += 1;
-  }
-  const targets = hits + misses;
-  const nonTargets = correctRejections + falseAlarms;
-  const hitRate = targets ? hits / targets : null;
-  const crRate = nonTargets ? correctRejections / nonTargets : null;
-  // A missing signal class counts as chance (0.5), mirroring the server — a
-  // never-press run through an all-non-target sequence must not show 100.
-  const accuracy = hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
+// position accuracy (which pays ~70% for never pressing). Delegates to the
+// shared answered+correct derivation in constants.js (buildNBackQuestions marks
+// `correct` with exactly the identity that derivation relies on).
+export function localNBackScore(_drill, questions) {
+  const accuracy = nBackBalancedAccuracy(questions);
   return accuracy == null ? 0 : Math.min(100, Math.max(0, Math.round(accuracy * 100)));
 }
 

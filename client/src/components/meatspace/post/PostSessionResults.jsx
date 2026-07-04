@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle, Save, ArrowLeft, ChevronDown, ChevronUp, Dumbbell } from 'lucide-react';
-import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS } from './constants';
+import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 
 export default function PostSessionResults({ session, tags = {}, onSaved, onBack }) {
   const { drillResults, sessionScore, state, saveSession, isTraining } = session;
@@ -78,18 +78,19 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
               // this pre-save view falls back to deriving from questions[] since
               // the session hasn't been scored server-side yet. n-back is a go/no-go
               // task: a withheld press ("answered: null") is a deliberate no-match
-              // decision, not an unreached trial — so every trial counts as reached
-              // (completion 100%, matching the server's completion=1). Note: the
-              // pre-save fallback accuracy here is raw position accuracy over all
-              // trials — a close stand-in for (not identical to) the balanced
-              // signal-detection accuracy the server persists on save (#2093 owns
-              // the deeper results UI).
+              // decision, not an unreached trial — every trial counts as reached
+              // (completion 100%, matching the server's completion=1), and its
+              // accuracy fallback is the balanced signal-detection derivation
+              // (raw `correct` averaging would pay ~70% for never pressing).
               const questions = result.questions || [];
               const noGo = result.type === 'n-back';
               const reached = noGo ? questions : questions.filter(q => q.answered !== null);
+              const derivedAcc = noGo
+                ? nBackBalancedAccuracy(questions)
+                : (reached.length > 0 ? reached.filter(q => q.correct).length / reached.length : null);
               const accPct = result.accuracy != null
                 ? Math.round(result.accuracy * 100)
-                : (reached.length > 0 ? Math.round((reached.filter(q => q.correct).length / reached.length) * 100) : null);
+                : (derivedAcc != null ? Math.round(derivedAcc * 100) : null);
               const compPct = result.completion != null
                 ? Math.round(result.completion * 100)
                 : (questions.length > 0 ? Math.round((reached.length / questions.length) * 100) : null);

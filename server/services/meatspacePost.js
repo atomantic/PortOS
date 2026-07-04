@@ -316,15 +316,42 @@ export function computePostStreaks(sessions, todayStr) {
  * `null` — never NaN. Used by stats aggregation and the adaptive signal so old
  * and new session shapes both read cleanly.
  */
+/**
+ * Balanced (signal-detection) accuracy for n-back questions, derived from only
+ * `answered` + `correct` — fields both legacy stored sessions and pre-save
+ * client results carry. Works because `correct` was always computed as
+ * "(pressed ? match : no-match) === expected", so `isTarget = pressed === correct`
+ * is an identity across old and new scorers. A missing signal class counts as
+ * chance (0.5), matching scoreNBack. Exported for the client-fallback mirror
+ * tests; the client copy lives in components/meatspace/post/constants.js.
+ */
+export function nBackBalancedAccuracy(questions) {
+  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
+  for (const q of Array.isArray(questions) ? questions : []) {
+    const pressed = q?.answered === 'match';
+    const isTarget = pressed === !!q?.correct;
+    if (isTarget) { if (pressed) hits += 1; else misses += 1; }
+    else if (pressed) falseAlarms += 1;
+    else correctRejections += 1;
+  }
+  const hitRate = hits + misses ? hits / (hits + misses) : null;
+  const crRate = correctRejections + falseAlarms ? correctRejections / (correctRejections + falseAlarms) : null;
+  return hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
+}
+
 export function deriveTaskAccuracy(task) {
   if (typeof task?.accuracy === 'number' && !Number.isNaN(task.accuracy)) return task.accuracy;
   const qs = Array.isArray(task?.questions) ? task.questions : [];
-  // n-back is go/no-go: a withheld press (answered == null) is a deliberate
-  // "no-match" decision, not an unreached trial — so accuracy spans ALL trials,
-  // mirroring the client fallbacks in PostHistory/PostSessionResults.
-  const reached = task?.type === 'n-back' ? qs : qs.filter(q => q?.answered != null);
-  if (!reached.length) return null;
-  return reached.filter(q => q?.correct).length / reached.length;
+  if (!qs.length) return null;
+  // n-back is go/no-go: a withheld press is a deliberate "no-match" decision,
+  // and its legacy `correct` flags encode the OLD raw-position model — so the
+  // fallback recomputes balanced SDT accuracy rather than averaging them
+  // (otherwise a legacy never-press run still reads ~70%). Mirrors the client
+  // fallbacks in PostHistory/PostSessionResults.
+  if (task?.type === 'n-back') return nBackBalancedAccuracy(qs);
+  const answered = qs.filter(q => q?.answered != null);
+  if (!answered.length) return null;
+  return answered.filter(q => q?.correct).length / answered.length;
 }
 
 /**

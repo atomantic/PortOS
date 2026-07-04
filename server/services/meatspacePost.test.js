@@ -884,21 +884,37 @@ describe('deriveTaskAccuracy / deriveTaskCompletion — legacy-session fallback'
     expect(deriveTaskCompletion({})).toBe(null);
   });
 
-  it('legacy n-back: withheld presses are decisions, not skips — accuracy spans all trials, completion is 1', () => {
-    // 10-trial legacy n-back run: 2 presses (1 correct hit, 1 false alarm) and 8
-    // withheld (all correct rejections). Answered-only filtering would report
-    // accuracy 0.5 / completion 0.2; go/no-go semantics say 9/10 and fully reached.
+  it('legacy n-back: balanced SDT derivation, not raw correct-flag averaging', () => {
+    // 10-trial legacy n-back run: 2 presses (1 hit, 1 false alarm) and 8 withheld
+    // trials whose stored correct:true flags mark them correct rejections. Raw
+    // correct-flag averaging would report 0.9; balanced SDT tallies hit 1
+    // (pressed+correct), false alarm 1 (pressed+incorrect), correct rejections 8
+    // (withheld+correct) → hitRate 1, crRate 8/9 → (1 + 8/9)/2 ≈ 0.944.
     const task = {
       type: 'n-back',
       questions: [
-        { answered: 'match', correct: true },
-        { answered: 'match', correct: false },
-        ...Array.from({ length: 8 }, () => ({ answered: null, correct: true })),
+        { answered: 'match', correct: true },   // hit (target)
+        { answered: 'match', correct: false },  // false alarm (non-target)
+        ...Array.from({ length: 8 }, () => ({ answered: null, correct: true })), // correct rejections
       ],
     };
-    expect(deriveTaskAccuracy(task)).toBeCloseTo(0.9, 5);
+    expect(deriveTaskAccuracy(task)).toBeCloseTo((1 + 8 / 9) / 2, 5);
     expect(deriveTaskCompletion(task)).toBe(1);
     expect(deriveTaskCompletion({ type: 'n-back', questions: [] })).toBe(null);
+  });
+
+  it('legacy n-back never-press run derives ~50 (not the stored raw ~70)', () => {
+    // Old scorer marked withheld non-targets correct:true and missed targets
+    // correct:false. 7 non-targets + 3 missed targets, no presses → raw average
+    // would read 70%; balanced SDT reads (hitRate 0 + crRate 1)/2 = 0.5.
+    const task = {
+      type: 'n-back',
+      questions: [
+        ...Array.from({ length: 7 }, () => ({ answered: null, correct: true })),  // correct rejections
+        ...Array.from({ length: 3 }, () => ({ answered: null, correct: false })), // misses
+      ],
+    };
+    expect(deriveTaskAccuracy(task)).toBe(0.5);
   });
 });
 

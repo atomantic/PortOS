@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
+import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel, nBackBalancedAccuracy } from './constants';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -264,8 +264,10 @@ export default function PostHistory({ onBack }) {
                   // completion separately from the blended score column (issue
                   // #2094) — never "correct/total", which counts timed-out
                   // questions as wrong. Prefer the server-persisted metrics; fall
-                  // back to deriving from questions[] for legacy sessions, treating
-                  // n-back's withheld presses as reached decisions (not skips).
+                  // back to deriving from questions[] for legacy sessions. Legacy
+                  // n-back needs balanced SDT accuracy (its stored `correct`
+                  // flags encode the old raw-position model that pays ~70% for
+                  // never pressing) and is always fully reached (go/no-go).
                   let detail;
                   if (isLlm) {
                     detail = `${task.responses?.length || 0} responses`;
@@ -273,9 +275,12 @@ export default function PostHistory({ onBack }) {
                     const questions = task.questions || [];
                     const noGo = task.type === 'n-back';
                     const reached = noGo ? questions : questions.filter(q => q.answered != null);
+                    const derivedAcc = noGo
+                      ? nBackBalancedAccuracy(questions)
+                      : (reached.length ? reached.filter(q => q.correct).length / reached.length : null);
                     const accPct = task.accuracy != null
                       ? Math.round(task.accuracy * 100)
-                      : (reached.length ? Math.round((reached.filter(q => q.correct).length / reached.length) * 100) : null);
+                      : (derivedAcc != null ? Math.round(derivedAcc * 100) : null);
                     const compPct = task.completion != null
                       ? Math.round(task.completion * 100)
                       : (questions.length ? Math.round((reached.length / questions.length) * 100) : null);
