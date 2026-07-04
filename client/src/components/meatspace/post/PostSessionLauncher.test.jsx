@@ -165,19 +165,30 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(screen.getByText(/4\/10/)).toBeTruthy();
   });
 
-  it('makes a launcher-targeted recommendation actionable (focuses the drill)', async () => {
+  it('starts exactly the recommended drill (not the whole domain) for a launcher-targeted rec', async () => {
     const onStart = vi.fn();
+    // Enable multiple math drills so a domain-focus would over-queue.
+    const multiMathConfig = {
+      ...baseConfig,
+      mentalMath: { enabled: true, drillTypes: {
+        multiplication: { enabled: true, count: 10, timeLimitSec: 120 },
+        powers: { enabled: true, count: 8, timeLimitSec: 90 },
+        estimation: { enabled: true, count: 5, timeLimitSec: 120 },
+      } },
+    };
     getPostRecommendations.mockResolvedValue({ recommendations: [
       { id: 'weak-skill:mm', kind: 'weak-skill', title: 'Shore up Multiplication', detail: 'x', deepLink: '/post/launcher', drillType: 'multiplication', priority: 0 },
     ] });
-    renderLauncher({ onStart });
+    renderLauncher({ onStart, config: multiMathConfig });
     await waitFor(() => expect(screen.getByText('Shore up Multiplication')).toBeTruthy());
     // A launcher-targeted rec renders as a button (does the practice), not a link.
     const row = screen.getByText('Shore up Multiplication').closest('button');
     expect(row).toBeTruthy();
     fireEvent.click(row);
     expect(onStart).toHaveBeenCalledTimes(1);
-    expect(onStart.mock.calls[0][0].some(d => d.type === 'multiplication')).toBe(true);
+    const drills = onStart.mock.calls[0][0];
+    // Only the recommended drill runs — powers/estimation are NOT queued.
+    expect(drills.map(d => d.type)).toEqual(['multiplication']);
   });
 
   it('launches a review rep (with markers) for a skill-review recommendation', async () => {

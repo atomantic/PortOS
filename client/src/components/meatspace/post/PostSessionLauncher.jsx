@@ -325,44 +325,57 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
+  // Build a full-length (non-abbreviated) drill config for a single enabled
+  // drill, shared by domain-focus and single-drill starts. `domainKey` overrides
+  // the drill's own domain only for consistency with the caller's grouping.
+  function buildFocusDrillConfig({ type, cfg, source }, domainKey = DRILL_TO_DOMAIN[type]) {
+    const domain = DOMAINS[domainKey];
+    let focusConfig;
+    if (source === 'math') {
+      focusConfig = {
+        steps: cfg.steps,
+        count: cfg.count,
+        maxDigits: cfg.maxDigits,
+        subtrahend: cfg.subtrahend,
+        startRange: cfg.startRange,
+        bases: cfg.bases,
+        maxExponent: cfg.maxExponent,
+        tolerancePct: cfg.tolerancePct,
+      };
+    } else if (source === 'cognitive') {
+      focusConfig = cognitiveDrillConfig(cfg);
+    } else {
+      focusConfig = { count: cfg.count || 5 };
+    }
+    const drillConfig = {
+      type,
+      domain: domainKey,
+      config: focusConfig,
+      timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
+    };
+    if (source === 'llm') {
+      drillConfig.providerId = cfg.providerId || llmProviderId;
+      drillConfig.model = cfg.model || llmModel;
+    }
+    return drillConfig;
+  }
+
   // Focused practice on a single domain: run every enabled drill in that domain
   // (not one random pick, unlike the balanced quick session) so the weakest
   // domain gets a substantive workout.
   function handleFocusDomain(domainKey) {
     const drills = enabledDomains[domainKey];
     if (!drills || drills.length === 0) return;
-    const domain = DOMAINS[domainKey];
-    const drillConfigs = drills.map(({ type, cfg, source }) => {
-      let focusConfig;
-      if (source === 'math') {
-        focusConfig = {
-          steps: cfg.steps,
-          count: cfg.count,
-          maxDigits: cfg.maxDigits,
-          subtrahend: cfg.subtrahend,
-          startRange: cfg.startRange,
-          bases: cfg.bases,
-          maxExponent: cfg.maxExponent,
-          tolerancePct: cfg.tolerancePct,
-        };
-      } else if (source === 'cognitive') {
-        focusConfig = cognitiveDrillConfig(cfg);
-      } else {
-        focusConfig = { count: cfg.count || 5 };
-      }
-      const drillConfig = {
-        type,
-        domain: domainKey,
-        config: focusConfig,
-        timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
-      };
-      if (source === 'llm') {
-        drillConfig.providerId = cfg.providerId || llmProviderId;
-        drillConfig.model = cfg.model || llmModel;
-      }
-      return drillConfig;
-    });
-    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
+    onStart(drills.map(d => buildFocusDrillConfig(d, domainKey)), buildCleanTags(tags), mode === 'train');
+  }
+
+  // Start a session with exactly ONE recommended drill (issue #2100): an Up next
+  // rec that names a specific drill takes the user into THAT drill, not every
+  // drill in its domain. No-op if the drill isn't currently enabled.
+  function startDrillByType(type) {
+    const entry = allEnabledDrills.find(d => d.type === type);
+    if (!entry) return;
+    onStart([buildFocusDrillConfig(entry)], buildCleanTags(tags), mode === 'train');
   }
 
   // Launch a single due maintenance-review rep from an "Up next" skill-review
@@ -552,9 +565,12 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                       onClick = () => startReviewRep(rec);
                     } else {
                       const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
-                      const canFocus = domainKey && sessionEnabledDomains[domainKey];
-                      onClick = canFocus
-                        ? () => handleFocusDomain(domainKey)
+                      // Start the EXACT recommended drill when it's enabled and in
+                      // an allowed module; else (no specific drill) start a Full POST.
+                      const drillRunnable = domainKey && sessionEnabledDomains[domainKey]
+                        && sessionEnabledDomains[domainKey].some(d => d.type === rec.drillType);
+                      onClick = drillRunnable
+                        ? () => startDrillByType(rec.drillType)
                         : (hasSessionDrills ? handleStart : null);
                     }
                     return (
