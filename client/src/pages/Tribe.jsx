@@ -483,6 +483,7 @@ function MemoryLinksPanel({ personId }) {
 const SOURCE_BADGES = {
   calendar: { Icon: Calendar, label: 'Calendar' },
   message: { Icon: MessageCircle, label: 'Message' },
+  imessage: { Icon: MessageCircle, label: 'iMessage' },
   import: { Icon: Users, label: 'Import' },
   user: { Icon: UserRound, label: 'Manual' },
 };
