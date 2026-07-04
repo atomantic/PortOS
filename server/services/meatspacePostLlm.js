@@ -618,42 +618,6 @@ Return ONLY valid JSON:
 {"overallScore":75,"scores":[{"score":80,"feedback":"Good creative connections"}],"summary":"Overall assessment"}`;
 }
 
-function buildStoryRecallScorePrompt(drillData, responses) {
-  const items = responses.map((r, i) => {
-    const exercise = drillData.exercises?.[r.questionIndex ?? i];
-    const qas = (exercise?.questions || []).map((q, qi) => {
-      const userAnswer = r.answers?.[qi] || '(no answer)';
-      return `  Q: ${q.question} | Correct: ${q.answer} | User: ${userAnswer}`;
-    }).join('\n');
-    return `Story ${i + 1}: "${exercise?.paragraph}"\n${qas}`;
-  }).join('\n\n');
-
-  return `Score these story recall responses. For each question, determine if the user's answer matches the correct answer (allow minor spelling/phrasing differences).
-Rate each exercise 0-100 based on accuracy.
-
-${items}
-
-Return ONLY valid JSON:
-{"overallScore":75,"scores":[{"score":80,"feedback":"Recalled 3 of 4 details correctly"}],"summary":"Overall memory assessment"}`;
-}
-
-function buildVerbalFluencyScorePrompt(drillData, responses) {
-  const items = responses.map((r, i) => {
-    const cat = drillData.categories?.[r.questionIndex ?? i];
-    return `Category: "${cat?.category}" (expected ~${cat?.minExpected})\nUser items: ${(r.items || []).join(', ') || '(none)'}`;
-  }).join('\n\n');
-
-  return `Score these verbal fluency responses. For each category:
-1. Count valid, unique items (remove duplicates and invalid entries)
-2. Compare count to minExpected
-3. Note any particularly creative or unusual valid answers
-
-${items}
-
-Return ONLY valid JSON:
-{"overallScore":75,"scores":[{"score":80,"feedback":"Named 12 valid animals, good variety","validCount":12,"invalidItems":["rock"]}],"summary":"Overall fluency assessment"}`;
-}
-
 function buildWitComebackScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {
     const scenario = drillData.scenarios?.[r.questionIndex ?? i];
@@ -687,41 +651,6 @@ Return ONLY valid JSON:
 // ─────────────────────────────────────────────────────────────────────────────
 // WORDPLAY TRAINING SCORE PROMPTS
 // ─────────────────────────────────────────────────────────────────────────────
-
-function buildCompoundChainScorePrompt(drillData, responses) {
-  const items = responses.map((r, i) => {
-    const challenge = drillData.challenges?.[r.questionIndex ?? i];
-    return `Root word: "${challenge?.rootWord}" (position: ${challenge?.position}, target: ${challenge?.minExpected}+)\nUser's compounds: ${(r.items || []).join(', ') || '(none)'}`;
-  }).join('\n\n');
-
-  return `Score these compound word/phrase association responses. For each root word:
-1. Count valid compound words or common phrases that actually use the root word
-2. Remove duplicates, misspellings, and invalid entries (words that don't form real compounds with the root)
-3. Compare count to the target (minExpected)
-4. Bonus for creative or unusual but valid compounds
-
-${items}
-
-Return ONLY valid JSON:
-{"overallScore":75,"scores":[{"score":80,"feedback":"12 valid compounds, good variety","validCount":12,"invalidItems":["not-a-real-compound"]}],"summary":"Overall compound chain assessment"}`;
-}
-
-function buildBridgeWordScorePrompt(drillData, responses) {
-  const items = responses.map((r, i) => {
-    const puzzle = drillData.puzzles?.[r.questionIndex ?? i];
-    return `Clues: ${(puzzle?.clues || []).join(', ')}\nCorrect answer: "${puzzle?.answer}"\nUser's answer: "${r.response || '(no response)'}"`;
-  }).join('\n\n');
-
-  return `Score these bridge word puzzle responses. For each puzzle:
-1. Check if the user's answer matches the correct bridge word (allow minor spelling differences)
-2. If the user gave a different word that also validly fills all the blanks, give full credit
-3. Rate 0 for wrong answers, 100 for correct
-
-${items}
-
-Return ONLY valid JSON:
-{"overallScore":75,"scores":[{"score":100,"feedback":"Correct!"}],"summary":"Overall bridge word assessment"}`;
-}
 
 function buildDoubleMeaningScorePrompt(drillData, responses) {
   const items = responses.map((r, i) => {

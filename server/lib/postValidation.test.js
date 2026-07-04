@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { postLlmScoreRequestSchema, postConfigUpdateSchema, postSessionSubmitSchema, postDrillRequestSchema, trainingEntrySchema, LLM_DRILL_TYPES } from './postValidation.js';
+import { postLlmScoreRequestSchema, postConfigUpdateSchema, postSessionSubmitSchema, postDrillRequestSchema, trainingEntrySchema, LLM_DRILL_TYPES, POST_MODULES, POST_SUPPORTED_MEMORY_TYPES } from './postValidation.js';
 
 describe('postConfigUpdateSchema llmDrills', () => {
   // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
@@ -168,6 +168,51 @@ describe('questionResultSchema chunkId/element (issue #2016)', () => {
       }]
     });
     expect(parsed.tasks[0].questions[0].chunkId).toBeNull();
+  });
+});
+
+describe('postSessionSubmitSchema.modules — enum of known modules (issue #2099, fix #6)', () => {
+  // Regression: `modules` (session-level) and each task's `module` were both
+  // z.array(z.string())/z.string() — any typo'd string passed validation and
+  // then silently created a phantom bucket in getPostStats().byModule, keyed
+  // off task.module. Now both must be one of POST_MODULES.
+  it('accepts every known module', () => {
+    for (const module of POST_MODULES) {
+      const parsed = postSessionSubmitSchema.parse({
+        modules: [module],
+        tasks: [{ module, type: 'doubling-chain', totalMs: 100 }]
+      });
+      expect(parsed.modules).toEqual([module]);
+    }
+  });
+
+  it('rejects an unknown module string on the session-level modules array', () => {
+    expect(() => postSessionSubmitSchema.parse({
+      modules: ['mentalmath'], // typo — missing the hyphen
+      tasks: [{ module: 'mental-math', type: 'doubling-chain', totalMs: 100 }]
+    })).toThrow();
+  });
+
+  it('rejects an unknown module string on a task — the actual byModule phantom-bucket vector', () => {
+    expect(() => postSessionSubmitSchema.parse({
+      modules: ['mental-math'],
+      tasks: [{ module: 'mentalmath', type: 'doubling-chain', totalMs: 100 }]
+    })).toThrow();
+  });
+
+  it('rejects an unknown module on postConfigUpdateSchema.sessionModules', () => {
+    expect(() => postConfigUpdateSchema.parse({ sessionModules: ['not-a-module'] })).toThrow();
+    expect(postConfigUpdateSchema.parse({ sessionModules: ['memory'] }).sessionModules).toEqual(['memory']);
+  });
+});
+
+describe('POST_SUPPORTED_MEMORY_TYPES (issue #2099, fix #1)', () => {
+  // Regression: memory-fill-blank used to be absent, which forced its score
+  // to 0 and skipped schedule/mastery advancement in submitPostSession.
+  it('includes memory-fill-blank alongside memory-sequence and memory-element-flash', () => {
+    expect(POST_SUPPORTED_MEMORY_TYPES).toEqual(
+      expect.arrayContaining(['memory-fill-blank', 'memory-sequence', 'memory-element-flash'])
+    );
   });
 });
 

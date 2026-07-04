@@ -154,7 +154,13 @@ export function usePostSession() {
     if (hasFillBlankAnswers) {
       answered = value;
       const normalized = value !== null ? String(value).toLowerCase().trim() : '';
-      correct = q.answers.some(a => String(a).toLowerCase().trim() === normalized);
+      // q.answers holds ACCEPTABLE-WORD OBJECTS ({ index, word, element }), not
+      // scalars — comparing via String(a) on an object always produced
+      // "[object Object]" so this could never match, silently scoring every
+      // fill-blank answer wrong (issue #2116). Compare against the object's
+      // `.word` (falling back to the raw value for a plain-string entry, for
+      // forward/backward compatibility with any other producer).
+      correct = q.answers.some(a => String(a?.word ?? a).toLowerCase().trim() === normalized);
     } else if (isTextAnswer) {
       answered = value;
       correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();

@@ -178,6 +178,21 @@ describe('generateMemoryDrill', () => {
     }
   });
 
+  // Regression (issue #2116): generateFillBlank used to return only an
+  // `answers[]` array of { index, word, element } objects with no scalar
+  // `expected` — the client's fill-blank scoring path (and any generic
+  // consumer expecting `expected`, like DrillQuestionReview) had nothing
+  // consistent to read. `expected` must now be the primary (first blanked)
+  // word, and it must always be ONE of the acceptable `answers[]` words.
+  it('stamps a scalar `expected` on every fill-blank question, matching the primary acceptable answer', async () => {
+    const drill = await generateMemoryDrill({ mode: 'fill-blank', count: 5 });
+    for (const q of drill.questions) {
+      expect(typeof q.expected).toBe('string');
+      expect(q.expected).toBe(q.answers[0].word);
+      expect(q.answers.map(a => a.word)).toContain(q.expected);
+    }
+  });
+
   it('generates sequence drill', async () => {
     const drill = await generateMemoryDrill({ mode: 'sequence', count: 3 });
     expect(drill).toBeTruthy();

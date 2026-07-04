@@ -28,6 +28,7 @@ import {
   postConfigEvents,
   resolveDrillConfig,
   getMultiplicationProgress,
+  getAdaptivePreview,
   getPostStats,
   deriveTaskAccuracy,
   deriveTaskCompletion,
@@ -666,13 +667,15 @@ describe('submitPostSession — memory drill schedule advance', () => {
     expect(memoryWrite).toBeUndefined();
   });
 
-  it('does not advance a schedule for an unsupported memory drill type with no memoryItemId', async () => {
+  it('does not advance a schedule for a supported memory task with no memoryItemId', async () => {
     await submitPostSession({
       cadence: 'daily',
       modules: ['memory'],
       tasks: [{
         module: 'memory',
         type: 'memory-fill-blank',
+        // No memoryItemId — the schedule/mastery advance loop gates on it
+        // regardless of whether the type is in POST_SUPPORTED_MEMORY_TYPES.
         questions: [{ prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500 }],
         totalMs: 500,
       }],
@@ -681,6 +684,131 @@ describe('submitPostSession — memory drill schedule advance', () => {
 
     const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
     expect(memoryWrite).toBeUndefined();
+  });
+
+  // Regression (issue #2099, fix #1): memory-fill-blank used to be ABSENT from
+  // POST_SUPPORTED_MEMORY_TYPES, so submitPostSession forced its score to 0
+  // (treating it as an "unsupported memory drill") and the schedule/mastery
+  // advance loop below skipped it entirely — any fill-blank work done inside a
+  // scored session was silently unrecorded. It must now behave exactly like
+  // memory-sequence/memory-element-flash: trust the client-computed score and
+  // advance the drilled item's schedule + mastery.
+  it('trusts the client score and advances schedule/mastery for a memory-fill-blank task (issue #2099/#2116)', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-fill-blank',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500, chunkId: 'verse-1' },
+        ],
+        score: 85,
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    // Client-computed score is trusted for this now-supported type, not forced to 0.
+    expect(session.tasks[0].score).toBe(85);
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrites.length).toBe(2); // schedule advance + mastery merge
+    const scheduleWrite = memoryWrites[0];
+    const updatedItem = scheduleWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedMastery = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedMastery.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 1, lastPracticed: expect.any(String) });
+  });
+});
+
+// =============================================================================
+// WEIGHTED SESSION SCORE — scoring.weights (issue #2099, fix #3)
+//
+// DEFAULT_CONFIG.scoring.weights + the postConfigUpdateSchema.scoring.weights
+// slice existed but were never read anywhere — computeSessionScore was a
+// plain unweighted mean. Wired here: uniform (default) weights must reproduce
+// the exact old unweighted-mean score; skewed weights must shift the blend
+// toward the higher-weighted module's score. LLM/memory tasks trust the
+// client-supplied `score` verbatim (no server-side rescoring), which makes
+// them the simplest fixture for asserting exact blended-score math.
+// =============================================================================
+
+describe('submitPostSession — weighted scoring (issue #2099)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const llmTask = (score) => ({
+    module: 'llm-drills', type: 'word-association', responses: [], score, totalMs: 1000,
+  });
+  const memoryTask = (score) => ({
+    module: 'memory', type: 'memory-sequence', questions: [], score, totalMs: 500,
+  });
+
+  it('uniform default weights reproduce the plain unweighted mean', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      return Promise.resolve(defaultValue); // post-config → baseDefaults (all weights 1.0)
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(100), memoryTask(0)],
+      tags: {},
+    });
+
+    expect(session.score).toBe(50); // (100 + 0) / 2
+  });
+
+  it('a configured module weight skews the blended score toward the higher-weighted module', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        // De-emphasize memory (0.5) — mirrors the real 0-1 range
+        // postConfigUpdateSchema.scoring.weights accepts. llm-drills is
+        // absent from this patch and must fall back to the default weight
+        // (1.0), not drop out.
+        return Promise.resolve({ scoring: { weights: { memory: 0.5 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(100), memoryTask(80)],
+      tags: {},
+    });
+
+    // (100*1 + 80*0.5) / (1+0.5) = 140/1.5 = 93.33 → 93
+    expect(session.score).toBe(93);
+  });
+
+  it('a zero weight excludes that module\'s task from the blend entirely', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        return Promise.resolve({ scoring: { weights: { memory: 0 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(80), memoryTask(0)],
+      tags: {},
+    });
+
+    // memory weight 0 drops out entirely → score is just the llm-drills task's own score
+    expect(session.score).toBe(80);
   });
 });
 
@@ -849,6 +977,70 @@ describe('resolveDrillConfig — progressive multiplication', () => {
     expect(progress.levels[0].mastered).toBe(true);
     expect(progress.thresholds.minSamples).toBeGreaterThan(0);
     expect(progress.windowDays).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// ADAPTIVE PREVIEW / resolveDrillConfig PARITY — multiplication (issue #2099, fix #2)
+//
+// getAdaptivePreview used to always build multiplication's preview off the
+// generic maxDigits Adaptive knob, even though resolveDrillConfig hands
+// multiplication's difficulty entirely to the progressive ladder whenever
+// `progressive !== false` (the default) — so the previewed maxDigits
+// adjustment could never actually apply. This locks the two functions'
+// multiplication branch in parity for both progressive modes.
+// =============================================================================
+
+describe('getAdaptivePreview — multiplication parity with resolveDrillConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      return Promise.resolve(defaultValue);
+    });
+  });
+
+  it('previews the progressive ladder rung (not a maxDigits knob) when progressive is on (the default)', async () => {
+    const preview = await getAdaptivePreview();
+    const resolved = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+
+    expect(preview.drills.multiplication.ladder).toBe(true);
+    // Same rung resolveDrillConfig would actually generate a drill at.
+    expect(preview.drills.multiplication.level).toBe(resolved.progression.level);
+    expect(preview.drills.multiplication.factors).toEqual(resolved.progression.factors);
+    // The generic Adaptive maxDigits field must NOT be present — showing it
+    // would advertise an adjustment resolveDrillConfig will never apply.
+    expect(preview.drills.multiplication.field).toBeUndefined();
+    expect(preview.drills.multiplication.to).toBeUndefined();
+  });
+
+  it('previews the maxDigits Adaptive knob when progressive is turned off', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        return Promise.resolve({ mentalMath: { drillTypes: { multiplication: { progressive: false } } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const preview = await getAdaptivePreview();
+    const resolved = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+
+    // No live adaptation without scored history, but the field/shape must
+    // match the maxDigits knob resolveDrillConfig's Adaptive branch would use
+    // — not the ladder shape.
+    expect(preview.drills.multiplication.ladder).toBeUndefined();
+    expect(preview.drills.multiplication.field).toBe('maxDigits');
+    expect(resolved.progression == null).toBe(true);
+    expect(resolved.config.maxDigits).toBe(2);
+  });
+
+  it('other math drill types are unaffected (still the generic Adaptive preview)', async () => {
+    const preview = await getAdaptivePreview();
+    expect(preview.drills['doubling-chain'].field).toBe('steps');
+    expect(preview.drills['doubling-chain'].ladder).toBeUndefined();
   });
 });
 

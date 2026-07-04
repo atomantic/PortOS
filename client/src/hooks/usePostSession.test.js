@@ -256,6 +256,87 @@ describe('usePostSession — memory drill chunk/element attribution (#2016)', ()
   });
 });
 
+// Covers issue #2116: generateFillBlank questions carry acceptable answers as
+// `answers[]` OBJECTS ({ index, word, element }), not scalar strings.
+// submitAnswer's fill-blank branch used to compare via `String(a)` on each
+// object, which always stringifies to "[object Object]" — so a fill-blank
+// answer could never be marked correct no matter what the user typed. It must
+// now compare against each acceptable answer's `.word`.
+describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function fillBlankDrill(answers) {
+    return {
+      type: 'memory-fill-blank',
+      memoryItemId: 'song-1',
+      config: {},
+      questions: [{
+        prompt: 'The ____ fox',
+        fullText: 'The quick fox',
+        expected: answers[0]?.word ?? null,
+        answers,
+        chunkId: 'verse-1',
+      }],
+    };
+  }
+
+  it('marks a fill-blank answer correct when it matches an acceptable answer word', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('quick');
+    });
+
+    const task = result.current.drillResults[0];
+    expect(task.questions[0].correct).toBe(true);
+    expect(task.module).toBe('memory');
+    expect(task.memoryItemId).toBe('song-1');
+  });
+
+  it('is case/whitespace-insensitive, matching any of several acceptable blanked words', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([
+        { index: 1, word: 'quick', element: null },
+        { index: 2, word: 'fox', element: null },
+      ])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('  FOX  ');
+    });
+
+    expect(result.current.drillResults[0].questions[0].correct).toBe(true);
+  });
+
+  it('marks a fill-blank answer incorrect when it matches none of the acceptable words', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('slow');
+    });
+
+    expect(result.current.drillResults[0].questions[0].correct).toBe(false);
+  });
+});
+
 describe('usePostSession — LLM training-log correctCount (issue #2097)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
