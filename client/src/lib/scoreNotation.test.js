@@ -73,10 +73,24 @@ describe('keySignature', () => {
   });
   it('reads flat keys', () => {
     expect(keySignature('F')).toMatchObject({ type: 'flat', count: 1, letters: ['B'] });
-    expect(keySignature('Eb minor')).toMatchObject({ type: 'flat', count: 3 });
+    // Eb minor's relative major is Gb (6 flats), not Eb major (3 flats) —
+    // regression check for treating a minor tonic as if it were major.
+    expect(keySignature('Eb minor')).toMatchObject({ type: 'flat', count: 6 });
   });
   it('falls back to C for unknown input', () => {
     expect(keySignature('nonsense')).toMatchObject({ type: 'none', count: 0 });
+  });
+  it('resolves a minor key to its relative major signature', () => {
+    expect(keySignature('D minor')).toMatchObject({ type: 'flat', count: 1, letters: ['B'] });
+    expect(keySignature('Em')).toMatchObject({ type: 'sharp', count: 1, letters: ['F'] });
+    expect(keySignature('F# minor')).toMatchObject({ type: 'sharp', count: 3, letters: ['F', 'C', 'G'] });
+    expect(keySignature('Bbm')).toMatchObject({ type: 'flat', count: 5, letters: ['B', 'E', 'A', 'D', 'G'] });
+    expect(keySignature('D min')).toMatchObject({ type: 'flat', count: 1 });
+  });
+  it('major behavior is unchanged, and "major"/"maj" never misparse as minor', () => {
+    expect(keySignature('D')).toMatchObject({ type: 'sharp', count: 2 });
+    expect(keySignature('D major')).toMatchObject({ type: 'sharp', count: 2 });
+    expect(keySignature('Dmaj')).toMatchObject({ type: 'sharp', count: 2 });
   });
 });
 
