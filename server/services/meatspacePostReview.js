@@ -273,8 +273,13 @@ export async function getReviewSchedule() {
  */
 export async function getDueReviews(now = new Date(), limit = 2) {
   const entries = await getReviewSchedule();
+  // Gate on `nextReviewAt`, NOT on `reviewState !== 'fresh'`: a failed review is
+  // rescheduled a few days out (needs-refresh), and serving it again immediately
+  // would ignore that refresh delay and re-surface the same rep every session.
+  // isReviewDue covers both a fresh skill past its interval and a needs-refresh
+  // skill past its (shorter) refresh interval.
   return entries
-    .filter(e => reviewState(e, now) !== 'fresh')
+    .filter(e => isReviewDue(e, now))
     .sort((a, b) => Date.parse(a.nextReviewAt || 0) - Date.parse(b.nextReviewAt || 0))
     .slice(0, Math.max(0, limit));
 }
@@ -301,7 +306,10 @@ export async function getRetentionReport(now = new Date()) {
       retentionPct: ret.retentionPct,
     };
   });
-  const dueCount = skills.filter(s => s.state !== 'fresh').length;
+  // "due" here means actually servable now (nextReviewAt elapsed) — a
+  // needs-refresh skill still inside its short refresh delay is shown with a
+  // needs-refresh badge but is NOT counted as due (it isn't served yet).
+  const dueCount = entries.filter(e => isReviewDue(e, now)).length;
   return {
     skills,
     dueCount,

@@ -1815,6 +1815,22 @@ describe('getSessionSkillContext', () => {
     expect(getSessionSkillContext(session).reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: false }]);
   });
 
+  it('marks a review rep FAILED when accuracy is high but completion is too low (bailed review)', () => {
+    // One correct answer, four skipped: answered-only accuracy is 1.0, but the
+    // review was barely completed — it must not bank a pass and advance the
+    // interval without re-verifying the skill.
+    const session = { tasks: [{
+      type: 'multiplication',
+      config: { level: 1, review: true, reviewSkillId: 'multiplication:L1' },
+      questions: [
+        { answered: 10, correct: true },
+        { answered: null, correct: false }, { answered: null, correct: false },
+        { answered: null, correct: false }, { answered: null, correct: false },
+      ],
+    }] };
+    expect(getSessionSkillContext(session).reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: false }]);
+  });
+
   it('collects practiced skill ids from normal (non-review) multiplication / cognitive / memory tasks', () => {
     const session = { tasks: [
       { type: 'multiplication', config: { level: 2 }, questions: [{ answered: 1, correct: true }] },

@@ -309,6 +309,11 @@ export async function submitPostSession(sessionData) {
 // SKILL RE-VERIFICATION (issue #2096) — mastered-skill review scheduling
 // =============================================================================
 
+// A maintenance-review rep must reach at least this fraction of its questions to
+// count as a genuine re-verification (mirrors COGNITIVE_MASTERY_DEFAULTS
+// minCompletion). Below it, the review is recorded as failed rather than passed.
+const MIN_REVIEW_COMPLETION = 0.75;
+
 /**
  * Current mastered-but-inactive skills eligible for re-verification tracking:
  *   - multiplication rungs strictly BELOW the resolved current level (you've
@@ -388,8 +393,17 @@ export function getSessionSkillContext(session) {
   for (const task of session?.tasks || []) {
     const cfg = task.config || {};
     if (cfg.reviewSkillId) {
+      // A review passes only when it's both accurate AND sufficiently completed:
+      // accuracy is answered-only, so without the completion gate answering one
+      // question correctly and skipping the rest would bank a "pass" (acc===1)
+      // and push the interval out without actually re-verifying the skill. A
+      // low-completion attempt is recorded as a FAIL → needs-refresh + sooner
+      // re-review, which is the safe outcome for a bailed review.
       const acc = deriveTaskAccuracy(task);
-      reviewResults.push({ skillId: cfg.reviewSkillId, passed: acc != null && acc >= MASTERY_TARGET_ACCURACY });
+      const completion = deriveTaskCompletion(task);
+      const passed = acc != null && acc >= MASTERY_TARGET_ACCURACY
+        && (completion == null || completion >= MIN_REVIEW_COMPLETION);
+      reviewResults.push({ skillId: cfg.reviewSkillId, passed });
       continue;
     }
     if (task.type === 'multiplication' && Number.isInteger(cfg.level)) {
@@ -421,9 +435,14 @@ export async function syncReviewScheduleForSession(session, now = new Date()) {
  * `reviewSkillId` so the session-submit path records the pass/fail.
  */
 export async function getPostReviewReps(now = new Date(), limit = 2) {
-  const due = await getDueReviews(now, limit);
+  // Fetch ALL due reviews, then filter to the runnable kinds BEFORE capping —
+  // capping first would let older due memory-chunk entries (which have no
+  // runnable rep) consume the limit slots and starve runnable multiplication/
+  // cognitive reps that are due later in the schedule.
+  const due = await getDueReviews(now, Infinity);
   const reps = [];
   for (const entry of due) {
+    if (reps.length >= limit) break;
     if (entry.kind === 'multiplication') {
       reps.push({
         skillId: entry.skillId,

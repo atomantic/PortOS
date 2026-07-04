@@ -155,13 +155,17 @@ describe('applySessionToReviewSchedule — session sync', () => {
     expect(store.skills['multiplication:L0'].label).toBe('Renamed');       // metadata refreshed
   });
 
-  it('records a review rep result and surfaces a failed skill as needs-refresh', async () => {
+  it('records a failed review as needs-refresh and honors the shorter refresh delay before re-serving', async () => {
     await applySessionToReviewSchedule({ masteredSkills: [skill()], now: new Date('2026-07-01T00:00:00.000Z') });
     const res = await applySessionToReviewSchedule({ reviewResults: [{ skillId: 'multiplication:L0', passed: false }], now: new Date('2026-07-10T00:00:00.000Z') });
     expect(res.reviewed).toBe(1);
     expect(store.skills['multiplication:L0'].status).toBe('needs-refresh');
-    const due = await getDueReviews(new Date('2026-07-10T00:00:00.000Z'));
-    expect(due.map(d => d.skillId)).toEqual(['multiplication:L0']);
+    // Rescheduled REFRESH_INTERVAL_DAYS out — NOT served again immediately even
+    // though it's needs-refresh (the refresh delay must be honored).
+    expect(await getDueReviews(new Date('2026-07-10T12:00:00.000Z'))).toEqual([]);
+    // ...but it IS served once the (shorter) refresh interval elapses.
+    const later = new Date(Date.parse('2026-07-10T00:00:00.000Z') + (REFRESH_INTERVAL_DAYS + 1) * DAY);
+    expect((await getDueReviews(later)).map(d => d.skillId)).toEqual(['multiplication:L0']);
   });
 
   it('resets staleness for actively-practiced mastered skills', async () => {
