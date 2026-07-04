@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink, copyFile } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -889,6 +889,27 @@ export function sanitizeFilename(filename) {
     return '_' + sanitized.slice(1);
   }
   return sanitized;
+}
+
+/**
+ * Move a temp file into the uploads dir (`PATHS.uploads`) and return the
+ * persisted filename, mirroring the `/api/uploads` route's naming
+ * (`<uuid8>-<sanitized-name>`) so a server-produced file (e.g. a yt-dlp audio
+ * extraction, #2120) is served and referenced exactly like a user upload.
+ *
+ * copyFile + unlink instead of rename — the source usually lives in
+ * `os.tmpdir()`, which may sit on a different filesystem (rename across devices
+ * throws EXDEV on Linux); copy works regardless. The temp unlink is best-effort
+ * cleanup. Returns `{ filename, sizeBytes }`.
+ */
+export async function importFileToUploads(tempPath, originalName) {
+  await ensureDir(PATHS.uploads);
+  const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
+  const dest = join(PATHS.uploads, filename);
+  await copyFile(tempPath, dest);
+  await unlink(tempPath).catch(() => {});
+  const s = await stat(dest).catch(() => null);
+  return { filename, sizeBytes: s?.size ?? 0 };
 }
 
 /**

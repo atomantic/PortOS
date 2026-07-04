@@ -19,6 +19,11 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/rounds.js';
 import { generateRound, evaluateRound, deriveRoundParts } from '../services/roundsAI.js';
+import {
+  startReferenceAudioImport,
+  attachReferenceAudioSseClient,
+  cancelReferenceAudioImport,
+} from '../services/roundReferenceAudioImport.js';
 
 const router = Router();
 
@@ -215,6 +220,31 @@ router.get('/:id', asyncHandler(async (req, res) => {
   if (!round) throw new ServerError('Round not found', { status: 404, code: svc.ERR_NOT_FOUND });
   res.json({ round });
 }));
+
+// --- Reference-audio import (#2120) -----------------------------------------
+// Download + extract audio from a URL via yt-dlp into the uploads dir, so it can
+// be attached to a round reference and analyzed exactly like an upload/mic
+// capture (the deferred convenience path from #2106; upload/mic stay primary).
+// Two-segment `reference-audio/...` paths are registered before `/:id` so the
+// literal segment can't be read as a round id. The kickoff returns 202 + a
+// jobId; progress streams over SSE; the client persists the returned filename
+// on the reference via the normal PUT on Save.
+const referenceAudioImportSchema = z.object({ url: str(2048).min(1) });
+
+router.post('/reference-audio/import', asyncHandler(async (req, res) => {
+  const { url } = validateRequest(referenceAudioImportSchema, req.body || {});
+  res.status(202).json(await startReferenceAudioImport(url));
+}));
+
+router.get('/reference-audio/import/:jobId/events', (req, res) => {
+  if (!attachReferenceAudioSseClient(req.params.jobId, res)) {
+    throw new ServerError('Import job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/reference-audio/import/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelReferenceAudioImport(req.params.jobId) });
+});
 
 router.post('/', asyncHandler(async (req, res) => {
   const input = validateRequest(roundInputSchema, req.body || {});

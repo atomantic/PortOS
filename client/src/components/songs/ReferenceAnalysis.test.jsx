@@ -25,6 +25,23 @@ vi.mock('../../lib/audioRecorder', () => ({
   arrayBufferToBase64: vi.fn(() => 'b64'),
 }));
 
+// Control the reference-audio-import hook (#2120) so the "Download from URL"
+// control is exercised without a real yt-dlp/SSE round-trip. `state` is mutated
+// per-test to simulate the active (downloading) vs idle render.
+const refImport = vi.hoisted(() => ({
+  start: vi.fn(),
+  cancel: vi.fn(),
+  onComplete: null,
+  state: { active: false, percent: 0, stage: null },
+}));
+vi.mock('../../hooks/useReferenceAudioImport.js', () => ({
+  default: (opts = {}) => {
+    refImport.onComplete = opts.onComplete;
+    return { ...refImport.state, start: refImport.start, cancel: refImport.cancel };
+  },
+}));
+
+import { act } from '@testing-library/react';
 import ReferenceAnalysis, { ReferenceAudioAttach } from './ReferenceAnalysis.jsx';
 
 const SR = 16000;
@@ -394,5 +411,29 @@ describe('ReferenceAudioAttach', () => {
     // Segments are offsets into the removed audio — cleared with it so stale
     // ranges can't resurrect against a later, different recording.
     expect(onUpdate).toHaveBeenCalledWith('segments', []);
+  });
+
+  it('starts a URL download and wires the finished filename onto the reference draft (#2120)', () => {
+    refImport.start.mockClear();
+    refImport.state = { active: false, percent: 0, stage: null };
+    const onUpdate = vi.fn();
+    render(<ReferenceAudioAttach reference={{ id: 'r', url: 'https://x.com' }} onUpdate={onUpdate} />);
+
+    const input = screen.getByLabelText(/reference audio url/i);
+    fireEvent.change(input, { target: { value: 'https://tiktok.com/@a/video/1' } });
+    fireEvent.click(screen.getByRole('button', { name: /download/i }));
+    expect(refImport.start).toHaveBeenCalledWith('https://tiktok.com/@a/video/1');
+
+    // Simulate the SSE 'complete' frame landing an uploads-dir filename.
+    act(() => refImport.onComplete('dl.mp3'));
+    expect(onUpdate).toHaveBeenCalledWith('audioFilename', 'dl.mp3');
+  });
+
+  it('shows live progress and disables upload while a download is active (#2120)', () => {
+    refImport.state = { active: true, percent: 42, stage: null };
+    render(<ReferenceAudioAttach reference={{ id: 'r', url: 'https://x.com' }} onUpdate={vi.fn()} />);
+    expect(screen.getByText(/downloading 42%/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /upload audio/i }).disabled).toBe(true);
+    refImport.state = { active: false, percent: 0, stage: null }; // reset for other tests
   });
 });
