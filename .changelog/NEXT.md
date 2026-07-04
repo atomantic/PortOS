@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Rounds
+
+- **[issue-2104] Fixed: 500 Miles' reference TikTok videos now show up on older installs.** The built-in "500 Miles" round shipped with three TikTok reference performances, but any install that already had its data saved from before those were added never picked them up — the Reference material section stayed empty. A one-time backfill now restores the three references for those installs, without touching anything you may have added of your own.
+
 ## Media
 
 - **[issue-2036] Sketch & Annotation Canvas (phase 2): re-render an image guided by your annotations.** The annotate page (`/media/annotate/:mediaKey`) gained a "Re-render" action: draw over a generated image, then feed your markup back through local img2img so the marks reshape the render. A confirmation dialog names the exact local model it will run (no surprise AI calls) and lets you add an optional prompt and tune how much to change before it starts; the new render is queued and appears in Media History. Requires a local FLUX img2img runner — the action explains when one isn't available. Phase 3 (blank-canvas storyboard) remains open on #2036.
