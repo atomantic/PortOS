@@ -260,19 +260,34 @@ export default function PostHistory({ onBack }) {
               if (expanded) {
                 for (const [i, task] of (s.tasks || []).entries()) {
                   const isLlm = LLM_DRILL_TYPES.includes(task.type);
-                  // Non-LLM rows show correctness AND average speed separately from
-                  // the blended score column (issue #2094). Prefer the persisted
-                  // avgResponseMs; fall back to deriving it for legacy sessions.
+                  // Non-LLM rows show accuracy (answered-only), speed, and
+                  // completion separately from the blended score column (issue
+                  // #2094) — never "correct/total", which counts timed-out
+                  // questions as wrong. Prefer the server-persisted metrics; fall
+                  // back to deriving from questions[] for legacy sessions, treating
+                  // n-back's withheld presses as reached decisions (not skips).
                   let detail;
                   if (isLlm) {
                     detail = `${task.responses?.length || 0} responses`;
                   } else {
-                    const answered = (task.questions || []).filter(q => q.answered != null);
+                    const questions = task.questions || [];
+                    const noGo = task.type === 'n-back';
+                    const reached = noGo ? questions : questions.filter(q => q.answered != null);
+                    const accPct = task.accuracy != null
+                      ? Math.round(task.accuracy * 100)
+                      : (reached.length ? Math.round((reached.filter(q => q.correct).length / reached.length) * 100) : null);
+                    const compPct = task.completion != null
+                      ? Math.round(task.completion * 100)
+                      : (questions.length ? Math.round((reached.length / questions.length) * 100) : null);
+                    const timed = reached.filter(q => (q.responseMs || 0) > 0);
                     const avgMs = task.avgResponseMs != null
                       ? task.avgResponseMs
-                      : (answered.length ? Math.round(answered.reduce((s, q) => s + (q.responseMs || 0), 0) / answered.length) : null);
-                    const correctStr = `${task.questions?.filter(q => q.correct).length || 0}/${task.questions?.length || 0} correct`;
-                    detail = avgMs != null ? `${correctStr} · ${(avgMs / 1000).toFixed(1)}s` : correctStr;
+                      : (timed.length ? Math.round(timed.reduce((s, q) => s + (q.responseMs || 0), 0) / timed.length) : null);
+                    const parts = [];
+                    if (accPct != null) parts.push(`${accPct}% acc`);
+                    if (avgMs != null) parts.push(`${(avgMs / 1000).toFixed(1)}s`);
+                    if (compPct != null && compPct < 100) parts.push(`${compPct}% done`);
+                    detail = parts.join(' · ') || `${questions.length} questions`;
                   }
                   rows.push(
                     <tr key={`${s.id}-${i}`} className="bg-port-bg/30">

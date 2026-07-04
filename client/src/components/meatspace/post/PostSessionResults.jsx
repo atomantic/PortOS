@@ -75,19 +75,25 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
             } else {
               // Accuracy (answered-only) and speed are shown separately from the
               // blended score (issue #2094). Prefer the server-persisted metrics;
-              // fall back to deriving from questions[] for legacy sessions, and
-              // surface completion only when the drill wasn't fully answered.
+              // this pre-save view falls back to deriving from questions[] since
+              // the session hasn't been scored server-side yet. n-back is a go/no-go
+              // task: a withheld press ("answered: null") is a deliberate no-match
+              // decision, not an unreached trial — so every trial counts as reached
+              // (completion 100%) and accuracy spans all trials, matching the server
+              // scorer that stamps completion=1 for n-back.
               const questions = result.questions || [];
-              const answered = questions.filter(q => q.answered !== null);
+              const noGo = result.type === 'n-back';
+              const reached = noGo ? questions : questions.filter(q => q.answered !== null);
               const accPct = result.accuracy != null
                 ? Math.round(result.accuracy * 100)
-                : (answered.length > 0 ? Math.round((answered.filter(q => q.correct).length / answered.length) * 100) : null);
+                : (reached.length > 0 ? Math.round((reached.filter(q => q.correct).length / reached.length) * 100) : null);
               const compPct = result.completion != null
                 ? Math.round(result.completion * 100)
-                : (questions.length > 0 ? Math.round((answered.length / questions.length) * 100) : null);
+                : (questions.length > 0 ? Math.round((reached.length / questions.length) * 100) : null);
+              const timed = reached.filter(q => q.responseMs > 0);
               const avgMs = result.avgResponseMs != null
                 ? result.avgResponseMs
-                : (answered.length > 0 ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length) : null);
+                : (timed.length > 0 ? Math.round(timed.reduce((s, q) => s + q.responseMs, 0) / timed.length) : null);
               const parts = [];
               if (accPct != null) parts.push(`${accPct}% acc`);
               if (avgMs != null) parts.push(`${(avgMs / 1000).toFixed(1)}s`);
