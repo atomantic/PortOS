@@ -728,6 +728,15 @@ describe('submitPostSession — idempotent upsert by client id (issue #2098)', (
     expect(stored.length).toBe(1);
   });
 
+  it('preserves the original date/startedAt on an idempotent re-submit (no midnight drift)', async () => {
+    const first = await submitPostSession(buildBody());
+    const second = await submitPostSession(buildBody());
+    // A retry keeps the original day + start timestamp so history ordering and
+    // streaks can't be corrupted by a re-submit that arrives later (or next day).
+    expect(second.date).toBe(first.date);
+    expect(second.startedAt).toBe(first.startedAt);
+  });
+
   it('assigns a server uuid when the client omits an id', async () => {
     const { id, ...noId } = buildBody();
     const session = await submitPostSession(noId);

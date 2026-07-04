@@ -115,8 +115,12 @@ export function usePostSession() {
   const [runId, setRunId] = useState(restored?.runId ?? null);
   const [tags, setTags] = useState(restored?.tags ?? {}); // session tags captured at launch
   const [lastAnswer, setLastAnswer] = useState(null); // { correct, expected, answered } for training feedback
-  const questionStartRef = useRef(Date.now());
-  const drillStartRef = useRef(Date.now());
+  // Seed the timing refs from the restored snapshot so a mid-drill refresh keeps
+  // measuring elapsed time from the ORIGINAL question/drill start — otherwise the
+  // in-flight question's responseMs (and the drill's totalMs) would reset to 0 on
+  // reload, under-counting time and inflating the speed bonus.
+  const questionStartRef = useRef(restored?.questionStartedAt ?? Date.now());
+  const drillStartRef = useRef(restored?.drillStartedAt ?? Date.now());
   const finishDrillRef = useRef(null);
 
   // Persist the live run to sessionStorage on every meaningful change; clear it
@@ -131,6 +135,11 @@ export function usePostSession() {
     sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
       runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,
       answers, drillResults, sessionScore, isTraining, tags,
+      // Persist the timing anchors (mutated synchronously on each question/drill
+      // transition, just before the state change that fires this effect) so a
+      // refresh resumes the clock instead of restarting it.
+      questionStartedAt: questionStartRef.current,
+      drillStartedAt: drillStartRef.current,
     }));
   }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, tags]);
 

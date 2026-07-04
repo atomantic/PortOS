@@ -217,11 +217,16 @@ export async function submitPostSession(sessionData) {
   const sessionId = sessionData.id || randomUUID();
   const existingIndex = data.sessions.findIndex(s => s.id === sessionId);
   const isNewSession = existingIndex < 0;
+  const existing = isNewSession ? null : data.sessions[existingIndex];
 
   const session = {
     id: sessionId,
-    date: now.split('T')[0],
-    startedAt: now,
+    // Preserve the ORIGINAL day/start on an idempotent re-submit — a retry that
+    // crosses midnight (or just arrives later) must not move the session to a
+    // new date, which would corrupt history ordering and streak math. Only a
+    // fresh insert stamps "now".
+    date: existing?.date ?? now.split('T')[0],
+    startedAt: existing?.startedAt ?? now,
     completedAt: now,
     durationMs: rescoredTasks.reduce((sum, t) => sum + (t.totalMs || 0), 0),
     cadence: sessionData.cadence || 'daily',
