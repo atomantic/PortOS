@@ -324,6 +324,30 @@ describe('PostDrillConfig', () => {
       expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('false');
     });
 
+    it('Cognitive "Enable all" also turns the domain toggle on when a preset had turned it off', async () => {
+      // Regression: bulk-enabling drills in a collapsed/off domain used to
+      // flip only the hidden per-drill flags — Save would persist
+      // cognitive.enabled=false and the launcher would never run them.
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Math focus')); // sets cognitiveEnabled=false
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(screen.getByLabelText('Enable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByText('Save'));
+      await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+      const payload = updatePostConfig.mock.calls[0][0];
+      expect(payload.cognitive.enabled).toBe(true);
+      expect(payload.cognitive.drillTypes['digit-span'].enabled).toBe(true);
+    });
+
+    it('Cognitive "Disable all" leaves the domain toggle alone', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByLabelText('Disable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+    });
+
     it('LLM "Enable all" is blocked without a chosen provider — no toggles flip, an error toast fires', async () => {
       const toastModule = await import('../../ui/Toast');
       render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
@@ -346,6 +370,25 @@ describe('PostDrillConfig', () => {
       expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('true');
       fireEvent.click(screen.getByLabelText('Disable all LLM drills'));
       expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('LLM "Enable all" also turns the LLM domain toggle back on when it was off', async () => {
+      // Same domain-on rule as cognitive: bulk-enable must not leave
+      // llmDrills.enabled=false or the launcher ignores the enabled drills.
+      getProviders.mockResolvedValue({
+        providers: [{ id: 'prov-1', name: 'Test Provider', type: 'api', enabled: true, models: [] }],
+      });
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      await waitFor(() => expect(getProviders).toHaveBeenCalled());
+      const providerSelect = screen.getByLabelText('Provider');
+      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(2));
+      fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
+      // Turn the LLM section off (provider selection survives in state).
+      fireEvent.click(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }));
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('true');
     });
   });
 });

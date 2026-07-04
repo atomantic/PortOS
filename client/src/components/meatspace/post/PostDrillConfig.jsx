@@ -604,17 +604,30 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
   function setAllCognitiveEnabled(enabled) {
     setCognitiveDrillTypes(prev => setEnabledMap(prev, COGNITIVE_TYPES, enabled ? new Set(COGNITIVE_TYPES) : new Set()));
+    // Bulk-enabling drills in a domain whose section toggle is off (e.g.
+    // right after the "Math focus" preset) must also turn the domain on —
+    // otherwise the flags flip invisibly and Save persists
+    // cognitive.enabled=false, so the launcher still ignores every drill the
+    // user just enabled. Disabling all leaves the domain toggle alone (an
+    // empty-but-on section is a valid state).
+    if (enabled) setCognitiveEnabled(true);
   }
 
   // Never bulk-enable LLM drills without a chosen provider — respects the
   // AI-provider consent posture (no silent expansion into a provider the
-  // user hasn't picked). Disabling never calls a provider, so it's unguarded.
+  // user hasn't picked; issue #2101 explicitly requires a non-empty provider
+  // selection here, so the "System Default" sentinel does not satisfy the
+  // gate). Disabling never calls a provider, so it's unguarded.
   function setAllLlmEnabled(enabled) {
     if (enabled && !llmProviderId) {
       toast.error('Pick an AI provider above before enabling all LLM drills');
       return;
     }
     setLlmDrillTypes(prev => setEnabledMap(prev, LLM_TYPES, enabled ? new Set(LLM_TYPES) : new Set()));
+    // Same domain-on rule as cognitive: enabling all LLM drills while the
+    // LLM section toggle is off would otherwise persist
+    // llmDrills.enabled=false and the launcher would never run them.
+    if (enabled) setLlmEnabled(true);
   }
 
   const selectedProvider = providers.find(p => p.id === llmProviderId);
