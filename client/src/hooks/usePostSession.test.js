@@ -309,6 +309,43 @@ describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)'
     expect(second.result.current.answers).toHaveLength(1); // the mid-drill answer survived
   });
 
+  it('keeps completed results in the snapshot during next-drill generation (does not drop the run on refresh)', async () => {
+    generatePostDrill
+      .mockResolvedValueOnce({ type: 'doubling-chain', config: {}, questions: [{ prompt: '2 x 2', expected: 4 }] })
+      .mockImplementationOnce(() => new Promise(() => {})); // drill 2 generation hangs (mid-refresh)
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([
+        { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
+        { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
+      ]);
+    });
+    act(() => { result.current.submitAnswer('4'); }); // finish drill 1 → between-drills
+    expect(result.current.state).toBe('between-drills');
+
+    act(() => { result.current.nextDrill(); }); // drill 2 generation starts and hangs → loading
+    expect(result.current.state).toBe('loading');
+
+    // The 'loading' state must NOT have overwritten the stable between-drills
+    // snapshot — drill 1's completed result must survive a refresh here.
+    const snap = JSON.parse(sessionStorage.getItem('post.activeRun'));
+    expect(snap.state).toBe('between-drills');
+    expect(snap.drillResults).toHaveLength(1);
+  });
+
+  it('does not restore a training run persisted mid-save (avoids double training-log)', () => {
+    sessionStorage.setItem('post.activeRun', JSON.stringify({
+      runId: 'r1', state: 'saving', isTraining: true,
+      drills: [{ type: 'compound-chain' }], currentDrillIndex: 0, currentDrill: null,
+      currentQuestionIndex: 0, answers: [],
+      drillResults: [{ module: 'llm-drills', type: 'compound-chain', score: 90 }],
+      sessionScore: 90, tags: {},
+    }));
+    const { result } = renderHook(() => usePostSession());
+    expect(result.current.state).toBe('idle'); // training run is dropped, not resumed
+  });
+
   it('clears the persisted run on reset (no stale run resumes next mount)', async () => {
     generatePostDrill.mockResolvedValue({
       type: 'doubling-chain', config: { startValue: 2, steps: 1 }, questions: [{ prompt: '2 x 2', expected: 4 }],

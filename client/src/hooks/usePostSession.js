@@ -38,9 +38,15 @@ function loadRunSnapshot() {
   let snap = null;
   try { snap = JSON.parse(raw); } catch { return null; } // corrupt storage → start fresh
   if (!snap || typeof snap !== 'object') return null;
-  // A run persisted mid-save reads back as still-completed; the idempotent
-  // submit (client-supplied id) makes a re-save safe.
-  if (snap.state === 'saving') snap.state = 'complete';
+  if (snap.state === 'saving') {
+    // A scored session re-saves idempotently (client-supplied id → upsert), so
+    // restoring a mid-save run to `complete` is safe. A TRAINING save instead
+    // loops non-idempotent training-log writes; restoring it would let a re-save
+    // double-log every drill — and the entries were most likely already posted —
+    // so drop it rather than resume.
+    if (snap.isTraining) return null;
+    snap.state = 'complete';
+  }
   if (!RESTORABLE_STATES.has(snap.state)) return null;
   return snap;
 }
@@ -131,6 +137,13 @@ export function usePostSession() {
       clearRunSnapshot();
       return;
     }
+    // While a drill is generating (initial start, next drill, or LLM scoring),
+    // do NOT overwrite the last stable snapshot: `loading` isn't restorable, and
+    // the in-flight request can't be resumed — but the COMPLETED results already
+    // captured in the prior drilling/between-drills snapshot must survive a
+    // refresh during generation. Keeping the last good snapshot lets a refresh
+    // resume at the between-drills screen instead of dropping the whole run.
+    if (state === STATES.LOADING) return;
     if (typeof sessionStorage === 'undefined') return;
     sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
       runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,

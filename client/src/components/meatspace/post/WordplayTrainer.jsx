@@ -125,6 +125,17 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
   // unrelated re-renders and after a consent-driven start.
   useEffect(() => {
     if (!selectedMode) return;
+    // A drill left over from a PREVIOUS mode (e.g. browser-back to the grid, then
+    // pick a different mode — the URL changed without going through
+    // handleBackToModes) must be cleared first. Otherwise the `drill || loading`
+    // guard below would keep the stale drill and skip generating this mode's, so
+    // this mode's UI would render against the wrong drill's data.
+    if (drill && drill.type !== selectedMode) {
+      setDrill(null); setQuestionIndex(0); setInputValue(''); setItems([]);
+      setFeedback(null); setResults([]);
+      initiatedRef.current = null;
+      return; // re-runs with drill cleared, then generates below
+    }
     if (initiatedRef.current === selectedMode) return;
     if (drill || loading) { initiatedRef.current = selectedMode; return; }
     // Wait for the cache-status fetch before deciding cold vs warm — null means
@@ -167,6 +178,9 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
     setActiveModel(useModel);
 
     const generated = await generatePostDrill(modeId, { count: 5 }, useProviderId, useModel).catch(() => null);
+    // Abort if a newer mode was selected mid-generation (browser-back then a
+    // different mode) — this stale drill must not land under the new mode's URL.
+    if (initiatedRef.current !== modeId) return;
     setLoading(false);
     if (generated) {
       setDrill(generated);
