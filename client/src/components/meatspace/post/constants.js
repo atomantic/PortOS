@@ -155,11 +155,13 @@ export function computeDomainAverages(byDrill = {}) {
 // Practice goals (issue #2100). A goal is "set" only when its target is a
 // positive number, so an absent/legacy `goals` object (or `{}`) yields no goal
 // rows and the UI hides cleanly.
+// `max` mirrors postGoalsSchema's bounds (server/lib/postValidation.js) so the
+// number inputs can't submit an out-of-range value that would 400 on save.
 export const GOAL_DEFS = [
-  { key: 'dailyMinutes', label: 'Minutes today', unit: 'min', metric: 'todayMinutes' },
-  { key: 'weeklySessions', label: 'Sessions this week', unit: '', metric: 'weekSessions' },
-  { key: 'streakTarget', label: 'Streak', unit: 'd', metric: 'currentStreak' },
-  { key: 'morseWpmTarget', label: 'Morse WPM', unit: 'wpm', metric: 'morseWpm' },
+  { key: 'dailyMinutes', label: 'Minutes today', unit: 'min', metric: 'todayMinutes', max: 1440 },
+  { key: 'weeklySessions', label: 'Sessions this week', unit: '', metric: 'weekSessions', max: 100 },
+  { key: 'streakTarget', label: 'Streak', unit: 'd', metric: 'currentStreak', max: 3650 },
+  { key: 'morseWpmTarget', label: 'Morse WPM', unit: 'wpm', metric: 'morseWpm', max: 100 },
 ];
 
 export function hasGoals(goals) {

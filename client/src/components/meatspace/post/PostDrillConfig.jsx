@@ -547,9 +547,12 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
   const setGoalField = (key, raw) => setGoals(prev => {
     const next = { ...prev };
-    const n = parseInt(raw, 10);
-    if (raw === '' || Number.isNaN(n)) delete next[key];
-    else next[key] = n;
+    let n = parseInt(raw, 10);
+    if (raw === '' || Number.isNaN(n)) { delete next[key]; return next; }
+    // Clamp into the schema's range so Save can't 400 on an out-of-bounds value.
+    const def = GOAL_DEFS.find(d => d.key === key);
+    n = Math.max(1, Math.min(def?.max ?? n, n));
+    next[key] = n;
     return next;
   });
   const toggleModule = (m) => setSessionModules(prev => (
@@ -842,6 +845,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 id={`goal-${def.key}`}
                 type="number"
                 min="1"
+                max={def.max}
                 inputMode="numeric"
                 value={goals[def.key] ?? ''}
                 onChange={e => setGoalField(def.key, e.target.value)}
