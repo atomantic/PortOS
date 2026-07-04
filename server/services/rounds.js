@@ -726,7 +726,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals). Two documented variant points vs. the Kodály-lineage teaching edition (cross-checked against the Wikibooks Songbook and 8notes/Beth\'s Notes listings): this seed\'s verse is "I will marry at thy will, sir" where the teaching edition sings "Aye, marry, that I will / if thou but stay", and this melody resolves the final phrase to the tonic D where the teaching edition ends on A/mi so the loop leads back into the round. Both variants are widely sung.',
+    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals). Two documented variant points vs. the Kodály-lineage teaching edition (cross-checked against the Wikibooks Songbook and 8notes/Beth\'s Notes listings): this seed\'s verse is "I will marry at thy will, sire" where the teaching edition sings "Aye, marry, that I will / if thou but stay", and this melody resolves the final phrase to the tonic D where the teaching edition ends on A/mi so the loop leads back into the round. Both variants are widely sung.',
     score: ROSE_MELODY,
     // Canonic voice stack: the melody entering two bars late per voice. Derived
     // from ROSE_MELODY so it can't drift from the tune.
