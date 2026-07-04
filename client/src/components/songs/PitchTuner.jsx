@@ -51,8 +51,11 @@ const noteLabel = (note) => {
 };
 
 export default function PitchTuner({ stream = null, a4 = 440 }) {
-  // `reading` is the latest tracker frame: { note, cents } (nulls when no pitch).
-  const [reading, setReading] = useState({ note: null, cents: null });
+  // `reading` is the latest tracker frame: { note, cents, held } (nulls when no
+  // pitch). `held` is true while the tracker is coasting on the last stable
+  // reading through a brief dropout — we dim the readout so a held frame reads as
+  // "still that note" rather than a fresh detection.
+  const [reading, setReading] = useState({ note: null, cents: null, held: false });
   const [standaloneOn, setStandaloneOn] = useState(false);
   const trackerRef = useRef(null);   // active pitch tracker { stop }
   const analyserRef = useRef(null);  // active { close } stream-analyser graph
@@ -68,7 +71,7 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
   const teardownTracker = useCallback(() => {
     if (trackerRef.current) { trackerRef.current.stop(); trackerRef.current = null; }
     if (analyserRef.current) { analyserRef.current.close(); analyserRef.current = null; }
-    setReading({ note: null, cents: null });
+    setReading({ note: null, cents: null, held: false });
   }, []);
 
   // Attach the tuner to a stream. Returns nothing; teardownTracker() detaches.
@@ -79,9 +82,14 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
     analyserRef.current = graph;
     trackerRef.current = createPitchTracker(graph.analyser, {
       a4,
+      // Cap the readout to ~12Hz (the lib's acquire/hold hysteresis, release
+      // window, and sticky note label all use their defaults) so the note/cents
+      // don't strobe at the 60fps frame rate; the tracker's smoothed value keeps
+      // the needle motion fluid between emits.
+      updateHz: 12,
       onUpdate: (u) => {
         if (!mountedRef.current) return; // navigation-away guard
-        setReading({ note: u.note, cents: u.cents });
+        setReading({ note: u.note, cents: u.cents, held: !!u.held });
       },
     });
   }, [a4, teardownTracker]);
@@ -145,11 +153,16 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
 
   const active = Boolean(stream) || standaloneOn;
   const quality = tuningQuality(reading.cents);
-  // Needle position 0–100% across the bar; 50% is dead-center (in tune).
-  const clamped = Number.isFinite(reading.cents)
+  // Needle position 0–100% across the bar; 50% is dead-center (in tune). The
+  // tracker's sticky note label reports cents relative to the held note, so a
+  // wandering pitch can read past ±50¢ — clamp so the needle stays on the bar and
+  // the displayed number stays within a semitone.
+  const displayCents = Number.isFinite(reading.cents)
     ? Math.max(-CENTS_SPAN, Math.min(CENTS_SPAN, reading.cents))
     : 0;
-  const needlePct = 50 + (clamped / CENTS_SPAN) * 50;
+  const needlePct = 50 + (displayCents / CENTS_SPAN) * 50;
+  // Dim the readout while coasting on a held reading through a brief dropout.
+  const heldDim = reading.held ? 'opacity-60' : '';
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3">
@@ -182,13 +195,13 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
       </div>
 
       {/* Note + cents readout */}
-      <div className="flex items-end justify-center gap-3 mt-3" aria-live="polite">
+      <div className={`flex items-end justify-center gap-3 mt-3 transition-opacity ${heldDim}`} aria-live="polite">
         <span className={`text-4xl font-bold tabular-nums leading-none ${LEVEL_TONE[quality.level]}`}>
           {noteLabel(reading.note)}
         </span>
         <span className={`text-sm pb-1 ${LEVEL_TONE[quality.level]}`}>
           {Number.isFinite(reading.cents) && reading.note
-            ? `${reading.cents > 0 ? '+' : ''}${reading.cents}¢ · ${quality.label}`
+            ? `${displayCents > 0 ? '+' : ''}${displayCents}¢ · ${quality.label}`
             : active ? 'Listening…' : 'Idle'}
         </span>
       </div>

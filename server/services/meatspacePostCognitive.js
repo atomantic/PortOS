@@ -66,6 +66,44 @@ function accuracySpeedScore(recomputed, refMs) {
   return Math.min(100, Math.max(0, Math.round((correctRatio * 0.8 + speedBonus * 0.2) * 100)));
 }
 
+/**
+ * Answered-only metric bundle stored alongside every scored task, so a reader
+ * can report accuracy (of the answers actually given) separately from completion
+ * (how much of the drill was reached) and average speed — instead of only the
+ * blended headline `score` (issue #2094). Unanswered trials (`answered == null`)
+ * lower `completion`, never `accuracy`. Fields are `null` (never NaN) when there
+ * is no data to derive them from, so downstream readers/aggregators stay safe.
+ *
+ * NOTE: this treats `answered == null` as "not reached". It is therefore the
+ * right helper for skip-means-blank drills (stroop, schulte, mental-rotation,
+ * digit-span, reaction-time) but NOT for n-back, where withholding a press is a
+ * deliberate "no-match" answer — n-back computes its own signal-detection metrics.
+ */
+export function answeredMetrics(recomputed) {
+  const list = Array.isArray(recomputed) ? recomputed : [];
+  const totalCount = list.length;
+  const answered = list.filter(q => q?.answered != null);
+  const answeredCount = answered.length;
+  const correct = answered.filter(q => q?.correct).length;
+  return {
+    accuracy: answeredCount ? correct / answeredCount : null,
+    completion: totalCount ? answeredCount / totalCount : null,
+    avgResponseMs: answeredCount
+      ? Math.round(answered.reduce((s, q) => s + (q.responseMs || 0), 0) / answeredCount)
+      : null,
+    answeredCount,
+    totalCount,
+  };
+}
+
+// Median of a numeric list (integer-rounded for the even case). `null` when empty.
+export function median(nums) {
+  const list = (Array.isArray(nums) ? nums : []).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!list.length) return null;
+  const mid = Math.floor(list.length / 2);
+  return list.length % 2 ? list[mid] : Math.round((list[mid - 1] + list[mid]) / 2);
+}
+
 // Fisher-Yates shuffle. Used by Schulte table cell placement and mental
 // rotation option ordering — never a naive `sort(() => Math.random() - 0.5)`.
 function shuffle(arr) {
@@ -151,6 +189,34 @@ export function generateNBack(config = {}) {
       targets.push(false);
     }
   }
+
+  // Guarantee BOTH signal classes among the decision positions (issue #2094):
+  // the SDT scorer needs at least one target and one non-target, or a missing
+  // class degrades to chance and caps the achievable score at 75. The random
+  // 30% roll can produce an all-non-target (or, rarely, all-target) run, so
+  // mutate one decision position until both classes exist. Targets are always
+  // recomputed from the sequence after a mutation — changing sequence[i] also
+  // flips whether i+n is a target, so the mirror can never be hand-patched.
+  const recomputeTargets = () => {
+    for (let i = 0; i < length; i++) {
+      targets[i] = i >= n && sequence[i] === sequence[i - n];
+    }
+  };
+  let classGuard = 0;
+  while (classGuard++ < 20) {
+    const decisions = targets.slice(n);
+    const hasTarget = decisions.some(Boolean);
+    const hasNonTarget = decisions.some(t => !t);
+    if (hasTarget && hasNonTarget) break;
+    const i = n + Math.floor(Math.random() * (length - n));
+    if (!hasTarget) {
+      sequence[i] = sequence[i - n];
+    } else {
+      sequence[i] = pick(NBACK_LETTERS.filter(l => l !== sequence[i - n]));
+    }
+    recomputeTargets();
+  }
+
   return {
     type: 'n-back',
     config: { n, length, stimulusMs: clampInt(config.stimulusMs, 1000, 5000, 2500) },
@@ -322,7 +388,8 @@ function scoreNBack(drillData, questions) {
     const i = Number.isInteger(q.index) ? q.index : -1;
     const isTarget = i >= n && sequence[i] != null && sequence[i] === sequence[i - n];
     const expected = isTarget ? 'match' : 'no-match';
-    // Anything but an explicit "match" counts as "no-match" (including a skip).
+    // Withholding a press IS the "no-match" answer — n-back is a go/no-go task,
+    // so a skip is a deliberate response, not an unreached trial.
     const answered = q.answered === 'match' ? 'match' : q.answered == null ? null : 'no-match';
     const effective = answered === 'match' ? 'match' : 'no-match';
     return {
@@ -334,7 +401,58 @@ function scoreNBack(drillData, questions) {
       responseMs: clampMs(q.responseMs, refMs),
     };
   });
-  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed };
+
+  // Signal-detection tally: hits/misses over targets, correct-rejections/false-
+  // alarms over non-targets. Scoring on RAW position accuracy (the old behaviour)
+  // rewarded never pressing — with ~30% target density a do-nothing run scored
+  // ~70%. Balanced accuracy — the mean of hit rate and correct-rejection rate —
+  // fixes that: a zero-response run scores ~50 (chance) and an always-press run
+  // is equally penalised for its false alarms (issue #2094).
+  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
+  for (const q of recomputed) {
+    const pressed = q.answered === 'match';
+    if (q.expected === 'match') {
+      if (pressed) hits += 1; else misses += 1;
+    } else if (pressed) {
+      falseAlarms += 1;
+    } else {
+      correctRejections += 1;
+    }
+  }
+  const targets = hits + misses;
+  const nonTargets = correctRejections + falseAlarms;
+  const hitRate = targets ? hits / targets : null;
+  const correctRejectionRate = nonTargets ? correctRejections / nonTargets : null;
+  // Balanced accuracy. A missing signal class (a run with only targets or only
+  // non-targets — possible in legacy/short stored sequences even though the
+  // generator now guarantees both) counts as CHANCE (0.5), not as a free pass:
+  // otherwise never pressing through an all-non-target run would bank a perfect
+  // correct-rejection rate and score 100 — the exact do-nothing exploit this
+  // scorer exists to close. Single-class ceilings are therefore 75, floors 25.
+  const accuracy = hitRate == null && correctRejectionRate == null
+    ? null
+    : ((hitRate ?? 0.5) + (correctRejectionRate ?? 0.5)) / 2;
+
+  const presses = recomputed.filter(q => q.answered === 'match' && q.responseMs > 0);
+  const avgResponseMs = presses.length
+    ? Math.round(presses.reduce((s, q) => s + q.responseMs, 0) / presses.length)
+    : null;
+
+  return {
+    score: accuracy == null ? 0 : Math.min(100, Math.max(0, Math.round(accuracy * 100))),
+    questions: recomputed,
+    accuracy,
+    // Every trial in a go/no-go n-back gets a decision, so completion is 1 when
+    // any trial ran (the metric exists for reader uniformity, not signal).
+    completion: recomputed.length ? 1 : null,
+    avgResponseMs,
+    answeredCount: recomputed.length,
+    totalCount: recomputed.length,
+    hits,
+    misses,
+    falseAlarms,
+    correctRejections,
+  };
 }
 
 function scoreDigitSpan(drillData, questions) {
@@ -364,7 +482,7 @@ function scoreDigitSpan(drillData, questions) {
   const span = recomputed.filter(q => q.correct).reduce((m, q) => Math.max(m, q.length || 0), 0);
   const spanBonus = maxLength > 0 ? Math.min(1, span / maxLength) : 0;
   const score = Math.min(100, Math.max(0, Math.round((correctRatio * 0.7 + spanBonus * 0.3) * 100)));
-  return { score, questions: recomputed, span };
+  return { score, questions: recomputed, span, ...answeredMetrics(recomputed) };
 }
 
 function scoreStroop(drillData, questions) {
@@ -383,7 +501,7 @@ function scoreStroop(drillData, questions) {
       responseMs: clampMs(q.responseMs, refMs),
     };
   });
-  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed };
+  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed, ...answeredMetrics(recomputed) };
 }
 
 // Schulte table: each question is one "find the next number" step, keyed by
@@ -406,7 +524,7 @@ function scoreSchulteTable(drillData, questions) {
       responseMs: clampMs(q.responseMs, refMs),
     };
   });
-  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed };
+  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed, ...answeredMetrics(recomputed) };
 }
 
 // Mental rotation: `index` selects the trial; `answered` is the option index
@@ -428,7 +546,7 @@ function scoreMentalRotation(drillData, questions) {
       responseMs: clampMs(q.responseMs, refMs),
     };
   });
-  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed };
+  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed, ...answeredMetrics(recomputed) };
 }
 
 // Reaction time: 'simple' trials just need a clean (non-false-start) press;
@@ -437,7 +555,10 @@ function scoreMentalRotation(drillData, questions) {
 function scoreReactionTime(drillData, questions) {
   const trials = drillData?.trials || [];
   const mode = drillData?.config?.mode === 'choice' ? 'choice' : 'simple';
+  // `refMs` is the "slow" bound (score 0); `fastMs` the "elite" ceiling (score
+  // 100). A choice reaction is inherently slower, so both shift up in choice mode.
   const refMs = mode === 'choice' ? 1200 : 600;
+  const fastMs = mode === 'choice' ? 400 : 200;
   const recomputed = questions.map(q => {
     const trial = trials[q.index] || {};
     const falseStart = q.falseStart === true;
@@ -459,10 +580,49 @@ function scoreReactionTime(drillData, questions) {
       expected,
       answered,
       correct,
+      falseStart,
       responseMs: clampMs(q.responseMs, refMs * 3),
     };
   });
-  return { score: accuracySpeedScore(recomputed, refMs), questions: recomputed };
+
+  // Latency IS the score: reaction time is a speed measure, so a valid trial's
+  // median RT vs a reference curve drives the score (issue #2094). A false start
+  // (pressing before the stimulus) invalidates its trial; in choice mode a wrong
+  // target also invalidates it. In simple mode "correct" == a clean, timed press.
+  // The latency score is then scaled by the VALID-TRIAL RATE — otherwise one
+  // lucky 200ms press among a run of false starts would persist a perfect 100
+  // headline score. Mirrors the blended-score convention everywhere else, where
+  // completion/invalid trials fold into the headline number while the separated
+  // medianMs/accuracy metrics stay pure.
+  const valid = recomputed.filter(q => q.correct && !q.falseStart && q.responseMs > 0);
+  const latencies = valid.map(q => q.responseMs);
+  const medianMs = median(latencies);
+  const bestMs = latencies.length ? Math.min(...latencies) : null;
+  const totalTrials = recomputed.length;
+  const validRate = totalTrials ? valid.length / totalTrials : 0;
+  const latencyScore = medianMs == null
+    ? 0
+    : Math.min(100, Math.max(0, (100 * (refMs - medianMs)) / (refMs - fastMs)));
+  const score = Math.round(latencyScore * validRate);
+
+  // A press attempt is any non-false-start trial with a real latency; accuracy is
+  // the share of those that were valid (in simple mode every clean press is valid,
+  // so accuracy tracks the false-start-free rate; in choice mode it's target hits).
+  const pressed = recomputed.filter(q => !q.falseStart && q.responseMs > 0);
+  const totalCount = recomputed.length;
+  return {
+    score,
+    questions: recomputed,
+    medianMs,
+    bestMs,
+    accuracy: pressed.length ? valid.length / pressed.length : null,
+    completion: totalCount ? pressed.length / totalCount : null,
+    avgResponseMs: latencies.length
+      ? Math.round(latencies.reduce((s, ms) => s + ms, 0) / latencies.length)
+      : null,
+    answeredCount: pressed.length,
+    totalCount,
+  };
 }
 
 /**

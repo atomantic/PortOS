@@ -430,6 +430,16 @@ export const SEED_500_MILES_SCORE_PARTS = [
   },
 ];
 
+// Reference performances for the built-in "500 Miles" — TikTok clips the user
+// pointed at as worked examples for the Reference material section. Kept as a
+// named export so SEED_ROUNDS and the backfill migration share ONE source (no
+// drift), the same pattern as SEED_500_MILES_SCORE_PARTS above.
+export const SEED_500_MILES_REFERENCES = [
+  { id: 'ref-tt-marie', url: 'https://www.tiktok.com/@marie.celestinee/video/7638358831205977376', label: 'TikTok · @marie.celestinee', note: 'Reference performance.' },
+  { id: 'ref-tt-eric', url: 'https://www.tiktok.com/@ericolsith/video/7633158760659176718', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
+  { id: 'ref-tt-eric-2', url: 'https://www.tiktok.com/@ericolsith/video/7647221045618887949', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
+];
+
 // --- Traditional rounds: melodies + canonic voice stacks --------------------
 // The four built-in rounds are canons — the harmony IS the melody sung against
 // itself, each voice entering a fixed number of bars late. Rather than hand-
@@ -466,18 +476,25 @@ const canonVoice = (melody, { delayBars, id, label, role }) => {
 
 // Hey Ho Nobody Home — six bars, three 2-bar phrases. The classic 3-voice round:
 // voices enter one phrase (2 bars) apart, and the three phrases stack into the
-// full minor chord.
-const HEY_HO_MELODY = [
+// full D-minor chord. Centered on D with all naturals (score header `key: C` =
+// no key signature), so it stacks cleanly with Ah Poor Bird and Rose Rose Rose
+// Red in the D-minor quodlibet: phrase 1 (D/A) + phrase 2 (D–E–F) + phrase 3
+// (A–G–F–E) outline a D-minor triad, with no B-natural to sound a tritone
+// against the partners' F. Contour matches the Wikibooks Songbook (E-minor) and
+// Kodály teaching (D natural-minor) transcriptions, transposed to D
+// (1-1-2-2-♭3-♭3-♭3-♭3-2 in phrase 2). Exported so migration 158 can restore it
+// onto installs that still hold the old G-centered, major-third transcription.
+export const HEY_HO_MELODY = [
   'clef: treble',
   'key: C',
   'time: 4/4',
   'tempo: 76',
   '',
-  '| G4h(Hey) D4h(ho) | G4q(no-) G4e(bo-) G4e(dy) D4h(home) |',
-  '| G4q(Meat) G4q(nor) A4q(drink) A4q(nor) | B4e(mon-) B4e(ey) B4e(have) B4e(I) A4h(none) |',
-  '| D5q(Still) C5q(I) D5q(will) C5q(be) | B4h(mer-) A4h(ry) |',
+  '| D4h(Hey) A3h(ho) | D4q(no-) D4e(bo-) D4e(dy) A3h(home) |',
+  '| D4q(Meat) D4q(nor) E4q(drink) E4q(nor) | F4e(mon-) F4e(ey) F4e(have) F4e(I) E4h(none) |',
+  '| A4q(Still) G4q(I) A4q(will) G4q(be) | F4h(mer-) E4h(ry) |',
 ].join('\n');
-const HEY_HO_SCORE_PARTS = [
+export const HEY_HO_SCORE_PARTS = [
   canonVoice(HEY_HO_MELODY, { delayBars: 2, id: 'part-heyho-v2', label: 'Voice 2', role: 'voice-2' }),
   canonVoice(HEY_HO_MELODY, { delayBars: 4, id: 'part-heyho-v3', label: 'Voice 3', role: 'voice-3' }),
 ];
@@ -644,11 +661,7 @@ export const SEED_ROUNDS = [
       { id: 'high-harmony-2', label: 'High Harmony II', part: 'Soprano / Tenor', notes: 'Held upper pad — keep the leading tone (the B in G7) so it resolves up to C.' },
       { id: 'high-harmony-1', label: 'High Harmony I', part: 'Soprano', notes: 'Sparse top descant — high chord tones on the emotional phrases. Enter late; mostly long notes.' },
     ],
-    references: [
-      { id: 'ref-tt-marie', url: 'https://www.tiktok.com/@marie.celestinee/video/7638358831205977376', label: 'TikTok · @marie.celestinee', note: 'Reference performance.' },
-      { id: 'ref-tt-eric', url: 'https://www.tiktok.com/@ericolsith/video/7633158760659176718', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
-      { id: 'ref-tt-eric-2', url: 'https://www.tiktok.com/@ericolsith/video/7647221045618887949', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
-    ],
+    references: SEED_500_MILES_REFERENCES,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
@@ -667,7 +680,7 @@ export const SEED_ROUNDS = [
     key: 'D minor (Dorian)',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Scored in D with no key signature — D Dorian, B natural. Melody after Jack Campin\'s D-minor round transcription.',
+    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Centered on D with no key signature — all naturals (D Dorian / natural minor), no B. Melody after the Wikibooks Songbook and Kodály teaching transcriptions, transposed to a D tonal center.',
     score: HEY_HO_MELODY,
     // Canonic voice stack: the melody entering one phrase (2 bars) late per voice
     // — the round sung against itself. Derived from HEY_HO_MELODY so it can't
@@ -697,7 +710,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 72,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A four-phrase round (8 bars). Voices enter every two bars. The melody climbs the minor scale to a leap in the third phrase, then settles back to the tonic. Scored in D minor with no key signature (all naturals).',
+    notation: 'A four-phrase round (8 bars). Voices enter every two bars. The melody climbs the minor scale to a leap in the third phrase, then settles back to the tonic. Scored in D minor with no key signature (all naturals). Phrase 3 \'the\' is sung C natural here (natural-minor variant); the Kodály-lineage teaching edition raises it to C♯ there (harmonic minor, tone set la-ti-do-re-mi-si). Both are widely sung — this is a deliberate variant choice, not an error.',
     score: AH_POOR_BIRD_MELODY,
     // Canonic voice stack: the melody entering two bars late per voice. Derived
     // from AH_POOR_BIRD_MELODY so it can't drift from the tune.
@@ -726,7 +739,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals).',
+    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals). Two documented variant points vs. the Kodály-lineage teaching edition (cross-checked against the Wikibooks Songbook and 8notes/Beth\'s Notes listings): this seed\'s verse is "I will marry at thy will, sire" where the teaching edition sings "Aye, marry, that I will / if thou but stay", and this melody resolves the final phrase to the tonic D where the teaching edition ends on A/mi so the loop leads back into the round. Both variants are widely sung.',
     score: ROSE_MELODY,
     // Canonic voice stack: the melody entering two bars late per voice. Derived
     // from ROSE_MELODY so it can't drift from the tune.
@@ -754,7 +767,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 112,
     rhythmShapeId: 'driving-4-4',
-    notation: 'The refrain chant, repeated. Scored in D minor with no key signature (all naturals). Loop it as many times as you like; a second voice entering one phrase behind turns it into a round.',
+    notation: 'The refrain chant, repeated. Scored in D minor with no key signature (all naturals). Loop it as many times as you like; a second voice entering one phrase behind turns it into a round. Deliberate learned variant: this seed encodes the refrain as the user learned it, transposed to D minor to stack with the English trio; canonical printings of the Israeli round Zum Gali Gali are typically in E minor and include the verse ("Hechalutz le\'ma\'an avodah…") over the ostinato. Do not "correct" this toward the printed version — the transposition and refrain-only form are intentional.',
     score: ZUM_MELODY,
     // Canonic Voice 2: the chant entering ONE bar late so its busy half overlaps
     // the resolving half (an even delay would only double it in unison). Derived
