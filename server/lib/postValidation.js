@@ -212,6 +212,17 @@ const llmDrillTypeConfigSchema = z.object({
   model: z.string().optional()
 });
 
+// Optional practice goals (issue #2100). Every field is optional so a config
+// with no goals — or a legacy config that predates this block entirely — stays
+// valid; bounds keep a hand-edited config from persisting a nonsensical target.
+// Exported so the settings route / tests can validate a `goals` slice directly.
+export const postGoalsSchema = z.object({
+  dailyMinutes: z.number().int().min(1).max(1440).optional(),
+  weeklySessions: z.number().int().min(1).max(100).optional(),
+  streakTarget: z.number().int().min(1).max(3650).optional(),
+  morseWpmTarget: z.number().min(1).max(100).optional(),
+}).partial();
+
 // Config update (partial)
 export const postConfigUpdateSchema = z.object({
   mentalMath: z.object({
@@ -230,6 +241,8 @@ export const postConfigUpdateSchema = z.object({
     drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
   sessionModules: z.array(z.enum(POST_MODULES)).optional(),
+  // Optional practice goals (issue #2100) — see postGoalsSchema above.
+  goals: postGoalsSchema.optional(),
   scoring: z.object({
     weights: z.record(z.number().min(0).max(1)).optional()
   }).optional(),

@@ -24,6 +24,7 @@ import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } fr
 import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems, isStatMastered, MASTERY_TARGET_ACCURACY } from './meatspacePostMemory.js';
 import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
+import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, ymdToUTC } from '../lib/postStreak.js';
 
 // Re-export the shared streak helper so existing importers of
@@ -91,7 +92,21 @@ const DEFAULT_CONFIG = {
       'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 }
     }
   },
-  sessionModules: ['mental-math'],
+  // Default session composition is a balanced, interleaved mix of the free
+  // (no-provider) modules — mental math, deterministic cognitive drills, and
+  // memory (issue #2100). LLM drills are deliberately excluded from the default:
+  // auto-enabling them would queue provider calls the user hasn't consented to
+  // (see CLAUDE.md's AI Provider Usage Policy). A user who wants wit/verbal
+  // drills in every session adds `llm-drills` here explicitly.
+  sessionModules: ['mental-math', 'cognitive', 'memory'],
+  // Optional practice goals (issue #2100). All fields absent by default so a
+  // fresh/legacy install shows no goal UI until the user sets one. Bounds are
+  // enforced by postGoalsSchema (server/lib/postValidation.js).
+  //   dailyMinutes?   — minutes trained today target
+  //   weeklySessions? — scored sessions per rolling 7 days target
+  //   streakTarget?   — unified activity-streak (days) target
+  //   morseWpmTarget? — Morse effective-WPM target
+  goals: {},
   // Per-module weight applied to a session's blended score (issue #2099).
   // Uniform 1.0 defaults reproduce the old unweighted-mean behavior exactly —
   // a user only sees a change once they actually adjust a weight.
@@ -803,6 +818,224 @@ export async function getPostProgress({ days = 90 } = {}) {
       })),
       reviews,
     },
+  };
+}
+
+// =============================================================================
+// RECOMMENDATIONS ("what to practice next") — issue #2100
+// =============================================================================
+
+// Cap on how many recommendations the launcher/widget surface — enough to fill
+// an "Up next" panel without becoming a wall of tasks.
+const RECOMMENDATION_LIMIT = 5;
+// Coarse module → domain routing for weak-skill recommendations. Only the
+// domains a weak-skill rec can name are needed here; the full map lives on the
+// client (constants.js DRILL_TO_DOMAIN). Prettify falls back to the drill type.
+const DRILL_LABEL = (type) =>
+  String(type || '').replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
+/**
+ * The single weakest scored drill by recent (windowed) accuracy — the drill
+ * whose `byDrillAccuracy` is lowest among drills with at least one sample.
+ * Pure; reads the shape `getPostStats` returns. `null` when there's no
+ * accuracy signal yet (fresh install / all drills without derivable accuracy).
+ * Returns `{ key, module, type, accuracy, samples }` where `key` is
+ * `"<module>:<type>"`.
+ */
+export function weakestSkillFromStats(stats) {
+  const acc = stats?.byDrillAccuracy || {};
+  const counts = stats?.byDrillCount || {};
+  let worst = null;
+  for (const [key, a] of Object.entries(acc)) {
+    if (typeof a !== 'number' || Number.isNaN(a)) continue;
+    const samples = counts[key] || 0;
+    if (samples < 1) continue;
+    if (!worst || a < worst.accuracy) {
+      const sep = key.indexOf(':');
+      worst = {
+        key,
+        module: sep >= 0 ? key.slice(0, sep) : null,
+        type: sep >= 0 ? key.slice(sep + 1) : key,
+        accuracy: a,
+        samples,
+      };
+    }
+  }
+  return worst;
+}
+
+/**
+ * Stalled-progression descriptors from the resolved multiplication + cognitive
+ * ladders: a laddered drill the user is partway up but not yet advancing, with
+ * how many more clean/fast reps remain to reach the next rung. Pure — takes the
+ * already-resolved progress objects. A ladder that's mastered-and-advancing or
+ * at its hardest rung contributes nothing.
+ *
+ * @param {object} mulProgress - getMultiplicationProgress() result
+ * @param {Record<string,object>} cogProgress - getCognitiveProgress() result
+ * @param {{kochLevel:number, kochLevelSet:boolean, maxKochLevel:number}} morse
+ */
+export function stalledProgressions(mulProgress, cogProgress, morse) {
+  const out = [];
+
+  const ladderStall = (prog, drillType, label, deepLink) => {
+    if (!prog || prog.atHardest || prog.currentMastered) return null;
+    const cur = (prog.levels || []).find((r) => r.level === prog.level);
+    if (!cur) return null;
+    const next = (prog.levels || []).find((r) => r.level === prog.level + 1);
+    const minSamples = prog.thresholds?.minSamples ?? 0;
+    const remaining = Math.max(1, minSamples - (cur.samples || 0));
+    return {
+      drillType,
+      label,
+      remaining,
+      nextLabel: next?.label || null,
+      deepLink,
+    };
+  };
+
+  const mul = ladderStall(mulProgress, 'multiplication', 'Multiplication', '/post/launcher');
+  if (mul) out.push(mul);
+
+  for (const [type, prog] of Object.entries(cogProgress || {})) {
+    const stall = ladderStall(prog, type, DRILL_LABEL(type), '/post/launcher');
+    if (stall) out.push(stall);
+  }
+
+  // Morse Koch progression: surface only once the user has engaged with Morse
+  // (a level has been set) and isn't already at the final Koch level — so a
+  // fresh install is never nagged about a track it hasn't started.
+  if (morse?.kochLevelSet && morse.kochLevel < (morse.maxKochLevel ?? Infinity)) {
+    out.push({
+      drillType: 'morse-copy',
+      label: 'Morse',
+      remaining: null,
+      nextLabel: `Koch level ${morse.kochLevel + 1}`,
+      deepLink: '/post/morse/copy',
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Compose the ordered "what to practice next" list from already-gathered
+ * signals. PURE + fully unit-testable — the async `getPostRecommendations`
+ * gathers the inputs and delegates here. Priority order (highest first):
+ *   1. Due memory items (spaced-repetition overdue)
+ *   2. Due skill re-verifications (mastered-but-inactive skills, issue #2096)
+ *   3. Weakest scored skill by recent accuracy
+ *   4. Stalled ladder progressions (N more reps to advance)
+ * When nothing is actionable (e.g. a fresh install with no history), a single
+ * sensible default ("run a full POST") is returned so the panel is never empty.
+ */
+export function composePostRecommendations({
+  dueMemoryItems = [],
+  dueReviews = [],
+  weakestSkill = null,
+  stalled = [],
+  hasHistory = false,
+  limit = RECOMMENDATION_LIMIT,
+} = {}) {
+  const recs = [];
+
+  for (const item of dueMemoryItems) {
+    recs.push({
+      id: `memory-due:${item.id}`,
+      kind: 'memory-due',
+      title: `Review "${item.title}"`,
+      detail: 'Due for spaced-repetition practice',
+      deepLink: '/post/memory',
+      drillType: 'memory-sequence',
+    });
+  }
+
+  for (const review of dueReviews) {
+    recs.push({
+      id: `skill-review:${review.skillId}`,
+      kind: 'skill-review',
+      title: `Re-verify ${review.label}`,
+      detail: review.status === 'needs-refresh'
+        ? 'Needs a refresh — last review slipped'
+        : 'Maintenance rep due',
+      deepLink: '/post/launcher',
+      drillType: review.drillType || null,
+    });
+  }
+
+  if (weakestSkill) {
+    recs.push({
+      id: `weak-skill:${weakestSkill.key}`,
+      kind: 'weak-skill',
+      title: `Shore up ${DRILL_LABEL(weakestSkill.type)}`,
+      detail: `Weakest skill lately — ${Math.round((weakestSkill.accuracy || 0) * 100)}% accuracy`,
+      deepLink: '/post/launcher',
+      drillType: weakestSkill.type,
+    });
+  }
+
+  for (const stall of stalled) {
+    const remainText = stall.remaining != null
+      ? `${stall.remaining} more clean rep${stall.remaining === 1 ? '' : 's'} to reach ${stall.nextLabel || 'the next level'}`
+      : `Advance to ${stall.nextLabel || 'the next level'}`;
+    recs.push({
+      id: `stalled:${stall.drillType}`,
+      kind: 'stalled-progression',
+      title: `${stall.label}: keep climbing`,
+      detail: remainText,
+      deepLink: stall.deepLink,
+      drillType: stall.drillType,
+    });
+  }
+
+  if (recs.length === 0) {
+    recs.push({
+      id: 'default:full-post',
+      kind: 'default',
+      title: hasHistory ? 'Keep your streak going' : 'Run your first POST',
+      detail: hasHistory
+        ? 'No specific gaps right now — run a full self-test to stay sharp.'
+        : 'Complete a full self-test to start tracking what to practice next.',
+      deepLink: '/post/launcher',
+      drillType: null,
+    });
+  }
+
+  return recs.slice(0, Math.max(1, limit)).map((r, i) => ({ ...r, priority: i }));
+}
+
+/**
+ * Gather the recommendation signals and compose the ordered "Up next" list
+ * (issue #2100). Reads due memory items, due skill re-verifications, recent
+ * stats (weakest skill), and the resolved ladders (stalled progressions).
+ */
+export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
+  const [dueMemoryItems, dueReviews, stats, mulProgress, cogProgress, morse, sessions] = await Promise.all([
+    getDueMemoryItems(),
+    getDueReviews(new Date(), Infinity),
+    getPostStats(MASTERY_DEFAULTS.windowDays),
+    getMultiplicationProgress(),
+    getCognitiveProgress(),
+    getMorseProgress(MASTERY_DEFAULTS.windowDays),
+    getPostSessions(),
+  ]);
+
+  const weakestSkill = weakestSkillFromStats(stats);
+  const stalled = stalledProgressions(mulProgress, cogProgress, {
+    kochLevel: morse?.kochLevel,
+    kochLevelSet: morse?.kochLevelSet,
+    maxKochLevel: MAX_KOCH_LEVEL,
+  });
+
+  return {
+    recommendations: composePostRecommendations({
+      dueMemoryItems,
+      dueReviews,
+      weakestSkill,
+      stalled,
+      hasHistory: sessions.length > 0,
+      limit,
+    }),
   };
 }
 

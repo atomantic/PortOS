@@ -123,6 +123,20 @@ router.get('/post/progress', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/meatspace/post/recommendations
+ * Ordered "what to practice next" list (issue #2100): due memory items, due
+ * skill re-verifications, the weakest recent skill, and stalled ladder
+ * progressions — each with a deep link into the exact drill/mode. Never empty
+ * (falls back to a sensible default when nothing specific is actionable).
+ */
+router.get('/post/recommendations', asyncHandler(async (req, res) => {
+  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;
+  const limit = Number.isNaN(rawLimit) || rawLimit == null ? undefined : Math.max(1, Math.min(10, rawLimit));
+  const result = await postService.getPostRecommendations(limit != null ? { limit } : {});
+  res.json(result);
+}));
+
+/**
  * POST /api/meatspace/post/drill
  * Generate a drill with questions and expected answers.
  * Supports both math drills (sync) and LLM drills (async, requires AI provider).

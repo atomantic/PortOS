@@ -1,10 +1,45 @@
 import { useState, useEffect } from 'react';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { getProviders, getPostReviewReps } from '../../../services/api';
+import { Link } from 'react-router-dom';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight } from 'lucide-react';
+import { getProviders, getPostReviewReps, getPostRecommendations } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
+
+// Canonical domain visiting order for interleaved "Full POST" composition
+// (issue #2100): alternate domains — math → cognitive → memory → verbal — so a
+// session is spaced/varied rather than blocked (all math, then all cognitive).
+// Domains not listed here interleave after, in first-seen order.
+export const INTERLEAVE_DOMAIN_ORDER = ['math', 'cognitive', 'memory', 'verbal', 'wordplay', 'imagination'];
+
+/**
+ * Round-robin interleave drill configs by their `domain` tag: one drill from
+ * each domain per round, in INTERLEAVE_DOMAIN_ORDER, until every drill is
+ * placed. Preserves per-domain input order. Pure — exported for unit tests.
+ */
+export function interleaveByDomain(drills, order = INTERLEAVE_DOMAIN_ORDER) {
+  const groups = new Map();
+  for (const d of drills || []) {
+    const key = d.domain || 'other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  }
+  const domainOrder = [
+    ...order.filter(k => groups.has(k)),
+    ...[...groups.keys()].filter(k => !order.includes(k)),
+  ];
+  const lengths = [...groups.values()].map(g => g.length);
+  const maxLen = lengths.length ? Math.max(...lengths) : 0;
+  const result = [];
+  for (let round = 0; round < maxLen; round++) {
+    for (const key of domainOrder) {
+      const list = groups.get(key);
+      if (round < list.length) result.push(list[round]);
+    }
+  }
+  return result;
+}
 
 const scoreColorClass = (score) =>
   score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
@@ -40,10 +75,15 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // until a skill is mastered and its review interval elapses; a load failure
   // silently degrades to a plain Quick session.
   const [reviewReps, setReviewReps] = useState([]);
+  // Ordered "what to practice next" recommendations (issue #2100). A load
+  // failure silently degrades to an empty list (the panel hides). The top
+  // recommendation also biases the Quick session's drill picks.
+  const [recommendations, setRecommendations] = useState([]);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
     getPostReviewReps(2).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
+    getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
   }, []);
 
   if (!config) {
@@ -93,6 +133,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   function handleStart() {
     const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: {
         steps: cfg.steps,
         count: cfg.count,
@@ -108,6 +149,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
     const llmConfigs = enabledLlmDrills.map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: { count: cfg.count || 5 },
       timeLimitSec: cfg.timeLimitSec || 120,
       providerId: cfg.providerId || llmProviderId,
@@ -116,12 +158,17 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
     const cognitiveConfigs = enabledCognitiveDrills.map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: cognitiveDrillConfig(cfg)
       // No timeLimitSec — cognitive drills are self-paced/stimulus-driven and
       // never enforce a countdown (see PostCognitiveDrillRunner.jsx).
     }));
 
-    const drillConfigs = [...mathConfigs, ...llmConfigs, ...cognitiveConfigs];
+    // Interleave across domains (math → cognitive → memory → verbal …) rather
+    // than running each module blocked, so a full session spaces varied work
+    // for better retention (issue #2100). Full coverage is preserved — every
+    // enabled drill still runs, just reordered.
+    const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs]);
     onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
@@ -141,11 +188,26 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   }
 
   function handleQuickSession() {
+    // Bias toward the top recommendation instead of pure random (issue #2100):
+    // if it names a drill type in an enabled domain, run that domain first and
+    // pick that exact drill; every other domain still gets a random pick.
+    const topRec = recommendations[0] || null;
+    const recDrill = topRec?.drillType || null;
+    const recDomain = recDrill ? DRILL_TO_DOMAIN[recDrill] : null;
+    const domainKeys = Object.keys(enabledDomains);
+    const orderedKeys = recDomain && enabledDomains[recDomain]
+      ? [recDomain, ...domainKeys.filter(k => k !== recDomain)]
+      : domainKeys;
+
     const drillConfigs = [];
-    for (const [domainKey, drills] of Object.entries(enabledDomains)) {
+    for (const domainKey of orderedKeys) {
+      const drills = enabledDomains[domainKey];
       const domain = DOMAINS[domainKey];
-      // Pick one random drill from this domain
-      const pick = drills[Math.floor(Math.random() * drills.length)];
+      // Prefer the recommended drill in its domain; otherwise pick at random.
+      const recommendedPick = domainKey === recDomain
+        ? drills.find(d => d.type === recDrill)
+        : null;
+      const pick = recommendedPick || drills[Math.floor(Math.random() * drills.length)];
       const cfg = pick.cfg;
 
       let quickConfig;
@@ -259,6 +321,16 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     .filter(d => enabledDomains[d.key])
     .reduce((weakest, d) => (!weakest || d.score < weakest.score ? d : weakest), null);
 
+  // Goal progress (issue #2100). Metrics come from data already on hand — no
+  // extra fetch: today's minutes from today's sessions, week sessions from the
+  // 7-day stats window, streak from the unified streak. Morse WPM has no metric
+  // here (would need a Morse fetch), so a morseWpmTarget goal is simply omitted
+  // — computeGoalProgress skips goals whose metric is unavailable.
+  const todaysSessions = (recentSessions || []).filter(s => s.date === today);
+  const todayMinutes = Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
+  const weekSessions = statsWeek?.sessionCount ?? 0;
+  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak });
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Header */}
@@ -316,6 +388,59 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
               )}
             </div>
           </div>
+
+          {/* Goals — progress vs the user's configured targets (issue #2100).
+              Hidden entirely until at least one goal is set. */}
+          {goalRows.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Goals</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {goalRows.map(g => (
+                  <div key={g.key}>
+                    <div className="flex items-baseline justify-between gap-1">
+                      <span className="text-xs text-gray-500 truncate">{g.label}</span>
+                      {g.met && <span className="text-xs text-port-success" aria-hidden="true">✓</span>}
+                    </div>
+                    <div className={`text-sm font-mono ${g.met ? 'text-port-success' : 'text-white'}`}>
+                      {g.current}/{g.target}{g.unit ? ` ${g.unit}` : ''}
+                    </div>
+                    <div className="h-1.5 mt-1 rounded-full bg-port-bg overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${g.met ? 'bg-port-success' : 'bg-port-accent'}`}
+                        style={{ width: `${g.pct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* "Up next" — prioritized recommendations with deep links into the
+              exact drill/mode (issue #2100). Hidden if none loaded. */}
+          {recommendations.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Compass size={16} className="text-port-accent" />
+                <h3 className="text-sm font-medium text-gray-300">Up next</h3>
+              </div>
+              <div className="space-y-2">
+                {recommendations.map(rec => (
+                  <Link
+                    key={rec.id}
+                    to={rec.deepLink}
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors group"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-white truncate">{rec.title}</div>
+                      {rec.detail && <div className="text-xs text-gray-500 truncate">{rec.detail}</div>}
+                    </div>
+                    <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Progress analytics — streak, 7-vs-30-day trend, weakest-domain focus.
               Degrades to nothing until there's scored history to summarize. */}

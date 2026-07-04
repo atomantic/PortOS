@@ -152,6 +152,49 @@ export function computeDomainAverages(byDrill = {}) {
     .sort((a, b) => b.score - a.score);
 }
 
+// Practice goals (issue #2100). A goal is "set" only when its target is a
+// positive number, so an absent/legacy `goals` object (or `{}`) yields no goal
+// rows and the UI hides cleanly.
+export const GOAL_DEFS = [
+  { key: 'dailyMinutes', label: 'Minutes today', unit: 'min', metric: 'todayMinutes' },
+  { key: 'weeklySessions', label: 'Sessions this week', unit: '', metric: 'weekSessions' },
+  { key: 'streakTarget', label: 'Streak', unit: 'd', metric: 'currentStreak' },
+  { key: 'morseWpmTarget', label: 'Morse WPM', unit: 'wpm', metric: 'morseWpm' },
+];
+
+export function hasGoals(goals) {
+  if (!goals || typeof goals !== 'object') return false;
+  return GOAL_DEFS.some(({ key }) => typeof goals[key] === 'number' && goals[key] > 0);
+}
+
+/**
+ * Progress toward each set goal. `goals` is the config's `goals` block; `metrics`
+ * supplies the current values (`todayMinutes`, `weekSessions`, `currentStreak`,
+ * `morseWpm`). Returns one row per goal that's actually set AND whose current
+ * metric is available (a goal whose metric is unknown — e.g. Morse WPM with no
+ * Morse data — is skipped rather than shown as 0). Pure.
+ */
+export function computeGoalProgress(goals = {}, metrics = {}) {
+  const rows = [];
+  for (const def of GOAL_DEFS) {
+    const target = goals?.[def.key];
+    if (typeof target !== 'number' || !(target > 0)) continue;
+    const current = metrics?.[def.metric];
+    if (typeof current !== 'number' || Number.isNaN(current)) continue;
+    const pct = Math.max(0, Math.min(100, Math.round((current / target) * 100)));
+    rows.push({
+      key: def.key,
+      label: def.label,
+      unit: def.unit,
+      current: Math.round(current * 10) / 10,
+      target,
+      pct,
+      met: current >= target,
+    });
+  }
+  return rows;
+}
+
 // Difficulty badge color helper
 export const getDifficultyColor = (difficulty) => {
   if (difficulty === 'hard') return 'bg-port-error/20 text-port-error';

@@ -1,5 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { buildCleanTags, cognitiveSummary } from './PostSessionLauncher';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+
+// Mock the API surface the launcher touches on mount (providers + review reps +
+// recommendations) so the render tests are deterministic and offline.
+vi.mock('../../../services/api', () => ({
+  getProviders: vi.fn().mockResolvedValue([]),
+  getPostReviewReps: vi.fn().mockResolvedValue({ reps: [] }),
+  getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
+}));
+
+import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
+import { getPostRecommendations } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10). Both were lifted from component-body closures to module
@@ -59,5 +71,98 @@ describe('cognitiveSummary', () => {
 
   it('falls back to an empty string for an unrecognized type with no count', () => {
     expect(cognitiveSummary('mental-rotation', {})).toBe('');
+  });
+});
+
+describe('interleaveByDomain (issue #2100)', () => {
+  it('round-robins one drill per domain in canonical order', () => {
+    const drills = [
+      { type: 'multiplication', domain: 'math' },
+      { type: 'powers', domain: 'math' },
+      { type: 'n-back', domain: 'cognitive' },
+      { type: 'memory-sequence', domain: 'memory' },
+    ];
+    const out = interleaveByDomain(drills).map(d => d.type);
+    // Round 0: math, cognitive, memory; round 1: math (the second math drill).
+    expect(out).toEqual(['multiplication', 'n-back', 'memory-sequence', 'powers']);
+  });
+
+  it('preserves per-domain input order', () => {
+    const drills = [
+      { type: 'a', domain: 'math' },
+      { type: 'b', domain: 'math' },
+      { type: 'c', domain: 'math' },
+    ];
+    expect(interleaveByDomain(drills).map(d => d.type)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('interleaves unranked domains after the canonical ones, deterministically', () => {
+    const drills = [
+      { type: 'mystery', domain: 'zzz' },
+      { type: 'multiplication', domain: 'math' },
+    ];
+    expect(interleaveByDomain(drills).map(d => d.type)).toEqual(['multiplication', 'mystery']);
+  });
+
+  it('returns an empty array for empty input', () => {
+    expect(interleaveByDomain([])).toEqual([]);
+    expect(interleaveByDomain()).toEqual([]);
+  });
+});
+
+describe('PostSessionLauncher render (issue #2100)', () => {
+  const baseConfig = {
+    mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true, count: 10, timeLimitSec: 120 } } },
+    llmDrills: { enabled: false, drillTypes: {} },
+    cognitive: { enabled: false, drillTypes: {} },
+    goals: { streakTarget: 10 },
+  };
+  const stats = { sessionCount: 3, overall: 70, currentStreak: 4, longestStreak: 8, byDrill: { 'mental-math:multiplication': 70 } };
+
+  const renderLauncher = (props = {}) => render(
+    <MemoryRouter>
+      <PostSessionLauncher
+        config={baseConfig}
+        recentSessions={[]}
+        stats={stats}
+        statsWeek={{ sessionCount: 2 }}
+        onStart={vi.fn()}
+        onViewHistory={vi.fn()}
+        onViewConfig={vi.fn()}
+        onViewMemory={vi.fn()}
+        onViewMorse={vi.fn()}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+  });
+
+  it('renders the "Up next" panel with working deep links', async () => {
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'memory-due:song', kind: 'memory-due', title: 'Review "Elements"', detail: 'Due', deepLink: '/post/memory', priority: 0 },
+      { id: 'stalled:morse-copy', kind: 'stalled-progression', title: 'Morse: keep climbing', detail: 'Koch 6', deepLink: '/post/morse/copy', priority: 1 },
+    ] });
+    const { container } = renderLauncher();
+    await waitFor(() => expect(screen.getByText('Up next')).toBeTruthy());
+    expect(screen.getByText('Review "Elements"')).toBeTruthy();
+    expect(container.querySelector('a[href="/post/memory"]')).toBeTruthy();
+    expect(container.querySelector('a[href="/post/morse/copy"]')).toBeTruthy();
+  });
+
+  it('renders goal progress against a configured goal', async () => {
+    renderLauncher();
+    await waitFor(() => expect(screen.getByText('Goals')).toBeTruthy());
+    // streakTarget 10 with a 4-day streak → "4/10 d".
+    expect(screen.getByText(/4\/10/)).toBeTruthy();
+  });
+
+  it('hides the goals panel when no goals are set', async () => {
+    renderLauncher({ config: { ...baseConfig, goals: {} } });
+    await waitFor(() => expect(getPostRecommendations).toHaveBeenCalled());
+    expect(screen.queryByText('Goals')).toBeNull();
   });
 });
