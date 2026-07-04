@@ -238,6 +238,24 @@ export const submitTrainingEntry = (data) => request('/meatspace/post/training',
 export const getTrainingStats = (days) => request(`/meatspace/post/training/stats${days != null ? `?days=${days}` : ''}`);
 export const getTrainingEntries = (limit) => request(`/meatspace/post/training/entries${limit ? `?limit=${limit}` : ''}`);
 
+// MeatSpace - POST Morse Trainer progress (server-side Koch level, round history,
+// accuracy/WPM trends, per-character confusion matrix). Callers own their error
+// UI (fire-and-forget from the trainer), so pass { silent: true }.
+export const submitMorseRound = (data, options = {}) => request('/meatspace/post/morse/rounds', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options
+});
+export const getMorseProgress = (days, options = {}) => request(
+  `/meatspace/post/morse/progress${days != null ? `?days=${days}` : ''}`,
+  options
+);
+export const updateMorseLevel = (data, options = {}) => request('/meatspace/post/morse/level', {
+  method: 'PUT',
+  body: JSON.stringify(data),
+  ...options
+});
+
 // Life Calendar
 export const getLifeCalendar = () => request('/meatspace/calendar');
 export const getActivities = () => request('/meatspace/activities');

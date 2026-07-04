@@ -18,6 +18,8 @@ import {
   memoryItemUpdateSchema,
   memoryPracticeSchema,
   memoryDrillRequestSchema,
+  morseRoundSchema,
+  morseLevelUpdateSchema,
   LLM_DRILL_TYPES,
   MEMORY_DRILL_TYPES,
   trainingEntrySchema,
@@ -27,6 +29,7 @@ import * as memoryService from '../services/meatspacePostMemory.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
 import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
+import * as morseService from '../services/meatspacePostMorse.js';
 // meatspacePostReminder.js is not imported here — updatePostConfig() itself
 // reschedules the daily reminder (via meatspacePost.js's postConfigEvents) so
 // any current or future caller gets that behavior for free (#2015). Loaded
@@ -246,6 +249,42 @@ router.get('/post/training/entries', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
   const entries = await trainingService.getTrainingEntries(limit);
   res.json(entries);
+}));
+
+// =============================================================================
+// POST - Morse Trainer Progress
+// =============================================================================
+
+/**
+ * POST /api/meatspace/post/morse/rounds
+ * Append a completed Morse round (per-item sent→guessed results).
+ */
+router.post('/post/morse/rounds', asyncHandler(async (req, res) => {
+  const data = validateRequest(morseRoundSchema, req.body);
+  const round = await morseService.appendMorseRound(data);
+  res.status(201).json(round);
+}));
+
+/**
+ * GET /api/meatspace/post/morse/progress?days=N
+ * Koch level, per-mode accuracy/WPM trends, confusion matrix, and per-character
+ * accuracy (worst-first).
+ */
+router.get('/post/morse/progress', asyncHandler(async (req, res) => {
+  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
+  const progress = await morseService.getMorseProgress(days);
+  res.json(progress);
+}));
+
+/**
+ * PUT /api/meatspace/post/morse/level
+ * Explicit Koch level change (advance/reset) or one-time localStorage adoption.
+ */
+router.put('/post/morse/level', asyncHandler(async (req, res) => {
+  const data = validateRequest(morseLevelUpdateSchema, req.body);
+  const result = await morseService.setKochLevel(data);
+  res.json(result);
 }));
 
 // =============================================================================
