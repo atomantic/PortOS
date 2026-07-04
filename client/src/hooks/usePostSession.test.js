@@ -345,3 +345,94 @@ describe('usePostSession — LLM training-log correctCount (issue #2097)', () =>
     }));
   });
 });
+
+describe('usePostSession — LLM training-log per-question breakdown (issue #2114)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Follow-up to #2097: the standalone Wordplay tab already threads a
+  // per-question breakdown through submitTrainingEntry (WordplayTrainer.jsx).
+  // The in-session runner completes the same four drill types through
+  // completeLlmDrill/saveSession here, and must populate the same field so a
+  // completed in-session wordplay round isn't missing the breakdown.
+  it('threads a per-question breakdown for a completed in-session wordplay drill', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'compound-chain', config: {}, challenges: [{ rootWord: 'fire' }],
+    });
+    scorePostLlmDrill.mockResolvedValue({
+      score: 90,
+      questions: [{ questionIndex: 0, prompt: 'fire', items: ['firehouse'], responseMs: 500, llmScore: 90, llmFeedback: 'Nice!' }],
+      evaluation: { overallScore: 90, scores: [{ score: 90, feedback: 'Nice!' }] },
+    });
+    submitTrainingEntry.mockResolvedValue({});
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'compound-chain', config: {}, timeLimitSec: 120 }], true);
+    });
+
+    await act(async () => {
+      await result.current.completeLlmDrill({
+        module: 'llm-drills',
+        type: 'compound-chain',
+        config: {},
+        drillData: {},
+        responses: [{ questionIndex: 0, prompt: 'fire', items: ['firehouse'], responseMs: 500 }],
+        totalMs: 5000,
+      });
+    });
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    expect(submitTrainingEntry).toHaveBeenCalledWith(expect.objectContaining({
+      drillType: 'compound-chain',
+      questions: [expect.objectContaining({
+        prompt: 'fire', items: ['firehouse'], score: 90, feedback: 'Nice!', correct: true,
+      })],
+    }));
+  });
+
+  // Non-wordplay LLM drill types (word-association, story-recall, etc.) have
+  // no dashboard use case yet and their `r.responses` shape isn't guaranteed
+  // to carry a renderable prompt — scope the breakdown to WORDPLAY_LLM_DRILL_TYPES
+  // only, same as the standalone tab.
+  it('omits the questions field for a non-wordplay LLM drill type', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'word-association', config: {}, prompts: ['x'],
+    });
+    scorePostLlmDrill.mockResolvedValue({
+      score: 80,
+      questions: [{ questionIndex: 0, response: 'y', llmScore: 80 }],
+      evaluation: { overallScore: 80, scores: [{ score: 80 }] },
+    });
+    submitTrainingEntry.mockResolvedValue({});
+
+    const { result } = renderHook(() => usePostSession());
+
+    await act(async () => {
+      await result.current.startSession([{ type: 'word-association', config: {}, timeLimitSec: 120 }], true);
+    });
+
+    await act(async () => {
+      await result.current.completeLlmDrill({
+        module: 'llm-drills',
+        type: 'word-association',
+        config: {},
+        drillData: {},
+        responses: [{ questionIndex: 0, response: 'y', responseMs: 500 }],
+        totalMs: 3000,
+      });
+    });
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    const entry = submitTrainingEntry.mock.calls[0][0];
+    expect(entry).not.toHaveProperty('questions');
+  });
+});

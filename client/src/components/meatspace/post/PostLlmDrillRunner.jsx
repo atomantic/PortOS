@@ -104,13 +104,23 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     } else if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
       responseObj = {
         questionIndex,
+        // Compound Chain's root word (undefined/dropped for the other two
+        // items-based types) — needed so a completed training round can
+        // persist a readable per-question prompt (issue #2114), matching the
+        // standalone WordplayTrainer tab's compound-chain result shape.
+        prompt: currentPrompt?.rootWord,
         items: items,
         responseMs
       };
     } else {
       responseObj = {
         questionIndex,
-        prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
+        // Bridge Word puzzles have no rootWord/word/idiom field, only `clues`
+        // — without this fallback the persisted per-question prompt silently
+        // fell through to '' for this mode (issue #2114, same bug fixed in
+        // the standalone WordplayTrainer tab).
+        prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom
+          || (currentPrompt?.clues || []).join(' / ') || '',
         response: inputValue.trim(),
         responseMs
       };

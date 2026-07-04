@@ -78,6 +78,34 @@ describe('PostLlmDrillRunner — wordplay types render via the shared WordplayDr
   });
 });
 
+describe('PostLlmDrillRunner — per-question prompt for training-log persistence (issue #2114)', () => {
+  // Regression: Bridge Word puzzles carry only `clues`, not rootWord/word/idiom
+  // — the prompt fallback chain used to fall through to '' for this mode, so
+  // a completed in-session round's persisted training-log breakdown couldn't
+  // identify which puzzle a missed answer belonged to.
+  it('builds a readable prompt for a completed Bridge Word round from its clue set', async () => {
+    const onComplete = vi.fn();
+    render(
+      <PostLlmDrillRunner
+        drill={{ type: 'bridge-word', puzzles: [{ clues: ['news___', '___back'], answer: 'paper' }] }}
+        timeLimitSec={60}
+        drillIndex={0}
+        drillCount={1}
+        onComplete={onComplete}
+        isTraining={false}
+      />
+    );
+
+    const input = screen.getByPlaceholderText(/bridge word is/i);
+    fireEvent.change(input, { target: { value: 'paper' } });
+    fireEvent.click(screen.getByText('Submit'));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    const drillResult = onComplete.mock.calls[0][0];
+    expect(drillResult.responses[0]).toMatchObject({ prompt: 'news___ / ___back', response: 'paper' });
+  });
+});
+
 describe('PostLlmDrillRunner — training-mode scoring path', () => {
   it('scores a wordplay type through the shared scoreWordplayResponse core', async () => {
     scorePostLlmDrill.mockResolvedValue({
