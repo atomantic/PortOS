@@ -970,6 +970,10 @@ export function composePostRecommendations({
   }
 
   for (const review of dueReviews) {
+    // A memory-chunk re-verification can't run through the launcher's review-rep
+    // path (getPostReviewReps only regenerates multiplication/cognitive reps —
+    // memory retention lives under /post/memory), so route it there instead of a
+    // dead /post/launcher link (issue #2100 review).
     recs.push({
       id: `skill-review:${review.skillId}`,
       kind: 'skill-review',
@@ -977,7 +981,7 @@ export function composePostRecommendations({
       detail: review.status === 'needs-refresh'
         ? 'Needs a refresh — last review slipped'
         : 'Maintenance rep due',
-      deepLink: '/post/launcher',
+      deepLink: review.kind === 'memory' ? '/post/memory' : '/post/launcher',
       drillType: review.drillType || null,
     });
   }

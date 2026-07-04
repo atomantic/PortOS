@@ -206,12 +206,22 @@ describe('composePostRecommendations priority + composition', () => {
 
   it('places due skill re-verifications above weak skills', () => {
     const recs = composePostRecommendations({
-      dueReviews: [{ skillId: 'multiplication:L1', label: 'Multiplication 1×2', drillType: 'multiplication', status: 'due' }],
+      dueReviews: [{ skillId: 'multiplication:L1', label: 'Multiplication 1×2', drillType: 'multiplication', kind: 'multiplication', status: 'due' }],
       weakestSkill: { key: 'cognitive:n-back', type: 'n-back', accuracy: 0.5 },
       hasHistory: true,
     });
     expect(recs[0].kind).toBe('skill-review');
+    expect(recs[0].deepLink).toBe('/post/launcher');
     expect(recs[1].kind).toBe('weak-skill');
+  });
+
+  it('routes a memory-chunk re-verification to the memory tab, not the launcher', () => {
+    const recs = composePostRecommendations({
+      dueReviews: [{ skillId: 'memory:song:c1', label: 'Elements — Chorus', kind: 'memory', status: 'due' }],
+      hasHistory: true,
+    });
+    expect(recs[0].kind).toBe('skill-review');
+    expect(recs[0].deepLink).toBe('/post/memory');
   });
 
   it('returns a sensible default for an empty (fresh) history', () => {
