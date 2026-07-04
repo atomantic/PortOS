@@ -94,27 +94,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     e?.preventDefault();
     const responseMs = Date.now() - questionStartRef.current;
 
-    let responseObj;
-    if (drillType === 'story-recall') {
-      responseObj = {
-        questionIndex,
-        answers: items.length > 0 ? items : [inputValue.trim()],
-        responseMs
-      };
-    } else if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
-      responseObj = {
-        questionIndex,
-        items: items,
-        responseMs
-      };
-    } else {
-      responseObj = {
-        questionIndex,
-        prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
-        response: inputValue.trim(),
-        responseMs
-      };
-    }
+    const responseObj = buildLlmResponseObj({ drillType, questionIndex, items, inputValue, currentPrompt, responseMs });
 
     const newResponses = [...responses, responseObj];
     setResponses(newResponses);
@@ -486,7 +466,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   );
 }
 
-function getPrompts(drill) {
+export function getPrompts(drill) {
   if (!drill) return [];
   switch (drill.type) {
     case 'word-association': return drill.questions || [];
@@ -505,6 +485,33 @@ function getPrompts(drill) {
     case 'reframe': return drill.situations || [];
     default: return [];
   }
+}
+
+// Pure per-type response-object builder — the shape scorePostLlmDrill and the
+// server's finishDrill counterpart key off of. Every shape stamps
+// `questionIndex` so the server can pair a response with its originating
+// prompt/challenge/scenario by explicit index rather than array position —
+// array position broke pairing for hosts (e.g. the standalone WordplayTrainer
+// tab) that submit one response at a time wrapped in a single-item array
+// (fixed in 0a60c8457, "pair wordplay responses with correct challenge by
+// index"). Regressing this field silently mis-scores every response.
+export function buildLlmResponseObj({ drillType, questionIndex, items, inputValue, currentPrompt, responseMs }) {
+  if (drillType === 'story-recall') {
+    return {
+      questionIndex,
+      answers: items.length > 0 ? items : [inputValue.trim()],
+      responseMs,
+    };
+  }
+  if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
+    return { questionIndex, items, responseMs };
+  }
+  return {
+    questionIndex,
+    prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
+    response: inputValue.trim(),
+    responseMs,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

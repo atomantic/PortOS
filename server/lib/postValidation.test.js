@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { postLlmScoreRequestSchema, postConfigUpdateSchema, postSessionSubmitSchema, postDrillRequestSchema, trainingEntrySchema, LLM_DRILL_TYPES } from './postValidation.js';
+import {
+  postLlmScoreRequestSchema,
+  postConfigUpdateSchema,
+  postSessionSubmitSchema,
+  postDrillRequestSchema,
+  trainingEntrySchema,
+  memoryItemCreateSchema,
+  memoryScheduleSchema,
+  memoryPracticeSchema,
+  LLM_DRILL_TYPES,
+} from './postValidation.js';
 
 describe('postConfigUpdateSchema llmDrills', () => {
   // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
@@ -204,5 +214,135 @@ describe('postLlmScoreRequestSchema', () => {
       responses: [{ questionIndex: -1, responseMs: 0 }],
       timeLimitMs: 60000
     })).toThrow();
+  });
+});
+
+// =============================================================================
+// drillTypeConfigSchema numeric bounds (via postDrillRequestSchema.config)
+// (issue #2102 notes)
+// =============================================================================
+
+describe('drillTypeConfigSchema numeric bounds', () => {
+  it('accepts math-drill knobs within their documented bounds', () => {
+    const parsed = postDrillRequestSchema.parse({
+      type: 'serial-subtraction',
+      config: { steps: 50, subtrahend: 100, maxDigits: 4, tolerancePct: 50 },
+    });
+    expect(parsed.config).toMatchObject({ steps: 50, subtrahend: 100, maxDigits: 4, tolerancePct: 50 });
+  });
+
+  it('rejects steps above the max (50) and below the min (1)', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'serial-subtraction', config: { steps: 51 } })).toThrow();
+    expect(() => postDrillRequestSchema.parse({ type: 'serial-subtraction', config: { steps: 0 } })).toThrow();
+  });
+
+  it('rejects maxDigits outside 1-4', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'multiplication', config: { maxDigits: 5 } })).toThrow();
+    expect(() => postDrillRequestSchema.parse({ type: 'multiplication', config: { maxDigits: 0 } })).toThrow();
+  });
+
+  it('rejects tolerancePct outside 1-50', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'estimation', config: { tolerancePct: 0 } })).toThrow();
+    expect(() => postDrillRequestSchema.parse({ type: 'estimation', config: { tolerancePct: 51 } })).toThrow();
+  });
+
+  it('accepts cognitive-drill knobs within bounds (n, length, size, choices)', () => {
+    const parsed = postDrillRequestSchema.parse({
+      type: 'n-back',
+      config: { n: 3, length: 60, size: 7, choices: 4 },
+    });
+    expect(parsed.config).toMatchObject({ n: 3, length: 60, size: 7, choices: 4 });
+  });
+
+  it('rejects an out-of-range n-back n (must be 1-3)', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'n-back', config: { n: 4 } })).toThrow();
+    expect(() => postDrillRequestSchema.parse({ type: 'n-back', config: { n: 0 } })).toThrow();
+  });
+
+  it('rejects an out-of-range schulte-table size (must be 3-7)', () => {
+    expect(() => postDrillRequestSchema.parse({ type: 'schulte-table', config: { size: 8 } })).toThrow();
+    expect(() => postDrillRequestSchema.parse({ type: 'schulte-table', config: { size: 2 } })).toThrow();
+  });
+});
+
+// =============================================================================
+// memoryScheduleSchema / memoryItemCreateSchema ease bounds (issue #2102 notes)
+// =============================================================================
+
+describe('memoryScheduleSchema ease bounds', () => {
+  it('accepts ease within the SM-2 bounds [1.3, 5]', () => {
+    expect(memoryScheduleSchema.parse({ ease: 1.3, intervalDays: 0, nextReview: '2026-07-01T00:00:00.000Z' }).ease).toBe(1.3);
+    expect(memoryScheduleSchema.parse({ ease: 5, intervalDays: 10, nextReview: '2026-07-01T00:00:00.000Z' }).ease).toBe(5);
+  });
+
+  it('rejects ease below 1.3 or above 5', () => {
+    expect(() => memoryScheduleSchema.parse({ ease: 1.2, intervalDays: 0, nextReview: '2026-07-01T00:00:00.000Z' })).toThrow();
+    expect(() => memoryScheduleSchema.parse({ ease: 5.1, intervalDays: 0, nextReview: '2026-07-01T00:00:00.000Z' })).toThrow();
+  });
+
+  it('rejects a negative intervalDays', () => {
+    expect(() => memoryScheduleSchema.parse({ ease: 2.5, intervalDays: -1, nextReview: '2026-07-01T00:00:00.000Z' })).toThrow();
+  });
+});
+
+describe('memoryItemCreateSchema', () => {
+  it('accepts a well-formed create request with an embedded schedule', () => {
+    const parsed = memoryItemCreateSchema.parse({
+      title: 'My Poem',
+      type: 'poem',
+      lines: ['line one', 'line two'],
+      schedule: { ease: 2.5, intervalDays: 1, nextReview: '2026-07-01T00:00:00.000Z' },
+    });
+    expect(parsed.schedule.ease).toBe(2.5);
+    expect(parsed.type).toBe('poem');
+  });
+
+  it('rejects an out-of-bounds embedded schedule ease (schema parity with memoryScheduleSchema)', () => {
+    expect(() => memoryItemCreateSchema.parse({
+      title: 'My Poem',
+      lines: ['line one'],
+      schedule: { ease: 10, intervalDays: 1, nextReview: '2026-07-01T00:00:00.000Z' },
+    })).toThrow();
+  });
+
+  it('rejects an empty lines array', () => {
+    expect(() => memoryItemCreateSchema.parse({ title: 'Empty', lines: [] })).toThrow();
+  });
+
+  it('rejects an unknown item type', () => {
+    expect(() => memoryItemCreateSchema.parse({ title: 'X', type: 'novel', lines: ['a'] })).toThrow();
+  });
+
+  it('defaults type to "text" when omitted', () => {
+    expect(memoryItemCreateSchema.parse({ title: 'X', lines: ['a'] }).type).toBe('text');
+  });
+});
+
+// =============================================================================
+// memoryPracticeSchema mode enums (issue #2102 notes)
+// =============================================================================
+
+describe('memoryPracticeSchema mode enums', () => {
+  it('accepts every documented practice mode', () => {
+    for (const mode of ['fill-blank', 'sequence', 'element-flash', 'learn', 'speed-run']) {
+      const parsed = memoryPracticeSchema.parse({ mode, results: [{ correct: true }] });
+      expect(parsed.mode).toBe(mode);
+    }
+  });
+
+  it('rejects an unknown practice mode', () => {
+    expect(() => memoryPracticeSchema.parse({ mode: 'not-a-mode', results: [{ correct: true }] })).toThrow();
+  });
+
+  it('rejects an empty results array', () => {
+    expect(() => memoryPracticeSchema.parse({ mode: 'fill-blank', results: [] })).toThrow();
+  });
+
+  it('accepts a nullable chunkId and optional totalMs', () => {
+    const parsed = memoryPracticeSchema.parse({
+      mode: 'sequence', chunkId: null, results: [{ correct: false, expected: 'x', answered: 'y' }], totalMs: 4000,
+    });
+    expect(parsed.chunkId).toBeNull();
+    expect(parsed.totalMs).toBe(4000);
   });
 });

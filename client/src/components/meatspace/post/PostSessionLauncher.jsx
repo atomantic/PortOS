@@ -11,6 +11,28 @@ const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '�
 const scoreColorClass = (score) =>
   score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
 
+// Short "at a glance" summary chip per cognitive drill type, shown next to
+// its label in the launcher sidebar. Pure — no closures over component state.
+export function cognitiveSummary(type, cfg) {
+  if (type === 'n-back') return `${cfg.n ?? 2}-back`;
+  if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
+  if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
+  if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
+  return cfg.count ? `${cfg.count} trials` : '';
+}
+
+// Pure: sanitizes the optional condition-tags map before submit — drops
+// empty/whitespace-only values so a session with no conditions filled in
+// doesn't persist `{ sleep: '', caffeine: '', stress: '' }` to history.
+// `tags` is passed explicitly (lifted from the component's `tags` state).
+export function buildCleanTags(tags) {
+  const cleanTags = {};
+  for (const [k, v] of Object.entries(tags)) {
+    if (v.trim()) cleanTags[k] = v.trim();
+  }
+  return cleanTags;
+}
+
 export default function PostSessionLauncher({ config, recentSessions, stats, statsWeek, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
@@ -63,24 +85,6 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     choices: cfg.choices,
   });
 
-  // Short "at a glance" summary chip per cognitive drill type, shown next to
-  // its label in the launcher sidebar.
-  function cognitiveSummary(type, cfg) {
-    if (type === 'n-back') return `${cfg.n ?? 2}-back`;
-    if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
-    if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
-    if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
-    return cfg.count ? `${cfg.count} trials` : '';
-  }
-
-  function buildCleanTags() {
-    const cleanTags = {};
-    for (const [k, v] of Object.entries(tags)) {
-      if (v.trim()) cleanTags[k] = v.trim();
-    }
-    return cleanTags;
-  }
-
   function handleStart() {
     const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
       type,
@@ -113,7 +117,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     }));
 
     const drillConfigs = [...mathConfigs, ...llmConfigs, ...cognitiveConfigs];
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
   // Build domain → enabled drills map for quick session
@@ -173,7 +177,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       drillConfigs.push(drillConfig);
     }
 
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
   // Focused practice on a single domain: run every enabled drill in that domain
@@ -213,7 +217,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       }
       return drillConfig;
     });
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
