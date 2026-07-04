@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Human Activity Tracking
+
+- **[issue-2150] Activity timeline** — a new `/timeline` page shows a unified, day-by-day view of your activity (emails sent/received and calendar events, with more sources coming), backed by a machine-local `human_activity_events` store that your existing message and calendar syncs populate automatically. Pick any day (deep-linkable via `/timeline/:date`), see an hourly activity histogram and per-source tallies, and browse the day's events. Only metadata and a short summary line are stored — full message bodies stay in their per-source caches — and the timeline is machine-local (never federated to peers), like Tribe.
+
 ## Songs
 
 - **[issue-2109] The live vocal Tuner now locks onto the note you're singing instead of flickering.** Holding a steady note used to make the readout strobe — the note label flipped between neighbors, the needle lurched, and the display dropped to "—" on every breath or consonant. The tuner now holds a stable reading through brief dropouts (dimming while it coasts), only blanks after a real pause, keeps one note label while your pitch wanders up to ~60¢ around it, and re-locks promptly when you actually change notes — so a held note shows one label with a gently moving needle.

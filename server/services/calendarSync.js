@@ -217,6 +217,11 @@ export async function syncAccount(accountId, io, options = {}) {
     await logCalendarTouchpoints(accountId, newEvents).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
+    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+    // fail the sync. Idempotent on (source, dedupe_key). Machine-local.
+    await recordCalendarActivity(account, newEvents).catch((err) =>
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+
     io?.emit('calendar:sync:completed', { accountId, newEvents: uniqueNew.length, pruned, status: providerStatus });
     console.log(`📅 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
@@ -292,4 +297,15 @@ export async function logCalendarTouchpoints(accountId, events = []) {
     console.log(`🤝 Auto-logged ${result.created} calendar touchpoint(s) for account ${accountId}`);
   }
   return result;
+}
+
+// Record synced calendar events into the machine-local human-activity timeline
+// (#2150). Only finished, non-declined/cancelled events count as activity.
+// Idempotent (dedupe on source + event id). humanActivity is imported
+// dynamically to keep this hook lazy (mirrors the tribe auto-log path).
+export async function recordCalendarActivity(account, events = []) {
+  const { calendarActivityCandidates, recordEvents } = await import('./humanActivity.js');
+  const candidates = calendarActivityCandidates(account, events);
+  if (candidates.length === 0) return { recorded: 0, skipped: 0 };
+  return recordEvents(candidates);
 }

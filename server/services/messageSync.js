@@ -195,6 +195,12 @@ export async function syncAccount(accountId, io, options = {}) {
     await logMessageTouchpoints(account, cache.messages).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
+    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+    // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
+    // cache each sync is a no-op for already-recorded messages. Machine-local.
+    await recordMessageActivity(account, cache.messages).catch((err) =>
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {
       io?.emit('messages:changed', {});
@@ -392,4 +398,16 @@ export async function logMessageTouchpoints(account, messages = []) {
     console.log(`🤝 Auto-logged ${result.created} message touchpoint(s) for account ${account?.id}`);
   }
   return result;
+}
+
+// Record synced messages into the machine-local human-activity timeline (#2150).
+// Deterministic + idempotent (dedupe on source + message externalId), so
+// re-scanning the full cache each sync is a no-op for already-recorded messages.
+// humanActivity is imported dynamically to keep this hook lazy (mirrors the tribe
+// auto-log path) and off the module graph for callers that never sync.
+export async function recordMessageActivity(account, messages = []) {
+  const { messageActivityCandidates, recordEvents } = await import('./humanActivity.js');
+  const candidates = messageActivityCandidates(account, messages);
+  if (candidates.length === 0) return { recorded: 0, skipped: 0 };
+  return recordEvents(candidates);
 }
