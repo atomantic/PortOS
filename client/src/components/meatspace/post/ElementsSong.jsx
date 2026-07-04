@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronLeft, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge } from 'lucide-react';
+import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem } from '../../../services/api';
 import { RapidReaderModal } from '../../RapidReader';
 
@@ -103,6 +103,9 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
   const [searchQuery, setSearchQuery] = useState('');
   // Speed-reading (RSVP): { text, title } while the rapid reader modal is open.
   const [rapidRead, setRapidRead] = useState(null);
+  // Per-verse expand overrides ({ [chunkId]: bool }). Absent → falls back to
+  // isHighlighted so selecting an element still auto-opens its verses.
+  const [openVerses, setOpenVerses] = useState({});
 
   const songText = useMemo(
     () => (item.content?.lines || []).map(l => l.text).join(' '),
@@ -292,39 +295,46 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
             const pct = chunkMastery?.attempts > 0 ? Math.round((chunkMastery.correct / chunkMastery.attempts) * 100) : 0;
             const lines = item.content.lines.slice(chunk.lineRange[0], chunk.lineRange[1] + 1);
             const isHighlighted = highlightedChunks.includes(chunk.id);
+            const isOpen = openVerses[chunk.id] ?? isHighlighted;
 
+            // Custom disclosure (not <details>/<summary>): the collapsed row must
+            // keep BOTH the toggle and the always-visible Rapid Read trigger, and
+            // an interactive control can't live inside a <summary>. So the toggle
+            // and the gauge button are independent siblings on the row.
             return (
-              <details key={chunk.id} className="group relative" open={isHighlighted}>
-                <summary className={`flex items-center gap-2 justify-between cursor-pointer text-sm py-1 pr-9 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
-                  <span className="min-w-0 truncate">{chunk.label}{isHighlighted && <span className="text-xs text-port-accent/60 ml-2">contains {selectedElement}</span>}</span>
-                  <span className={`font-mono text-xs shrink-0 ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
-                    {pct > 0 ? `${pct}%` : '—'}
-                  </span>
-                </summary>
-                {/* Rapid-read trigger sits OUTSIDE <summary> — interactive controls
-                    nested in a summary are invalid HTML and unreliable for screen
-                    readers. As a sibling of <summary> it doesn't toggle the details. */}
-                <button
-                  type="button"
-                  onClick={() => setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label })}
-                  className="absolute top-0 right-0 flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
-                  title={`Rapid read ${chunk.label}`}
-                  aria-label={`Rapid read ${chunk.label}`}
-                >
-                  <Gauge size={13} />
-                </button>
-                <div className="mt-2 ml-2 space-y-1">
-                  {lines.map((line, i) => {
-                    const lineHasSelected = selectedElement && line.elements?.includes(selectedElement);
-                    return (
-                      <div key={i} className={`text-xs leading-relaxed transition-colors ${lineHasSelected ? 'text-white font-medium' : 'text-gray-500'}`}>
-                        {line.text}
-                        {lineHasSelected && <span className="text-port-accent/60 text-[10px] ml-1">[{line.elements.join(', ')}]</span>}
-                      </div>
-                    );
-                  })}
+              <div key={chunk.id}>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setOpenVerses(prev => ({ ...prev, [chunk.id]: !isOpen }))}
+                    aria-expanded={isOpen}
+                    className={`flex-1 min-w-0 flex items-center justify-between gap-2 cursor-pointer text-sm py-1 hover:text-white transition-colors ${isHighlighted ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
+                    <span className="min-w-0 flex items-center gap-1.5">
+                      <ChevronRight size={14} className={`shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                      <span className="truncate">{chunk.label}{isHighlighted && <span className="text-xs text-port-accent/60 ml-2">contains {selectedElement}</span>}</span>
+                    </span>
+                    <span className={`font-mono text-xs shrink-0 ${pct >= 80 ? 'text-port-success' : pct > 0 ? 'text-port-warning' : 'text-gray-600'}`}>
+                      {pct > 0 ? `${pct}%` : '—'}
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => setRapidRead({ text: lines.map(l => l.text).join(' '), title: chunk.label })}
+                    className="shrink-0 flex items-center justify-center w-7 h-7 rounded-md border border-port-border text-gray-500 hover:text-emerald-400 hover:border-emerald-400/50 transition-colors"
+                    title={`Rapid read ${chunk.label}`} aria-label={`Rapid read ${chunk.label}`}>
+                    <Gauge size={13} />
+                  </button>
                 </div>
-              </details>
+                {isOpen && (
+                  <div className="mt-2 ml-2 space-y-1">
+                    {lines.map((line, i) => {
+                      const lineHasSelected = selectedElement && line.elements?.includes(selectedElement);
+                      return (
+                        <div key={i} className={`text-xs leading-relaxed transition-colors ${lineHasSelected ? 'text-white font-medium' : 'text-gray-500'}`}>
+                          {line.text}
+                          {lineHasSelected && <span className="text-port-accent/60 text-[10px] ml-1">[{line.elements.join(', ')}]</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
