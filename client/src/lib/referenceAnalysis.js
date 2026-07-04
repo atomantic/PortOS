@@ -301,11 +301,15 @@ const medianOf = (values) => {
  * Estimate the fundamental frequency of a magnitude spectrum by weighted
  * harmonic sum. For each candidate f0 on a ~5-cent grid across [minHz, maxHz]
  * we sum interpolated magnitudes at its harmonics k·f0 (k = 1…H, below
- * Nyquist) weighted by 1/k. The 1/k weighting favors the TRUE fundamental over
- * its octave errors: f0/2 misses the strong first harmonic (its k=1 term lands
- * on empty spectrum) and 2·f0 drops the fundamental term entirely, so both
- * score below the real f0 — the frequency-domain analogue of the NSDF core's
- * first-strong-peak trick. `clarity` is the residual prominence of the winning
+ * Nyquist) weighted by 1/k. The 1/k weighting biases toward the TRUE
+ * fundamental over its octave errors: f0/2 misses the strong first harmonic
+ * (its k=1 term lands on empty spectrum) and 2·f0 drops the fundamental term
+ * entirely, so both usually score below the real f0 — the frequency-domain
+ * analogue of the NSDF core's first-strong-peak trick. It is a bias, not a
+ * guarantee: when spectral subtraction has gutted the fundamental bin (backing
+ * energy overlapped it), 2·f0 can still win and the note reads an octave high —
+ * which is why the result is a reviewable/editable PROPOSAL, not an auto-apply.
+ * `clarity` is the residual prominence of the winning
  * candidate over the grid's median score, in [0, 1]: a clean harmonic series
  * towers over a mostly-empty grid (→ 1); broadband noise scores flat (→ 0).
  *

@@ -295,6 +295,34 @@ describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
     expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/not enough audio before/i));
   });
 
+  it('rejects an invalid backing-window edit instead of silently dropping stacked mode', async () => {
+    installFakeAudio();
+    render(
+      <ControlledAnalysis
+        initialRef={{ ...baseRef, segments: [{ layerId: 'bass', startMs: 3000, endMs: 6000 }] }}
+        layers={layers}
+        scoreParts={[]}
+        tempo={60}
+        songKey="C"
+        onApplyPart={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Enable stacked → backing [0, 3000] seeded, "Extract from mix" shows.
+    fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
+    expect(await screen.findByRole('button', { name: /extract from mix/i })).toBeTruthy();
+
+    // Collapse the backing 'to' below 'from' + the minimum → the edit is
+    // rejected with a toast, and the segment STAYS in stacked mode (the row and
+    // "Extract from mix" persist), rather than silently reverting to solo.
+    const bgEnd = screen.getByLabelText(/backing reference end/i);
+    fireEvent.change(bgEnd, { target: { value: '0.1' } });
+    fireEvent.blur(bgEnd);
+    expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/backing reference must be at least/i));
+    expect(screen.getByRole('button', { name: /extract from mix/i })).toBeTruthy();
+    expect(screen.getByLabelText(/backing reference end/i)).toBeTruthy();
+  });
+
   it('recovers a new voice from a stacked mix end-to-end (toggle → extract from mix)', async () => {
     // [0, 0.8s]: C4 backing alone. [0.8, 1.8s]: C4 + a new A4 (440) on top.
     const audio = concatArr(harmonicTone(262, 0.8), mixArr(harmonicTone(262, 1.0), harmonicTone(440, 1.0)));

@@ -261,6 +261,14 @@ const BASE_TARGET = '__base__';
 // the pair IS "stacked mode" — the server persists it only when valid (#2121).
 const isStacked = (seg) => Number.isFinite(seg.bgStartMs) && Number.isFinite(seg.bgEndMs) && seg.bgEndMs > seg.bgStartMs;
 
+// A backing reference shorter than this can't hold even one FFT analysis frame
+// (2048 samples ≥ 128 ms at 16 kHz, less at higher rates) — averaging its
+// spectrum would fail and extraction would silently fall back to no-subtraction
+// (i.e. transcribe the loud backing layer AS the new voice). So we refuse to
+// seed, commit, or extract a window narrower than this, surfacing a toast
+// instead of a wrong-but-silent result (#2121).
+const MIN_BACKING_MS = 300;
+
 export default function ReferenceAnalysis({
   reference, layers = [], scoreParts = [], baseScore = '', tempo = null, songKey = '',
   onUpdateReference, onApplyPart, onClose,
@@ -341,12 +349,27 @@ export default function ReferenceAnalysis({
     const bgEndMs = seg.startMs;
     const preRoll = Math.min(4000, Math.max(1500, seg.endMs - seg.startMs));
     const bgStartMs = Math.max(0, bgEndMs - preRoll);
-    if (bgEndMs <= bgStartMs) {
+    if (bgEndMs - bgStartMs < MIN_BACKING_MS) {
       toast.error('Not enough audio before this segment for a backing reference — move the segment start later.');
       return;
     }
     setSegments(segments.map((s, i) => (i === idx ? { ...s, bgStartMs, bgEndMs } : s)));
   }, [segments, setSegments]);
+
+  // Commit an edit to one end of the backing window, but only if the pair stays
+  // a valid, usable range — otherwise the segment would drop out of stacked mode
+  // (isStacked flips false) and silently revert to solo extraction. Reject the
+  // edit with a toast so the backing editor stays put and the mode is stable.
+  const commitBacking = useCallback((idx, field, ms) => {
+    const seg = segments[idx];
+    const bgStartMs = field === 'bgStartMs' ? ms : seg.bgStartMs;
+    const bgEndMs = field === 'bgEndMs' ? ms : seg.bgEndMs;
+    if (bgEndMs - bgStartMs < MIN_BACKING_MS) {
+      toast.error(`The backing reference must be at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s and end before the voice enters.`);
+      return;
+    }
+    updateSegment(idx, { [field]: ms });
+  }, [segments, updateSegment]);
 
   const seekTo = useCallback((ms) => {
     const el = audioRef.current;
@@ -385,6 +408,13 @@ export default function ReferenceAnalysis({
   const extractSegment = useCallback((seg) => {
     if (!decoded) return;
     const stacked = isStacked(seg);
+    // Defense-in-depth against a too-short backing window (e.g. a hand-edited or
+    // peer-synced segment the server accepted but that can't hold an FFT frame):
+    // don't let stacked extraction silently degrade to solo-on-the-mix.
+    if (stacked && (seg.bgEndMs - seg.bgStartMs) < MIN_BACKING_MS) {
+      toast.error(`The backing reference is too short — give it at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s of the layers before the voice enters.`);
+      return;
+    }
     setExtracting(true);
     // Yield a frame so the button's busy state paints before the O(n·lag) DSP.
     setTimeout(() => {
@@ -632,12 +662,12 @@ export default function ReferenceAnalysis({
                       <SecondsInput
                         key={`bg-start-${seg.bgStartMs}`}
                         valueMs={seg.bgStartMs}
-                        onCommit={(ms) => updateSegment(idx, { bgStartMs: ms })}
+                        onCommit={(ms) => commitBacking(idx, 'bgStartMs', ms)}
                         ariaLabel="Backing reference start (seconds)"
                       />
                       <span>s</span>
                     </label>
-                    <button type="button" onClick={() => updateSegment(idx, { bgStartMs: currentMs() })} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <button type="button" onClick={() => commitBacking(idx, 'bgStartMs', currentMs())} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                       <Flag size={14} />
                     </button>
                     <label className="flex items-center gap-1 text-xs text-gray-400">
@@ -645,12 +675,12 @@ export default function ReferenceAnalysis({
                       <SecondsInput
                         key={`bg-end-${seg.bgEndMs}`}
                         valueMs={seg.bgEndMs}
-                        onCommit={(ms) => updateSegment(idx, { bgEndMs: ms })}
+                        onCommit={(ms) => commitBacking(idx, 'bgEndMs', ms)}
                         ariaLabel="Backing reference end (seconds)"
                       />
                       <span>s</span>
                     </label>
-                    <button type="button" onClick={() => updateSegment(idx, { bgEndMs: currentMs() })} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <button type="button" onClick={() => commitBacking(idx, 'bgEndMs', currentMs())} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
                       <FlagOff size={14} />
                     </button>
                     <button type="button" onClick={() => playSegment({ startMs: seg.bgStartMs, endMs: seg.bgEndMs })} title="Play the backing reference" aria-label="Play backing reference" className="p-1 text-gray-500 hover:text-port-accent">
