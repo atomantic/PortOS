@@ -90,10 +90,14 @@ export function adaptDrillConfig(type, baseConfig = {}, signal = {}, opts = {}) 
     return out;
   }
 
-  if (completion != null && completion < options.minCompletion) {
+  const lowCompletion = completion != null && completion < options.minCompletion;
+  if (lowCompletion && scoreToDirection(score, options) !== -1) {
     // The user barely reached this drill (timed out on most of it) — accuracy off
-    // a handful of answers isn't a trustworthy difficulty signal, so hold the
-    // manual config until they complete more of it (issue #2094).
+    // a handful of answers isn't a trustworthy signal to HOLD or go HARDER on, so
+    // keep the manual config until they complete more of it (issue #2094). The
+    // EASIER direction is deliberately allowed through: chronic low completion is
+    // itself evidence the drill is too hard/long, and blocking the ease would
+    // deadlock difficulty (low completion → no adaptation → completion stays low).
     out.reason = 'insufficient-completion';
     return out;
   }

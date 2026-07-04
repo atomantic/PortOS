@@ -156,10 +156,20 @@ export async function submitPostSession(sessionData) {
   const data = await loadSessions();
   const now = new Date().toISOString();
 
-  // Strip client-provided score/correct and recompute server-side (math drills only)
+  // Strip client-provided score/correct — plus every separated metric field
+  // (issue #2094) — and recompute server-side. Stripping up front means the
+  // LLM/memory branches (which trust the client `score` but never carry these
+  // metrics) can't persist stale client-sent values that stats aggregation
+  // would then prefer over a questions[] derivation.
   const rawTasks = Array.isArray(sessionData.tasks) ? sessionData.tasks : [];
   const rescoredTasks = rawTasks.map(t => {
-    const { score: _score, correct: _correct, ...rest } = t || {};
+    const {
+      score: _score, correct: _correct,
+      accuracy: _acc, completion: _comp, avgResponseMs: _avg,
+      answeredCount: _ac, totalCount: _tc, medianMs: _med, bestMs: _best, span: _span,
+      hits: _h, misses: _m, falseAlarms: _fa, correctRejections: _cr,
+      ...rest
+    } = t || {};
 
     // LLM drills: score was computed server-side via /post/score-llm and
     // passed back by the client. Re-scoring here would add latency + cost.
@@ -309,19 +319,24 @@ export function computePostStreaks(sessions, todayStr) {
 export function deriveTaskAccuracy(task) {
   if (typeof task?.accuracy === 'number' && !Number.isNaN(task.accuracy)) return task.accuracy;
   const qs = Array.isArray(task?.questions) ? task.questions : [];
-  const answered = qs.filter(q => q?.answered != null);
-  if (!answered.length) return null;
-  return answered.filter(q => q?.correct).length / answered.length;
+  // n-back is go/no-go: a withheld press (answered == null) is a deliberate
+  // "no-match" decision, not an unreached trial — so accuracy spans ALL trials,
+  // mirroring the client fallbacks in PostHistory/PostSessionResults.
+  const reached = task?.type === 'n-back' ? qs : qs.filter(q => q?.answered != null);
+  if (!reached.length) return null;
+  return reached.filter(q => q?.correct).length / reached.length;
 }
 
 /**
  * Completion (answered / total) for a scored task, with the same legacy fallback
  * as deriveTaskAccuracy. `null` when there are no questions to derive from.
+ * n-back legacy tasks are always fully reached — every trial gets a decision.
  */
 export function deriveTaskCompletion(task) {
   if (typeof task?.completion === 'number' && !Number.isNaN(task.completion)) return task.completion;
   const qs = Array.isArray(task?.questions) ? task.questions : [];
   if (!qs.length) return null;
+  if (task?.type === 'n-back') return 1;
   return qs.filter(q => q?.answered != null).length / qs.length;
 }
 
@@ -713,7 +728,9 @@ export function computeExpectedFromPrompt(prompt) {
 }
 
 export function scoreDrill(type, questions, timeLimitMs, config = {}) {
-  if (!questions?.length) return { score: 0, questions };
+  if (!questions?.length) {
+    return { score: 0, questions, accuracy: null, completion: null, avgResponseMs: null, answeredCount: 0, totalCount: 0 };
+  }
 
   // Recompute expected from the prompt server-side — never trust client-provided expected
   const recomputed = questions.map(q => {
@@ -748,7 +765,7 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   // so the headline gamification number is unchanged for existing sessions and
   // fully-answered tasks (back-compat). The separated metrics below are what
   // reporting and the adaptive signal now consume (issue #2094).
-  const correctRatio = correctCount / totalCount;
+  const correctRatio = totalCount ? correctCount / totalCount : 0;
 
   // Clamp responseMs to [0, timeLimitMs] to prevent inflated speed bonuses
   const totalResponseMs = answered.reduce((sum, q) => sum + Math.min(Math.max(q.responseMs || 0, 0), timeLimitMs), 0);

@@ -883,6 +883,23 @@ describe('deriveTaskAccuracy / deriveTaskCompletion — legacy-session fallback'
     expect(deriveTaskCompletion({ questions: [] })).toBe(null);
     expect(deriveTaskCompletion({})).toBe(null);
   });
+
+  it('legacy n-back: withheld presses are decisions, not skips — accuracy spans all trials, completion is 1', () => {
+    // 10-trial legacy n-back run: 2 presses (1 correct hit, 1 false alarm) and 8
+    // withheld (all correct rejections). Answered-only filtering would report
+    // accuracy 0.5 / completion 0.2; go/no-go semantics say 9/10 and fully reached.
+    const task = {
+      type: 'n-back',
+      questions: [
+        { answered: 'match', correct: true },
+        { answered: 'match', correct: false },
+        ...Array.from({ length: 8 }, () => ({ answered: null, correct: true })),
+      ],
+    };
+    expect(deriveTaskAccuracy(task)).toBeCloseTo(0.9, 5);
+    expect(deriveTaskCompletion(task)).toBe(1);
+    expect(deriveTaskCompletion({ type: 'n-back', questions: [] })).toBe(null);
+  });
 });
 
 describe('getPostStats — accuracy/completion aggregation', () => {

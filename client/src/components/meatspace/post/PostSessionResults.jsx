@@ -79,8 +79,11 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
               // the session hasn't been scored server-side yet. n-back is a go/no-go
               // task: a withheld press ("answered: null") is a deliberate no-match
               // decision, not an unreached trial — so every trial counts as reached
-              // (completion 100%) and accuracy spans all trials, matching the server
-              // scorer that stamps completion=1 for n-back.
+              // (completion 100%, matching the server's completion=1). Note: the
+              // pre-save fallback accuracy here is raw position accuracy over all
+              // trials — a close stand-in for (not identical to) the balanced
+              // signal-detection accuracy the server persists on save (#2093 owns
+              // the deeper results UI).
               const questions = result.questions || [];
               const noGo = result.type === 'n-back';
               const reached = noGo ? questions : questions.filter(q => q.answered !== null);

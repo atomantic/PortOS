@@ -59,6 +59,16 @@ describe('adaptDrillConfig', () => {
     expect(res.config.maxDigits).toBe(2);
   });
 
+  it('still EASES under the completion floor — chronic time-outs must not deadlock difficulty', () => {
+    // Low completion + low accuracy: the drill is too hard/long. Blocking the
+    // ease would freeze difficulty forever (low completion → no adaptation →
+    // completion stays low), so the easier direction passes the floor.
+    const res = adaptDrillConfig('multiplication', { maxDigits: 3 }, { score: 30, samples: 5, completion: 0.3 });
+    expect(res.applied).toBe(true);
+    expect(res.reason).toBe('easier');
+    expect(res.config.maxDigits).toBe(2);
+  });
+
   it('adapts normally once completion clears the floor', () => {
     const res = adaptDrillConfig('multiplication', { maxDigits: 2 }, { score: 95, samples: 5, completion: 0.8 });
     expect(res.applied).toBe(true);
