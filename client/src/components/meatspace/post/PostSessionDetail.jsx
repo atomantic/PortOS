@@ -14,7 +14,9 @@ export default function PostSessionDetail({ id, onBack }) {
   useEffect(() => {
     let cancelled = false;
     setStatus('loading');
-    getPostSession(id)
+    // silent: this view owns its own not-found UI, so suppress the helper's
+    // default error toast (a 404 for a stale/deleted id isn't a toast-worthy error).
+    getPostSession(id, { silent: true })
       .then(s => {
         if (cancelled) return;
         if (s) { setSession(s); setStatus('ready'); }

@@ -254,8 +254,12 @@ export async function submitPostSession(sessionData) {
   //     bookkeeping — log it single-line and still return 200. (Sanctioned
   //     try/catch: the session is already saved; there is nothing to roll back.)
   if (isNewSession) {
+    // Pre-filter to POST-supported memory tasks with a memoryItemId — the exact
+    // gate the prior per-task loop used, so an unsupported memory drill (e.g.
+    // memory-fill-blank) is never scheduled even if it somehow carried an id.
+    const memoryTasks = rescoredTasks.filter(t => POST_SUPPORTED_MEMORY_TYPES.includes(t.type) && t.memoryItemId);
     try {
-      await applySessionToMemoryItems(rescoredTasks, new Date(now));
+      await applySessionToMemoryItems(memoryTasks, new Date(now));
     } catch (err) {
       console.error(`❌ POST session memory post-processing failed (session ${sessionId} still saved): ${err.message}`);
     }
