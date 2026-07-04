@@ -703,7 +703,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 72,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A four-phrase round (8 bars). Voices enter every two bars. The melody climbs the minor scale to a leap in the third phrase, then settles back to the tonic. Scored in D minor with no key signature (all naturals).',
+    notation: 'A four-phrase round (8 bars). Voices enter every two bars. The melody climbs the minor scale to a leap in the third phrase, then settles back to the tonic. Scored in D minor with no key signature (all naturals). Phrase 3 \'the\' is sung C natural here (natural-minor variant); the Kodály-lineage teaching edition raises it to C♯ there (harmonic minor, tone set la-ti-do-re-mi-si). Both are widely sung — this is a deliberate variant choice, not an error.',
     score: AH_POOR_BIRD_MELODY,
     // Canonic voice stack: the melody entering two bars late per voice. Derived
     // from AH_POOR_BIRD_MELODY so it can't drift from the tune.
@@ -732,7 +732,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals).',
+    notation: 'A four-phrase English round (i–VII–V harmony), 8 bars. Voices enter every two bars. Scored in D minor with no key signature (all naturals). Two documented variant points vs. the Kodály-lineage teaching edition (cross-checked against the Wikibooks Songbook and 8notes/Beth\'s Notes listings): this seed\'s verse is "I will marry at thy will, sire" where the teaching edition sings "Aye, marry, that I will / if thou but stay", and this melody resolves the final phrase to the tonic D where the teaching edition ends on A/mi so the loop leads back into the round. Both variants are widely sung.',
     score: ROSE_MELODY,
     // Canonic voice stack: the melody entering two bars late per voice. Derived
     // from ROSE_MELODY so it can't drift from the tune.
@@ -760,7 +760,7 @@ export const SEED_ROUNDS = [
     key: 'D minor',
     tempo: 112,
     rhythmShapeId: 'driving-4-4',
-    notation: 'The refrain chant, repeated. Scored in D minor with no key signature (all naturals). Loop it as many times as you like; a second voice entering one phrase behind turns it into a round.',
+    notation: 'The refrain chant, repeated. Scored in D minor with no key signature (all naturals). Loop it as many times as you like; a second voice entering one phrase behind turns it into a round. Deliberate learned variant: this seed encodes the refrain as the user learned it, transposed to D minor to stack with the English trio; canonical printings of the Israeli round Zum Gali Gali are typically in E minor and include the verse ("Hechalutz le\'ma\'an avodah…") over the ostinato. Do not "correct" this toward the printed version — the transposition and refrain-only form are intentional.',
     score: ZUM_MELODY,
     // Canonic Voice 2: the chant entering ONE bar late so its busy half overlaps
     // the resolving half (an even delay would only double it in unison). Derived
