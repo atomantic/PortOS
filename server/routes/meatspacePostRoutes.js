@@ -23,6 +23,7 @@ import {
   LLM_DRILL_TYPES,
   MEMORY_DRILL_TYPES,
   trainingEntrySchema,
+  postProgressQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
 import * as memoryService from '../services/meatspacePostMemory.js';
@@ -110,6 +111,18 @@ router.get('/post/stats', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/meatspace/post/progress
+ * Unified time-series progress: per-day score/accuracy/response-time/minutes
+ * buckets, per-domain and per-drill series, totals, ONE unified streak (scored
+ * sessions OR training-log activity), and a mastery block (issue #2091).
+ */
+router.get('/post/progress', asyncHandler(async (req, res) => {
+  const { days, bucket } = validateRequest(postProgressQuerySchema, req.query);
+  const progress = await postService.getPostProgress({ days, bucket });
+  res.json(progress);
+}));
+
+/**
  * POST /api/meatspace/post/drill
  * Generate a drill with questions and expected answers.
  * Supports both math drills (sync) and LLM drills (async, requires AI provider).
@@ -168,6 +181,17 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
  */
 router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
   const progress = await postService.getMultiplicationProgress();
+  res.json(progress);
+}));
+
+/**
+ * GET /api/meatspace/post/cognitive-progress
+ * Per-drill progressive-ladder level + per-rung mastery for the laddered
+ * cognitive drills (n-back / digit-span / schulte / mental-rotation / stroop),
+ * keyed by drill type, so the config UI can show each drill's current rung.
+ */
+router.get('/post/cognitive-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getCognitiveProgress();
   res.json(progress);
 }));
 

@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { shuffle } from '../lib/arrayUtils.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
@@ -683,7 +684,7 @@ function generateFillBlank(item, count) {
   if (!lines.length) return null;
 
   const questions = [];
-  const shuffled = [...lines].sort(() => Math.random() - 0.5).slice(0, Math.min(count, lines.length));
+  const shuffled = shuffle(lines).slice(0, Math.min(count, lines.length));
 
   for (const line of shuffled) {
     const words = line.text.split(/\s+/);
@@ -719,6 +720,13 @@ function generateFillBlank(item, count) {
     questions.push({
       prompt: display,
       fullText: line.text,
+      // Scalar primary answer (the first blanked word) — kept alongside the
+      // full `answers[]` acceptable-word list so consumers that expect a
+      // single `expected` field (DrillQuestionReview, scoring) have a
+      // consistent value instead of always reading "—"/undefined (issue
+      // #2116). Scoring still checks `answers[]` for a match against ANY
+      // blanked word, not just this primary one.
+      expected: answers[0]?.word ?? null,
       answers,
       chunkId: findChunkForLine(item, lines.indexOf(line)),
     });
@@ -738,7 +746,7 @@ function generateSequenceRecall(item, count) {
   if (lines.length < 2) return null;
 
   const questions = [];
-  const indices = [...Array(lines.length - 1).keys()].sort(() => Math.random() - 0.5).slice(0, Math.min(count, lines.length - 1));
+  const indices = shuffle([...Array(lines.length - 1).keys()]).slice(0, Math.min(count, lines.length - 1));
 
   for (const idx of indices) {
     questions.push({
@@ -762,7 +770,7 @@ function generateElementFlash(item, count) {
   if (item.id !== 'elements-song' || !item.content.elementMap) return null;
 
   const elements = Object.entries(item.content.elementMap);
-  const shuffled = [...elements].sort(() => Math.random() - 0.5).slice(0, Math.min(count, elements.length));
+  const shuffled = shuffle(elements).slice(0, Math.min(count, elements.length));
 
   const questions = shuffled.map(([symbol, info]) => {
     // Randomly ask name→symbol or symbol→name

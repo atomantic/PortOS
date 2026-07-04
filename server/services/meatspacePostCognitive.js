@@ -15,6 +15,8 @@
  * NO AI-provider calls happen anywhere in this module.
  */
 
+import { shuffle } from '../lib/arrayUtils.js';
+
 // Coarse module tag stored on scored cognitive tasks, so stats read as
 // `byDrill['cognitive:<type>']` (parallel to `mental-math:<type>`).
 export const COGNITIVE_MODULE = 'cognitive';
@@ -102,17 +104,6 @@ export function median(nums) {
   if (!list.length) return null;
   const mid = Math.floor(list.length / 2);
   return list.length % 2 ? list[mid] : Math.round((list[mid - 1] + list[mid]) / 2);
-}
-
-// Fisher-Yates shuffle. Used by Schulte table cell placement and mental
-// rotation option ordering — never a naive `sort(() => Math.random() - 0.5)`.
-function shuffle(arr) {
-  const out = [...arr];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
 }
 
 // --- Mental rotation: grid-cell shape helpers -------------------------------
@@ -358,22 +349,37 @@ export function generateReactionTime(config = {}) {
 }
 
 export function generateCognitiveDrill(type, config = {}) {
+  let drill;
   switch (type) {
     case 'n-back':
-      return generateNBack(config);
+      drill = generateNBack(config);
+      break;
     case 'digit-span':
-      return generateDigitSpan(config);
+      drill = generateDigitSpan(config);
+      break;
     case 'stroop':
-      return generateStroop(config);
+      drill = generateStroop(config);
+      break;
     case 'schulte-table':
-      return generateSchulteTable(config);
+      drill = generateSchulteTable(config);
+      break;
     case 'mental-rotation':
-      return generateMentalRotation(config);
+      drill = generateMentalRotation(config);
+      break;
     case 'reaction-time':
-      return generateReactionTime(config);
+      drill = generateReactionTime(config);
+      break;
     default:
       return null;
   }
+  // Stamp the effective progression level into the generated drill's config so
+  // it round-trips through the client and is persisted per-task on session
+  // submit — the difficulty stamp that lets stats bucket by rung (n=2 vs n=3),
+  // exactly as multiplication stamps `config.level` (issue #2095).
+  if (drill && Number.isInteger(config.level)) {
+    drill.config = { ...drill.config, level: config.level };
+  }
+  return drill;
 }
 
 // =============================================================================

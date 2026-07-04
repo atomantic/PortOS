@@ -1,11 +1,18 @@
 export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
-export const MEMORY_DRILL_TYPES = ['memory-sequence', 'memory-element-flash'];
+// Mirrors the server's POST_SUPPORTED_MEMORY_TYPES (server/lib/postValidation.js)
+// — all three memory drill types are now fully scored in a POST session (issue
+// #2099/#2116): usePostSession.finishDrill uses this to tag the result's
+// module as `memory` (not `mental-math`) and preserve memoryItemId so the
+// server's schedule/mastery advancement fires.
+export const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
 // Deterministic cognitive drills (no LLM). Mirror the server's
 // COGNITIVE_DRILL_TYPES in server/services/meatspacePostCognitive.js.
 export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time'];
 
-// Drill types valid elsewhere but not yet supported by the POST runner.
-// These use answers[] arrays instead of expected and need dedicated runners.
+// Drill types valid elsewhere but not yet wired into the interactive POST
+// session drill picker (DOMAINS.memory.drillTypes below) — memory-fill-blank's
+// scoring path is fully correct now (see MEMORY_DRILL_TYPES above), it just
+// isn't one of the types PostSessionLauncher offers to pick from yet.
 export const POST_UNSUPPORTED_DRILL_TYPES = ['memory-fill-blank'];
 
 // The four wordplay drill types with a dedicated standalone trainer

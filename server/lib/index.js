@@ -190,6 +190,8 @@ export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';
 export * from './postMultiplicationLadder.js';
+export * from './postProgression.js';
+export * from './postStreak.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
@@ -210,6 +212,7 @@ export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';
+export * from './arrayUtils.js';
 export * from './asyncMutex.js';
 export * from './authGate.js';
 export * from './domainAutonomy.js';

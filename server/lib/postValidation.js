@@ -59,8 +59,20 @@ const llmResponseSchema = z.object({
 const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'];
 const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
-// Memory drills supported by the POST runner (client-side scoring with string comparison)
-const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
+// Memory drills supported by the POST runner (client-side scoring with string
+// comparison) — trusted for score + schedule/mastery advancement on session
+// submit (issue #2099). Currently identical to MEMORY_DRILL_TYPES; kept as a
+// separate list (rather than aliasing MEMORY_DRILL_TYPES directly) so a FUTURE
+// memory drill type can ship generation-only, ahead of its scoring support,
+// without silently trusting a client-supplied score for it.
+const POST_SUPPORTED_MEMORY_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
+// Canonical set of coarse "module" tags a scored POST task/session can carry
+// (mental-math / llm-drills / cognitive drills / memory drills). Shared by the
+// session-submit schema (below) and sessionModules config so a typo'd module
+// string is rejected at validation instead of silently creating a phantom
+// `byModule` stats bucket (issue #2099). Morse is deliberately excluded — it
+// only ever posts through the separate, unrestricted `trainingEntrySchema`.
+const POST_MODULES = ['mental-math', 'llm-drills', 'cognitive', 'memory'];
 // Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
 // Sourced from meatspacePostCognitive.js so the type list has one owner.
 const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
@@ -106,10 +118,14 @@ const drillTypeConfigSchema = z.object({
   // keeps a conservative fixed floor of 6 and lets the generator clamp up.
   // (timeLimitSec above is validated but NOT enforced for these drill types —
   // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
-  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
-  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
-  // keep their own internal defaults regardless.
+  // stimulusMs (n-back) / showMs (digit-span) are the presentation-speed knobs.
+  // The progressive ladder (default ON) drives them per rung; manual mode
+  // (progressive off) exposes them in the config UI (issue #2095), so they must
+  // survive validation. Bounds mirror the generator clamps in
+  // meatspacePostCognitive.js (generateNBack / generateDigitSpan).
   n: z.number().int().min(1).max(3).optional(),
+  stimulusMs: z.number().int().min(1000).max(5000).optional(),
+  showMs: z.number().int().min(400).max(4000).optional(),
   length: z.number().int().min(6).max(60).optional(),
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(3).max(9).optional(),
@@ -125,7 +141,7 @@ const drillTypeConfigSchema = z.object({
 // Task result within a session
 // score is optional — the server recomputes it via scoreDrill
 const taskResultSchema = z.object({
-  module: z.string(),
+  module: z.enum(POST_MODULES),
   type: z.enum(DRILL_TYPES),
   config: drillTypeConfigSchema.optional().default({}),
   questions: z.array(questionResultSchema).optional().default([]),
@@ -175,7 +191,7 @@ export const postSessionSubmitSchema = z.object({
   // omit it get a server-assigned uuid.
   id: z.string().uuid().optional(),
   cadence: z.enum(['daily', 'weekly', 'monthly']).optional().default('daily'),
-  modules: z.array(z.string()).min(1),
+  modules: z.array(z.enum(POST_MODULES)).min(1),
   tasks: z.array(taskResultSchema).min(1),
   tags: postTagsSchema.optional().default({})
 });
@@ -206,7 +222,7 @@ export const postConfigUpdateSchema = z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
-  sessionModules: z.array(z.string()).optional(),
+  sessionModules: z.array(z.enum(POST_MODULES)).optional(),
   scoring: z.object({
     weights: z.record(z.number().min(0).max(1)).optional()
   }).optional(),
@@ -378,6 +394,41 @@ export const morseLevelUpdateSchema = z.object({
   }).optional(),
 });
 
+// =============================================================================
+// PROGRESS DASHBOARD QUERY (issue #2091)
+// =============================================================================
+
+// GET /post/progress query params. `days` clamps like /post/stats: a NaN /
+// missing value falls back to the 90-day default, a value >365 is clamped, and
+// <=0 means all-time (0). `bucket` is forward-compat (only day buckets today).
+export const postProgressQuerySchema = z.object({
+  days: z.preprocess((v) => {
+    if (v == null || v === '') return 90;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return 90;
+    if (n <= 0) return 0;
+    return Math.min(n, 365);
+  }, z.number().int()),
+  bucket: z.enum(['day']).optional().default('day'),
+});
+
+// Per-question breakdown for a training-log entry (issue #2114 — follow-up to
+// #2097, which only persisted round-level aggregates). Optional and additive:
+// entries without it (legacy rows, and non-wordplay training modules that
+// never populate it) must stay valid. Field names mirror llmResponseSchema
+// above (the shape scored POST sessions store per LLM-drill question) so a
+// future progress dashboard can render training-log and scored-session
+// breakdowns with the same renderer rather than inventing a training-only shape.
+const trainingQuestionSchema = z.object({
+  prompt: z.string().optional(),
+  response: z.string().optional(),
+  items: z.array(z.string()).optional(),
+  responseMs: z.number().min(0).optional(),
+  score: z.number().min(0).max(100).optional(),
+  feedback: z.string().optional(),
+  correct: z.boolean().optional(),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
@@ -389,6 +440,7 @@ export const trainingEntrySchema = z.object({
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
+  questions: z.array(trainingQuestionSchema).optional(),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, POST_MODULES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };

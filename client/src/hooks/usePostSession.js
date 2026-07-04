@@ -1,7 +1,10 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
-import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect } from '../components/meatspace/post/constants';
+import {
+  LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
+  WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD,
+} from '../components/meatspace/post/constants';
 
 // sessionStorage key for the single in-progress run. Single-user tool → one
 // active run at a time, so a single key is enough. Restored on refresh so a
@@ -245,10 +248,23 @@ export function usePostSession() {
     // For estimation drills, check within tolerance
     let correct;
     let answered;
+    // Fill-blank element attribution: which specific answers[] entry the
+    // user's guess matched (if any) — set only on an unambiguous correct
+    // match, since a wrong guess against a multi-blank prompt can't be
+    // attributed to any one blank/element (issue #2099 codex review).
+    let matchedElement;
     if (hasFillBlankAnswers) {
       answered = value;
       const normalized = value !== null ? String(value).toLowerCase().trim() : '';
-      correct = q.answers.some(a => String(a).toLowerCase().trim() === normalized);
+      // q.answers holds ACCEPTABLE-WORD OBJECTS ({ index, word, element }), not
+      // scalars — comparing via String(a) on an object always produced
+      // "[object Object]" so this could never match, silently scoring every
+      // fill-blank answer wrong (issue #2116). Compare against the object's
+      // `.word` (falling back to the raw value for a plain-string entry, for
+      // forward/backward compatibility with any other producer).
+      const matched = q.answers.find(a => String(a?.word ?? a).toLowerCase().trim() === normalized);
+      correct = !!matched;
+      matchedElement = matched?.element ?? null;
     } else if (isTextAnswer) {
       answered = value;
       correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
@@ -269,7 +285,12 @@ export function usePostSession() {
       answered,
       correct,
       responseMs,
-      ...memoryAttribution(q)
+      ...memoryAttribution(q),
+      // Fill-blank's per-answer element (see matchedElement above) takes
+      // priority over memoryAttribution(q)'s question-level element field
+      // (which fill-blank questions never carry — only memory-element-flash
+      // does), so mergeMasteryFromSession can credit the matched element.
+      ...(matchedElement != null ? { element: matchedElement } : {})
     };
 
     const newAnswers = [...answers, answer];
@@ -422,12 +443,31 @@ export function usePostSession() {
         const correctCount = isLlmDrill
           ? countLlmCorrect(r.responses || [])
           : (r.questions?.filter(q => q.correct)?.length ?? 0);
+        // Per-question breakdown (issue #2114) — the standalone Wordplay tab
+        // (WordplayTrainer.jsx) already threads this through; extend the same
+        // breakdown to the in-session runner's completed wordplay rounds so
+        // both entry points populate it, not just the standalone tab. Scoped
+        // to the four wordplay types since those are the only ones whose
+        // `r.responses` entries (post-completeLlmDrill) carry a prompt/response
+        // shape a future dashboard could render per-question.
+        const questions = WORDPLAY_LLM_DRILL_TYPES.includes(r.type)
+          ? (r.responses || []).map(resp => ({
+            prompt: resp.prompt,
+            response: resp.response,
+            items: resp.items,
+            responseMs: resp.responseMs,
+            score: resp.llmScore != null ? resp.llmScore : undefined,
+            feedback: resp.llmFeedback,
+            correct: (resp.llmScore ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+          }))
+          : undefined;
         await submitTrainingEntry({
           module: r.module,
           drillType: r.type,
           questionCount,
           correctCount,
           totalMs: r.totalMs || 0,
+          ...(questions ? { questions } : {}),
         }).catch(() => {});
       }
       toast.success('Training session logged');
@@ -451,6 +491,14 @@ export function usePostSession() {
     });
     if (!session) return null;
     setSavedSession(session);
+    // Replace the pre-save estimate (computeSessionScoreFromResults, a plain
+    // per-domain average) with the server's authoritative score — which now
+    // additionally honors configured per-module scoring.weights (issue
+    // #2099). Without this, PostSessionResults keeps showing the local
+    // estimate even in the SAVED state, silently diverging from the score
+    // that was actually persisted/toasted whenever weights aren't uniform
+    // (issue #2099 codex review).
+    setSessionScore(session.score);
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);
     return session;
