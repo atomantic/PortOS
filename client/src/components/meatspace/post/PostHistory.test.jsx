@@ -86,3 +86,50 @@ describe('PostHistory analytics dashboard', () => {
     expect(screen.queryByText('Drill Breakdown')).toBeNull();
   });
 });
+
+// Issue #2093 — expanding a past session must reuse DrillQuestionReview so
+// history teaches from mistakes exactly like the just-finished session does.
+describe('PostHistory expanded session review', () => {
+  const REVIEW_SESSIONS = [
+    {
+      id: 'c', date: '2026-06-03', score: 70, durationMs: 60000, modules: ['mental-math'],
+      tasks: [
+        {
+          module: 'mental-math', type: 'multiplication', score: 50,
+          questions: [
+            { prompt: '6 x 7', expected: 42, answered: 41, correct: false, responseMs: 2000 },
+            { prompt: '3 x 3', expected: 9, answered: 9, correct: true, responseMs: 1200 },
+          ],
+        },
+        { module: 'llm-drills', type: 'pun-wordplay', score: 64, responses: [{}] },
+      ],
+    },
+  ];
+
+  it('reuses DrillQuestionReview inside an expanded session for a non-LLM task', async () => {
+    getPostSessions.mockResolvedValue(REVIEW_SESSIONS);
+    render(<PostHistory onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByText('2026-06-03')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('2026-06-03'));
+
+    // The missed-item summary + per-question table (shared with PostSessionResults).
+    // "6 x 7" appears twice once expanded: once in the missed-items chip,
+    // once in the per-question table row.
+    await waitFor(() => expect(screen.getByText('1 missed')).toBeTruthy());
+    expect(screen.getAllByText('6 x 7').length).toBe(2);
+    expect(screen.getByText('42')).toBeTruthy();
+  });
+
+  it('does not render a review for an LLM task (unchanged summary-only behavior)', async () => {
+    getPostSessions.mockResolvedValue(REVIEW_SESSIONS);
+    render(<PostHistory onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByText('2026-06-03')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('2026-06-03'));
+
+    await waitFor(() => expect(screen.getByText('1 responses')).toBeTruthy());
+    // No missed-item summary rendered twice — only the one math task produces it.
+    expect(screen.getAllByText(/missed/).length).toBe(1);
+  });
+});

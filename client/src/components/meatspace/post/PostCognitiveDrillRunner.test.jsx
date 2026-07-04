@@ -117,6 +117,7 @@ describe('scoreDigitSpanRecall', () => {
     expect(question).toEqual({
       prompt: '3-digit (forward)',
       index: 0,
+      expected: '123',
       answered: '123',
       correct: true,
       responseMs: 1500,
@@ -182,6 +183,7 @@ describe('scoreStroopTrial', () => {
     expect(question).toEqual({
       prompt: 'RED',
       index: 0,
+      expected: 'blue',
       answered: 'blue',
       correct: true,
       responseMs: 800,
@@ -210,6 +212,7 @@ describe('scoreMentalRotationTrial', () => {
     expect(question).toEqual({
       prompt: 'shape L',
       index: 0,
+      expected: 1,
       answered: 1,
       correct: true,
       responseMs: 650,

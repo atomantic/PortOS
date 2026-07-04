@@ -1,0 +1,365 @@
+import { Check, X, MinusCircle, AlertTriangle } from 'lucide-react';
+
+// Sub-second precision — most drill response times are under a few seconds,
+// so the shared `formatDurationMs` (client/src/utils/formatters.js), which
+// floors to whole seconds and shows "0s" for anything under 1000ms, is too
+// coarse for a per-question review. This is a deliberately separate,
+// narrower formatter for that reason.
+const fmtMs = (ms) => `${(Math.max(0, ms || 0) / 1000).toFixed(1)}s`;
+
+const isUnanswered = (q) => q.answered === null || q.answered === undefined;
+
+function ResultIcon({ correct, unanswered }) {
+  if (unanswered) return <MinusCircle size={13} className="text-gray-500 shrink-0" />;
+  return correct
+    ? <Check size={13} className="text-port-success shrink-0" />
+    : <X size={13} className="text-port-error shrink-0" />;
+}
+
+const rowTint = (correct, unanswered) => {
+  if (unanswered) return 'bg-port-bg/40 text-gray-500';
+  return correct === false ? 'bg-port-error/10' : '';
+};
+
+function TableShell({ children }) {
+  return (
+    <div className="overflow-x-auto -mx-1 px-1">
+      <table className="w-full text-xs min-w-[420px]">{children}</table>
+    </div>
+  );
+}
+
+// Leads every review with the misses so a mistake is visible before scrolling
+// through the full per-question list (issue #2093 acceptance criterion #3).
+function MissedSummary({ missed, formatPrompt }) {
+  if (!missed.length) {
+    return (
+      <div className="flex items-center gap-1.5 text-xs text-port-success mb-3">
+        <Check size={13} />
+        No misses
+      </div>
+    );
+  }
+  const shown = missed.slice(0, 8);
+  const extra = missed.length - shown.length;
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-1.5 text-xs text-port-error font-medium mb-1.5">
+        <X size={13} />
+        {missed.length} missed
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((q, i) => (
+          <span
+            key={i}
+            className="text-xs px-1.5 py-0.5 rounded bg-port-error/10 text-port-error border border-port-error/20 font-mono"
+          >
+            {formatPrompt(q)}
+          </span>
+        ))}
+        {extra > 0 && <span className="text-xs text-gray-500 self-center">+{extra} more</span>}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// GENERIC — math, memory, mental-rotation (and any future non-cognitive/LLM
+// drill type): prompt / your answer / expected / result / time.
+// =============================================================================
+function formatGenericValue(type, value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (type === 'mental-rotation' && Number.isInteger(value)) return `Option ${value + 1}`;
+  return String(value);
+}
+
+function GenericReview({ questions, missed, type }) {
+  return (
+    <div>
+      <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
+      <TableShell>
+        <thead>
+          <tr className="text-gray-500 text-left border-b border-port-border">
+            <th className="py-1 pr-2 font-medium">Prompt</th>
+            <th className="py-1 pr-2 font-medium">Your answer</th>
+            <th className="py-1 pr-2 font-medium">Expected</th>
+            <th className="py-1 pr-2 font-medium text-center">Result</th>
+            <th className="py-1 pl-2 font-medium text-right">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {questions.map((q, i) => {
+            const unanswered = isUnanswered(q);
+            return (
+              <tr key={i} className={`border-b border-port-border/30 ${rowTint(q.correct, unanswered)}`}>
+                <td className="py-1 pr-2 font-mono text-white">{q.prompt}</td>
+                <td className="py-1 pr-2 font-mono">
+                  {unanswered
+                    ? <span className="italic text-gray-500">skipped</span>
+                    : formatGenericValue(type, q.answered)}
+                </td>
+                <td className="py-1 pr-2 font-mono text-port-success">{formatGenericValue(type, q.expected)}</td>
+                <td className="py-1 pr-2 text-center"><ResultIcon correct={q.correct} unanswered={unanswered} /></td>
+                <td className="py-1 pl-2 text-right text-gray-400 font-mono">{fmtMs(q.responseMs)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </TableShell>
+    </div>
+  );
+}
+
+// =============================================================================
+// N-BACK — a letter sequence rendered as chips, colored by signal-detection
+// outcome (hit / false alarm / miss / correct rejection). Derived purely from
+// `answered`/`correct` — no separate `isTarget` field is stored on the
+// question, so this classification IS the answer-key reconstruction.
+// =============================================================================
+const NBACK_STYLES = {
+  hit: 'bg-port-success/20 border-port-success/50 text-port-success',
+  falseAlarm: 'bg-port-warning/20 border-port-warning/50 text-port-warning',
+  miss: 'bg-port-error/20 border-port-error/50 text-port-error',
+  reject: 'bg-port-bg border-port-border/50 text-gray-500',
+};
+const NBACK_LABELS = { hit: 'Hit', falseAlarm: 'False alarm', miss: 'Miss', reject: 'Correct reject' };
+
+function classifyNBack(q) {
+  const pressed = q.answered === 'match';
+  if (pressed && q.correct) return 'hit';
+  if (pressed && !q.correct) return 'falseAlarm';
+  if (!pressed && q.correct) return 'reject';
+  return 'miss';
+}
+
+function NBackReview({ questions, missed }) {
+  const counts = questions.reduce((acc, q) => {
+    const cls = classifyNBack(q);
+    acc[cls] = (acc[cls] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
+      <div className="flex flex-wrap gap-1 mb-2">
+        {questions.map((q, i) => {
+          const cls = classifyNBack(q);
+          return (
+            <span
+              key={i}
+              title={`${NBACK_LABELS[cls]} · ${fmtMs(q.responseMs)}`}
+              className={`w-7 h-7 flex items-center justify-center rounded border font-mono text-xs font-semibold ${NBACK_STYLES[cls]}`}
+            >
+              {q.prompt}
+            </span>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs text-gray-500">
+        {['hit', 'falseAlarm', 'miss', 'reject'].filter((k) => counts[k]).map((k) => (
+          <span key={k} className="flex items-center gap-1.5">
+            <span className={`w-2.5 h-2.5 rounded-sm border ${NBACK_STYLES[k]}`} />
+            {NBACK_LABELS[k]} ({counts[k]})
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// DIGIT SPAN — shown digits vs recalled digits, per round.
+// =============================================================================
+function DigitSpanReview({ questions, missed }) {
+  return (
+    <div>
+      <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
+      <TableShell>
+        <thead>
+          <tr className="text-gray-500 text-left border-b border-port-border">
+            <th className="py-1 pr-2 font-medium">Round</th>
+            <th className="py-1 pr-2 font-medium">Shown</th>
+            <th className="py-1 pr-2 font-medium">Recalled</th>
+            <th className="py-1 pr-2 font-medium text-center">Result</th>
+            <th className="py-1 pl-2 font-medium text-right">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {questions.map((q, i) => {
+            const unanswered = isUnanswered(q);
+            return (
+              <tr key={i} className={`border-b border-port-border/30 ${rowTint(q.correct, unanswered)}`}>
+                <td className="py-1 pr-2 text-gray-400">{q.prompt}</td>
+                <td className="py-1 pr-2 font-mono text-white tracking-widest">{q.expected ?? '—'}</td>
+                <td className="py-1 pr-2 font-mono tracking-widest">
+                  {unanswered ? <span className="italic text-gray-500 tracking-normal">skipped</span> : q.answered}
+                </td>
+                <td className="py-1 pr-2 text-center"><ResultIcon correct={q.correct} unanswered={unanswered} /></td>
+                <td className="py-1 pl-2 text-right text-gray-400 font-mono">{fmtMs(q.responseMs)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </TableShell>
+    </div>
+  );
+}
+
+// =============================================================================
+// STROOP — word vs ink color vs your answer, with a color swatch per name.
+// The swatch hex map comes from `drillData.options` (the drill's generated
+// STROOP_COLORS mirror) — falls back to plain text if drillData is absent.
+// =============================================================================
+function StroopReview({ questions, missed, drillData }) {
+  const colorHex = {};
+  for (const opt of drillData?.options || []) colorHex[opt.name] = opt.hex;
+
+  const Swatch = ({ name }) => (
+    name && colorHex[name]
+      ? <span className="inline-block w-2.5 h-2.5 rounded-full mr-1 align-middle" style={{ backgroundColor: colorHex[name] }} />
+      : null
+  );
+
+  return (
+    <div>
+      <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
+      <TableShell>
+        <thead>
+          <tr className="text-gray-500 text-left border-b border-port-border">
+            <th className="py-1 pr-2 font-medium">Word</th>
+            <th className="py-1 pr-2 font-medium">Ink color</th>
+            <th className="py-1 pr-2 font-medium">Your answer</th>
+            <th className="py-1 pr-2 font-medium text-center">Result</th>
+            <th className="py-1 pl-2 font-medium text-right">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {questions.map((q, i) => {
+            const unanswered = isUnanswered(q);
+            return (
+              <tr key={i} className={`border-b border-port-border/30 ${rowTint(q.correct, unanswered)}`}>
+                <td className="py-1 pr-2 font-mono text-white uppercase">{q.prompt}</td>
+                <td className="py-1 pr-2 capitalize"><Swatch name={q.expected} />{q.expected || '—'}</td>
+                <td className="py-1 pr-2 capitalize">
+                  {unanswered
+                    ? <span className="italic text-gray-500 normal-case">skipped</span>
+                    : <><Swatch name={q.answered} />{q.answered}</>}
+                </td>
+                <td className="py-1 pr-2 text-center"><ResultIcon correct={q.correct} unanswered={unanswered} /></td>
+                <td className="py-1 pl-2 text-right text-gray-400 font-mono">{fmtMs(q.responseMs)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </TableShell>
+    </div>
+  );
+}
+
+// =============================================================================
+// SCHULTE TABLE / REACTION TIME — pure speed drills: per-trial time with
+// outliers flagged (response time > mean + 1.5 SD over the genuinely-timed
+// trials — false starts and skips are excluded from the baseline so one
+// anomalous trial can't skew the threshold for the rest).
+// =============================================================================
+function computeOutlierIndices(questions) {
+  const timed = questions
+    .map((q, i) => ({ i, ms: q.responseMs || 0 }))
+    .filter(({ i }) => !questions[i].falseStart && questions[i].answered != null);
+  const outliers = new Set();
+  if (timed.length < 3) return outliers;
+  const mean = timed.reduce((s, t) => s + t.ms, 0) / timed.length;
+  const variance = timed.reduce((s, t) => s + (t.ms - mean) ** 2, 0) / timed.length;
+  const stddev = Math.sqrt(variance);
+  if (stddev <= 0) return outliers;
+  const threshold = mean + 1.5 * stddev;
+  timed.forEach(({ i, ms }) => { if (ms > threshold) outliers.add(i); });
+  return outliers;
+}
+
+function TimingReview({ questions, missed, type }) {
+  const isReaction = type === 'reaction-time';
+  const outlierIdx = computeOutlierIndices(questions);
+
+  return (
+    <div>
+      <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
+      <TableShell>
+        <thead>
+          <tr className="text-gray-500 text-left border-b border-port-border">
+            <th className="py-1 pr-2 font-medium">#</th>
+            <th className="py-1 pr-2 font-medium">Status</th>
+            <th className="py-1 pl-2 font-medium text-right">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {questions.map((q, i) => {
+            const isOutlier = outlierIdx.has(i);
+            let statusText;
+            let statusCls;
+            let StatusIcon;
+            if (isReaction && q.falseStart) {
+              statusText = 'False start'; statusCls = 'text-port-warning'; StatusIcon = AlertTriangle;
+            } else if (q.correct) {
+              statusText = isReaction ? 'Correct' : 'Found'; statusCls = 'text-port-success'; StatusIcon = Check;
+            } else {
+              statusText = q.answered == null ? 'No response' : 'Wrong'; statusCls = 'text-port-error'; StatusIcon = X;
+            }
+            // Not reusing the shared `rowTint` helper here: a false start is
+            // "answered: null" like a skip, but should read as a distinct
+            // warning (via the Status column) rather than the muted
+            // unanswered-row treatment the other reviews use.
+            return (
+              <tr key={i} className={`border-b border-port-border/30 ${q.correct === false && !q.falseStart ? 'bg-port-error/10' : ''}`}>
+                <td className="py-1 pr-2 text-gray-400 font-mono">{i + 1}</td>
+                <td className="py-1 pr-2">
+                  <span className={`inline-flex items-center gap-1 ${statusCls}`}>
+                    <StatusIcon size={12} />
+                    {statusText}
+                  </span>
+                </td>
+                <td className="py-1 pl-2 text-right font-mono">
+                  <span className={isOutlier ? 'text-port-warning' : 'text-gray-400'}>{fmtMs(q.responseMs)}</span>
+                  {isOutlier && <AlertTriangle size={11} className="inline-block ml-1 mb-0.5 text-port-warning" aria-label="Outlier response time" />}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </TableShell>
+    </div>
+  );
+}
+
+/**
+ * Per-question / per-trial mistake review, shared by PostSessionResults (the
+ * just-finished session) and PostHistory (a past session's expanded detail).
+ * Dispatches on drill `type` — math/memory/mental-rotation share a generic
+ * prompt/answered/expected table; n-back, digit-span, stroop, and the two
+ * pure-speed drills (schulte-table/reaction-time) each get a type-appropriate
+ * view because their `questions[]` capture different things per trial.
+ *
+ * `drillData` is the generated drill (only used by Stroop, to look up each
+ * color's swatch hex) — optional, and safely ignored by every other type.
+ */
+export default function DrillQuestionReview({ type, questions, drillData }) {
+  const list = questions || [];
+  if (!list.length) return null;
+
+  const missed = list.filter((q) => q.correct === false);
+
+  switch (type) {
+    case 'n-back':
+      return <NBackReview questions={list} missed={missed} />;
+    case 'digit-span':
+      return <DigitSpanReview questions={list} missed={missed} />;
+    case 'stroop':
+      return <StroopReview questions={list} missed={missed} drillData={drillData} />;
+    case 'schulte-table':
+    case 'reaction-time':
+      return <TimingReview questions={list} missed={missed} type={type} />;
+    default:
+      return <GenericReview questions={list} missed={missed} type={type} />;
+  }
+}
