@@ -4,6 +4,10 @@
 
 - **[issue-2109] The live vocal Tuner now locks onto the note you're singing instead of flickering.** Holding a steady note used to make the readout strobe — the note label flipped between neighbors, the needle lurched, and the display dropped to "—" on every breath or consonant. The tuner now holds a stable reading through brief dropouts (dimming while it coasts), only blanks after a real pause, keeps one note label while your pitch wanders up to ~60¢ around it, and re-locks promptly when you actually change notes — so a held note shows one label with a gently moving needle.
 
+## Rounds
+
+- **[issue-2104] Fixed: 500 Miles' reference TikTok videos now show up on older installs.** The built-in "500 Miles" round shipped with three TikTok reference performances, but any install that already had its data saved from before those were added never picked them up — the Reference material section stayed empty. A one-time backfill now restores the three references for those installs, without touching anything you may have added of your own.
+
 ## Media
 
 - **[issue-2036] Sketch & Annotation Canvas (phase 2): re-render an image guided by your annotations.** The annotate page (`/media/annotate/:mediaKey`) gained a "Re-render" action: draw over a generated image, then feed your markup back through local img2img so the marks reshape the render. A confirmation dialog names the exact local model it will run (no surprise AI calls) and lets you add an optional prompt and tune how much to change before it starts; the new render is queued and appears in Media History. Requires a local FLUX img2img runner — the action explains when one isn't available. Phase 3 (blank-canvas storyboard) remains open on #2036.

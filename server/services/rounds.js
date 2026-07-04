@@ -430,6 +430,16 @@ export const SEED_500_MILES_SCORE_PARTS = [
   },
 ];
 
+// Reference performances for the built-in "500 Miles" — TikTok clips the user
+// pointed at as worked examples for the Reference material section. Kept as a
+// named export so SEED_ROUNDS and the backfill migration share ONE source (no
+// drift), the same pattern as SEED_500_MILES_SCORE_PARTS above.
+export const SEED_500_MILES_REFERENCES = [
+  { id: 'ref-tt-marie', url: 'https://www.tiktok.com/@marie.celestinee/video/7638358831205977376', label: 'TikTok · @marie.celestinee', note: 'Reference performance.' },
+  { id: 'ref-tt-eric', url: 'https://www.tiktok.com/@ericolsith/video/7633158760659176718', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
+  { id: 'ref-tt-eric-2', url: 'https://www.tiktok.com/@ericolsith/video/7647221045618887949', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
+];
+
 // --- Traditional rounds: melodies + canonic voice stacks --------------------
 // The four built-in rounds are canons — the harmony IS the melody sung against
 // itself, each voice entering a fixed number of bars late. Rather than hand-
@@ -644,11 +654,7 @@ export const SEED_ROUNDS = [
       { id: 'high-harmony-2', label: 'High Harmony II', part: 'Soprano / Tenor', notes: 'Held upper pad — keep the leading tone (the B in G7) so it resolves up to C.' },
       { id: 'high-harmony-1', label: 'High Harmony I', part: 'Soprano', notes: 'Sparse top descant — high chord tones on the emotional phrases. Enter late; mostly long notes.' },
     ],
-    references: [
-      { id: 'ref-tt-marie', url: 'https://www.tiktok.com/@marie.celestinee/video/7638358831205977376', label: 'TikTok · @marie.celestinee', note: 'Reference performance.' },
-      { id: 'ref-tt-eric', url: 'https://www.tiktok.com/@ericolsith/video/7633158760659176718', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
-      { id: 'ref-tt-eric-2', url: 'https://www.tiktok.com/@ericolsith/video/7647221045618887949', label: 'TikTok · @ericolsith', note: 'Reference performance.' },
-    ],
+    references: SEED_500_MILES_REFERENCES,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
   },
