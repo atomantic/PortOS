@@ -373,6 +373,24 @@ export const morseLevelUpdateSchema = z.object({
   }).optional(),
 });
 
+// =============================================================================
+// PROGRESS DASHBOARD QUERY (issue #2091)
+// =============================================================================
+
+// GET /post/progress query params. `days` clamps like /post/stats: a NaN /
+// missing value falls back to the 90-day default, a value >365 is clamped, and
+// <=0 means all-time (0). `bucket` is forward-compat (only day buckets today).
+export const postProgressQuerySchema = z.object({
+  days: z.preprocess((v) => {
+    if (v == null || v === '') return 90;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return 90;
+    if (n <= 0) return 0;
+    return Math.min(n, 365);
+  }, z.number().int()),
+  bucket: z.enum(['day']).optional().default('day'),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),

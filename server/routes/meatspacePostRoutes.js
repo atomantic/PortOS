@@ -23,6 +23,7 @@ import {
   LLM_DRILL_TYPES,
   MEMORY_DRILL_TYPES,
   trainingEntrySchema,
+  postProgressQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
 import * as memoryService from '../services/meatspacePostMemory.js';
@@ -107,6 +108,18 @@ router.get('/post/stats', asyncHandler(async (req, res) => {
   const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
   const stats = await postService.getPostStats(days);
   res.json(stats);
+}));
+
+/**
+ * GET /api/meatspace/post/progress
+ * Unified time-series progress: per-day score/accuracy/response-time/minutes
+ * buckets, per-domain and per-drill series, totals, ONE unified streak (scored
+ * sessions OR training-log activity), and a mastery block (issue #2091).
+ */
+router.get('/post/progress', asyncHandler(async (req, res) => {
+  const { days, bucket } = validateRequest(postProgressQuerySchema, req.query);
+  const progress = await postService.getPostProgress({ days, bucket });
+  res.json(progress);
 }));
 
 /**

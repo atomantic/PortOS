@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Brain, ArrowRight } from 'lucide-react';
 import * as api from '../services/api';
+import { streakGlyph } from '../lib/streakGlyph.js';
 
 // Surfaces the daily POST cognitive self-test on the dashboard: today's
 // completion status, the current practice streak, and a one-click way into the
@@ -27,7 +28,6 @@ export default function DailyPostWidget() {
   const longest = stats?.longestStreak ?? 0;
   const completedToday = !!stats?.completedToday;
   const todayScore = stats?.todayScore;
-  const streakGlyph = streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨';
 
   return (
     <Link
@@ -49,7 +49,7 @@ export default function DailyPostWidget() {
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="text-2xl" aria-hidden="true">{streakGlyph}</div>
+        <div className="text-2xl" aria-hidden="true">{streakGlyph(streak)}</div>
         <div>
           <div className="text-xl font-bold text-white">
             {streak} day{streak !== 1 ? 's' : ''}
