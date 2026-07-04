@@ -1150,6 +1150,15 @@ function SendDrill({ keying, onExit, onSessionComplete, onRoundSubmit }) {
       const responseMs = at != null && prevAt != null ? Math.max(0, Math.round(at - prevAt)) : 0;
       items.push({ sent, guessed, correct: sent === guessed, responseMs });
     }
+    // Spacing is stripped for letter-level alignment (word gaps aren't Morse
+    // characters), so a send that keys every letter right but botches the word
+    // gap (e.g. `DE K1AB` sent as `DEK1AB`) would otherwise store as 100%. When
+    // the exact-match failed on spacing alone, append one non-letter error item
+    // (empty sent → excluded from the confusion matrix) so the round's accuracy
+    // matches the exact-match verdict.
+    if (!correct && items.length > 0 && items.every((it) => it.correct)) {
+      items.push({ sent: '', guessed: ' ', correct: false, responseMs: 0 });
+    }
     if (items.length > 0) {
       onRoundSubmit?.({ mode: 'send', durationMs, items });
     }
