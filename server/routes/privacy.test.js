@@ -185,9 +185,16 @@ describe('DELETE /api/privacy/orgs/:id', () => {
 
 describe('GET /api/privacy/orgs/:id/holdings', () => {
   it('returns the joined masked holdings for the org', async () => {
+    orgService.getOrg.mockResolvedValueOnce({ id: VALID_UUID, name: 'Acme Bank' });
     const res = await request(makeApp()).get(`/api/privacy/orgs/${VALID_UUID}/holdings`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual([{ orgId: 'o1', vaultRecordId: 'v1', vaultMaskedValue: 'a•••@b.com' }]);
+  });
+
+  it('404s a missing org before ever querying holdings', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/orgs/${VALID_UUID}/holdings`);
+    expect(res.status).toBe(404);
+    expect(orgService.getHoldingsForOrg).not.toHaveBeenCalled();
   });
 });
 

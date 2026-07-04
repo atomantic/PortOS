@@ -7,16 +7,29 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+const { queryMock, withTransactionMock } = vi.hoisted(() => ({
+  queryMock: vi.fn(),
+  withTransactionMock: vi.fn(),
+}));
 
-vi.mock('../lib/db.js', () => ({ query: queryMock }));
+vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransactionMock }));
 
 const {
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   getHoldingsForOrg, getOrgsHoldingRecord, setOrgHoldings, setHoldingsStatus, getHoldingsSummary,
 } = await import('./privacyOrgs.js');
 
-beforeEach(() => { queryMock.mockReset(); });
+beforeEach(() => {
+  queryMock.mockReset();
+  withTransactionMock.mockReset();
+});
+
+/** Fakes a transactional client whose `.query` is driven by the given handler. */
+function mockTransaction(handler) {
+  const client = { query: vi.fn(handler) };
+  withTransactionMock.mockImplementation(async (fn) => fn(client));
+  return client;
+}
 
 const orgRow = (overrides = {}) => ({
   id: 'o1', name: 'Acme Bank', category: 'bank', website: 'https://acme.example',
@@ -127,39 +140,56 @@ describe('getHoldingsForOrg / getOrgsHoldingRecord', () => {
 });
 
 describe('setOrgHoldings', () => {
-  it('404s an unknown org before writing anything', async () => {
-    queryMock.mockResolvedValueOnce({ rows: [] }); // getOrg
+  it('404s an unknown org before writing anything, inside the transaction', async () => {
+    const client = mockTransaction(async (sql) => {
+      if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
     await expect(setOrgHoldings('missing', [{ vaultRecordId: 'v1' }]))
       .rejects.toMatchObject({ status: 404 });
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(queryMock).not.toHaveBeenCalled(); // getHoldingsForOrg never reached
   });
 
-  it('deletes the complement and upserts the given set', async () => {
-    queryMock.mockImplementation(async (sql) => {
+  it('deletes the complement and upserts the given set, all inside one transaction', async () => {
+    const client = mockTransaction(async (sql) => {
       if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
       if (/DELETE FROM privacy_org_holdings/.test(sql)) return { rows: [] };
       if (/INSERT INTO privacy_org_holdings/.test(sql)) return { rows: [] };
-      if (/SELECT h\.org_id/.test(sql)) return { rows: [] };
-      throw new Error(`unexpected query: ${sql}`);
+      throw new Error(`unexpected client query: ${sql}`);
     });
+    queryMock.mockResolvedValue({ rows: [] }); // getHoldingsForOrg after commit
     await setOrgHoldings('o1', [{ vaultRecordId: 'v1', status: 'current' }, { vaultRecordId: 'v2' }]);
-    const deleteCall = queryMock.mock.calls.find(([sql]) => /DELETE FROM privacy_org_holdings/.test(sql));
+    const deleteCall = client.query.mock.calls.find(([sql]) => /DELETE FROM privacy_org_holdings/.test(sql));
     expect(deleteCall[1]).toEqual(['o1', ['v1', 'v2']]);
-    const insertCalls = queryMock.mock.calls.filter(([sql]) => /INSERT INTO privacy_org_holdings/.test(sql));
+    const insertCalls = client.query.mock.calls.filter(([sql]) => /INSERT INTO privacy_org_holdings/.test(sql));
     expect(insertCalls).toHaveLength(2);
     expect(insertCalls[1][1]).toEqual(['o1', 'v2', 'current']); // default status applied
+    expect(withTransactionMock).toHaveBeenCalledTimes(1);
   });
 
   it('clears all holdings when given an empty list', async () => {
-    queryMock.mockImplementation(async (sql) => {
+    const client = mockTransaction(async (sql) => {
       if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
       if (/DELETE FROM privacy_org_holdings WHERE org_id = \$1$/.test(sql)) return { rows: [] };
-      if (/SELECT h\.org_id/.test(sql)) return { rows: [] };
-      throw new Error(`unexpected query: ${sql}`);
+      throw new Error(`unexpected client query: ${sql}`);
     });
+    queryMock.mockResolvedValue({ rows: [] });
     await setOrgHoldings('o1', []);
-    const deleteCall = queryMock.mock.calls.find(([sql]) => /DELETE FROM privacy_org_holdings/.test(sql));
+    const deleteCall = client.query.mock.calls.find(([sql]) => /DELETE FROM privacy_org_holdings/.test(sql));
     expect(deleteCall[1]).toEqual(['o1']);
+  });
+
+  it('surfaces a stale/unknown vaultRecordId as a 400, not a raw FK-violation 500', async () => {
+    const fkError = Object.assign(new Error('insert or update on table violates foreign key constraint'), { code: '23503' });
+    mockTransaction(async (sql) => {
+      if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
+      if (/DELETE FROM privacy_org_holdings/.test(sql)) return { rows: [] };
+      if (/INSERT INTO privacy_org_holdings/.test(sql)) throw fkError;
+      throw new Error(`unexpected client query: ${sql}`);
+    });
+    await expect(setOrgHoldings('o1', [{ vaultRecordId: 'missing-vault-id' }]))
+      .rejects.toMatchObject({ status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
   });
 });
 

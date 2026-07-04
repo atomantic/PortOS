@@ -109,6 +109,25 @@ describe.skipIf(!dbReady)('privacy orgs DB round-trip', () => {
     expect(await orgs.getOrg(org.id)).toBe(null);
   });
 
+  it('rejects a nonexistent vaultRecordId as a 400 and rolls back the whole call (transactional)', async () => {
+    const record = await vault.createVaultRecord({ type: 'custom', label: 'Real one', value: 'z' });
+    createdVaultRecords.push(record.id);
+    const org = await orgs.createOrg({ name: 'Rollback Org' });
+    createdOrgs.push(org.id);
+    // Seed one real holding so we can confirm it survives the failed call untouched.
+    await orgs.setOrgHoldings(org.id, [{ vaultRecordId: record.id }]);
+
+    await expect(orgs.setOrgHoldings(org.id, [
+      { vaultRecordId: record.id }, { vaultRecordId: '00000000-0000-4000-8000-000000000000' },
+    ])).rejects.toMatchObject({ status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
+
+    // The transaction must have rolled back the DELETE-complement too — the
+    // pre-existing holding for `record.id` is still there, unchanged.
+    const holdings = await orgs.getHoldingsForOrg(org.id);
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0].vaultRecordId).toBe(record.id);
+  });
+
   it('cascades: deleting the vault record drops its holdings', async () => {
     const record = await vault.createVaultRecord({ type: 'custom', label: 'Misc2', value: 'y' });
     const org = await orgs.createOrg({ name: 'Another Org' });

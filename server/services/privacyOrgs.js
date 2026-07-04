@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const ORG_COLUMNS = `id, name, category, website, trust, status, contact,
@@ -160,30 +160,44 @@ export async function getOrgsHoldingRecord(vaultRecordId) {
  * anything not listed is removed. Runs as one statement per side (delete the
  * complement, upsert the rest) rather than a delete-all + reinsert, so an
  * unrelated concurrent read never sees a momentarily-empty holdings set.
+ * The whole delete+upsert sequence runs inside ONE transaction — without it,
+ * a bad `vaultRecordId` partway through the upsert loop (foreign key
+ * violation, see below) would leave the DELETE committed but only some of
+ * the new rows written: neither the old nor the requested holdings set.
  */
 export async function setOrgHoldings(orgId, holdings) {
-  const org = await getOrg(orgId);
-  if (!org) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
+  await withTransaction(async (client) => {
+    const { rows: orgRows } = await client.query(`SELECT id FROM privacy_orgs WHERE id = $1`, [orgId]);
+    if (!orgRows[0]) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
 
-  const ids = holdings.map((h) => h.vaultRecordId);
-  if (ids.length === 0) {
-    await query(`DELETE FROM privacy_org_holdings WHERE org_id = $1`, [orgId]);
-  } else {
-    await query(
-      `DELETE FROM privacy_org_holdings WHERE org_id = $1 AND vault_record_id != ALL($2::uuid[])`,
-      [orgId, ids],
-    );
-    for (const h of holdings) {
-      await query(
-        `INSERT INTO privacy_org_holdings (org_id, vault_record_id, status, noted_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())
-         ON CONFLICT (org_id, vault_record_id)
-         DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`,
-        [orgId, h.vaultRecordId, h.status ?? 'current'],
+    const ids = holdings.map((h) => h.vaultRecordId);
+    if (ids.length === 0) {
+      await client.query(`DELETE FROM privacy_org_holdings WHERE org_id = $1`, [orgId]);
+    } else {
+      await client.query(
+        `DELETE FROM privacy_org_holdings WHERE org_id = $1 AND vault_record_id != ALL($2::uuid[])`,
+        [orgId, ids],
       );
+      for (const h of holdings) {
+        // A vaultRecordId that doesn't exist (stale UI id, typo, raced with a
+        // deletion) trips the FK constraint — surface it as a clean 400
+        // instead of a raw Postgres constraint-violation 500.
+        await client.query(
+          `INSERT INTO privacy_org_holdings (org_id, vault_record_id, status, noted_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT (org_id, vault_record_id)
+           DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`,
+          [orgId, h.vaultRecordId, h.status ?? 'current'],
+        ).catch((err) => {
+          if (err?.code === '23503') {
+            throw new ServerError(`Vault record ${h.vaultRecordId} not found`, { status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
+          }
+          throw err;
+        });
+      }
     }
-  }
-  console.log(`🔗 Set ${ids.length} holdings for privacy org ${orgId}`);
+    console.log(`🔗 Set ${ids.length} holdings for privacy org ${orgId}`);
+  });
   return getHoldingsForOrg(orgId);
 }
 

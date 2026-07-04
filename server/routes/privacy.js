@@ -112,6 +112,8 @@ router.delete('/orgs/:id', asyncHandler(async (req, res) => {
 
 router.get('/orgs/:id/holdings', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacyOrgIdParamsSchema, req.params);
+  const org = await getOrg(id);
+  if (!org) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
   res.json(await getHoldingsForOrg(id));
 }));
 
