@@ -151,6 +151,11 @@ export function usePostSession() {
     // For estimation drills, check within tolerance
     let correct;
     let answered;
+    // Fill-blank element attribution: which specific answers[] entry the
+    // user's guess matched (if any) — set only on an unambiguous correct
+    // match, since a wrong guess against a multi-blank prompt can't be
+    // attributed to any one blank/element (issue #2099 codex review).
+    let matchedElement;
     if (hasFillBlankAnswers) {
       answered = value;
       const normalized = value !== null ? String(value).toLowerCase().trim() : '';
@@ -160,7 +165,9 @@ export function usePostSession() {
       // fill-blank answer wrong (issue #2116). Compare against the object's
       // `.word` (falling back to the raw value for a plain-string entry, for
       // forward/backward compatibility with any other producer).
-      correct = q.answers.some(a => String(a?.word ?? a).toLowerCase().trim() === normalized);
+      const matched = q.answers.find(a => String(a?.word ?? a).toLowerCase().trim() === normalized);
+      correct = !!matched;
+      matchedElement = matched?.element ?? null;
     } else if (isTextAnswer) {
       answered = value;
       correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
@@ -181,7 +188,12 @@ export function usePostSession() {
       answered,
       correct,
       responseMs,
-      ...memoryAttribution(q)
+      ...memoryAttribution(q),
+      // Fill-blank's per-answer element (see matchedElement above) takes
+      // priority over memoryAttribution(q)'s question-level element field
+      // (which fill-blank questions never carry — only memory-element-flash
+      // does), so mergeMasteryFromSession can credit the matched element.
+      ...(matchedElement != null ? { element: matchedElement } : {})
     };
 
     const newAnswers = [...answers, answer];
@@ -357,6 +369,14 @@ export function usePostSession() {
     });
     if (!session) return null;
     setSavedSession(session);
+    // Replace the pre-save estimate (computeSessionScoreFromResults, a plain
+    // per-domain average) with the server's authoritative score — which now
+    // additionally honors configured per-module scoring.weights (issue
+    // #2099). Without this, PostSessionResults keeps showing the local
+    // estimate even in the SAVED state, silently diverging from the score
+    // that was actually persisted/toasted whenever weights aren't uniform
+    // (issue #2099 codex review).
+    setSessionScore(session.score);
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);
     return session;

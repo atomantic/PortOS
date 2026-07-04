@@ -335,6 +335,110 @@ describe('usePostSession — memory-fill-blank scoring (issue #2099/#2116)', () 
 
     expect(result.current.drillResults[0].questions[0].correct).toBe(false);
   });
+
+  // Regression (codex review of issue #2099): a correct fill-blank match on
+  // an element-name blank must carry that element through to the answer so
+  // mergeMasteryFromSession can credit item.mastery.elements — previously
+  // only chunkId (question-level) survived; the per-answer element was
+  // silently dropped because memoryAttribution(q) only reads q.element,
+  // which fill-blank questions never carry (only answers[i].element does).
+  it('attributes the matched answer\'s element on a correct match', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([
+        { index: 1, word: 'hydrogen', element: 'H' },
+        { index: 3, word: 'fox', element: null },
+      ])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('hydrogen');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(true);
+    expect(q.element).toBe('H');
+  });
+
+  it('omits element on an incorrect match — which blank was intended is ambiguous', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'hydrogen', element: 'H' }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('nope');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(false);
+    expect(q).not.toHaveProperty('element');
+  });
+
+  it('omits element when the matched answer has none (a plain-word blank)', async () => {
+    generatePostDrill.mockResolvedValue(
+      fillBlankDrill([{ index: 1, word: 'quick', element: null }])
+    );
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'memory-fill-blank', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('quick');
+    });
+
+    const q = result.current.drillResults[0].questions[0];
+    expect(q.correct).toBe(true);
+    expect(q).not.toHaveProperty('element');
+    // chunkId still comes through via memoryAttribution(q) regardless.
+    expect(q.chunkId).toBe('verse-1');
+  });
+});
+
+// Regression (codex review of issue #2099): saveSession's returned session
+// score (now module-weighted server-side, see meatspacePost.js
+// computeSessionScore) must replace the pre-save local estimate
+// (computeSessionScoreFromResults — a plain per-domain average that never
+// reads config.scoring.weights), or the results screen keeps showing the
+// stale unweighted estimate even after the weighted score was toasted/saved.
+describe('usePostSession — sessionScore syncs to the server score on save (issue #2099)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('replaces the local pre-save score estimate with the server-computed session.score', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain',
+      config: { startValue: 2, steps: 1 },
+      questions: [{ prompt: '2 x 2', expected: 4 }],
+    });
+    // Server's weighted score (e.g. a de-emphasized module) diverges from
+    // whatever the client's local per-domain estimate computed pre-save.
+    submitPostSession.mockResolvedValue({ id: 'session-1', score: 37 });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => {
+      result.current.submitAnswer('4');
+    });
+
+    expect(result.current.sessionScore).not.toBe(37); // the local estimate, pre-save
+
+    await act(async () => {
+      await result.current.saveSession({});
+    });
+
+    expect(result.current.sessionScore).toBe(37);
+  });
 });
 
 describe('usePostSession — LLM training-log correctCount (issue #2097)', () => {
