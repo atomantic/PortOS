@@ -19,8 +19,10 @@
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import { readFileSync } from 'fs';
+import { chmod } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, tryReadFile, atomicWrite } from './fileUtils.js';
+import { createSingleFlight } from './singleFlight.js';
 
 const CIPHER = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -100,7 +102,19 @@ export function isVaultKeyConfigured() {
  * orphaning previously encrypted rows. Returns `{ generated }`. Never logs
  * the key value.
  */
-export async function ensureVaultKey({ envPath = resolveEnvPath() } = {}) {
+const keyProvisioning = createSingleFlight();
+
+export function ensureVaultKey({ envPath = resolveEnvPath() } = {}) {
+  if (parseKey(process.env.PRIVACY_VAULT_KEY)) return Promise.resolve({ generated: false });
+  // Single-flight per env path: two concurrent first writes must share ONE
+  // generation — otherwise each mints its own key, one wins the .env write,
+  // and the loser's freshly encrypted row is unrecoverable after restart.
+  return keyProvisioning.run(envPath, () => provisionVaultKey(envPath));
+}
+
+async function provisionVaultKey(envPath) {
+  // Re-check inside the flight: a caller that raced in behind an adopt/generate
+  // (or a fresh call after the slot cleared) must not rotate an existing key.
   if (parseKey(process.env.PRIVACY_VAULT_KEY)) return { generated: false };
 
   const fromFile = readKeyFromEnvFile(envPath);
@@ -110,11 +124,17 @@ export async function ensureVaultKey({ envPath = resolveEnvPath() } = {}) {
   }
 
   const key = randomBytes(KEY_BYTES).toString('hex');
-  const content = (await tryReadFile(envPath)) ?? '';
+  const existing = await tryReadFile(envPath);
+  const content = existing ?? '';
   // Drop any invalid PRIVACY_VAULT_KEY lines (none are valid — checked above).
   const cleaned = content.replace(/^PRIVACY_VAULT_KEY=.*(\r?\n|$)/gm, '');
   const separator = cleaned && !cleaned.endsWith('\n') ? '\n' : '';
   await atomicWrite(envPath, `${cleaned}${separator}PRIVACY_VAULT_KEY=${key}\n`);
+  // A brand-new .env holding a key that decrypts every vault record must not
+  // be world-readable (atomicWrite gives new files the umask default, commonly
+  // 0644). An EXISTING .env keeps whatever mode the user chose — atomicWrite
+  // already preserves it, and silently re-chmodding a user's file is worse.
+  if (existing === null) await chmod(envPath, 0o600);
   process.env.PRIVACY_VAULT_KEY = key;
   console.log('🔐 Generated PRIVACY_VAULT_KEY and wrote it to .env (vault encryption engaged)');
   return { generated: true };

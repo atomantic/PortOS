@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -167,6 +167,33 @@ describe('ensureVaultKey', () => {
     process.env.PRIVACY_VAULT_KEY = 'stale-garbage';
     expect(await ensureVaultKey({ envPath })).toEqual({ generated: true });
     expect(isVaultKeyConfigured()).toBe(true);
+  });
+
+  it('coalesces concurrent first writes into ONE generated key (no rotation race)', async () => {
+    // Two racing first vault writes must not each mint a key — the loser's
+    // rows would be encrypted under a key the winner's .env write discards.
+    const [a, b] = await Promise.all([
+      ensureVaultKey({ envPath }),
+      ensureVaultKey({ envPath }),
+    ]);
+    expect(a).toEqual({ generated: true });
+    expect(b).toEqual({ generated: true }); // shared flight → same result object
+    const content = readFileSync(envPath, 'utf8');
+    expect(content.match(/^PRIVACY_VAULT_KEY=/gm)).toHaveLength(1);
+    expect(content).toContain(`PRIVACY_VAULT_KEY=${process.env.PRIVACY_VAULT_KEY}`);
+    // A later call adopts, never rotates.
+    expect(await ensureVaultKey({ envPath })).toEqual({ generated: false });
+  });
+
+  it.skipIf(process.platform === 'win32')('creates a NEW .env with 0600 permissions', async () => {
+    await ensureVaultKey({ envPath });
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves an EXISTING .env file mode', async () => {
+    writeFileSync(envPath, 'OTHER_VAR=1\n', { mode: 0o644 });
+    await ensureVaultKey({ envPath });
+    expect(statSync(envPath).mode & 0o777).toBe(0o644);
   });
 
   it('REPLACES an invalid PRIVACY_VAULT_KEY line instead of appending a duplicate', async () => {
