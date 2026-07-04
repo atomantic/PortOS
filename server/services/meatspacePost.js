@@ -14,7 +14,14 @@ import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
-import { advanceScheduleFromSession, mergeMasteryFromSession } from './meatspacePostMemory.js';
+import { advanceScheduleFromSession, mergeMasteryFromSession, getMemoryItems, getDueMemoryItems } from './meatspacePostMemory.js';
+import { getAllTrainingEntries } from './meatspacePostTraining.js';
+import { computePostStreaks, computeUnifiedStreak, ymdToUTC } from '../lib/postStreak.js';
+
+// Re-export the shared streak helper so existing importers of
+// `computePostStreaks` from this module keep working after it moved to
+// server/lib/postStreak.js (single implementation — see that file).
+export { computePostStreaks };
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -256,59 +263,6 @@ export async function submitPostSession(sessionData) {
   return session;
 }
 
-// Local-date arithmetic on `YYYY-MM-DD` strings via UTC midnight so day math
-// never drifts across DST boundaries (the activity-streak bug class).
-function ymdToUTC(s) {
-  const [y, m, d] = s.split('-').map(Number);
-  return Date.UTC(y, m - 1, d);
-}
-function ymdShift(s, deltaDays) {
-  return new Date(ymdToUTC(s) + deltaDays * 86400000).toISOString().split('T')[0];
-}
-
-/**
- * Compute POST practice streaks from session records. Pure (takes `todayStr`
- * explicitly) so it's unit-testable without faking the clock.
- *
- * - `completedToday`  — at least one session dated today
- * - `currentStreak`   — consecutive days with a session counting back from
- *   today; a not-yet-done today does NOT break the streak as long as yesterday
- *   has one (grace window), mirroring `usage.js` `calculateStreak`
- * - `longestStreak`   — longest consecutive-day run in all history
- * - `lastDate`        — most recent session date (null if never practiced)
- * - `todayScore`      — best session score recorded today (null if none)
- */
-export function computePostStreaks(sessions, todayStr) {
-  const dateSet = new Set((sessions || []).map(s => s?.date).filter(Boolean));
-  const dates = Array.from(dateSet).sort();
-  const completedToday = dateSet.has(todayStr);
-  const lastDate = dates.length ? dates[dates.length - 1] : null;
-
-  const todayScores = (sessions || [])
-    .filter(s => s?.date === todayStr && typeof s?.score === 'number')
-    .map(s => s.score);
-  const todayScore = todayScores.length ? Math.max(...todayScores) : null;
-
-  let longestStreak = 0;
-  let run = 0;
-  let prev = null;
-  for (const d of dates) {
-    run = prev && ymdToUTC(d) - ymdToUTC(prev) === 86400000 ? run + 1 : 1;
-    if (run > longestStreak) longestStreak = run;
-    prev = d;
-  }
-
-  // Anchor the current streak at today, or yesterday if today isn't done yet.
-  let cursor = completedToday ? todayStr : ymdShift(todayStr, -1);
-  let currentStreak = 0;
-  while (dateSet.has(cursor)) {
-    currentStreak += 1;
-    cursor = ymdShift(cursor, -1);
-  }
-
-  return { completedToday, currentStreak, longestStreak, lastDate, todayScore };
-}
-
 /**
  * Answered-only accuracy for a scored task, tolerant of legacy sessions that
  * predate the persisted `accuracy` field (issue #2094). Order: the stored value
@@ -367,10 +321,51 @@ export function deriveTaskCompletion(task) {
   return qs.filter(q => q?.answered != null).length / qs.length;
 }
 
+/**
+ * Mean response time (ms) for a scored task, tolerant of legacy sessions that
+ * predate the persisted `avgResponseMs` field (issue #2094): the stored value
+ * first, else the mean of the answered questions' `responseMs` (>0 only), else
+ * `null` — never NaN. Used by progress aggregation so the "getting faster"
+ * trend reads cleanly across old and new session shapes.
+ */
+export function deriveTaskAvgResponseMs(task) {
+  if (typeof task?.avgResponseMs === 'number' && !Number.isNaN(task.avgResponseMs)) return task.avgResponseMs;
+  const qs = Array.isArray(task?.questions) ? task.questions : [];
+  const timed = qs.filter(q => (q?.responseMs || 0) > 0);
+  if (!timed.length) return null;
+  return Math.round(timed.reduce((sum, q) => sum + q.responseMs, 0) / timed.length);
+}
+
+/**
+ * ONE unified activity streak across scored sessions AND the training log — the
+ * single number every POST surface (launcher, Morse trainer, dashboard widgets)
+ * should show, so they can't disagree (issue #2091). A day is active with EITHER
+ * a scored session or a training-log entry (Morse / memory practice). Computed
+ * over ALL history, independent of any stats window.
+ */
+export async function getUnifiedActivityStreak(todayStr = new Date().toISOString().split('T')[0]) {
+  const [sessions, training] = await Promise.all([getPostSessions(), getAllTrainingEntries()]);
+  return computeUnifiedStreak(sessions, training, todayStr);
+}
+
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
-  // Streaks are computed over ALL history, independent of the stats window.
-  const streaks = computePostStreaks(sessions, new Date().toISOString().split('T')[0]);
+  const todayStr = new Date().toISOString().split('T')[0];
+  // Streaks are computed over ALL history, independent of the stats window, and
+  // over BOTH scored sessions and the training log so the launcher/dashboard
+  // streak matches the Morse trainer and the Progress page (issue #2091).
+  // `completedToday`/`todayScore` stay SCORED-session specific — they answer
+  // "did you complete a scored POST today / what did you score", which a
+  // practice-only day legitimately doesn't satisfy.
+  const sessionStreaks = computePostStreaks(sessions, todayStr);
+  const training = await getAllTrainingEntries();
+  const unified = computeUnifiedStreak(sessions, training, todayStr);
+  const streaks = {
+    ...sessionStreaks,
+    currentStreak: unified.current,
+    longestStreak: unified.longest,
+    lastDate: unified.lastActiveDate,
+  };
   let recent = sessions;
   if (days > 0) {
     const cutoff = new Date();
@@ -425,6 +420,182 @@ export async function getPostStats(days = 30) {
   for (const key of Object.keys(byDrillCompletionList)) byDrillCompletion[key] = avgFrac(byDrillCompletionList[key]);
 
   return { days, sessionCount: recent.length, overall, byModule, byDrill, byDrillCount, byDrillAccuracy, byDrillCompletion, ...streaks };
+}
+
+// =============================================================================
+// PROGRESS (time-series) — issue #2091
+// =============================================================================
+
+function mean(list) {
+  return list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+}
+
+// Accumulate one task's metrics into a `key -> (date -> bucket)` map, so a
+// domain/drill series can aggregate multiple same-day tasks into one point.
+function pushMetricSeries(map, key, date, score, accuracy, avgResponseMs) {
+  if (key == null) return;
+  let byDate = map.get(key);
+  if (!byDate) { byDate = new Map(); map.set(key, byDate); }
+  let bucket = byDate.get(date);
+  if (!bucket) { bucket = { scores: [], accs: [], resp: [] }; byDate.set(date, bucket); }
+  if (typeof score === 'number' && !Number.isNaN(score)) bucket.scores.push(score);
+  if (accuracy != null) bucket.accs.push(accuracy);
+  if (avgResponseMs != null) bucket.resp.push(avgResponseMs);
+}
+
+// Finalize a `key -> (date -> bucket)` map into `key -> [{ date, score,
+// accuracy, avgResponseMs }]`, chronologically sorted.
+function finalizeMetricSeries(map) {
+  const out = {};
+  for (const [key, byDate] of map) {
+    out[key] = Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, b]) => {
+        const acc = mean(b.accs);
+        const resp = mean(b.resp);
+        const score = mean(b.scores);
+        return {
+          date,
+          score: score == null ? null : Math.round(score),
+          accuracy: acc == null ? null : acc,
+          avgResponseMs: resp == null ? null : Math.round(resp),
+        };
+      });
+  }
+  return out;
+}
+
+/**
+ * Time-series progress across scored sessions, the training log, and memory
+ * mastery — the data behind the unified Progress dashboard (issue #2091).
+ *
+ * - `series.byDay`     per-day buckets (same-day sessions aggregated) of score,
+ *   accuracy, avg response time, minutes, and session count.
+ * - `series.byDomain`  per-day series keyed by coarse module (`mental-math`, …).
+ * - `series.byDrill`   per-day series keyed by drill type (`multiplication`, …).
+ * - `totals`           minutes trained (sessions + practice), session count,
+ *   practice-entry count over the window.
+ * - `streak`           ONE unified streak (sessions OR training-log activity),
+ *   computed over ALL history like `getPostStats`.
+ * - `mastery`          multiplication ladder rung + memory items (mastery/due).
+ *
+ * Accuracy/speed are reported separately (issue #2094): the persisted per-task
+ * `accuracy`/`avgResponseMs` are preferred, with a per-question derivation
+ * fallback for legacy sessions.
+ */
+export async function getPostProgress({ days = 90 } = {}) {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const window = Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 0;
+
+  const allSessions = await getPostSessions();
+  const allTraining = await getAllTrainingEntries();
+
+  // Unified streak is computed over ALL history, independent of the window.
+  const streak = computeUnifiedStreak(allSessions, allTraining, todayStr);
+
+  let cutoffStr = null;
+  if (window > 0) {
+    cutoffStr = new Date(ymdToUTC(todayStr) - window * 86400000).toISOString().split('T')[0];
+  }
+  const sessions = cutoffStr ? allSessions.filter(s => (s.date || '') >= cutoffStr) : allSessions;
+  const training = cutoffStr ? allTraining.filter(e => String(e.date || '').split('T')[0] >= cutoffStr) : allTraining;
+
+  // Per-day buckets for the headline trends, plus per-domain/per-drill series.
+  const dayMap = new Map();      // date -> { scores, accs, resp, minutes, sessions }
+  const domainMap = new Map();   // module -> Map(date -> metric bucket)
+  const drillMap = new Map();    // type   -> Map(date -> metric bucket)
+
+  const ensureDay = (date) => {
+    let d = dayMap.get(date);
+    if (!d) { d = { scores: [], accs: [], resp: [], minutes: 0, sessions: 0 }; dayMap.set(date, d); }
+    return d;
+  };
+
+  for (const s of sessions) {
+    const date = s.date;
+    if (!date) continue;
+    const day = ensureDay(date);
+    day.sessions += 1;
+    day.minutes += (s.durationMs || 0) / 60000;
+    if (typeof s.score === 'number' && !Number.isNaN(s.score)) day.scores.push(s.score);
+
+    const sessionAccs = [];
+    const sessionResp = [];
+    for (const task of s.tasks || []) {
+      const acc = deriveTaskAccuracy(task);
+      const resp = deriveTaskAvgResponseMs(task);
+      if (acc != null) sessionAccs.push(acc);
+      if (resp != null) sessionResp.push(resp);
+      pushMetricSeries(domainMap, task.module, date, task.score, acc, resp);
+      pushMetricSeries(drillMap, task.type, date, task.score, acc, resp);
+    }
+    const sAcc = mean(sessionAccs);
+    if (sAcc != null) day.accs.push(sAcc);
+    const sResp = mean(sessionResp);
+    if (sResp != null) day.resp.push(sResp);
+  }
+
+  // Practice time (Morse / memory) folds into each day's minutes — a practice-
+  // only day still shows time-in-training even with no scored session.
+  for (const e of training) {
+    const date = String(e.date || '').split('T')[0];
+    if (!date) continue;
+    ensureDay(date).minutes += (e.totalMs || 0) / 60000;
+  }
+
+  const byDay = Array.from(dayMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => {
+      const score = mean(d.scores);
+      const acc = mean(d.accs);
+      const resp = mean(d.resp);
+      return {
+        date,
+        score: score == null ? null : Math.round(score),
+        accuracy: acc == null ? null : acc,
+        avgResponseMs: resp == null ? null : Math.round(resp),
+        minutes: Math.round(d.minutes),
+        sessions: d.sessions,
+      };
+    });
+
+  const sessionMs = sessions.reduce((sum, s) => sum + (s.durationMs || 0), 0);
+  const trainingMs = training.reduce((sum, e) => sum + (e.totalMs || 0), 0);
+
+  // Mastery block: multiplication ladder rung + per-item memory mastery/due.
+  const mulProgress = await getMultiplicationProgress();
+  const memoryItems = await getMemoryItems();
+  const dueItems = await getDueMemoryItems();
+  const dueIds = new Set(dueItems.map(i => i.id));
+
+  return {
+    days: window,
+    series: {
+      byDay,
+      byDomain: finalizeMetricSeries(domainMap),
+      byDrill: finalizeMetricSeries(drillMap),
+    },
+    totals: {
+      minutesTrained: Math.round((sessionMs + trainingMs) / 60000),
+      sessions: sessions.length,
+      practiceEntries: training.length,
+    },
+    streak,
+    mastery: {
+      multiplication: {
+        level: mulProgress.level,
+        description: mulProgress.label,
+        floorLevel: mulProgress.floorLevel,
+      },
+      memoryItems: memoryItems.map(it => ({
+        id: it.id,
+        title: it.title,
+        overallPct: it.mastery?.overallPct ?? 0,
+        // 0/1 per item so the client can sum to a total "due" count.
+        dueCount: dueIds.has(it.id) ? 1 : 0,
+      })),
+    },
+  };
 }
 
 // =============================================================================

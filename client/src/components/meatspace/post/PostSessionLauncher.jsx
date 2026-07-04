@@ -4,9 +4,7 @@ import { getProviders } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
-
-// Streak glyph tiers mirror DailyPostWidget so the launcher and dashboard agree.
-const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨');
+import { streakGlyph } from '../../../lib/streakGlyph.js';
 
 const scoreColorClass = (score) =>
   score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';

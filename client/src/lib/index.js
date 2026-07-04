@@ -84,6 +84,7 @@ export * from './singToScore.js';
 export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './songProgress.js';
+export * from './streakGlyph.js';
 export * from './syncCounts.js';
 export * from './terminalTheme.js';
 export * from './tribe.js';
