@@ -179,7 +179,7 @@ export const getPostSessions = (from, to) => {
   if (to) params.set('to', to);
   return request(`/meatspace/post/sessions?${params}`);
 };
-export const getPostSession = (id) => request(`/meatspace/post/sessions/${id}`);
+export const getPostSession = (id, options = {}) => request(`/meatspace/post/sessions/${id}`, options);
 export const submitPostSession = (data, options = {}) => request('/meatspace/post/sessions', {
   method: 'POST',
   body: JSON.stringify(data),

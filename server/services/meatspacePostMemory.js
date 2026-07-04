@@ -480,13 +480,51 @@ export async function advanceScheduleFromSession(memoryItemId, ratio, now = new 
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
 
-  const advanced = advanceSchedule(item.schedule, ratio, now);
-  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
-  item.updatedAt = now.toISOString();
+  applyScheduleAdvanceToItem(item, ratio, now);
   await saveMemoryItems(items);
 
   console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
   return item.schedule;
+}
+
+// In-place schedule advance shared by advanceScheduleFromSession (one load+save)
+// and applySessionToMemoryItems (one load+save for the WHOLE session). Keeping a
+// single core guarantees the consolidated one-pass path produces byte-identical
+// schedule results to the legacy per-task path.
+function applyScheduleAdvanceToItem(item, ratio, now) {
+  const advanced = advanceSchedule(item.schedule, ratio, now);
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
+  item.updatedAt = now.toISOString();
+  return item.schedule;
+}
+
+// In-place mastery merge shared by mergeMasteryFromSession and
+// applySessionToMemoryItems — same single-core-of-truth rationale as
+// applyScheduleAdvanceToItem above.
+function applyMasteryMergeToItem(item, questions, now) {
+  const nowIso = now.toISOString();
+  for (const q of questions) {
+    if (q.chunkId) {
+      if (!item.mastery.chunks[q.chunkId]) {
+        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
+      }
+      const chunk = item.mastery.chunks[q.chunkId];
+      chunk.attempts += 1;
+      if (q.correct) chunk.correct += 1;
+      chunk.lastPracticed = nowIso;
+    }
+    if (q.element) {
+      if (!item.mastery.elements[q.element]) {
+        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
+      }
+      item.mastery.elements[q.element].attempts += 1;
+      if (q.correct) item.mastery.elements[q.element].correct += 1;
+    }
+  }
+
+  item.mastery.overallPct = computeOverallMastery(item);
+  item.updatedAt = nowIso;
+  return item.mastery;
 }
 
 /**
@@ -514,32 +552,48 @@ export async function mergeMasteryFromSession(memoryItemId, questions, now = new
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
 
-  const nowIso = now.toISOString();
-  for (const q of questions) {
-    if (q.chunkId) {
-      if (!item.mastery.chunks[q.chunkId]) {
-        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
-      }
-      const chunk = item.mastery.chunks[q.chunkId];
-      chunk.attempts += 1;
-      if (q.correct) chunk.correct += 1;
-      chunk.lastPracticed = nowIso;
-    }
-    if (q.element) {
-      if (!item.mastery.elements[q.element]) {
-        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
-      }
-      item.mastery.elements[q.element].attempts += 1;
-      if (q.correct) item.mastery.elements[q.element].correct += 1;
-    }
-  }
-
-  item.mastery.overallPct = computeOverallMastery(item);
-  item.updatedAt = nowIso;
+  applyMasteryMergeToItem(item, questions, now);
   await saveMemoryItems(items);
 
   console.log(`🧠 POST session mastery merged: "${item.title}" ${questions.length} answers → ${item.mastery.overallPct}% overall`);
   return item.mastery;
+}
+
+/**
+ * Consolidated post-session memory bookkeeping: advance schedule AND merge
+ * chunk/element mastery for every memory drill in a session, reading and writing
+ * the shared memory-items file exactly ONCE regardless of task count (the
+ * previous path did 2 full read-modify-write round-trips PER memory task). A
+ * task is a memory drill iff it carries a `memoryItemId` — the only tasks the
+ * submit path attaches one to (POST_SUPPORTED_MEMORY_TYPES). Per task the
+ * schedule ratio is correct-over-total, matching the legacy per-task caller.
+ *
+ * @param {Array<{memoryItemId?, questions?}>} tasks - the session's scored tasks
+ * @returns {Promise<{updated:number}>} how many memory items were touched
+ */
+export async function applySessionToMemoryItems(tasks, now = new Date()) {
+  const memoryTasks = (Array.isArray(tasks) ? tasks : []).filter(t => t?.memoryItemId);
+  if (!memoryTasks.length) return { updated: 0 };
+
+  const items = await loadMemoryItems();
+  let updated = 0;
+  for (const task of memoryTasks) {
+    const item = items.find(i => i.id === task.memoryItemId);
+    if (!item) continue;
+    const questions = Array.isArray(task.questions) ? task.questions : [];
+    const total = questions.length;
+    const correct = questions.filter(q => q?.correct).length;
+    const ratio = total ? correct / total : 0;
+    applyScheduleAdvanceToItem(item, ratio, now);
+    // mergeMasteryFromSession is a no-op on empty questions; mirror that so the
+    // one-pass path stays identical to the legacy schedule+mastery sequence.
+    if (questions.length) applyMasteryMergeToItem(item, questions, now);
+    updated += 1;
+    console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+  }
+
+  if (updated) await saveMemoryItems(items);
+  return { updated };
 }
 
 /**

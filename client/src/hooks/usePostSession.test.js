@@ -621,3 +621,110 @@ describe('usePostSession — LLM training-log per-question breakdown (issue #211
     expect(entry).not.toHaveProperty('questions');
   });
 });
+
+describe('usePostSession — refresh-safe run + idempotent submit (issue #2098)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+  });
+
+  it('generates a client run id and submits it as the session id (idempotent upsert key)', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain', config: { startValue: 2, steps: 1 }, questions: [{ prompt: '2 x 2', expected: 4 }],
+    });
+    submitPostSession.mockResolvedValue({ id: 'srv', score: 100 });
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    const runId = result.current.runId;
+    expect(runId).toMatch(/^[0-9a-f-]{36}$/i);
+
+    act(() => { result.current.submitAnswer('4'); });
+    await act(async () => { await result.current.saveSession({}); });
+
+    const payload = submitPostSession.mock.calls[0][0];
+    expect(payload.id).toBe(runId); // same id the run started with → retry-safe
+  });
+
+  it('persists the in-progress run to sessionStorage and restores it on a fresh mount (refresh)', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain', config: { startValue: 2, steps: 3 },
+      questions: [
+        { prompt: '2 x 2', expected: 4 },
+        { prompt: '4 x 2', expected: 8 },
+        { prompt: '8 x 2', expected: 16 },
+      ],
+    });
+
+    const first = renderHook(() => usePostSession());
+    await act(async () => {
+      await first.result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => { first.result.current.submitAnswer('4'); }); // answer q1, mid-drill
+    const runId = first.result.current.runId;
+    expect(first.result.current.state).toBe('drilling');
+
+    // Simulate a page refresh: a brand-new hook instance reads sessionStorage.
+    first.unmount();
+    const second = renderHook(() => usePostSession());
+    expect(second.result.current.runId).toBe(runId);
+    expect(second.result.current.state).toBe('drilling');
+    expect(second.result.current.currentDrill?.questions).toHaveLength(3);
+    expect(second.result.current.answers).toHaveLength(1); // the mid-drill answer survived
+  });
+
+  it('keeps completed results in the snapshot during next-drill generation (does not drop the run on refresh)', async () => {
+    generatePostDrill
+      .mockResolvedValueOnce({ type: 'doubling-chain', config: {}, questions: [{ prompt: '2 x 2', expected: 4 }] })
+      .mockImplementationOnce(() => new Promise(() => {})); // drill 2 generation hangs (mid-refresh)
+
+    const { result } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([
+        { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
+        { type: 'doubling-chain', config: {}, timeLimitSec: 60 },
+      ]);
+    });
+    act(() => { result.current.submitAnswer('4'); }); // finish drill 1 → between-drills
+    expect(result.current.state).toBe('between-drills');
+
+    act(() => { result.current.nextDrill(); }); // drill 2 generation starts and hangs → loading
+    expect(result.current.state).toBe('loading');
+
+    // The 'loading' state must NOT have overwritten the stable between-drills
+    // snapshot — drill 1's completed result must survive a refresh here.
+    const snap = JSON.parse(sessionStorage.getItem('post.activeRun'));
+    expect(snap.state).toBe('between-drills');
+    expect(snap.drillResults).toHaveLength(1);
+  });
+
+  it('does not restore a training run persisted mid-save (avoids double training-log)', () => {
+    sessionStorage.setItem('post.activeRun', JSON.stringify({
+      runId: 'r1', state: 'saving', isTraining: true,
+      drills: [{ type: 'compound-chain' }], currentDrillIndex: 0, currentDrill: null,
+      currentQuestionIndex: 0, answers: [],
+      drillResults: [{ module: 'llm-drills', type: 'compound-chain', score: 90 }],
+      sessionScore: 90, tags: {},
+    }));
+    const { result } = renderHook(() => usePostSession());
+    expect(result.current.state).toBe('idle'); // training run is dropped, not resumed
+  });
+
+  it('clears the persisted run on reset (no stale run resumes next mount)', async () => {
+    generatePostDrill.mockResolvedValue({
+      type: 'doubling-chain', config: { startValue: 2, steps: 1 }, questions: [{ prompt: '2 x 2', expected: 4 }],
+    });
+    const { result, unmount } = renderHook(() => usePostSession());
+    await act(async () => {
+      await result.current.startSession([{ type: 'doubling-chain', config: {}, timeLimitSec: 60 }]);
+    });
+    act(() => { result.current.reset(); });
+    unmount();
+
+    const next = renderHook(() => usePostSession());
+    expect(next.result.current.state).toBe('idle');
+    expect(next.result.current.runId).toBeNull();
+  });
+});

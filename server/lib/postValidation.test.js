@@ -429,3 +429,30 @@ describe('memoryPracticeSchema mode enums', () => {
     expect(parsed.totalMs).toBe(4000);
   });
 });
+
+describe('postSessionSubmitSchema client-generated id (issue #2098)', () => {
+  const baseBody = () => ({
+    modules: ['mental-math'],
+    tasks: [{
+      module: 'mental-math',
+      type: 'doubling-chain',
+      questions: [{ prompt: '2 x 2', expected: 4, answered: 4, responseMs: 200 }],
+      totalMs: 200
+    }]
+  });
+
+  it('accepts and preserves a valid uuid id (keys the idempotent upsert)', () => {
+    const id = '123e4567-e89b-42d3-a456-426614174000';
+    const parsed = postSessionSubmitSchema.parse({ ...baseBody(), id });
+    expect(parsed.id).toBe(id);
+  });
+
+  it('accepts a body with no id (server assigns one — back-compat)', () => {
+    const parsed = postSessionSubmitSchema.parse(baseBody());
+    expect(parsed.id).toBeUndefined();
+  });
+
+  it('rejects a non-uuid id', () => {
+    expect(() => postSessionSubmitSchema.parse({ ...baseBody(), id: 'not-a-uuid' })).toThrow();
+  });
+});
