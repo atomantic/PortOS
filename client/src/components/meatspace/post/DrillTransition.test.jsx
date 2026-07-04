@@ -65,25 +65,28 @@ describe('DrillTransition', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
-  it('Resume still resumes the countdown when the browser leaves focus on the button after a click', async () => {
+  it('Resume still resumes the countdown when the browser leaves focus on the button after a click, without stealing keyboard focus', async () => {
     // Regression: Chrome/Edge/Windows Firefox keep focus on a <button> after
     // a real click (jsdom's fireEvent.click does not model this, which is
-    // why the previous test alone didn't catch it). Without an explicit
-    // blur-on-click, hoveringFocus would stay true forever once the
-    // Pause/Resume button is focused, permanently pausing the countdown —
-    // clicking "Resume" would never actually resume it.
+    // why an earlier version of this test didn't catch it). Without
+    // resetting hoveringFocus on toggle, it would stay true forever once
+    // the Pause/Resume button is focused, permanently pausing the
+    // countdown — clicking "Resume" would never actually resume it. The fix
+    // must NOT blur the button to work around this — that would strand a
+    // keyboard user's focus — so also assert focus stays on the button.
     const onContinue = vi.fn();
     render(<DrillTransition {...baseProps} onContinue={onContinue} />);
     const pauseButton = screen.getByRole('button', { name: 'Pause' });
     act(() => { pauseButton.focus(); });
     fireEvent.click(pauseButton);
-    expect(document.activeElement).not.toBe(pauseButton);
+    expect(document.activeElement).toBe(pauseButton);
     await tickSeconds(5);
     expect(onContinue).not.toHaveBeenCalled();
 
     const resumeButton = screen.getByRole('button', { name: 'Resume' });
-    act(() => { resumeButton.focus(); });
+    expect(document.activeElement).toBe(resumeButton); // same element, re-labeled
     fireEvent.click(resumeButton);
+    expect(document.activeElement).toBe(resumeButton);
     await tickSeconds(3);
     expect(onContinue).toHaveBeenCalledTimes(1);
   });

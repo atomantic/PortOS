@@ -103,16 +103,18 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
       <div className="flex items-center gap-2">
         <button
           type="button"
-          onClick={(e) => {
+          onClick={() => {
             setManuallyPaused(p => !p);
-            // Many browsers (Chrome/Edge, Windows Firefox) keep focus on a
-            // <button> after a click, which would otherwise leave
-            // hoveringFocus=true forever — so clicking "Resume" would never
-            // actually resume (paused still true via hoveringFocus even
-            // after manuallyPaused flips off). Blur has relatedTarget=null,
-            // which the card's onBlur handler treats as "focus left the
-            // card", clearing hoveringFocus so paused can go false again.
-            e.currentTarget.blur();
+            // Explicitly clear the ambient focus-pause on every toggle rather
+            // than blurring the button: many browsers (Chrome/Edge, Windows
+            // Firefox) keep focus on a <button> after a click, so without
+            // this, hoveringFocus would stay true forever once the button is
+            // focused and clicking "Resume" would never actually resume.
+            // Resetting the flag directly (instead of calling .blur()) keeps
+            // real keyboard focus on the button — a keyboard user doesn't
+            // lose their place — while still letting a later Tab-away-and-
+            // back re-engage the ambient focus-pause normally.
+            setHoveringFocus(false);
           }}
           aria-pressed={manuallyPaused}
           className="flex items-center gap-1.5 px-4 py-3 bg-port-card border border-port-border hover:border-port-accent text-gray-300 text-sm font-medium rounded-lg transition-colors shrink-0"
