@@ -9,10 +9,11 @@ vi.mock('../../../services/api', () => ({
   getPostReviewReps: vi.fn().mockResolvedValue({ reps: [] }),
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
   getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
+  getPostProgress: vi.fn().mockResolvedValue({ series: { byDay: [] } }),
 }));
 
 import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
-import { getPostRecommendations, getMorseProgress } from '../../../services/api';
+import { getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10). Both were lifted from component-body closures to module
@@ -141,6 +142,7 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     vi.clearAllMocks();
     getPostRecommendations.mockResolvedValue({ recommendations: [] });
     getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
+    getPostProgress.mockResolvedValue({ series: { byDay: [] } });
   });
 
   it('renders the "Up next" panel with working deep links', async () => {
@@ -160,6 +162,28 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     await waitFor(() => expect(screen.getByText('Goals')).toBeTruthy());
     // streakTarget 10 with a 4-day streak → "4/10 d".
     expect(screen.getByText(/4\/10/)).toBeTruthy();
+  });
+
+  it('makes a launcher-targeted recommendation actionable (focuses the drill)', async () => {
+    const onStart = vi.fn();
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'weak-skill:mm', kind: 'weak-skill', title: 'Shore up Multiplication', detail: 'x', deepLink: '/post/launcher', drillType: 'multiplication', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Shore up Multiplication')).toBeTruthy());
+    // A launcher-targeted rec renders as a button (does the practice), not a link.
+    const row = screen.getByText('Shore up Multiplication').closest('button');
+    expect(row).toBeTruthy();
+    fireEvent.click(row);
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart.mock.calls[0][0].some(d => d.type === 'multiplication')).toBe(true);
+  });
+
+  it('counts training-log time toward the daily-minutes goal', async () => {
+    getPostProgress.mockResolvedValue({ series: { byDay: [{ date: new Date().toISOString().split('T')[0], minutes: 15 }] } });
+    renderLauncher({ config: { ...baseConfig, goals: { dailyMinutes: 20 } } });
+    await waitFor(() => expect(getPostProgress).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/15\/20/)).toBeTruthy());
   });
 
   it('renders a Morse WPM goal by fetching current Morse speed', async () => {

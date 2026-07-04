@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, Layers } from 'lucide-react';
-import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress } from '../../../services/api';
+import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
@@ -82,6 +82,10 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // Current effective Morse WPM — fetched only when a Morse WPM goal is set, so
   // that goal can render progress (issue #2100). null when unset/unavailable.
   const [morseWpm, setMorseWpm] = useState(null);
+  // Today's TOTAL training minutes (scored sessions + training-log practice —
+  // Training mode, Morse, memory) for the daily-minutes goal. Fetched only when
+  // that goal is set; null falls back to the scored-session-only estimate.
+  const [todayMinutesTotal, setTodayMinutesTotal] = useState(null);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
@@ -103,6 +107,23 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       .catch(() => { if (!cancelled) setMorseWpm(null); });
     return () => { cancelled = true; };
   }, [config?.goals?.morseWpmTarget]);
+
+  // Today's total training minutes (incl. training-log practice) — fetched only
+  // when a daily-minutes goal is set, so that goal counts Training/Morse/memory
+  // time, not just scored sessions (issue #2100 review).
+  useEffect(() => {
+    if (!config?.goals?.dailyMinutes) { setTodayMinutesTotal(null); return; }
+    let cancelled = false;
+    getPostProgress(1, { silent: true })
+      .then(p => {
+        if (cancelled) return;
+        const t = new Date().toISOString().split('T')[0];
+        const todayBucket = (p?.series?.byDay || []).find(d => d.date === t);
+        setTodayMinutesTotal(todayBucket ? todayBucket.minutes : 0);
+      })
+      .catch(() => { if (!cancelled) setTodayMinutesTotal(null); });
+    return () => { cancelled = true; };
+  }, [config?.goals?.dailyMinutes]);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
@@ -379,7 +400,11 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // here (would need a Morse fetch), so a morseWpmTarget goal is simply omitted
   // — computeGoalProgress skips goals whose metric is unavailable.
   const todaysSessions = (recentSessions || []).filter(s => s.date === today);
-  const todayMinutes = Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
+  // Prefer the training-log-inclusive total (fetched when a daily goal is set);
+  // fall back to the scored-session-only estimate otherwise.
+  const todayMinutes = todayMinutesTotal != null
+    ? todayMinutesTotal
+    : Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
   const weekSessions = statsWeek?.sessionCount ?? 0;
   const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak, morseWpm });
 
@@ -477,19 +502,40 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                 <h3 className="text-sm font-medium text-gray-300">Up next</h3>
               </div>
               <div className="space-y-2">
-                {recommendations.map(rec => (
-                  <Link
-                    key={rec.id}
-                    to={rec.deepLink}
-                    className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors group"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm text-white truncate">{rec.title}</div>
-                      {rec.detail && <div className="text-xs text-gray-500 truncate">{rec.detail}</div>}
-                    </div>
-                    <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
-                  </Link>
-                ))}
+                {recommendations.map(rec => {
+                  const rowClass = 'flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors group w-full text-left';
+                  const inner = (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-white truncate">{rec.title}</div>
+                        {rec.detail && <div className="text-xs text-gray-500 truncate">{rec.detail}</div>}
+                      </div>
+                      <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
+                    </>
+                  );
+                  // A rec that targets the launcher should DO the practice, not
+                  // just navigate to the page the user is already on (issue #2100
+                  // review): focus the recommended drill's domain when it maps to
+                  // a runnable one, else start a Full POST. Routed recs
+                  // (/post/memory, /post/morse/copy) stay navigational links.
+                  if (rec.deepLink === '/post/launcher') {
+                    const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
+                    const canFocus = domainKey && sessionEnabledDomains[domainKey];
+                    const onClick = canFocus
+                      ? () => handleFocusDomain(domainKey)
+                      : (hasSessionDrills ? handleStart : null);
+                    return (
+                      <button key={rec.id} type="button" onClick={onClick || undefined} disabled={!onClick} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                        {inner}
+                      </button>
+                    );
+                  }
+                  return (
+                    <Link key={rec.id} to={rec.deepLink} className={rowClass}>
+                      {inner}
+                    </Link>
+                  );
+                })}
               </div>
             </div>
           )}
