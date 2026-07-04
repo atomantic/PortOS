@@ -223,7 +223,20 @@ export default function RoundEditor() {
       partnerRoundIds: song.partnerRoundIds || [],
     };
     const data = await updateRound(id, patch, { silent: true });
-    if (data?.round) setServerSong(data.round);
+    if (data?.round) {
+      setServerSong(data.round);
+      // Saving strips temp reference ids, so a freshly-added reference gets a
+      // new server uuid — re-point an open ?analyze= deep link at its saved
+      // twin (matched by url + audioFilename) instead of stranding the
+      // workbench on a "no longer exists" fallback.
+      if (analyzeId && !(data.round.references || []).some((r) => r.id === analyzeId)) {
+        const old = (song.references || []).find((r) => r.id === analyzeId);
+        const twin = old && (data.round.references || []).find(
+          (r) => r.url === old.url && (r.audioFilename || '') === (old.audioFilename || ''),
+        );
+        setAnalyze(twin ? twin.id : null);
+      }
+    }
     toast.success('Round saved');
     return data?.round;
   }, { errorMessage: 'Failed to save round' });
@@ -705,17 +718,26 @@ export default function RoundEditor() {
                     {tiktokVideoId(r.url) && <p className="text-xs text-port-success">✓ TikTok video — embeds in View</p>}
                     {/* Reference-audio analysis (#2106): attach audio (upload or
                         mic capture while the video plays), then analyze it into
-                        per-layer proposed parts. */}
+                        per-layer proposed parts. Gated on a valid http(s) URL —
+                        the server DROPS a reference whose url fails that check,
+                        so letting the user attach audio/segments to a droppable
+                        row would silently lose that work on Save. */}
                     <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-port-border/60">
-                      <ReferenceAudioAttach reference={r} onUpdate={(key, value) => updateReference(r.id, key, value)} />
-                      {r.audioFilename && (
-                        <button
-                          type="button"
-                          onClick={() => setAnalyze(r.id)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10"
-                        >
-                          <AudioLines size={14} /> Analyze audio
-                        </button>
+                      {isHttpUrl(r.url) ? (
+                        <>
+                          <ReferenceAudioAttach reference={r} onUpdate={(key, value) => updateReference(r.id, key, value)} />
+                          {r.audioFilename && (
+                            <button
+                              type="button"
+                              onClick={() => setAnalyze(r.id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10"
+                            >
+                              <AudioLines size={14} /> Analyze audio
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-gray-600">Enter a valid http(s) link above to attach audio for analysis.</span>
                       )}
                     </div>
                   </div>

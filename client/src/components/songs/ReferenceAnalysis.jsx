@@ -48,6 +48,26 @@ const secToMs = (raw) => {
   return Number.isFinite(n) ? Math.max(0, Math.round(n * 1000)) : 0;
 };
 
+// Seconds input that commits on blur/Enter rather than per keystroke — a
+// controlled `value={msToSec(...)}` reformats on every render, which fights
+// sequential typing ("14" becomes "1.04"). Uncontrolled while focused; the
+// caller passes a `key` tied to `valueMs` so an external update (the
+// set-from-playhead flag buttons) remounts it with the fresh value.
+function SecondsInput({ valueMs, onCommit, ariaLabel }) {
+  return (
+    <input
+      type="number"
+      min={0}
+      step={0.1}
+      defaultValue={msToSec(valueMs)}
+      onBlur={(e) => onCommit(secToMs(e.target.value))}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      aria-label={ariaLabel}
+      className="w-20 bg-port-bg border border-port-border rounded-lg px-2 py-1 text-xs text-white focus:border-port-accent focus:outline-none"
+    />
+  );
+}
+
 // --- Attach controls (edit-tab reference card) ------------------------------
 
 /**
@@ -342,8 +362,11 @@ export default function ReferenceAnalysis({
       }
       setProposal({ layerId: seg.layerId, text });
       // Default the comparison to the stored part whose role matches the
-      // segment's layer (layer ids double as harmony-part roles).
-      const match = scoreParts.find((p) => p.role === seg.layerId);
+      // segment's layer (layer ids double as harmony-part roles). Only when
+      // the segment actually HAS a layer and the part a non-empty role — an
+      // unassigned segment ('' layerId) must not silently preselect a
+      // role-less hand-added part as the overwrite target.
+      const match = seg.layerId ? scoreParts.find((p) => p.role && p.role === seg.layerId) : null;
       setCompareId(match?.id || '');
     }, 30);
   }, [decoded, tempo, songKey, scoreParts]);
@@ -471,14 +494,11 @@ export default function ReferenceAnalysis({
                 </select>
                 <label className="flex items-center gap-1 text-xs text-gray-400">
                   <span>from</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={msToSec(seg.startMs)}
-                    onChange={(e) => updateSegment(idx, { startMs: secToMs(e.target.value) })}
-                    aria-label="Segment start (seconds)"
-                    className="w-20 bg-port-bg border border-port-border rounded-lg px-2 py-1 text-xs text-white focus:border-port-accent focus:outline-none"
+                  <SecondsInput
+                    key={`start-${seg.startMs}`}
+                    valueMs={seg.startMs}
+                    onCommit={(ms) => updateSegment(idx, { startMs: ms })}
+                    ariaLabel="Segment start (seconds)"
                   />
                   <span>s</span>
                 </label>
@@ -487,14 +507,11 @@ export default function ReferenceAnalysis({
                 </button>
                 <label className="flex items-center gap-1 text-xs text-gray-400">
                   <span>to</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={msToSec(seg.endMs)}
-                    onChange={(e) => updateSegment(idx, { endMs: secToMs(e.target.value) })}
-                    aria-label="Segment end (seconds)"
-                    className="w-20 bg-port-bg border border-port-border rounded-lg px-2 py-1 text-xs text-white focus:border-port-accent focus:outline-none"
+                  <SecondsInput
+                    key={`end-${seg.endMs}`}
+                    valueMs={seg.endMs}
+                    onCommit={(ms) => updateSegment(idx, { endMs: ms })}
+                    ariaLabel="Segment end (seconds)"
                   />
                   <span>s</span>
                 </label>
