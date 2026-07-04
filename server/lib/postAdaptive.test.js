@@ -50,6 +50,30 @@ describe('adaptDrillConfig', () => {
     expect(res.config.maxDigits).toBe(2);
   });
 
+  it('skips adaptation when completion is below the floor (too little signal)', () => {
+    // Enough samples and a high accuracy signal, but the user only reached ~30%
+    // of the drill — not a trustworthy difficulty signal, so hold (issue #2094).
+    const res = adaptDrillConfig('multiplication', { maxDigits: 2 }, { score: 95, samples: 5, completion: 0.3 });
+    expect(res.applied).toBe(false);
+    expect(res.reason).toBe('insufficient-completion');
+    expect(res.config.maxDigits).toBe(2);
+  });
+
+  it('adapts normally once completion clears the floor', () => {
+    const res = adaptDrillConfig('multiplication', { maxDigits: 2 }, { score: 95, samples: 5, completion: 0.8 });
+    expect(res.applied).toBe(true);
+    expect(res.reason).toBe('harder');
+    expect(res.completion).toBe(0.8);
+    expect(res.config.maxDigits).toBe(3);
+  });
+
+  it('adapts when completion is absent (legacy signal without the field)', () => {
+    const res = adaptDrillConfig('multiplication', { maxDigits: 2 }, { score: 95, samples: 5 });
+    expect(res.applied).toBe(true);
+    expect(res.reason).toBe('harder');
+    expect(res.completion).toBe(null);
+  });
+
   it('bumps the primary knob harder on sustained high scores (higher = harder)', () => {
     const res = adaptDrillConfig('multiplication', { maxDigits: 2 }, { score: 95, samples: 5 });
     expect(res.applied).toBe(true);

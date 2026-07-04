@@ -28,6 +28,9 @@ import {
   postConfigEvents,
   resolveDrillConfig,
   getMultiplicationProgress,
+  getPostStats,
+  deriveTaskAccuracy,
+  deriveTaskCompletion,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -311,9 +314,45 @@ describe('scoreDrill', () => {
       { prompt: '7 x 4', expected: 28, answered: 28, responseMs: 1500 },
       { prompt: '6 x 8', expected: 48, answered: 48, responseMs: 2000 }
     ];
-    const { score } = scoreDrill('multiplication', questions, 120000);
+    const { score, accuracy, completion, avgResponseMs, answeredCount, totalCount } = scoreDrill('multiplication', questions, 120000);
     expect(score).toBeGreaterThanOrEqual(90);
     expect(score).toBeLessThanOrEqual(100);
+    // Fully-answered task: separated metrics all report cleanly.
+    expect(accuracy).toBe(1);
+    expect(completion).toBe(1);
+    expect(answeredCount).toBe(3);
+    expect(totalCount).toBe(3);
+    expect(avgResponseMs).toBe(1500);
+  });
+
+  it('separates answered-only accuracy from completion; unanswered ≠ wrong', () => {
+    const questions = [
+      { prompt: '5 x 3', expected: 15, answered: 15, responseMs: 1000 }, // correct
+      { prompt: '7 x 4', expected: 28, answered: 99, responseMs: 1200 }, // wrong
+      { prompt: '6 x 8', expected: 48, answered: null, responseMs: 0 },  // unreached
+      { prompt: '2 x 9', expected: 18, answered: null, responseMs: 0 }   // unreached
+    ];
+    const { accuracy, completion, answeredCount, totalCount, avgResponseMs } = scoreDrill('multiplication', questions, 60000);
+    // 1 correct of 2 ANSWERED → 0.5 accuracy (the 2 unanswered do not count as wrong).
+    expect(accuracy).toBe(0.5);
+    // 2 answered of 4 → 0.5 completion.
+    expect(completion).toBe(0.5);
+    expect(answeredCount).toBe(2);
+    expect(totalCount).toBe(4);
+    expect(avgResponseMs).toBe(1100);
+  });
+
+  it('accuracy and avgResponseMs are null (never NaN) when nothing was answered', () => {
+    const questions = [
+      { prompt: '5 x 3', expected: 15, answered: null, responseMs: 0 },
+      { prompt: '7 x 4', expected: 28, answered: null, responseMs: 0 }
+    ];
+    const { score, accuracy, completion, avgResponseMs, answeredCount } = scoreDrill('multiplication', questions, 60000);
+    expect(accuracy).toBe(null);
+    expect(avgResponseMs).toBe(null);
+    expect(completion).toBe(0);
+    expect(answeredCount).toBe(0);
+    expect(score).toBe(0);
   });
 
   it('0% accuracy gives low score', () => {
@@ -326,15 +365,20 @@ describe('scoreDrill', () => {
     expect(score).toBeLessThanOrEqual(20);
   });
 
-  it('unanswered questions count against accuracy', () => {
+  it('blended score still folds completion in (back-compat): 1 correct of 2 total', () => {
     const questions = [
       { prompt: '5 x 3', expected: 15, answered: 15, responseMs: 1000 },
       { prompt: '7 x 4', expected: 28, answered: null, responseMs: 0 }
     ];
-    const { score } = scoreDrill('multiplication', questions, 60000);
-    // 50% accuracy = 40 base, plus speed bonus
+    const { score, accuracy, completion } = scoreDrill('multiplication', questions, 60000);
+    // The headline `score` stays correct-over-TOTAL (== accuracy × completion) so
+    // existing history is unchanged: 1/2 → 40 base + speed bonus.
     expect(score).toBeGreaterThanOrEqual(40);
     expect(score).toBeLessThanOrEqual(60);
+    // …but the separated metrics report the answered-only accuracy (100%) and the
+    // completion (50%) independently.
+    expect(accuracy).toBe(1);
+    expect(completion).toBe(0.5);
   });
 
   it('slow responses reduce speed bonus', () => {
@@ -805,5 +849,131 @@ describe('resolveDrillConfig — progressive multiplication', () => {
     expect(progress.levels[0].mastered).toBe(true);
     expect(progress.thresholds.minSamples).toBeGreaterThan(0);
     expect(progress.windowDays).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// SCORING MODEL: accuracy vs speed separation, adaptive signal, legacy fallback
+// (issue #2094)
+// =============================================================================
+
+describe('deriveTaskAccuracy / deriveTaskCompletion — legacy-session fallback', () => {
+  it('prefers the persisted fields when present', () => {
+    const task = { accuracy: 0.75, completion: 0.5, questions: [{ answered: 1, correct: true }] };
+    expect(deriveTaskAccuracy(task)).toBe(0.75);
+    expect(deriveTaskCompletion(task)).toBe(0.5);
+  });
+
+  it('derives answered-only accuracy from questions[] for legacy tasks', () => {
+    // 1 correct of 2 ANSWERED (a 3rd is unanswered) → 0.5 accuracy, 2/3 completion.
+    const task = {
+      questions: [
+        { answered: 5, correct: true },
+        { answered: 9, correct: false },
+        { answered: null, correct: false },
+      ],
+    };
+    expect(deriveTaskAccuracy(task)).toBe(0.5);
+    expect(deriveTaskCompletion(task)).toBeCloseTo(2 / 3, 5);
+  });
+
+  it('returns null (never NaN) when there is nothing to derive from', () => {
+    expect(deriveTaskAccuracy({ questions: [] })).toBe(null);
+    expect(deriveTaskAccuracy({ questions: [{ answered: null }] })).toBe(null);
+    expect(deriveTaskCompletion({ questions: [] })).toBe(null);
+    expect(deriveTaskCompletion({})).toBe(null);
+  });
+});
+
+describe('getPostStats — accuracy/completion aggregation', () => {
+  const today = new Date().toISOString().split('T')[0];
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function mockSessions(sessions) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      if (String(path).includes('post-sessions')) return Promise.resolve({ sessions });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  it('aggregates answered-only accuracy and completion per drill, mixing new + legacy tasks', async () => {
+    mockSessions([
+      {
+        date: today,
+        score: 50,
+        tasks: [
+          // New-shape task: explicit metrics.
+          { module: 'mental-math', type: 'doubling-chain', score: 60, accuracy: 1, completion: 0.5, questions: [] },
+          // Legacy task (no metrics): derived from questions → accuracy 0.5, completion 1.
+          { module: 'mental-math', type: 'doubling-chain', score: 40, questions: [
+            { answered: 1, correct: true }, { answered: 2, correct: false },
+          ] },
+        ],
+      },
+    ]);
+    const stats = await getPostStats(30);
+    const key = 'mental-math:doubling-chain';
+    // accuracy mean of 1.0 and 0.5 = 0.75; completion mean of 0.5 and 1.0 = 0.75.
+    expect(stats.byDrillAccuracy[key]).toBeCloseTo(0.75, 5);
+    expect(stats.byDrillCompletion[key]).toBeCloseTo(0.75, 5);
+    // Blended byDrill is unchanged (mean of the two scores).
+    expect(stats.byDrill[key]).toBe(50);
+    expect(stats.byDrillCount[key]).toBe(2);
+  });
+});
+
+describe('adaptive signal is accuracy-driven — fast-sloppy vs slow-accurate diverge (issue #2094)', () => {
+  const today = new Date().toISOString().split('T')[0];
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function mockSessions(sessions) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions });
+      if (p.includes('post-config')) return Promise.resolve({ adaptive: { enabled: true } });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  // Three doubling-chain tasks (meets minSamples=3), fully completed, at a given
+  // answered-only accuracy — the blended score is deliberately identical across
+  // the two scenarios to prove the OLD blended-score signal could not tell them apart.
+  function accSessions(accuracy) {
+    return [{
+      date: today,
+      score: 55,
+      tasks: Array.from({ length: 3 }, () => ({
+        module: 'mental-math', type: 'doubling-chain', score: 55,
+        accuracy, completion: 1, questions: [],
+      })),
+    }];
+  }
+
+  it('slow-but-accurate (accuracy 1.0) adapts HARDER', async () => {
+    mockSessions(accSessions(1));
+    const { adaptive } = await resolveDrillConfig('doubling-chain', { steps: 8 });
+    expect(adaptive.reason).toBe('harder');
+    expect(adaptive.direction).toBe(1);
+  });
+
+  it('fast-but-sloppy (accuracy 0.0) adapts EASIER — same blended score, opposite direction', async () => {
+    mockSessions(accSessions(0));
+    const { adaptive } = await resolveDrillConfig('doubling-chain', { steps: 8 });
+    expect(adaptive.reason).toBe('easier');
+    expect(adaptive.direction).toBe(-1);
+  });
+
+  it('low completion holds difficulty even at high accuracy', async () => {
+    const sessions = [{
+      date: today, score: 55,
+      tasks: Array.from({ length: 3 }, () => ({
+        module: 'mental-math', type: 'doubling-chain', score: 55,
+        accuracy: 1, completion: 0.2, questions: [],
+      })),
+    }];
+    mockSessions(sessions);
+    const { adaptive } = await resolveDrillConfig('doubling-chain', { steps: 8 });
+    expect(adaptive.reason).toBe('insufficient-completion');
+    expect(adaptive.applied).toBe(false);
   });
 });

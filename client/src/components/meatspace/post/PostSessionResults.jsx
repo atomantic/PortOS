@@ -73,14 +73,26 @@ export default function PostSessionResults({ session, tags = {}, onSaved, onBack
               const summary = result.evaluation?.summary;
               subtitle = summary || `${result.responses?.length || 0} responses`;
             } else {
-              const correct = (result.questions || []).filter(q => q.correct).length;
-              const total = (result.questions || []).length;
-              const accuracyPct = total > 0 ? Math.round((correct / total) * 100) : 0;
-              const answered = (result.questions || []).filter(q => q.answered !== null);
-              const avgMs = answered.length > 0
-                ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length)
-                : 0;
-              subtitle = `${accuracyPct}% accuracy · ${(avgMs / 1000).toFixed(1)}s avg`;
+              // Accuracy (answered-only) and speed are shown separately from the
+              // blended score (issue #2094). Prefer the server-persisted metrics;
+              // fall back to deriving from questions[] for legacy sessions, and
+              // surface completion only when the drill wasn't fully answered.
+              const questions = result.questions || [];
+              const answered = questions.filter(q => q.answered !== null);
+              const accPct = result.accuracy != null
+                ? Math.round(result.accuracy * 100)
+                : (answered.length > 0 ? Math.round((answered.filter(q => q.correct).length / answered.length) * 100) : null);
+              const compPct = result.completion != null
+                ? Math.round(result.completion * 100)
+                : (questions.length > 0 ? Math.round((answered.length / questions.length) * 100) : null);
+              const avgMs = result.avgResponseMs != null
+                ? result.avgResponseMs
+                : (answered.length > 0 ? Math.round(answered.reduce((s, q) => s + q.responseMs, 0) / answered.length) : null);
+              const parts = [];
+              if (accPct != null) parts.push(`${accPct}% acc`);
+              if (avgMs != null) parts.push(`${(avgMs / 1000).toFixed(1)}s`);
+              if (compPct != null && compPct < 100) parts.push(`${compPct}% done`);
+              subtitle = parts.join(' · ') || `${questions.length} questions`;
             }
 
             const drillScoreColor = (result.score || 0) >= 80 ? 'text-port-success' :

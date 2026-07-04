@@ -179,10 +179,13 @@ export async function submitPostSession(sessionData) {
     }
 
     // Cognitive drills: deterministic — recompute the answer key from the
-    // generated drillData (never trust client `correct`/`score`).
+    // generated drillData (never trust client `correct`/`score`). Spread the
+    // full scored bundle so the separated metrics (accuracy/completion/
+    // avgResponseMs, plus n-back SDT counts and reaction-time median/best) are
+    // persisted alongside the blended score (issue #2094).
     if (COGNITIVE_DRILL_TYPES.includes(rest.type)) {
-      const { score, questions } = scoreCognitiveDrill(rest.type, rest.drillData, rest.questions || []);
-      return { ...rest, questions, score };
+      const scored = scoreCognitiveDrill(rest.type, rest.drillData, rest.questions || []);
+      return { ...rest, ...scored };
     }
 
     // Math drills: strip correct from individual questions and rescore
@@ -192,8 +195,8 @@ export async function submitPostSession(sessionData) {
     });
     const drillConfig = config.mentalMath?.drillTypes?.[rest.type] || {};
     const timeLimitMs = (drillConfig.timeLimitSec || 120) * 1000;
-    const { score, questions } = scoreDrill(rest.type, sanitizedQuestions, timeLimitMs, rest.config || drillConfig);
-    return { ...rest, questions, score };
+    const scored = scoreDrill(rest.type, sanitizedQuestions, timeLimitMs, rest.config || drillConfig);
+    return { ...rest, ...scored };
   });
 
   const session = {
@@ -296,6 +299,32 @@ export function computePostStreaks(sessions, todayStr) {
   return { completedToday, currentStreak, longestStreak, lastDate, todayScore };
 }
 
+/**
+ * Answered-only accuracy for a scored task, tolerant of legacy sessions that
+ * predate the persisted `accuracy` field (issue #2094). Order: the stored value
+ * first, else derive from `questions[]` (correct over ANSWERED, not total), else
+ * `null` — never NaN. Used by stats aggregation and the adaptive signal so old
+ * and new session shapes both read cleanly.
+ */
+export function deriveTaskAccuracy(task) {
+  if (typeof task?.accuracy === 'number' && !Number.isNaN(task.accuracy)) return task.accuracy;
+  const qs = Array.isArray(task?.questions) ? task.questions : [];
+  const answered = qs.filter(q => q?.answered != null);
+  if (!answered.length) return null;
+  return answered.filter(q => q?.correct).length / answered.length;
+}
+
+/**
+ * Completion (answered / total) for a scored task, with the same legacy fallback
+ * as deriveTaskAccuracy. `null` when there are no questions to derive from.
+ */
+export function deriveTaskCompletion(task) {
+  if (typeof task?.completion === 'number' && !Number.isNaN(task.completion)) return task.completion;
+  const qs = Array.isArray(task?.questions) ? task.questions : [];
+  if (!qs.length) return null;
+  return qs.filter(q => q?.answered != null).length / qs.length;
+}
+
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
   // Streaks are computed over ALL history, independent of the stats window.
@@ -309,7 +338,7 @@ export async function getPostStats(days = 30) {
   }
 
   if (recent.length === 0) {
-    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {}, byDrillCount: {}, ...streaks };
+    return { days, sessionCount: 0, overall: null, byModule: {}, byDrill: {}, byDrillCount: {}, byDrillAccuracy: {}, byDrillCompletion: {}, ...streaks };
   }
 
   const scores = recent.map(s => s.score);
@@ -317,6 +346,11 @@ export async function getPostStats(days = 30) {
 
   const byModule = {};
   const byDrill = {};
+  // Accuracy (answered-only) and completion tracked per drill alongside the
+  // blended score, so reporting and the adaptive signal can separate "how right"
+  // from "how fast/complete" (issue #2094). Legacy tasks are derived, not skipped.
+  const byDrillAccuracyList = {};
+  const byDrillCompletionList = {};
   for (const session of recent) {
     for (const task of session.tasks) {
       if (!byModule[task.module]) byModule[task.module] = [];
@@ -325,18 +359,30 @@ export async function getPostStats(days = 30) {
       const key = `${task.module}:${task.type}`;
       if (!byDrill[key]) byDrill[key] = [];
       byDrill[key].push(task.score);
+
+      const acc = deriveTaskAccuracy(task);
+      if (acc != null) (byDrillAccuracyList[key] ||= []).push(acc);
+      const comp = deriveTaskCompletion(task);
+      if (comp != null) (byDrillCompletionList[key] ||= []).push(comp);
     }
   }
 
   const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+  const avgFrac = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
   for (const key of Object.keys(byModule)) byModule[key] = avg(byModule[key]);
   // byDrillCount is the per-drill sample size, used to gate adaptive difficulty
   // (don't adapt off a single lucky/unlucky run). Captured before averaging.
   const byDrillCount = {};
   for (const key of Object.keys(byDrill)) byDrillCount[key] = byDrill[key].length;
   for (const key of Object.keys(byDrill)) byDrill[key] = avg(byDrill[key]);
+  // Per-drill accuracy (0-1) and completion (0-1) means. Separate sample lists so
+  // a drill with no derivable accuracy still reports a completion figure.
+  const byDrillAccuracy = {};
+  for (const key of Object.keys(byDrillAccuracyList)) byDrillAccuracy[key] = avgFrac(byDrillAccuracyList[key]);
+  const byDrillCompletion = {};
+  for (const key of Object.keys(byDrillCompletionList)) byDrillCompletion[key] = avgFrac(byDrillCompletionList[key]);
 
-  return { days, sessionCount: recent.length, overall, byModule, byDrill, byDrillCount, ...streaks };
+  return { days, sessionCount: recent.length, overall, byModule, byDrill, byDrillCount, byDrillAccuracy, byDrillCompletion, ...streaks };
 }
 
 // =============================================================================
@@ -477,15 +523,23 @@ export function generateDrill(type, config = {}) {
 
 /**
  * Read the recent performance signal for one math drill type from scored
- * sessions. Returns { score, samples } — score is the avg session score (0-100)
- * over the adaptive window; samples is how many task samples backed it.
+ * sessions. Returns { score, samples, completion } where `score` is now the avg
+ * ACCURACY (0-100, answered-only) — not the blended session score — so a
+ * fast-but-sloppy run and a slow-but-accurate run produce different adaptive
+ * directions (issue #2094). `completion` (0-1) lets adaptDrillConfig skip
+ * adaptation when the user barely reached the drill (too little signal).
  */
 async function getAdaptiveSignal(type) {
   const stats = await getPostStats(ADAPTIVE_DEFAULTS.windowDays);
   const key = `${MATH_MODULE}:${type}`;
-  const score = stats.byDrill?.[key];
+  const accuracy = stats.byDrillAccuracy?.[key];
   const samples = stats.byDrillCount?.[key] || 0;
-  return { score: score == null ? null : score, samples };
+  const completion = stats.byDrillCompletion?.[key];
+  return {
+    score: accuracy == null ? null : Math.round(accuracy * 100),
+    samples,
+    completion: completion == null ? null : completion,
+  };
 }
 
 /**
@@ -615,16 +669,21 @@ export async function getAdaptivePreview() {
   const drills = {};
   for (const type of Object.keys(ADAPTIVE_SPECS)) {
     const key = `${MATH_MODULE}:${type}`;
+    const accuracy = stats.byDrillAccuracy?.[key];
+    const completion = stats.byDrillCompletion?.[key];
     const signal = {
-      score: stats.byDrill?.[key] == null ? null : stats.byDrill[key],
+      // Preview mirrors the live adaptive signal: accuracy (0-100), not the
+      // blended score, plus completion for the low-completion skip (issue #2094).
+      score: accuracy == null ? null : Math.round(accuracy * 100),
       samples: stats.byDrillCount?.[key] || 0,
+      completion: completion == null ? null : completion,
     };
     // Base off the user's saved config so the preview matches what a session
     // would actually use; adaptDrillConfig falls back to the spec base per field.
     drills[type] = adaptDrillConfig(type, savedDrills[type] || {}, signal);
   }
 
-  return { enabled, windowDays: ADAPTIVE_DEFAULTS.windowDays, thresholds: { highScore: ADAPTIVE_DEFAULTS.highScore, lowScore: ADAPTIVE_DEFAULTS.lowScore, minSamples: ADAPTIVE_DEFAULTS.minSamples }, drills };
+  return { enabled, windowDays: ADAPTIVE_DEFAULTS.windowDays, thresholds: { highScore: ADAPTIVE_DEFAULTS.highScore, lowScore: ADAPTIVE_DEFAULTS.lowScore, minSamples: ADAPTIVE_DEFAULTS.minSamples, minCompletion: ADAPTIVE_DEFAULTS.minCompletion }, drills };
 }
 
 // =============================================================================
@@ -682,16 +741,34 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
   });
 
   const answered = recomputed.filter(q => q.answered != null);
+  const answeredCount = answered.length;
+  const totalCount = recomputed.length;
   const correctCount = recomputed.filter(q => q.correct).length;
-  const correctRatio = correctCount / recomputed.length;
+  // Blended `score` stays keyed on correct-over-TOTAL (== accuracy × completion),
+  // so the headline gamification number is unchanged for existing sessions and
+  // fully-answered tasks (back-compat). The separated metrics below are what
+  // reporting and the adaptive signal now consume (issue #2094).
+  const correctRatio = correctCount / totalCount;
 
   // Clamp responseMs to [0, timeLimitMs] to prevent inflated speed bonuses
   const totalResponseMs = answered.reduce((sum, q) => sum + Math.min(Math.max(q.responseMs || 0, 0), timeLimitMs), 0);
-  const avgResponseMs = answered.length > 0 ? totalResponseMs / answered.length : timeLimitMs;
+  // Speed bonus falls back to the full time window when nothing was answered, so
+  // an empty drill scores 0 (no accuracy, no bonus) rather than dividing by zero.
+  const avgForBonus = answeredCount > 0 ? totalResponseMs / answeredCount : timeLimitMs;
 
-  const speedBonus = Math.max(0, 1 - avgResponseMs / timeLimitMs);
+  const speedBonus = Math.max(0, 1 - avgForBonus / timeLimitMs);
   const score = Math.round((correctRatio * 0.8 + speedBonus * 0.2) * 100);
-  return { score: Math.min(100, Math.max(0, score)), questions: recomputed };
+  return {
+    score: Math.min(100, Math.max(0, score)),
+    questions: recomputed,
+    // Accuracy is answered-only: running out of time reduces `completion`, never
+    // accuracy (issue #2094). `null` (never NaN) when nothing was answered.
+    accuracy: answeredCount ? correctCount / answeredCount : null,
+    completion: totalCount ? answeredCount / totalCount : null,
+    avgResponseMs: answeredCount ? Math.round(totalResponseMs / answeredCount) : null,
+    answeredCount,
+    totalCount,
+  };
 }
 
 function computeSessionScore(tasks) {

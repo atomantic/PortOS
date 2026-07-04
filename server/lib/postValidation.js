@@ -137,6 +137,25 @@ const taskResultSchema = z.object({
   // every other drill type.
   memoryItemId: z.string().optional(),
   score: z.number().min(0).max(100).optional(),
+  // Separated performance metrics stored alongside the blended `score` (issue
+  // #2094). The server always recomputes these from the drill answer key on
+  // submit, so an incoming client value is advisory — accepted (optional,
+  // nullable where a metric can be genuinely absent) rather than rejected, to
+  // keep the request/stored shapes in parity. `accuracy`/`completion` are 0-1
+  // fractions; `avgResponseMs`/`medianMs`/`bestMs` are milliseconds. The n-back
+  // signal-detection counts and reaction-time latency extremes ride along too.
+  accuracy: z.number().min(0).max(1).nullable().optional(),
+  completion: z.number().min(0).max(1).nullable().optional(),
+  avgResponseMs: z.number().min(0).nullable().optional(),
+  answeredCount: z.number().int().min(0).optional(),
+  totalCount: z.number().int().min(0).optional(),
+  medianMs: z.number().min(0).nullable().optional(),
+  bestMs: z.number().min(0).nullable().optional(),
+  span: z.number().int().min(0).optional(),
+  hits: z.number().int().min(0).optional(),
+  misses: z.number().int().min(0).optional(),
+  falseAlarms: z.number().int().min(0).optional(),
+  correctRejections: z.number().int().min(0).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(100).optional(),
     breakdown: z.array(z.object({

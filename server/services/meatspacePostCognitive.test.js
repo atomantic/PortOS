@@ -155,7 +155,7 @@ describe('cognitive drill generators', () => {
 });
 
 describe('cognitive drill scorers (recompute the answer key, never trust client)', () => {
-  it('n-back scores a perfect run near the top and rewards no wrong presses', () => {
+  it('n-back scores a perfect run at 100 via signal-detection (all targets hit, no false alarms)', () => {
     // Deterministic sequence: A B A B A → with n=2, positions 2,3,4 are all targets.
     const drillData = { type: 'n-back', config: { n: 2, stimulusMs: 2000 }, sequence: ['A', 'B', 'A', 'B', 'A'] };
     const questions = [
@@ -163,25 +163,61 @@ describe('cognitive drill scorers (recompute the answer key, never trust client)
       { index: 3, answered: 'match', responseMs: 400 },
       { index: 4, answered: 'match', responseMs: 400 },
     ];
-    const { score, questions: scored } = scoreCognitiveDrill('n-back', drillData, questions);
+    const { score, accuracy, hits, misses, falseAlarms, correctRejections, questions: scored } =
+      scoreCognitiveDrill('n-back', drillData, questions);
     expect(scored.every(q => q.correct)).toBe(true);
-    // Score is the shared 80% accuracy + 20% speed blend: perfect accuracy floors
-    // it at 80, and a 400ms avg response against the 2000ms stimulus window adds
-    // 0.2 × (1 − 400/2000) × 100 = 16 → 96. (100 is only reached at instantaneous
-    // response, so it's an aspirational ceiling, like a golf score.)
-    expect(score).toBe(96);
+    // Balanced accuracy — all 3 targets hit (hitRate 1), no non-targets to falsely
+    // alarm on — is 1.0 → 100. Speed no longer folds into the n-back score.
+    expect(score).toBe(100);
+    expect(accuracy).toBe(1);
+    expect({ hits, misses, falseAlarms, correctRejections }).toEqual({ hits: 3, misses: 0, falseAlarms: 0, correctRejections: 0 });
   });
 
   it('n-back marks a false-positive press wrong even if client claims correct', () => {
     const drillData = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'C', 'D'] };
     // index 2 (C) is NOT a match of index 0 (A); pressing "match" is wrong.
-    const { score, questions } = scoreCognitiveDrill('n-back', drillData, [
+    const { score, falseAlarms, correctRejections, questions } = scoreCognitiveDrill('n-back', drillData, [
       { index: 2, answered: 'match', correct: true, responseMs: 300 },
       { index: 3, answered: null, responseMs: 0 },
     ]);
     expect(questions[0].correct).toBe(false); // client's correct:true ignored
     expect(questions[1].correct).toBe(true); // correctly withheld
-    expect(score).toBeLessThan(100);
+    // Only non-targets present: one false alarm + one correct rejection →
+    // correct-rejection rate 0.5 → score 50.
+    expect(falseAlarms).toBe(1);
+    expect(correctRejections).toBe(1);
+    expect(score).toBe(50);
+  });
+
+  it('n-back: never responding scores ~50 (chance), not ~70 — the do-nothing exploit is closed', () => {
+    // A B A B A with n=2 → indices 2,3,4 are targets; a full-length sequence would
+    // also carry non-targets, so include one. Sequence A B A C A: idx2=A(target),
+    // idx3=C(non-target), idx4=A(target).
+    const drillData = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'A', 'C', 'A'] };
+    const questions = [
+      { index: 2, answered: null, responseMs: 0 },
+      { index: 3, answered: null, responseMs: 0 },
+      { index: 4, answered: null, responseMs: 0 },
+    ];
+    const { score, hits, misses, falseAlarms, correctRejections } = scoreCognitiveDrill('n-back', drillData, questions);
+    // 2 targets missed (hitRate 0), 1 non-target correctly rejected (CR rate 1) →
+    // balanced 0.5 → 50. (Old raw-accuracy scoring would have paid ~67 here.)
+    expect({ hits, misses, falseAlarms, correctRejections }).toEqual({ hits: 0, misses: 2, falseAlarms: 0, correctRejections: 1 });
+    expect(score).toBe(50);
+  });
+
+  it('n-back: always pressing is equally penalised for false alarms (~50)', () => {
+    const drillData = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'A', 'C', 'A'] };
+    const questions = [
+      { index: 2, answered: 'match', responseMs: 300 },
+      { index: 3, answered: 'match', responseMs: 300 },
+      { index: 4, answered: 'match', responseMs: 300 },
+    ];
+    const { score, hits, misses, falseAlarms, correctRejections } = scoreCognitiveDrill('n-back', drillData, questions);
+    // 2 targets hit (hitRate 1), 1 non-target false-alarmed (CR rate 0) →
+    // balanced 0.5 → 50.
+    expect({ hits, misses, falseAlarms, correctRejections }).toEqual({ hits: 2, misses: 0, falseAlarms: 1, correctRejections: 0 });
+    expect(score).toBe(50);
   });
 
   it('digit-span expects the reversed sequence for the backward variant', () => {
@@ -253,13 +289,46 @@ describe('cognitive drill scorers (recompute the answer key, never trust client)
 
   it('reaction-time simple mode marks a false start wrong even with a fast responseMs', () => {
     const drillData = { type: 'reaction-time', config: { mode: 'simple' }, trials: [{ delayMs: 1000 }, { delayMs: 1000 }] };
-    const { questions, score } = scoreCognitiveDrill('reaction-time', drillData, [
+    const { questions, score, medianMs, bestMs } = scoreCognitiveDrill('reaction-time', drillData, [
       { index: 0, answered: 'react', responseMs: 220, falseStart: false },
       { index: 1, answered: null, responseMs: 0, falseStart: true, correct: true }, // client lied "true"
     ]);
     expect(questions[0].correct).toBe(true);
     expect(questions[1].correct).toBe(false);
+    // The false-start trial is invalidated — only the 220ms press drives the score.
+    expect(medianMs).toBe(220);
+    expect(bestMs).toBe(220);
     expect(score).toBeGreaterThan(0);
+  });
+
+  it('reaction-time score is latency-driven: faster median beats slower median', () => {
+    const drillData = { type: 'reaction-time', config: { mode: 'simple' }, trials: [{ delayMs: 800 }, { delayMs: 800 }, { delayMs: 800 }] };
+    const fast = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 'react', responseMs: 200 },
+      { index: 1, answered: 'react', responseMs: 240 },
+      { index: 2, answered: 'react', responseMs: 260 },
+    ]);
+    const slow = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 'react', responseMs: 500 },
+      { index: 1, answered: 'react', responseMs: 520 },
+      { index: 2, answered: 'react', responseMs: 540 },
+    ]);
+    expect(fast.medianMs).toBe(240);
+    expect(slow.medianMs).toBe(520);
+    expect(fast.score).toBeGreaterThan(slow.score);
+    // simple-mode reference curve: 200ms→100, 600ms→0. Median 240 → round(100*(600-240)/400)=90.
+    expect(fast.score).toBe(90);
+  });
+
+  it('reaction-time scores 0 when every trial is a false start (no valid latency)', () => {
+    const drillData = { type: 'reaction-time', config: { mode: 'simple' }, trials: [{ delayMs: 500 }, { delayMs: 500 }] };
+    const { score, medianMs, bestMs } = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: null, responseMs: 0, falseStart: true },
+      { index: 1, answered: null, responseMs: 0, falseStart: true },
+    ]);
+    expect(medianMs).toBe(null);
+    expect(bestMs).toBe(null);
+    expect(score).toBe(0);
   });
 
   it('reaction-time choice mode requires the answered index to match the trial target', () => {
