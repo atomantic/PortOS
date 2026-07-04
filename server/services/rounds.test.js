@@ -528,6 +528,60 @@ describe('rounds service', () => {
     }
   });
 
+  it('the corrected Hey Ho melody is D-centered with all naturals (no B, issue #2105)', async () => {
+    const songs = await svc.listRounds();
+    const heyHo = songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
+    const parsed = parseScore(heyHo.score);
+    expect(parsed.errors).toEqual([]);
+    const letters = parsed.measures.flatMap((m) => m.notes.filter((n) => !n.rest).map((n) => n.pitch.letter));
+    // The old mis-transcription centered on G and climbed to a B-natural major
+    // third; the fix removes every B and re-centers on D.
+    expect(letters).not.toContain('B');
+    expect(letters[0]).toBe('D');
+    // The pitch content is the D natural-minor pentachord D–E–F–G–A only.
+    expect([...new Set(letters)].sort()).toEqual(['A', 'D', 'E', 'F', 'G']);
+  });
+
+  it('the D-minor quodlibet trio has no {B,F} tritone at any aligned beat (issue #2105)', async () => {
+    const songs = await svc.listRounds();
+    const trio = ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-rose-rose-rose-red']
+      .map((id) => songs.find((s) => s.id === id));
+    trio.forEach((s, i) => expect(s, `missing quodlibet round ${i}`).toBeTruthy());
+
+    // Expand a score into an eighth-note grid of sounding pitch letters (one entry
+    // per 0.5-beat slot; null for a rest). Asserts a clean parse and full 4/4 bars
+    // along the way, so the trio's mechanical validity rides on this check too.
+    const GRID = 0.5;
+    const toGrid = (round) => {
+      const parsed = parseScore(round.score);
+      expect(parsed.errors, `${round.title}: ${parsed.errors.join('; ')}`).toEqual([]);
+      const grid = [];
+      for (const [i, m] of parsed.measures.entries()) {
+        expect(Math.abs(m.beats - 4) < 1e-9, `${round.title} bar ${i + 1} = ${m.beats} beats`).toBe(true);
+        for (const n of m.notes) {
+          const slots = Math.round(n.duration.beats / GRID);
+          for (let k = 0; k < slots; k += 1) grid.push(n.rest ? null : n.pitch.letter);
+        }
+      }
+      return grid;
+    };
+
+    const grids = trio.map(toGrid);
+    // Align the three looping rounds over the least common multiple of their
+    // lengths and assert no beat ever sounds a B and an F together (the tritone
+    // that the old G-centered Hey Ho produced against the partners' F naturals).
+    const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+    const lcmLen = grids.reduce((acc, g) => (acc * g.length) / gcd(acc, g.length), 1);
+    for (let i = 0; i < lcmLen; i += 1) {
+      const sounding = new Set();
+      for (const g of grids) { const p = g[i % g.length]; if (p) sounding.add(p); }
+      expect(
+        sounding.has('B') && sounding.has('F'),
+        `B-against-F tritone at slot ${i}: {${[...sounding].sort().join(',')}}`,
+      ).toBe(false);
+    }
+  });
+
   it('sanitizes partnerRoundIds — drops blanks, dedupes, and drops self-references', () => {
     const song = svc.sanitizeRound({
       id: 'seed-rose-rose-rose-red',

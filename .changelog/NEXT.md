@@ -7,6 +7,7 @@
 ## Rounds
 
 - **[issue-2104] Fixed: 500 Miles' reference TikTok videos now show up on older installs.** The built-in "500 Miles" round shipped with three TikTok reference performances, but any install that already had its data saved from before those were added never picked them up — the Reference material section stayed empty. A one-time backfill now restores the three references for those installs, without touching anything you may have added of your own.
+- **[issue-2105] Fixed: "Hey Ho Nobody Home" now sings in D minor and stacks cleanly with its partner rounds.** The built-in round shipped with a mis-transcribed melody — centered on G with a major third — that contradicted its own key label and sounded a harsh clash when stacked with Ah Poor Bird and Rose Rose Rose Red in the Round Stack view. The melody is now the correct D-centered, all-natural minor tune (same shape, just the right key), so the three-round quodlibet is consonant. Older installs get the corrected melody automatically; a score you customized yourself is left untouched (use "Refresh from template" to pull the fix).
 
 ## Media
 

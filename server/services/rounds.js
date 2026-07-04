@@ -513,18 +513,25 @@ const canonVoice = (melody, { delayBars, id, label, role }) => {
 
 // Hey Ho Nobody Home — six bars, three 2-bar phrases. The classic 3-voice round:
 // voices enter one phrase (2 bars) apart, and the three phrases stack into the
-// full minor chord.
-const HEY_HO_MELODY = [
+// full D-minor chord. Centered on D with all naturals (score header `key: C` =
+// no key signature), so it stacks cleanly with Ah Poor Bird and Rose Rose Rose
+// Red in the D-minor quodlibet: phrase 1 (D/A) + phrase 2 (D–E–F) + phrase 3
+// (A–G–F–E) outline a D-minor triad, with no B-natural to sound a tritone
+// against the partners' F. Contour matches the Wikibooks Songbook (E-minor) and
+// Kodály teaching (D natural-minor) transcriptions, transposed to D
+// (1-1-2-2-♭3-♭3-♭3-♭3-2 in phrase 2). Exported so migration 158 can restore it
+// onto installs that still hold the old G-centered, major-third transcription.
+export const HEY_HO_MELODY = [
   'clef: treble',
   'key: C',
   'time: 4/4',
   'tempo: 76',
   '',
-  '| G4h(Hey) D4h(ho) | G4q(no-) G4e(bo-) G4e(dy) D4h(home) |',
-  '| G4q(Meat) G4q(nor) A4q(drink) A4q(nor) | B4e(mon-) B4e(ey) B4e(have) B4e(I) A4h(none) |',
-  '| D5q(Still) C5q(I) D5q(will) C5q(be) | B4h(mer-) A4h(ry) |',
+  '| D4h(Hey) A3h(ho) | D4q(no-) D4e(bo-) D4e(dy) A3h(home) |',
+  '| D4q(Meat) D4q(nor) E4q(drink) E4q(nor) | F4e(mon-) F4e(ey) F4e(have) F4e(I) E4h(none) |',
+  '| A4q(Still) G4q(I) A4q(will) G4q(be) | F4h(mer-) E4h(ry) |',
 ].join('\n');
-const HEY_HO_SCORE_PARTS = [
+export const HEY_HO_SCORE_PARTS = [
   canonVoice(HEY_HO_MELODY, { delayBars: 2, id: 'part-heyho-v2', label: 'Voice 2', role: 'voice-2' }),
   canonVoice(HEY_HO_MELODY, { delayBars: 4, id: 'part-heyho-v3', label: 'Voice 3', role: 'voice-3' }),
 ];
@@ -710,7 +717,7 @@ export const SEED_ROUNDS = [
     key: 'D minor (Dorian)',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Scored in D with no key signature — D Dorian, B natural. Melody after Jack Campin\'s D-minor round transcription.',
+    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Centered on D with no key signature — all naturals (D Dorian / natural minor), no B. Melody after the Wikibooks Songbook and Kodály teaching transcriptions, transposed to a D tonal center.',
     score: HEY_HO_MELODY,
     // Canonic voice stack: the melody entering one phrase (2 bars) late per voice
     // — the round sung against itself. Derived from HEY_HO_MELODY so it can't
