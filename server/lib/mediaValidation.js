@@ -20,6 +20,15 @@ export const citySnapshotConfigSchema = z.object({
   maxSnapshots: z.number().int().min(10).max(100000).optional()
 });
 
+// iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
+// by default and only reads chat.db when enabled (needs macOS Full Disk Access).
+// Validated as a settings slice on PUT /api/settings; service-side DEFAULT_CONFIG
+// fills any absent field so an install with no `imessage` key still resolves.
+export const imessageConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
 // Shared LoRA-training parameter bounds — used by both the settings-slice
 // defaults and the per-run override on POST /api/lora-training/runs.
 const loraTrainingParamsSchema = z.object({

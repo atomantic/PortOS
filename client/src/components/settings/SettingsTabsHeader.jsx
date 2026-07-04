@@ -18,6 +18,7 @@ export const TABS = [
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'embeddings', label: 'Embeddings', to: '/settings/embeddings' },
   { id: 'general', label: 'General', to: '/settings/general' },
+  { id: 'imessage', label: 'iMessage', to: '/settings/imessage' },
   { id: 'local-llm', label: 'Local LLMs', to: '/settings/local-llm' },
   { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },
   { id: 'prompts', label: 'Prompts', to: '/prompts' },

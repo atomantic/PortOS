@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cadenceStatus } from '../lib/tribeCadence.js';
-import { buildPersonMatchIndex, matchPeople, normalizeIdentifier } from '../lib/tribeMatch.js';
+import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import * as calendarSync from './calendarSync.js';
 
 // Default check-in cadence (days) per ring. Mirrored on the client in
@@ -68,6 +68,20 @@ export function normalizeEmails(emails) {
   return [...seen];
 }
 
+// Phone handles used to match a person to iMessage/Signal counterparts (#2151).
+// E.164-normalized + de-duplicated so matching (which also normalizes) is stable.
+export function normalizePhones(phones) {
+  const list = Array.isArray(phones)
+    ? phones
+    : (phones == null ? [] : String(phones).split(','));
+  const seen = new Set();
+  for (const raw of list) {
+    const key = normalizePhone(raw);
+    if (key) seen.add(key);
+  }
+  return [...seen];
+}
+
 export function rowToPerson(row) {
   return {
     id: row.id,
@@ -81,6 +95,7 @@ export function rowToPerson(row) {
     energy: row.energy || 'steady',
     tags: row.tags || [],
     emails: row.emails || [],
+    phones: row.phones || [],
     nextMove: row.next_move || '',
     notes: row.notes || '',
     touchpointCount: Number(row.touchpoint_count || 0),
@@ -227,8 +242,8 @@ export async function createPerson(data) {
   const result = await query(
     `INSERT INTO tribe_people (
       id, name, relationship, ring, cadence_days, last_contact_on, channel,
-      energy, tags, emails, next_move, notes, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+      energy, tags, emails, phones, next_move, notes, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
     RETURNING *, 0 AS touchpoint_count, 0 AS linked_memory_count`,
     [
       id,
@@ -241,6 +256,7 @@ export async function createPerson(data) {
       data.energy || 'steady',
       normalizeTags(data.tags),
       normalizeEmails(data.emails),
+      normalizePhones(data.phones),
       data.nextMove || '',
       data.notes || '',
     ],
@@ -264,8 +280,9 @@ export async function updatePerson(id, updates) {
          energy = $8,
          tags = $9,
          emails = $10,
-         next_move = $11,
-         notes = $12,
+         phones = $11,
+         next_move = $12,
+         notes = $13,
          updated_at = NOW()
      WHERE id = $1 AND deleted = FALSE
      RETURNING *,
@@ -282,6 +299,7 @@ export async function updatePerson(id, updates) {
       next.energy || 'steady',
       normalizeTags(next.tags),
       normalizeEmails(next.emails),
+      normalizePhones(next.phones),
       next.nextMove || '',
       next.notes || '',
     ],

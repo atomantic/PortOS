@@ -11,6 +11,7 @@ import EmbeddingsTab from '../components/settings/EmbeddingsTab';
 import { LocalLlmTab } from '../components/settings/LocalLlmTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
+import { IMessageTab } from '../components/settings/IMessageTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
@@ -35,6 +36,7 @@ export default function Settings() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'general': return <GeneralTab />;
+      case 'imessage': return <IMessageTab />;
       case 'ai-assignments': return <AiAssignmentsTab />;
       case 'api-access': return <ApiAccessTab />;
       case 'autofixer': return <AutofixerTab />;

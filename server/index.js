@@ -48,6 +48,7 @@ import catalogRoutes from './routes/catalog.js';
 import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
 import timelineRoutes from './routes/timeline.js';
+import imessageRoutes from './routes/imessage.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
@@ -168,6 +169,7 @@ import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
+import { startImessageScheduler } from './services/imessageScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
@@ -473,6 +475,7 @@ app.use('/api/catalog', catalogRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/timeline', timelineRoutes);
+app.use('/api/imessage', imessageRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain/import', brainImportRoutes);
@@ -597,6 +600,9 @@ startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init fai
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
+// Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
+// the user opts in via Settings → iMessage (needs macOS Full Disk Access) (#2151).
+startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();

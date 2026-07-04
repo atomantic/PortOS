@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -147,6 +147,11 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed interval/cap can't reach disk and break the scheduler.
   if (req.body?.citySnapshots !== undefined) {
     validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
+  }
+  // iMessage ingestion config (#2151) — validate the slice when present so a
+  // malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.imessage !== undefined) {
+    validateRequest(imessageConfigSchema.partial(), req.body.imessage);
   }
   // LoRA training config (caption provider + training defaults) — validate
   // the slice when present so a malformed save can't write bad bounds the
