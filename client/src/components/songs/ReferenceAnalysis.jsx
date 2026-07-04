@@ -367,11 +367,14 @@ export default function ReferenceAnalysis({
     }
     onApplyPart?.({
       id: comparePart?.id || '',
-      label: comparePart?.label || (proposal.layerId ? harmonyPartLabel(proposal.layerId) : 'Extracted part'),
+      // Prefer the harmony-part vocabulary label; a custom layer id falls back
+      // to the layer's own label (harmonyPartLabel returns '' for unknown ids).
+      label: comparePart?.label
+        || (proposal.layerId ? (harmonyPartLabel(proposal.layerId) || layerLabel(proposal.layerId)) : 'Extracted part'),
       role: comparePart?.role ?? (proposal.layerId || ''),
       score: proposal.text,
     });
-  }, [proposal, comparePart, onApplyPart]);
+  }, [proposal, comparePart, onApplyPart, layerLabel]);
 
   // Deep-link fallbacks: stale ?analyze= id, or a reference with no audio yet.
   if (!reference) {
