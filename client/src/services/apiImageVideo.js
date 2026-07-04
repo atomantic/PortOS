@@ -281,6 +281,42 @@ export const installLoraFromHuggingface = ({ url, family, silent = false } = {})
   silent,
 });
 
+// Streaming HF LoRA install — same install as installLoraFromHuggingface but
+// over an EventSource so the caller gets byte-level download progress. Resolves
+// with the new sidecar on the `complete` frame; rejects with an Error carrying
+// `.code` (e.g. 'HF_UNKNOWN_FAMILY', 'HF_ALREADY_INSTALLED') on `error`, so the
+// page can drive the same inline family-confirm retry it does for the POST path.
+// `onProgress({ received, total, progress })` fires per throttled download tick
+// — `progress` is 0..1, or null when the server had no Content-Length to divide.
+export function installLoraFromHuggingfaceStream({ url, family, onProgress } = {}) {
+  const params = new URLSearchParams({ url });
+  if (family) params.set('family', family);
+  const es = new EventSource(`/api/loras/install/huggingface/stream?${params.toString()}`);
+  return new Promise((resolve, reject) => {
+    es.onmessage = (evt) => {
+      let data;
+      try { data = JSON.parse(evt.data); } catch { return; }
+      if (data.type === 'progress') { onProgress?.(data); return; }
+      if (data.type === 'complete') { es.close(); resolve(data.sidecar); return; }
+      if (data.type === 'error') {
+        es.close();
+        const err = new Error(data.message || 'HuggingFace install failed');
+        err.code = data.code || null;
+        reject(err);
+      }
+    };
+    es.onerror = () => {
+      // A normal completion/error already closed the ES above; this only fires
+      // on a real transport failure (non-2xx open, dropped stream), which
+      // EventSource surfaces as readyState CLOSED with no auto-retry. Reject so
+      // the caller's spinner clears instead of hanging forever.
+      if (es.readyState === EventSource.CLOSED) {
+        reject(new Error('Download stream closed before completing'));
+      }
+    };
+  });
+}
+
 // Civitai LoRA suggestions per runner family. Cached server-side for 1h.
 // Pass `force: true` to bust the cache and re-fetch from Civitai.
 export const getCivitaiSuggestions = ({ force = false } = {}) =>

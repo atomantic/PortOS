@@ -19,7 +19,7 @@ import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/
 import {
   listLorasFull,
   installLoraFromCivitai,
-  installLoraFromHuggingface,
+  installLoraFromHuggingfaceStream,
   deleteLoraFull,
   getCivitaiAuth,
   setCivitaiAuth,
@@ -62,6 +62,12 @@ const MEDIA_FILTERS = [
 const suggestionKey = (modelId, versionId) => `${modelId}-${versionId}`;
 const cardKey = (card) => suggestionKey(card.modelId, card.versionId);
 
+// Integer download percent (0..100) from an SSE progress frame, or null when
+// the frame carries no numeric ratio (server sent no Content-Length → the UI
+// shows an indeterminate bar). Shared by the HF install form button, the
+// progress bar, and the curated video quick-install button.
+const pctOf = (progress) => (progress && typeof progress.progress === 'number' ? Math.round(progress.progress * 100) : null);
+
 export default function Loras() {
   const [loras, setLoras] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +78,10 @@ export default function Loras() {
   // the Civitai installer above because video LoRAs live on HF.
   const [hfUrl, setHfUrl] = useState('');
   const [hfInstalling, setHfInstalling] = useState(false);
+  // Byte-level download progress for the in-flight HF install (form OR curated
+  // quick-install — only one runs at a time). `{ received, total, progress }`
+  // where progress is 0..1, or null when the server had no Content-Length.
+  const [hfProgress, setHfProgress] = useState(null);
   // When autodetection can't classify the repo (HF_UNKNOWN_FAMILY), hold the
   // URL here to render an inline "install as LTX-Video?" confirm row — the API
   // supports an explicit family override, so a valid LTX LoRA with an
@@ -158,7 +168,8 @@ export default function Loras() {
   const runHfInstall = useCallback(async (url, family) => {
     if (!url || hfInstalling) return;
     setHfInstalling(true);
-    await installLoraFromHuggingface({ url, family, silent: true })
+    setHfProgress(null);
+    await installLoraFromHuggingfaceStream({ url, family, onProgress: setHfProgress })
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
         setHfUrl('');
@@ -175,7 +186,7 @@ export default function Loras() {
           toast.error(err?.message || 'HuggingFace install failed');
         }
       })
-      .finally(() => setHfInstalling(false));
+      .finally(() => { setHfInstalling(false); setHfProgress(null); });
   }, [hfInstalling, refresh]);
 
   const handleHfInstall = useCallback((e) => {
@@ -191,13 +202,14 @@ export default function Loras() {
   const installVideoSuggestion = useCallback(async (card) => {
     if (!card?.installUrl || installingVideoRepo) return;
     setInstallingVideoRepo(card.repo);
-    await installLoraFromHuggingface({ url: card.installUrl, family: card.runnerFamily, silent: true })
+    setHfProgress(null);
+    await installLoraFromHuggingfaceStream({ url: card.installUrl, family: card.runnerFamily, onProgress: setHfProgress })
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
         refresh();
       })
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
-      .finally(() => setInstallingVideoRepo(null));
+      .finally(() => { setInstallingVideoRepo(null); setHfProgress(null); });
   }, [installingVideoRepo, refresh]);
 
   const handleDelete = async (filename) => {
@@ -219,6 +231,10 @@ export default function Loras() {
     if (mediaFilter === 'video') return isVideoLoraFamily(l.runnerFamily);
     return true;
   });
+
+  // Download percent for the in-flight HF install (drives the form button label
+  // and progress bar), or null when the total is unknown.
+  const hfPct = pctOf(hfProgress);
 
   return (
     <div className="space-y-6">
@@ -287,9 +303,10 @@ export default function Loras() {
             disabled={hfInstalling || !hfUrl.trim()}
             className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            {hfInstalling ? 'Downloading…' : 'Install'}
+            {hfInstalling ? (hfPct != null ? `Downloading ${hfPct}%` : 'Downloading…') : 'Install'}
           </button>
         </div>
+        {hfInstalling && <HfDownloadProgress progress={hfProgress} />}
         <p className="text-xs text-gray-500">
           Paste a <code className="bg-port-bg px-1 rounded">huggingface.co</code> repo URL — or an{' '}
           <code className="bg-port-bg px-1 rounded">org/name</code> id — for an LTX-Video LoRA
@@ -308,7 +325,7 @@ export default function Loras() {
                 disabled={hfInstalling}
                 className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
               >
-                {hfInstalling ? 'Installing…' : 'Install as LTX-Video'}
+                {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : 'Install as LTX-Video'}
               </button>
               <button
                 type="button"
@@ -351,6 +368,7 @@ export default function Loras() {
         installedHfRepos={new Set(loras.map((l) => l.huggingface?.repo).filter(Boolean))}
         installingSuggestionKey={installingSuggestion}
         installingVideoRepo={installingVideoRepo}
+        installingVideoProgress={hfProgress}
         onRefresh={() => refreshSuggestions({ force: true })}
         onInstallVideo={installVideoSuggestion}
         onInstall={async (card, url, versionId) => {
@@ -364,7 +382,11 @@ export default function Loras() {
         }}
       />
 
-      <div>
+      {/* Border-top divides "Installed" from the suggestion panel above — the
+          curated "Video LoRAs" suggestions used to butt straight up against a
+          flat Installed grid, making installed image LoRAs read as if they were
+          part of the video section. */}
+      <div className="border-t border-port-border pt-6">
         <h2 className="text-lg font-semibold text-white mb-3">Installed</h2>
         {loading && <div className="text-sm text-gray-500">Loading…</div>}
         {error && (
@@ -377,13 +399,40 @@ export default function Loras() {
               : `No ${mediaFilter} LoRAs installed.`}
           </div>
         )}
+        {/* On "All", split installed LoRAs into Video/Image subsections (with the
+            same header style as the suggestion panel) so it's self-evident which
+            renders each applies to. A specific filter already scopes the list, so
+            render it flat. */}
         {visibleLoras.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {visibleLoras.map((lora) => (
-              <LoraCard key={lora.filename} lora={lora} onDelete={() => handleDelete(lora.filename)} deleting={deleting === lora.filename} />
-            ))}
-          </div>
+          mediaFilter === 'all'
+            ? <InstalledGroups loras={visibleLoras} deleting={deleting} onDelete={handleDelete} />
+            : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} />
         )}
+      </div>
+    </div>
+  );
+}
+
+// Byte-level download progress bar for an in-flight HuggingFace LoRA install.
+// `progress` is `{ received, total, progress }` (progress 0..1) or null. When
+// the server had no Content-Length (total 0 / progress null) the bar renders an
+// indeterminate pulse instead of a fill.
+function HfDownloadProgress({ progress }) {
+  const pct = pctOf(progress);
+  const total = progress?.total || 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[11px] text-gray-400">
+        <span>{pct != null ? `Downloading… ${pct}%` : 'Downloading…'}</span>
+        {total > 0 && (
+          <span className="font-mono text-gray-500">{formatBytes(progress.received)} / {formatBytes(total)}</span>
+        )}
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-port-bg" role="progressbar" aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
+        <div
+          className={`h-full bg-port-accent ${pct != null ? 'transition-[width] duration-200' : 'w-1/3 animate-pulse'}`}
+          style={pct != null ? { width: `${pct}%` } : undefined}
+        />
       </div>
     </div>
   );
@@ -417,7 +466,7 @@ function MediaFilter({ value, onChange }) {
   );
 }
 
-function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installedFilenames, installedHfRepos, installingSuggestionKey, installingVideoRepo, onRefresh, onInstall, onInstallVideo }) {
+function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installedFilenames, installedHfRepos, installingSuggestionKey, installingVideoRepo, installingVideoProgress, onRefresh, onInstall, onInstallVideo }) {
   const curated = suggestions?.curated || [];
   const runners = suggestions?.runners || {};
   const video = suggestions?.video || [];
@@ -479,6 +528,7 @@ function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installed
           cards={video}
           installedHfRepos={installedHfRepos}
           installingVideoRepo={installingVideoRepo}
+          installingVideoProgress={installingVideoProgress}
           onInstall={onInstallVideo}
         />
       )}
@@ -490,7 +540,7 @@ function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installed
 // like the Civitai sections — it's a small hand-picked list installed via the
 // HF path. Installed-state matches on the repo (HF installs carry no
 // modelId/versionId).
-function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo, onInstall }) {
+function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo, installingVideoProgress, onInstall }) {
   const list = cards || [];
   return (
     <div>
@@ -512,6 +562,7 @@ function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo,
               card={card}
               installed={installedHfRepos?.has(card.repo)}
               installing={installingVideoRepo === card.repo}
+              progress={installingVideoRepo === card.repo ? installingVideoProgress : null}
               onInstall={onInstall}
             />
           ))}
@@ -521,7 +572,8 @@ function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo,
   );
 }
 
-function VideoSuggestionCard({ card, installed, installing, onInstall }) {
+function VideoSuggestionCard({ card, installed, installing, progress, onInstall }) {
+  const pct = pctOf(progress);
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
       {card.previewImageUrl ? (
@@ -557,7 +609,7 @@ function VideoSuggestionCard({ card, installed, installing, onInstall }) {
               disabled={installing}
               className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
             >
-              {installing ? 'Installing…' : 'Quick install'}
+              {installing ? (pct != null ? `Installing ${pct}%` : 'Installing…') : 'Quick install'}
             </button>
           )}
         </div>
@@ -950,6 +1002,45 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
         </div>
       </form>
     </Modal>
+  );
+}
+
+// Responsive grid of installed LoRA cards. Extracted so the Installed section
+// can render either one flat grid (filtered view) or several grouped grids
+// (the "All" view) without duplicating the grid markup.
+function LoraGrid({ loras, deleting, onDelete }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      {loras.map((lora) => (
+        <LoraCard key={lora.filename} lora={lora} onDelete={() => onDelete(lora.filename)} deleting={deleting === lora.filename} />
+      ))}
+    </div>
+  );
+}
+
+// Installed LoRAs split into Video / Image subsections for the "All" view, each
+// with a labeled header mirroring the suggestion panel's grouping. Empty groups
+// are omitted. Video is listed first (fewer, and the source of the layout
+// confusion this grouping resolves).
+function InstalledGroups({ loras, deleting, onDelete }) {
+  const video = loras.filter((l) => isVideoLoraFamily(l.runnerFamily));
+  const image = loras.filter((l) => !isVideoLoraFamily(l.runnerFamily));
+  const groups = [
+    { key: 'video', label: 'Video LoRAs', items: video },
+    { key: 'image', label: 'Image LoRAs', items: image },
+  ].filter((g) => g.items.length > 0);
+  return (
+    <div className="space-y-5">
+      {groups.map((g) => (
+        <div key={g.key}>
+          <div className="flex items-baseline gap-3 mb-2">
+            <h3 className="text-sm font-medium text-gray-300">{g.label}</h3>
+            <span className="text-xs text-gray-600">{g.items.length}</span>
+          </div>
+          <LoraGrid loras={g.items} deleting={deleting} onDelete={onDelete} />
+        </div>
+      ))}
+    </div>
   );
 }
 

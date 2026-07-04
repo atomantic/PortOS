@@ -455,6 +455,56 @@ describe('installFromHuggingface', () => {
     ).rejects.toMatchObject({ code: 'HF_UNKNOWN_FAMILY' });
   });
 
+  it('reports byte-level download progress via onProgress', async () => {
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) {
+        return mockJsonResponse(HF_MODEL);
+      }
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array(Buffer.from('abcd')));
+            c.enqueue(new Uint8Array(Buffer.from('efgh')));
+            c.close();
+          },
+        });
+        // Carry a Content-Length so the total is known (8 bytes).
+        return { ok: true, status: 200, body: stream, headers: { get: (h) => (h === 'content-length' ? '8' : null) } };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const ticks = [];
+    await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl, onProgress: (p) => ticks.push(p) },
+    );
+    expect(ticks.length).toBeGreaterThan(0);
+    // The flush tick always fires last with the full byte count.
+    const last = ticks[ticks.length - 1];
+    expect(last.received).toBe(8);
+    expect(last.total).toBe(8);
+  });
+
+  it('tolerates a missing Content-Length (total 0, still completes)', async () => {
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) {
+        return mockJsonResponse(HF_MODEL);
+      }
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('weights'))); c.close(); } });
+        return { ok: true, status: 200, body: stream }; // no headers
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const ticks = [];
+    const sidecar = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl, onProgress: (p) => ticks.push(p) },
+    );
+    expect(sidecar.runnerFamily).toBe('ltx-video');
+    expect(ticks[ticks.length - 1]).toEqual({ received: 7, total: 0 });
+  });
+
   it('accepts an explicit family override', async () => {
     const fetchImpl = async (url) => {
       if (url.startsWith('https://huggingface.co/api/models/')) {
