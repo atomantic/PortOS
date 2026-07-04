@@ -22,6 +22,7 @@
  * exported and unit-tested with fixtures — no real chat.db required.
  */
 import { DatabaseSync } from 'node:sqlite';
+import { statSync } from 'node:fs';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from '../lib/timezone.js';
@@ -258,15 +259,25 @@ export function chatDbPath() {
 
 // Classify a chat.db open failure so the UI can surface an actionable message.
 // A macOS sandbox / TCC denial surfaces as EPERM/EACCES or SQLite "unable to
-// open database file" (SQLITE_CANTOPEN) — all of which mean Full Disk Access is
-// missing for the running process.
+// open database file" (SQLITE_CANTOPEN) — but SQLITE_CANTOPEN is ALSO what a
+// simply-nonexistent chat.db produces (Linux install, a Mac that never used
+// Messages), and telling those users to grant Full Disk Access can't help them.
+// Disambiguate via stat: a TCC denial surfaces as EPERM/EACCES on stat, while
+// ENOENT means the file genuinely doesn't exist.
 function isFullDiskAccessError(err) {
+  if (err?.code === 'EACCES' || err?.code === 'EPERM') return true;
   const msg = String(err?.message || '').toLowerCase();
-  return err?.code === 'EACCES'
-    || err?.code === 'EPERM'
-    || msg.includes('unable to open')
+  const ambiguous = msg.includes('unable to open')
     || msg.includes('not authorized')
     || msg.includes('operation not permitted');
+  if (!ambiguous) return false;
+  try {
+    statSync(chatDbPath());
+    return true; // file exists but SQLite couldn't open it — permission problem
+  } catch (statErr) {
+    if (statErr?.code === 'ENOENT') return false; // chat.db genuinely absent
+    return true; // EPERM/EACCES on stat — the TCC denial itself
+  }
 }
 
 const FDA_REMEDIATION = 'Grant Full Disk Access to the process running PortOS (node or the PM2 daemon): System Settings → Privacy & Security → Full Disk Access → enable your terminal / node / pm2, then restart PortOS.';
@@ -370,8 +381,20 @@ function readMessages(db, cursorRowid, limit) {
  * summary. Safe to call repeatedly — dedupe keys make re-ingestion a no-op. This
  * runs outside the request lifecycle (scheduler / explicit endpoint), so the
  * chat.db open is try/catch-guarded and returns an error report instead of throwing.
+ *
+ * Re-entrancy guarded: a manual "Sync now" overlapping a scheduler tick would
+ * double-read the same cursor (deduped, but doubled work, and the slower writer
+ * could stamp a stale cursor over the fresher one) — so concurrent callers share
+ * the in-flight pass instead.
  */
+let syncInFlight = null;
 export async function runSync() {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  return syncInFlight;
+}
+
+async function doRunSync() {
   const state = await readSyncState();
   const path = chatDbPath();
   let db;
@@ -399,26 +422,38 @@ export async function runSync() {
   const activityCandidates = imessageActivityCandidates(batch.messages);
   const touchpointCandidates = imessageTouchpointCandidates(batch.messages, timezone);
 
+  // Persistence failures must NOT advance the cursor: the dedupe keys make
+  // re-processing the batch on the next pass a harmless no-op, but skipping
+  // past unpersisted messages loses them permanently (the cursor never revisits
+  // a ROWID). Track failure and hold the cursor so the batch gets retried.
+  let persistFailed = false;
   const activityResult = await recordEvents(activityCandidates).catch((err) => {
     console.error(`❌ iMessage activity record failed: ${err?.message || err}`);
+    persistFailed = true;
     return { recorded: 0, skipped: activityCandidates.length };
   });
   const touchpointResult = await tribe.autoLogTouchpoints(touchpointCandidates).catch((err) => {
     console.error(`❌ iMessage touchpoint log failed: ${err?.message || err}`);
+    persistFailed = true;
     return { created: 0, matched: 0 };
   });
 
+  const nextCursor = persistFailed ? state.cursorRowid : batch.maxRowid;
   const result = {
-    ok: true,
+    ok: !persistFailed,
+    ...(persistFailed ? { error: 'Persistence failed — cursor held so the batch retries next sync' } : {}),
     scanned: batch.scanned,
     recorded: activityResult.recorded,
     touchpointsCreated: touchpointResult.created,
     touchpointsMatched: touchpointResult.matched,
     decodeFailures: batch.decodeFailures,
-    cursorRowid: batch.maxRowid,
+    cursorRowid: nextCursor,
+    // A full batch means older history remains beyond this pass — the caller
+    // (UI toast / next scheduler tick) should run again to keep draining.
+    hasMore: batch.scanned === SCAN_LIMIT,
   };
-  await writeSyncState({ cursorRowid: batch.maxRowid, lastRunAt: new Date().toISOString(), lastResult: result });
-  console.log(`💬 iMessage sync: scanned ${result.scanned}, recorded ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s), ${result.decodeFailures} decode-skip(s), cursor→${result.cursorRowid}`);
+  await writeSyncState({ cursorRowid: nextCursor, lastRunAt: new Date().toISOString(), lastResult: result });
+  console.log(`💬 iMessage sync: scanned ${result.scanned}, recorded ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s), ${result.decodeFailures} decode-skip(s), cursor→${result.cursorRowid}${result.hasMore ? ' (more remaining)' : ''}${persistFailed ? ' — PERSIST FAILED, cursor held' : ''}`);
   return result;
 }
 

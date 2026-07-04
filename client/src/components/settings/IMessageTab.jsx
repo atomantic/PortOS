@@ -72,8 +72,8 @@ export function IMessageTab() {
     const result = await syncImessage({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
     setSyncing(false);
     if (result?.ok) {
-      toast.success(`Synced: ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s)`);
-      setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), lastResult: result, lastRunAt: new Date().toISOString() } }));
+      toast.success(`Synced: ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s)${result.hasMore ? ' — more history remains, run again' : ''}`);
+      setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), cursorRowid: result.cursorRowid, lastResult: result, lastRunAt: new Date().toISOString() } }));
     } else {
       toast.error(result?.fullDiskAccessRequired ? 'Full Disk Access required' : (result?.error || 'Sync failed'));
       setSetup(result);

@@ -54,6 +54,7 @@ const emptyDraft = () => ({
   energy: 'steady',
   tags: '',
   emails: '',
+  phones: '',
   nextMove: '',
   notes: '',
 });
@@ -311,6 +312,18 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
           />
           <span className="mt-1 block text-[11px] text-gray-600">
             Auto-logs a touchpoint when this person appears in a synced calendar event or message.
+          </span>
+        </label>
+        <label className="block sm:col-span-2">
+          <span className="text-xs text-gray-500">Phone numbers</span>
+          <input
+            value={draft.phones}
+            onChange={(event) => update('phones', event.target.value)}
+            className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
+            placeholder="+1 555 123 4567, 555 987 6543"
+          />
+          <span className="mt-1 block text-[11px] text-gray-600">
+            Matches this person to iMessage conversations (saved in +E.164 form).
           </span>
         </label>
         <label className="block sm:col-span-2">
@@ -762,6 +775,7 @@ export default function Tribe() {
     ...contact,
     tags: tagsToInput(contact.tags),
     emails: tagsToInput(contact.emails),
+    phones: tagsToInput(contact.phones),
     cadenceDays: contact.cadenceDays || ringFor(contact.ring).cadenceDays,
   });
 
@@ -779,6 +793,7 @@ export default function Tribe() {
       energy: draft.energy,
       tags: tagsToArray(draft.tags),
       emails: tagsToArray(draft.emails),
+      phones: tagsToArray(draft.phones),
       nextMove: draft.nextMove.trim(),
       notes: draft.notes.trim(),
     };
