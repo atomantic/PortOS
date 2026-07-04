@@ -68,13 +68,37 @@ const FLAT_ORDER = ['B', 'E', 'A', 'D', 'G', 'C', 'F'];
 const SHARP_KEYS = { G: 1, D: 2, A: 3, E: 4, B: 5, 'F#': 6, 'C#': 7 };
 const FLAT_KEYS = { F: 1, Bb: 2, Eb: 3, Ab: 4, Db: 5, Gb: 6, Cb: 7 };
 
-// Resolve a key string ("C major", "Eb", "F# minor") to a key-signature
-// descriptor. We read only the tonic (letter + optional single accidental) and
-// treat it as major — good enough for a lead sheet, and the renderer only uses
-// this to draw the accidental cluster at the clef. Unknown → C (no accidentals).
+// Minor tonic → its relative major (tonic + minor third up), so a minor key
+// resolves through the SHARP_KEYS/FLAT_KEYS major lookup above instead of
+// (incorrectly) reusing its own letter as if it were major. Covers the 15
+// keys reachable through SHARP_KEYS/FLAT_KEYS + natural C/Am. Explicit modes
+// (dorian, mixolydian, …) are out of scope — score those in C (all naturals)
+// per the existing convention, same as the seed data does.
+const MINOR_TO_MAJOR = {
+  A: 'C', E: 'G', B: 'D', 'F#': 'A', 'C#': 'E', 'G#': 'B', 'D#': 'F#', 'A#': 'C#',
+  D: 'F', G: 'Bb', C: 'Eb', F: 'Ab', Bb: 'Db', Eb: 'Gb', Ab: 'Cb',
+};
+
+// Matches a minor qualifier immediately following the tonic: `m`, `min`, or
+// `minor` (case-insensitive), optionally preceded by whitespace. The trailing
+// `\b` is what keeps this from misfiring on "major"/"maj" — after matching the
+// bare `m`, the next character in "major" is the word-char `a`, so there's no
+// word boundary and the whole match fails, leaving the tonic to resolve as
+// major (unchanged default behavior).
+const MINOR_QUALIFIER = /^\s*m(?:in(?:or)?)?\b/i;
+
+// Resolve a key string ("C major", "Eb", "D minor", "F# minor", "Bbm") to a
+// key-signature descriptor. We read the tonic (letter + optional single
+// accidental) plus an optional minor qualifier right after it; a minor tonic
+// is mapped to its relative major before the lookup, so the signature matches
+// the actual key rather than the parallel major. Unknown → C (no accidentals).
 export const keySignature = (keyName) => {
-  const m = /^\s*([A-Ga-g])([#b]?)/.exec(keyName || '');
-  const tonic = m ? `${m[1].toUpperCase()}${m[2]}` : 'C';
+  const raw = keyName || '';
+  const m = /^\s*([A-Ga-g])([#b]?)/.exec(raw);
+  let tonic = m ? `${m[1].toUpperCase()}${m[2]}` : 'C';
+  if (m && MINOR_QUALIFIER.test(raw.slice(m[0].length)) && MINOR_TO_MAJOR[tonic]) {
+    tonic = MINOR_TO_MAJOR[tonic];
+  }
   if (SHARP_KEYS[tonic]) {
     const count = SHARP_KEYS[tonic];
     return { type: 'sharp', count, letters: SHARP_ORDER.slice(0, count) };
