@@ -24,11 +24,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, AudioLines, Flag, FlagOff, Layers, Loader2, Mic, Play, Plus, Square, Trash2, Upload, Wand2, X,
+  ArrowLeft, AudioLines, Download, Flag, FlagOff, Layers, Loader2, Mic, Play, Plus, Square, Trash2, Upload, Wand2, X,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
 import { uploadFile, getUploadUrl } from '../../services/api';
+import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
@@ -79,8 +80,17 @@ function SecondsInput({ valueMs, onCommit, ariaLabel }) {
 export function ReferenceAudioAttach({ reference, onUpdate }) {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [url, setUrl] = useState('');
   const fileRef = useRef(null);
   const handleRef = useRef(null);
+
+  // "Download audio from URL" (#2120) — best-effort yt-dlp fetch straight onto
+  // the reference. On completion the returned uploads-dir filename is set on the
+  // draft (flipping to the attached state); the user Saves to keep it, same as
+  // upload/mic capture.
+  const audioImport = useReferenceAudioImport({
+    onComplete: (filename) => { setUrl(''); onUpdate('audioFilename', filename); },
+  });
 
   // Never leave the mic open on unmount (deferred-work cleanup rule).
   useEffect(() => () => { handleRef.current?.cancel(); }, []);
@@ -156,33 +166,72 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
     );
   }
 
+  const downloading = audioImport.active;
+  const downloadLabel = audioImport.stage === 'extracting'
+    ? 'Extracting…'
+    : audioImport.stage === 'importing'
+      ? 'Saving…'
+      : `Downloading ${audioImport.percent}%`;
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <input ref={fileRef} type="file" accept="audio/*" onChange={onFile} className="hidden" aria-label="Upload reference audio file" />
-      <button
-        type="button"
-        onClick={() => fileRef.current?.click()}
-        disabled={busy || recording}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
-      >
-        {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload audio
-      </button>
-      {recording ? (
-        <button type="button" onClick={stopRecord} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-port-error text-white hover:bg-port-error/90 animate-pulse">
-          <Square size={14} /> Stop capture
-        </button>
-      ) : (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <input ref={fileRef} type="file" accept="audio/*" onChange={onFile} className="hidden" aria-label="Upload reference audio file" />
         <button
           type="button"
-          onClick={startRecord}
-          disabled={busy}
-          title="Record through the mic while the reference video plays"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy || recording || downloading}
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
         >
-          <Mic size={14} /> Capture from mic
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload audio
         </button>
-      )}
-      <span className="text-xs text-gray-600">Upload a screen-recording’s audio, or capture the mic while the video plays.</span>
+        {recording ? (
+          <button type="button" onClick={stopRecord} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg bg-port-error text-white hover:bg-port-error/90 animate-pulse">
+            <Square size={14} /> Stop capture
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={startRecord}
+            disabled={busy || downloading}
+            title="Record through the mic while the reference video plays"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+          >
+            <Mic size={14} /> Capture from mic
+          </button>
+        )}
+        {downloading ? (
+          <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300">
+            <Loader2 size={14} className="animate-spin" /> {downloadLabel}
+            <button type="button" onClick={audioImport.cancel} title="Cancel download" className="ml-1 text-gray-400 hover:text-port-error">
+              <X size={13} />
+            </button>
+          </span>
+        ) : (
+          <div className="flex items-center gap-1">
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); audioImport.start(url); } }}
+              placeholder="Paste a video URL…"
+              disabled={busy || recording}
+              aria-label="Reference audio URL to download"
+              className="px-2 py-1.5 text-xs rounded-lg border border-port-border bg-port-bg text-gray-200 w-44 disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={() => audioImport.start(url)}
+              disabled={busy || recording || !url.trim()}
+              title="Download audio from a URL via yt-dlp"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
+            >
+              <Download size={14} /> Download
+            </button>
+          </div>
+        )}
+      </div>
+      <span className="text-xs text-gray-600">Upload a screen-recording’s audio, capture the mic while the video plays, or download audio from a URL (needs yt-dlp installed).</span>
     </div>
   );
 }

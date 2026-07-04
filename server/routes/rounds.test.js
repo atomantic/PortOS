@@ -28,6 +28,14 @@ const aiMocks = vi.hoisted(() => ({
 }));
 vi.mock('../services/roundsAI.js', () => aiMocks);
 
+// Isolate the route contract from the real yt-dlp/SSE import service (#2120).
+const importMocks = vi.hoisted(() => ({
+  startReferenceAudioImport: vi.fn(),
+  attachReferenceAudioSseClient: vi.fn(),
+  cancelReferenceAudioImport: vi.fn(),
+}));
+vi.mock('../services/roundReferenceAudioImport.js', () => importMocks);
+
 import roundsRoutes from './rounds.js';
 
 const makeApp = () => {
@@ -42,6 +50,7 @@ describe('rounds route', () => {
   beforeEach(() => {
     for (const fn of Object.values(mocks)) fn.mockReset();
     for (const fn of Object.values(aiMocks)) fn.mockReset();
+    for (const fn of Object.values(importMocks)) fn.mockReset();
   });
 
   it('GET / returns the song list', async () => {
@@ -331,5 +340,30 @@ describe('rounds route', () => {
     await request(makeApp()).post('/api/rounds/song-1/derive-parts').send({ partIds: ['bass', 'high-harmony-1'] });
     const [arg] = aiMocks.deriveRoundParts.mock.calls[0];
     expect(arg.partIds).toEqual(['bass', 'high-harmony-1']);
+  });
+
+  // --- Reference-audio import (#2120) ---------------------------------------
+  it('POST /reference-audio/import 202s with the jobId from the service', async () => {
+    importMocks.startReferenceAudioImport.mockResolvedValue({ jobId: 'job-1' });
+    const res = await request(makeApp())
+      .post('/api/rounds/reference-audio/import')
+      .send({ url: 'https://tiktok.com/@a/video/1' });
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ jobId: 'job-1' });
+    expect(importMocks.startReferenceAudioImport).toHaveBeenCalledWith('https://tiktok.com/@a/video/1');
+  });
+
+  it('POST /reference-audio/import 400s on a missing url (not read as a round id)', async () => {
+    const res = await request(makeApp()).post('/api/rounds/reference-audio/import').send({});
+    expect(res.status).toBe(400);
+    expect(importMocks.startReferenceAudioImport).not.toHaveBeenCalled();
+  });
+
+  it('POST /reference-audio/import/:jobId/cancel reports the cancel result', async () => {
+    importMocks.cancelReferenceAudioImport.mockReturnValue(true);
+    const res = await request(makeApp()).post('/api/rounds/reference-audio/import/job-1/cancel');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(importMocks.cancelReferenceAudioImport).toHaveBeenCalledWith('job-1');
   });
 });

@@ -46,3 +46,17 @@ export const evaluateRound = (id, body = {}, options) =>
 // providerId?, model? } — partIds optionally restricts which harmony parts.
 export const deriveRoundParts = (id, body = {}, options) =>
   request(`/rounds/${enc(id)}/derive-parts`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+// --- Reference-audio import (#2120) — download + extract a reference's audio
+// from a URL via yt-dlp into the uploads dir. Kickoff returns { jobId }; progress
+// streams over SSE (subscribe with useSseProgress); the terminal `complete` frame
+// carries the { filename } the caller persists on the reference. Upload/mic
+// capture remain the primary attach paths.
+export const importReferenceAudio = (url, options = {}) =>
+  request('/rounds/reference-audio/import', { method: 'POST', body: JSON.stringify({ url }), ...options });
+
+export const referenceAudioImportEventsUrl = (jobId) =>
+  `/api/rounds/reference-audio/import/${enc(jobId)}/events`;
+
+export const cancelReferenceAudioImport = (jobId, options = {}) =>
+  request(`/rounds/reference-audio/import/${enc(jobId)}/cancel`, { method: 'POST', ...options });
