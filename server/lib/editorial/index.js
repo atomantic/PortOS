@@ -12,3 +12,4 @@ export * from './nameSimilarity.js';
 export * from './proseTics.js';
 export * from './repetition.js';
 export * from './shotContinuity.js';
+export * from './slopScore.js';

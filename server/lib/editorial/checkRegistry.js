@@ -142,6 +142,7 @@ import { researchChecks } from './checks/research.js';
 import { characterArcChecks } from './checks/characterArc.js';
 import { proseStyleChecks } from './checks/proseStyle.js';
 import { dialogueChecks } from './checks/dialogue.js';
+import { slopChecks } from './checks/slop.js';
 
 // Canonical display + run order of the built-in checks. Grouping the checks into
 // ./checks/*.js by category (#1829) would otherwise change the observable order
@@ -201,6 +202,10 @@ const CHECK_ORDER = Object.freeze([
   'prose.repeated-gestures',
   'prose.word-echoes',
   'prose.sentence-rhythm',
+  'prose.slop-banned-words',
+  'prose.ai-tells',
+  'prose.structural-tics',
+  'prose.burstiness',
   'prose.telling-emotion',
   'prose.dead-metaphor',
   'opening.wrong-start',
@@ -233,6 +238,7 @@ const ASSEMBLED_CHECKS = [
   ...characterArcChecks,
   ...proseStyleChecks,
   ...dialogueChecks,
+  ...slopChecks,
 ];
 for (const c of ASSEMBLED_CHECKS) {
   if (!CHECK_ORDER_INDEX.has(c.id)) {
