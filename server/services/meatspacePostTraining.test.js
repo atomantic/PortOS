@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
-  PATHS: { meatspace: '/tmp/test-meatspace' },
+  // `data` is required because getTrainingStats now imports meatspacePost.js
+  // (for the shared unified streak), which transitively loads the drill cache —
+  // its module-load `join(PATHS.data, …)` needs a string.
+  PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn().mockResolvedValue({ entries: [] }),
 }));

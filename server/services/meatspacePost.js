@@ -336,10 +336,36 @@ export function deriveTaskAvgResponseMs(task) {
   return Math.round(timed.reduce((sum, q) => sum + q.responseMs, 0) / timed.length);
 }
 
+/**
+ * ONE unified activity streak across scored sessions AND the training log — the
+ * single number every POST surface (launcher, Morse trainer, dashboard widgets)
+ * should show, so they can't disagree (issue #2091). A day is active with EITHER
+ * a scored session or a training-log entry (Morse / memory practice). Computed
+ * over ALL history, independent of any stats window.
+ */
+export async function getUnifiedActivityStreak(todayStr = new Date().toISOString().split('T')[0]) {
+  const [sessions, training] = await Promise.all([getPostSessions(), getAllTrainingEntries()]);
+  return computeUnifiedStreak(sessions, training, todayStr);
+}
+
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
-  // Streaks are computed over ALL history, independent of the stats window.
-  const streaks = computePostStreaks(sessions, new Date().toISOString().split('T')[0]);
+  const todayStr = new Date().toISOString().split('T')[0];
+  // Streaks are computed over ALL history, independent of the stats window, and
+  // over BOTH scored sessions and the training log so the launcher/dashboard
+  // streak matches the Morse trainer and the Progress page (issue #2091).
+  // `completedToday`/`todayScore` stay SCORED-session specific — they answer
+  // "did you complete a scored POST today / what did you score", which a
+  // practice-only day legitimately doesn't satisfy.
+  const sessionStreaks = computePostStreaks(sessions, todayStr);
+  const training = await getAllTrainingEntries();
+  const unified = computeUnifiedStreak(sessions, training, todayStr);
+  const streaks = {
+    ...sessionStreaks,
+    currentStreak: unified.current,
+    longestStreak: unified.longest,
+    lastDate: unified.lastActiveDate,
+  };
   let recent = sessions;
   if (days > 0) {
     const cutoff = new Date();

@@ -8,7 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
-import { computePostStreaks } from '../lib/postStreak.js';
+import { getUnifiedActivityStreak } from './meatspacePost.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
@@ -51,11 +51,11 @@ export async function submitTrainingEntry(entry) {
 /**
  * Get training stats: per-drill practice counts, streaks, recent activity.
  *
- * Streaks come from the SHARED `computePostStreaks` (server/lib/postStreak.js) —
- * the same DST-safe helper the scored-session streak uses — so the training
- * streak can no longer disagree with the POST streak for identical activity
- * (issue #2091). Like `getPostStats`, the streak is computed over ALL history,
- * independent of the stats window; only the per-drill breakdown is windowed.
+ * The streak comes from the SHARED unified streak (`getUnifiedActivityStreak` in
+ * meatspacePost.js) — the exact same number the launcher, dashboard widgets, and
+ * Progress page show — so the Morse trainer can no longer disagree with them
+ * (issue #2091). It counts BOTH scored sessions and training-log entries over
+ * ALL history; only the per-drill breakdown below is windowed.
  */
 export async function getTrainingStats(days = 30) {
   const data = await loadTrainingLog();
@@ -81,9 +81,8 @@ export async function getTrainingStats(days = 30) {
     byDrill[key].dates.add(String(e.date || '').split('T')[0]);
   }
 
-  // Unified streak semantics (shared helper, ALL history, grace window).
-  const todayStr = new Date().toISOString().split('T')[0];
-  const { currentStreak, longestStreak } = computePostStreaks(allEntries, todayStr);
+  // ONE unified streak across sessions + training (shared helper, ALL history).
+  const { current: currentStreak, longest: longestStreak } = await getUnifiedActivityStreak();
   const activeDays = new Set(entries.map(e => String(e.date || '').split('T')[0])).size;
 
   // Summarize

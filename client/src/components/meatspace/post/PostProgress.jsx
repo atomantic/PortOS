@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ArrowLeft, Flame, Trophy, Clock, Gauge } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
@@ -69,13 +69,19 @@ export default function PostProgress({ subtab, onBack }) {
   const [range, setRange] = useState(90);
   const [domain, setDomain] = useState('all');
   const [loaded, setLoaded] = useState(false);
+  // Guard against out-of-order responses: switching All (a full-history scan)
+  // → 7d can let the slower All response land last and overwrite the 7d data
+  // while the 7d range stays selected. Only the newest request may set state.
+  const reqRef = useRef(0);
 
   const loadData = useCallback(async () => {
     // The Sessions sub-view renders PostHistory (its own fetch) — no need to
     // pull the progress payload for it.
     if (subtab === 'sessions') return;
+    const reqId = ++reqRef.current;
     const p = await getPostProgress(range, { silent: true })
       .catch((err) => { console.warn('⚠️ Failed to load POST progress: ' + err.message); return null; });
+    if (reqId !== reqRef.current) return; // a newer request superseded this one
     setProgress(p);
     setLoaded(true);
   }, [range, subtab]);

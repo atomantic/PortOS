@@ -18,7 +18,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
-import { getPostProgress } from './meatspacePost.js';
+import { getPostProgress, getPostStats, getUnifiedActivityStreak } from './meatspacePost.js';
+import { getTrainingStats } from './meatspacePostTraining.js';
 import { postProgressQuerySchema } from '../lib/postValidation.js';
 
 const mathTask = (score, questions) => ({ module: 'mental-math', type: 'multiplication', score, questions });
@@ -110,6 +111,50 @@ describe('getPostProgress bucketing', () => {
     expect(mine).toMatchObject({ id: 'm1', title: 'Elements', overallPct: 42 });
     // Past-due nextReview → dueCount 1.
     expect(mine.dueCount).toBe(1);
+  });
+});
+
+describe('unified streak agrees across every POST surface', () => {
+  it('getPostStats, getTrainingStats, and getPostProgress report the SAME streak', async () => {
+    // Interleave scored sessions and practice on distinct days: neither source
+    // alone is a full streak, but together they form a consecutive run ending
+    // today — every surface must see the same unified number.
+    state.sessions = [
+      { date: daysAgo(2), durationMs: 60000, score: 80, tasks: [mathTask(80, [q(true)])] },
+      { date: todayStr(), durationMs: 60000, score: 90, tasks: [mathTask(90, [q(true)])] },
+    ];
+    state.training = [
+      { date: daysAgo(1), module: 'morse', drillType: 'morse-copy', questionCount: 5, correctCount: 5, totalMs: 1000 },
+    ];
+
+    const [stats, training, progress, unified] = await Promise.all([
+      getPostStats(30),
+      getTrainingStats(30),
+      getPostProgress({ days: 30 }),
+      getUnifiedActivityStreak(),
+    ]);
+
+    // 3 consecutive active days (session, practice, session) → streak 3.
+    expect(unified.current).toBe(3);
+    expect(stats.currentStreak).toBe(3);
+    expect(training.currentStreak).toBe(3);
+    expect(progress.streak.current).toBe(3);
+    // Longest agrees too.
+    expect(stats.longestStreak).toBe(training.longestStreak);
+    expect(stats.longestStreak).toBe(progress.streak.longest);
+  });
+
+  it('a practice-only day still extends the launcher (getPostStats) streak', async () => {
+    // No scored sessions at all — the launcher/dashboard streak (getPostStats)
+    // must still count Morse practice, matching the Morse trainer.
+    state.training = [
+      { date: daysAgo(1), module: 'morse', drillType: 'morse-copy', questionCount: 5, correctCount: 5, totalMs: 1000 },
+      { date: todayStr(), module: 'morse', drillType: 'morse-copy', questionCount: 5, correctCount: 5, totalMs: 1000 },
+    ];
+    const stats = await getPostStats(30);
+    expect(stats.currentStreak).toBe(2);
+    // But completedToday stays SCORED-session specific — no scored POST today.
+    expect(stats.completedToday).toBe(false);
   });
 });
 
