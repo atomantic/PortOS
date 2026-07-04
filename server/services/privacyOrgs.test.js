@@ -56,6 +56,15 @@ describe('createOrg', () => {
     const [, params] = queryMock.mock.calls[0];
     expect(params[6]).toBe(JSON.stringify({ email: 'a@b.com' }));
   });
+
+  it('never logs the org name — it is privacy-adjacent data, like the vault plaintext', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    queryMock.mockResolvedValue({ rows: [orgRow({ name: 'Dr. Smith Family Medicine' })] });
+    await createOrg({ name: 'Dr. Smith Family Medicine', category: 'medical' });
+    const loggedLines = logSpy.mock.calls.map((args) => args.join(' ')).join('\n');
+    expect(loggedLines).not.toContain('Dr. Smith Family Medicine');
+    logSpy.mockRestore();
+  });
 });
 
 describe('listOrgs', () => {

@@ -10,6 +10,11 @@
  * Holdings responses join masked vault values ONLY — never plaintext. The
  * one decrypt path stays `revealValue()` in privacyVault.js; this service
  * never touches `value_enc`.
+ *
+ * Log lines never include the org `name` — a name like "my employer" or
+ * "Dr. Smith's practice" is itself privacy-adjacent (it reveals a
+ * relationship, not just an identity fact), so logs carry only id/category,
+ * mirroring the vault's plaintext-never-logged posture.
  */
 
 import { randomUUID } from 'crypto';
@@ -67,7 +72,10 @@ export async function createOrg(input) {
       input.notes ?? '',
     ],
   );
-  console.log(`🏢 Created privacy org ${id} (name=${input.name})`);
+  // Log id/category only — the org NAME (bank, employer, medical provider, …)
+  // is user-entered privacy-adjacent data and follows the same never-log
+  // posture as the vault's plaintext values (see privacyVault.js header).
+  console.log(`🏢 Created privacy org ${id} (category=${input.category ?? 'other'})`);
   return rowToOrg(rows[0]);
 }
 
