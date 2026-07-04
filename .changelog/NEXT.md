@@ -35,6 +35,7 @@
 
 ## Rounds
 
+- **[issue-2121] Reference analysis can now pull a voice out of a stacked mix, not just solo spans.** The "analyze a reference's attached audio" workbench used to only transcribe time ranges where a voice sings *alone* — useless for the many layered TikTok builds where a new part enters over the layers already playing and never appears solo. Each segment now has a **Stacked** toggle: turn it on and set a short *backing reference* window from the moment just before the voice enters, and extraction subtracts that backing layer's spectrum (a hand-rolled FFT + spectral-diff, all pure local DSP — zero AI calls) to recover the newly-added voice's pitch line, then transcribes it onto the round's tempo/key grid exactly like the solo path. Enabling the toggle auto-seeds a sensible backing window ending right where the voice enters; you can nudge it or set it from the playhead. Solo extraction is unchanged.
 - **[issue-2108] Built-in rounds now document their melody variant points.** Ah Poor Bird, Rose Rose Rose Red, and Zum Gali Gali carried melody/lyric choices that differ from other printed versions with no note explaining why — so a future accuracy check (or the AI evaluate feature) could mistake a deliberate variant for an error. Their notation now spells out each variant (Ah Poor Bird's C natural vs. the harmonic-minor C♯; Rose's verse and ending-note choices; Zum Gali Gali's D-minor transposition and refrain-only form) and cites the sources it was checked against.
 
 ## Fixed

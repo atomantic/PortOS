@@ -24,13 +24,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, AudioLines, Flag, FlagOff, Loader2, Mic, Play, Plus, Square, Trash2, Upload, Wand2, X,
+  ArrowLeft, AudioLines, Flag, FlagOff, Layers, Loader2, Mic, Play, Plus, Square, Trash2, Upload, Wand2, X,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
-import { proposeSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
+import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
 import { harmonyPartLabel } from '../../lib/songCraft';
 
@@ -256,6 +256,19 @@ function Waveform({ samples, durationMs, segments, playheadMs, onSeek }) {
 // "Melody" entry in scoreParts (which the parts editor deliberately excludes).
 const BASE_TARGET = '__base__';
 
+// Whether a segment is set up for stacked-mix extraction: a valid backing
+// window ([bgStartMs, bgEndMs)) that precedes the voice's entrance. Presence of
+// the pair IS "stacked mode" — the server persists it only when valid (#2121).
+const isStacked = (seg) => Number.isFinite(seg.bgStartMs) && Number.isFinite(seg.bgEndMs) && seg.bgEndMs > seg.bgStartMs;
+
+// A backing reference shorter than this can't hold even one FFT analysis frame
+// (2048 samples ≥ 128 ms at 16 kHz, less at higher rates) — averaging its
+// spectrum would fail and extraction would silently fall back to no-subtraction
+// (i.e. transcribe the loud backing layer AS the new voice). So we refuse to
+// seed, commit, or extract a window narrower than this, surfacing a toast
+// instead of a wrong-but-silent result (#2121).
+const MIN_BACKING_MS = 300;
+
 export default function ReferenceAnalysis({
   reference, layers = [], scoreParts = [], baseScore = '', tempo = null, songKey = '',
   onUpdateReference, onApplyPart, onClose,
@@ -322,6 +335,49 @@ export default function ReferenceAnalysis({
     setSegments(segments.filter((_, i) => i !== idx));
   }, [segments, setSegments]);
 
+  // Toggle stacked-mix extraction for a segment. Enabling seeds a backing
+  // window ending right where the voice enters (this segment's start) and
+  // reaching back a pre-roll sized to the segment (1.5–4 s, clamped to the
+  // audio's head); disabling strips the pair so the segment is solo again.
+  const toggleStacked = useCallback((idx) => {
+    const seg = segments[idx];
+    if (isStacked(seg)) {
+      const { bgStartMs: _bgStart, bgEndMs: _bgEnd, ...rest } = seg;
+      setSegments(segments.map((s, i) => (i === idx ? rest : s)));
+      return;
+    }
+    const bgEndMs = seg.startMs;
+    const preRoll = Math.min(4000, Math.max(1500, seg.endMs - seg.startMs));
+    const bgStartMs = Math.max(0, bgEndMs - preRoll);
+    if (bgEndMs - bgStartMs < MIN_BACKING_MS) {
+      toast.error('Not enough audio before this segment for a backing reference — move the segment start later.');
+      return;
+    }
+    setSegments(segments.map((s, i) => (i === idx ? { ...s, bgStartMs, bgEndMs } : s)));
+  }, [segments, setSegments]);
+
+  // Commit an edit to one end of the backing window, but only if the pair stays
+  // a valid, usable range — otherwise the segment would drop out of stacked mode
+  // (isStacked flips false) and silently revert to solo extraction. Reject the
+  // edit with a toast so the backing editor stays put and the mode is stable.
+  const commitBacking = useCallback((idx, field, ms) => {
+    const seg = segments[idx];
+    const bgStartMs = field === 'bgStartMs' ? ms : seg.bgStartMs;
+    const bgEndMs = field === 'bgEndMs' ? ms : seg.bgEndMs;
+    // The backing window must end at or before the voice enters (seg.startMs) —
+    // a window overlapping the segment already contains the new voice, so
+    // subtracting it would cancel the part we're trying to recover.
+    if (bgEndMs > seg.startMs) {
+      toast.error('The backing reference must end before the voice enters (before this segment’s start).');
+      return;
+    }
+    if (bgEndMs - bgStartMs < MIN_BACKING_MS) {
+      toast.error(`The backing reference must be at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s and end before the voice enters.`);
+      return;
+    }
+    updateSegment(idx, { [field]: ms });
+  }, [segments, updateSegment]);
+
   const seekTo = useCallback((ms) => {
     const el = audioRef.current;
     if (!el) return;
@@ -353,9 +409,24 @@ export default function ReferenceAnalysis({
     return layers.find((l) => l.id === layerId)?.label || layerId;
   }, [layers]);
 
-  // Extract a proposed score from one solo-sung segment (pure local DSP).
+  // Extract a proposed score from one segment (pure local DSP). A solo segment
+  // runs the offline NSDF path; a stacked segment (with a backing window) runs
+  // the spectral-diff path that subtracts the earlier layers first (#2121).
   const extractSegment = useCallback((seg) => {
     if (!decoded) return;
+    const stacked = isStacked(seg);
+    // Guard the backing-window invariants before running the DSP (covers a
+    // too-short window and one that overlaps the segment because the segment
+    // start was later moved earlier) — either would make stacked extraction
+    // subtract the wrong audio and silently propose a wrong part.
+    if (stacked && seg.bgEndMs > seg.startMs) {
+      toast.error('The backing reference overlaps this segment — set it to end before the voice enters, then extract.');
+      return;
+    }
+    if (stacked && (seg.bgEndMs - seg.bgStartMs) < MIN_BACKING_MS) {
+      toast.error(`The backing reference is too short — give it at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s of the layers before the voice enters.`);
+      return;
+    }
     setExtracting(true);
     // Yield a frame so the button's busy state paints before the O(n·lag) DSP.
     setTimeout(() => {
@@ -364,17 +435,24 @@ export default function ReferenceAnalysis({
       // silently change the part's time signature. parseScore defaults to 4/4
       // when the base score declares none.
       const { beats: beatsPerBar, beatValue } = parseScore(baseScore).time;
-      const { text } = proposeSegmentScore(decoded.samples, decoded.sampleRate, {
+      const common = {
         startMs: seg.startMs,
         endMs: seg.endMs,
         bpm: Number.isFinite(tempo) && tempo > 0 ? tempo : undefined,
         key: songKey || 'C',
         beatsPerBar,
         beatValue,
-      });
+      };
+      const { text } = stacked
+        ? proposeStackedSegmentScore(decoded.samples, decoded.sampleRate, {
+          ...common, bgStartMs: seg.bgStartMs, bgEndMs: seg.bgEndMs,
+        })
+        : proposeSegmentScore(decoded.samples, decoded.sampleRate, common);
       setExtracting(false);
       if (!text) {
-        toast.error('No clear sung pitch detected in that segment — try a tighter range around a solo voice.');
+        toast.error(stacked
+          ? 'No new voice recovered from the mix — check the backing window sits just before the voice enters, or try a solo span.'
+          : 'No clear sung pitch detected in that segment — try a tighter range around a solo voice.');
         return;
       }
       setProposal({ layerId: seg.layerId, text });
@@ -514,65 +592,123 @@ export default function ReferenceAnalysis({
         ) : (
           <ul className="space-y-2">
             {segments.map((seg, idx) => (
-              <li key={idx} className="bg-port-card border border-port-border rounded-lg p-3 flex flex-wrap items-center gap-2">
-                <select
-                  value={seg.layerId || ''}
-                  onChange={(e) => updateSegment(idx, { layerId: e.target.value })}
-                  aria-label="Segment layer"
-                  className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:border-port-accent focus:outline-none"
-                >
-                  <option value="">— Layer —</option>
-                  {layers.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-                </select>
-                <label className="flex items-center gap-1 text-xs text-gray-400">
-                  <span>from</span>
-                  <SecondsInput
-                    key={`start-${seg.startMs}`}
-                    valueMs={seg.startMs}
-                    onCommit={(ms) => updateSegment(idx, { startMs: ms })}
-                    ariaLabel="Segment start (seconds)"
-                  />
-                  <span>s</span>
-                </label>
-                <button type="button" onClick={() => updateSegment(idx, { startMs: currentMs() })} title="Set start from playhead" aria-label="Set segment start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
-                  <Flag size={14} />
-                </button>
-                <label className="flex items-center gap-1 text-xs text-gray-400">
-                  <span>to</span>
-                  <SecondsInput
-                    key={`end-${seg.endMs}`}
-                    valueMs={seg.endMs}
-                    onCommit={(ms) => updateSegment(idx, { endMs: ms })}
-                    ariaLabel="Segment end (seconds)"
-                  />
-                  <span>s</span>
-                </label>
-                <button type="button" onClick={() => updateSegment(idx, { endMs: currentMs() })} title="Set end from playhead" aria-label="Set segment end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
-                  <FlagOff size={14} />
-                </button>
-                <button type="button" onClick={() => playSegment(seg)} title="Play this segment" aria-label="Play segment" className="p-1 text-gray-500 hover:text-port-accent">
-                  <Play size={14} />
-                </button>
-                <span className="text-xs text-gray-600 flex-1 min-w-[80px]">{layerLabel(seg.layerId)}</span>
-                <button
-                  type="button"
-                  onClick={() => extractSegment(seg)}
-                  disabled={!decoded || extracting || seg.endMs <= seg.startMs}
-                  title={decoded ? 'Extract a proposed part from this range (local DSP)' : 'Waiting for audio to decode'}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10 disabled:opacity-40"
-                >
-                  {extracting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Extract part
-                </button>
-                <button type="button" onClick={() => removeSegment(idx)} aria-label="Remove segment" className="p-1.5 text-gray-500 hover:text-port-error">
-                  <Trash2 size={15} />
-                </button>
+              <li key={idx} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={seg.layerId || ''}
+                    onChange={(e) => updateSegment(idx, { layerId: e.target.value })}
+                    aria-label="Segment layer"
+                    className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:border-port-accent focus:outline-none"
+                  >
+                    <option value="">— Layer —</option>
+                    {layers.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+                  </select>
+                  <label className="flex items-center gap-1 text-xs text-gray-400">
+                    <span>from</span>
+                    <SecondsInput
+                      key={`start-${seg.startMs}`}
+                      valueMs={seg.startMs}
+                      onCommit={(ms) => updateSegment(idx, { startMs: ms })}
+                      ariaLabel="Segment start (seconds)"
+                    />
+                    <span>s</span>
+                  </label>
+                  <button type="button" onClick={() => updateSegment(idx, { startMs: currentMs() })} title="Set start from playhead" aria-label="Set segment start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <Flag size={14} />
+                  </button>
+                  <label className="flex items-center gap-1 text-xs text-gray-400">
+                    <span>to</span>
+                    <SecondsInput
+                      key={`end-${seg.endMs}`}
+                      valueMs={seg.endMs}
+                      onCommit={(ms) => updateSegment(idx, { endMs: ms })}
+                      ariaLabel="Segment end (seconds)"
+                    />
+                    <span>s</span>
+                  </label>
+                  <button type="button" onClick={() => updateSegment(idx, { endMs: currentMs() })} title="Set end from playhead" aria-label="Set segment end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                    <FlagOff size={14} />
+                  </button>
+                  <button type="button" onClick={() => playSegment(seg)} title="Play this segment" aria-label="Play segment" className="p-1 text-gray-500 hover:text-port-accent">
+                    <Play size={14} />
+                  </button>
+                  <span className="text-xs text-gray-600 flex-1 min-w-[60px]">{layerLabel(seg.layerId)}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleStacked(idx)}
+                    aria-pressed={isStacked(seg)}
+                    title={isStacked(seg)
+                      ? 'Stacked mix: subtracting the backing layers. Click to switch back to solo extraction.'
+                      : 'The voice never plays alone here — subtract the earlier layers using a backing window just before it enters.'}
+                    className={`flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg border ${isStacked(seg)
+                      ? 'border-port-accent bg-port-accent/10 text-port-accent'
+                      : 'border-port-border text-gray-400 hover:text-white'}`}
+                  >
+                    <Layers size={13} /> Stacked
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => extractSegment(seg)}
+                    disabled={!decoded || extracting || seg.endMs <= seg.startMs}
+                    title={decoded
+                      ? (isStacked(seg)
+                        ? 'Recover the new voice from the mix by spectral diff (local DSP)'
+                        : 'Extract a proposed part from this range (local DSP)')
+                      : 'Waiting for audio to decode'}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10 disabled:opacity-40"
+                  >
+                    {extracting ? <Loader2 size={14} className="animate-spin" /> : (isStacked(seg) ? <Layers size={14} /> : <Wand2 size={14} />)}
+                    {isStacked(seg) ? ' Extract from mix' : ' Extract part'}
+                  </button>
+                  <button type="button" onClick={() => removeSegment(idx)} aria-label="Remove segment" className="p-1.5 text-gray-500 hover:text-port-error">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+
+                {/* Stacked-mix backing window ("voice enters at" pairing) */}
+                {isStacked(seg) && (
+                  <div className="flex flex-wrap items-center gap-2 pl-1 border-l-2 border-port-accent/40 ml-1">
+                    <span className="flex items-center gap-1 text-xs text-port-accent"><Layers size={12} /> Backing ref</span>
+                    <label className="flex items-center gap-1 text-xs text-gray-400">
+                      <span>from</span>
+                      <SecondsInput
+                        key={`bg-start-${seg.bgStartMs}`}
+                        valueMs={seg.bgStartMs}
+                        onCommit={(ms) => commitBacking(idx, 'bgStartMs', ms)}
+                        ariaLabel="Backing reference start (seconds)"
+                      />
+                      <span>s</span>
+                    </label>
+                    <button type="button" onClick={() => commitBacking(idx, 'bgStartMs', currentMs())} title="Set backing start from playhead" aria-label="Set backing start from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                      <Flag size={14} />
+                    </button>
+                    <label className="flex items-center gap-1 text-xs text-gray-400">
+                      <span>to</span>
+                      <SecondsInput
+                        key={`bg-end-${seg.bgEndMs}`}
+                        valueMs={seg.bgEndMs}
+                        onCommit={(ms) => commitBacking(idx, 'bgEndMs', ms)}
+                        ariaLabel="Backing reference end (seconds)"
+                      />
+                      <span>s</span>
+                    </label>
+                    <button type="button" onClick={() => commitBacking(idx, 'bgEndMs', currentMs())} title="Set backing end from playhead" aria-label="Set backing end from playhead" className="p-1 text-gray-500 hover:text-port-accent">
+                      <FlagOff size={14} />
+                    </button>
+                    <button type="button" onClick={() => playSegment({ startMs: seg.bgStartMs, endMs: seg.bgEndMs })} title="Play the backing reference" aria-label="Play backing reference" className="p-1 text-gray-500 hover:text-port-accent">
+                      <Play size={14} />
+                    </button>
+                    <span className="text-xs text-gray-600">the layers already present, just before the voice enters</span>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         )}
         <p className="text-xs text-gray-600">
-          Layered builds usually expose each part solo right where it enters — mark that entrance loop.
-          Extraction of a voice from a stacked mix isn’t supported yet; pick solo spans.
+          Mark each part’s solo entrance loop for a clean extract. When a voice never plays alone,
+          turn on <span className="text-port-accent">Stacked</span> and set a backing reference from the moment just
+          before it enters — the extractor subtracts those layers and recovers the new voice by spectral diff.
         </p>
       </section>
 

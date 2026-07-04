@@ -173,6 +173,22 @@ describe('rounds route', () => {
     expect(patch.references[0].url).toBe('https://www.tiktok.com/@u/video/123');
   });
 
+  it('PUT /:id passes a segment stacked-mix backing window through validation (#2121)', async () => {
+    // The Zod schema strips unknown keys, so bgStartMs/bgEndMs must be typed on
+    // refSegmentSchema or they'd never reach the service sanitizer.
+    mocks.updateRound.mockResolvedValue({ id: 'song-1' });
+    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+      references: [{
+        url: 'https://www.tiktok.com/@u/video/123',
+        audioFilename: 'ref.wav',
+        segments: [{ layerId: 'alto', startMs: 8000, endMs: 16000, bgStartMs: 4000, bgEndMs: 8000 }],
+      }],
+    });
+    expect(res.status).toBe(200);
+    const [, patch] = mocks.updateRound.mock.calls[0];
+    expect(patch.references[0].segments[0]).toMatchObject({ bgStartMs: 4000, bgEndMs: 8000 });
+  });
+
   it('PUT /:id rejects a reference without a url', async () => {
     const res = await request(makeApp()).put('/api/rounds/song-1').send({
       references: [{ label: 'no url' }],

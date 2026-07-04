@@ -110,10 +110,15 @@ const scorePartSchema = z.object({
 // One labeled time range on a reference's attached audio (#2106). The service
 // clamps times and drops zero/negative-length spans; the schema only types the
 // fields (startMs/endMs required — a span without both selects nothing).
+// `bgStartMs`/`bgEndMs` are the optional stacked-mix backing window (#2121) —
+// a slice just before the voice enters, used to spectral-subtract the earlier
+// layers; the service drops the pair unless it forms a valid positive range.
 const refSegmentSchema = z.object({
   layerId: str(svc.ID_MAX_LENGTH).optional().default(''),
   startMs: z.number(),
   endMs: z.number(),
+  bgStartMs: z.number().optional(),
+  bgEndMs: z.number().optional(),
 });
 
 // A reference link/video (e.g. a TikTok performance). `url` is required; the

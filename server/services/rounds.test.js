@@ -391,6 +391,28 @@ describe('rounds service', () => {
     ]);
   });
 
+  it('persists a stacked-mix backing window only when valid; drops it otherwise (#2121)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: [
+          { layerId: 'lead', startMs: 8000, endMs: 16000, bgStartMs: 4000.6, bgEndMs: 8000.2 }, // valid (bgEnd rounds to startMs)
+          { layerId: 'bass', startMs: 20000, endMs: 24000, bgStartMs: 9000, bgEndMs: 9000 },     // zero-length bg → dropped
+          { layerId: 'alto', startMs: 30000, endMs: 34000, bgStartMs: 'x', bgEndMs: 29000 },     // non-finite bg → dropped
+          { layerId: 'tenor', startMs: 40000, endMs: 44000, bgStartMs: 38000, bgEndMs: 41000 },  // bgEnd > startMs (overlaps) → dropped
+        ],
+      }],
+    });
+    expect(song.references[0].segments).toEqual([
+      { layerId: 'lead', startMs: 8000, endMs: 16000, bgStartMs: 4001, bgEndMs: 8000 },
+      { layerId: 'bass', startMs: 20000, endMs: 24000 },
+      { layerId: 'alto', startMs: 30000, endMs: 34000 },
+      { layerId: 'tenor', startMs: 40000, endMs: 44000 },
+    ]);
+  });
+
   it('drops malformed reference segments and bounds the list (#2106)', () => {
     const song = svc.sanitizeRound({
       id: 'x',
