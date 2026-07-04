@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useState } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // The analysis view's DSP (referenceAnalysis.js) and transcription
@@ -34,22 +35,62 @@ const sine = (hz, seconds) => {
   return out;
 };
 
-// Fake Web Audio decode: any fetched bytes decode to 1 s of A3 (220 Hz).
-const installFakeAudio = () => {
-  const samples = sine(220, 1.0);
+// A voice-like tone (fundamental + 2 harmonics) so the spectral harmonic-sum
+// estimator has an overtone series to lock onto.
+const harmonicTone = (f0, seconds, amp = 0.5) => {
+  const n = Math.round(seconds * SR);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    out[i] = amp * (Math.sin(2 * Math.PI * f0 * t) + 0.5 * Math.sin(2 * Math.PI * 2 * f0 * t) + 0.33 * Math.sin(2 * Math.PI * 3 * f0 * t));
+  }
+  return out;
+};
+const concatArr = (...parts) => {
+  const out = new Float32Array(parts.reduce((s, p) => s + p.length, 0));
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+};
+const mixArr = (...parts) => {
+  const n = Math.min(...parts.map((p) => p.length));
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) for (const p of parts) out[i] += p[i];
+  return out;
+};
+
+// Fake Web Audio decode: any fetched bytes decode to the given mono samples.
+const installFakeAudioBuffer = (samples, durationSec) => {
   window.AudioContext = function FakeAudioContext() {
     return {
       sampleRate: SR,
       decodeAudioData: () => Promise.resolve({
         getChannelData: () => samples,
         sampleRate: SR,
-        duration: 1.0,
+        duration: durationSec,
       }),
       close: () => Promise.resolve(),
     };
   };
   global.fetch = vi.fn(() => Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }));
 };
+
+// Default fake: 1 s of A3 (220 Hz) for the solo-path tests.
+const installFakeAudio = () => installFakeAudioBuffer(sine(220, 1.0), 1.0);
+
+// A controlled host that feeds reference updates back as props, so a toggle
+// that persists through onUpdateReference re-renders the view (the parent owns
+// segment state in production).
+function ControlledAnalysis({ initialRef, ...props }) {
+  const [ref, setRef] = useState(initialRef);
+  return (
+    <ReferenceAnalysis
+      reference={ref}
+      onUpdateReference={(id, key, val) => setRef((r) => ({ ...r, [key]: val }))}
+      {...props}
+    />
+  );
+}
 
 const baseRef = {
   id: 'ref-1',
@@ -209,6 +250,79 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
     const applied = onApplyPart.mock.calls[0][0];
     expect(applied.base).toBe(true);
     expect(applied.score).toMatch(/A3/);
+  });
+});
+
+describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
+  it('toggling Stacked seeds a backing window ending where the voice enters', () => {
+    installFakeAudio();
+    const onUpdateReference = vi.fn();
+    render(
+      <ReferenceAnalysis
+        reference={{ ...baseRef, segments: [{ layerId: 'bass', startMs: 3000, endMs: 6000 }] }}
+        layers={layers}
+        scoreParts={[]}
+        tempo={60}
+        songKey="C"
+        onUpdateReference={onUpdateReference}
+        onApplyPart={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
+    expect(onUpdateReference).toHaveBeenCalledWith('ref-1', 'segments', [
+      // Pre-roll clamped to the segment length (3 s → capped at 4 s), ending at
+      // the segment start (the voice's entrance).
+      { layerId: 'bass', startMs: 3000, endMs: 6000, bgStartMs: 0, bgEndMs: 3000 },
+    ]);
+  });
+
+  it('warns when there is no audio before the segment to use as a backing ref', () => {
+    installFakeAudio();
+    render(
+      <ReferenceAnalysis
+        reference={{ ...baseRef, segments: [{ layerId: 'bass', startMs: 0, endMs: 1000 }] }}
+        layers={layers}
+        scoreParts={[]}
+        tempo={60}
+        songKey="C"
+        onUpdateReference={vi.fn()}
+        onApplyPart={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
+    expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/not enough audio before/i));
+  });
+
+  it('recovers a new voice from a stacked mix end-to-end (toggle → extract from mix)', async () => {
+    // [0, 0.8s]: C4 backing alone. [0.8, 1.8s]: C4 + a new A4 (440) on top.
+    const audio = concatArr(harmonicTone(262, 0.8), mixArr(harmonicTone(262, 1.0), harmonicTone(440, 1.0)));
+    installFakeAudioBuffer(audio, 1.8);
+    const onApplyPart = vi.fn();
+    render(
+      <ControlledAnalysis
+        initialRef={{ ...baseRef, segments: [{ layerId: 'bass', startMs: 800, endMs: 1800 }] }}
+        layers={layers}
+        scoreParts={[]}
+        tempo={60}
+        songKey="C"
+        onApplyPart={onApplyPart}
+        onClose={vi.fn()}
+      />,
+    );
+    // Wait for decode (solo Extract enabled), then flip to stacked mode. The
+    // toggle derives the backing window [0, 800] — the C4-only pre-entrance.
+    await waitFor(() => expect(screen.getByRole('button', { name: /extract part/i }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
+
+    const extractFromMix = await screen.findByRole('button', { name: /extract from mix/i });
+    fireEvent.click(extractFromMix);
+
+    // The spectral diff subtracts the C4 backing and transcribes the new A4.
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+    expect(screen.getAllByTestId('scoresheet')[0].textContent).toMatch(/A4/);
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
 

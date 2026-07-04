@@ -254,6 +254,12 @@ const sanitizeRecording = (r) => {
 // times are clamped non-negative integers and a zero/negative-length span is
 // dropped (it selects no audio). Used by the client's analysis view to extract
 // a per-layer pitch track from the span.
+//
+// Optional stacked-mix backing window (#2121): `bgStartMs`/`bgEndMs` mark a
+// slice just BEFORE the voice enters (the earlier layers alone) so the client
+// can spectral-subtract the backing and extract a voice that never appears
+// solo. Purely additive — the pair only persists together when it forms a
+// valid positive-length range, so a legacy solo segment round-trips unchanged.
 const sanitizeRefSegment = (s) => {
   if (!s || typeof s !== 'object') return null;
   const startRaw = finiteOrNull(s.startMs);
@@ -262,11 +268,22 @@ const sanitizeRefSegment = (s) => {
   const startMs = Math.max(0, Math.round(startRaw));
   const endMs = Math.max(0, Math.round(endRaw));
   if (endMs <= startMs) return null;
-  return {
+  const seg = {
     layerId: trimField(s.layerId, ID_MAX_LENGTH),
     startMs,
     endMs,
   };
+  const bgStartRaw = finiteOrNull(s.bgStartMs);
+  const bgEndRaw = finiteOrNull(s.bgEndMs);
+  if (bgStartRaw !== null && bgEndRaw !== null) {
+    const bgStartMs = Math.max(0, Math.round(bgStartRaw));
+    const bgEndMs = Math.max(0, Math.round(bgEndRaw));
+    if (bgEndMs > bgStartMs) {
+      seg.bgStartMs = bgStartMs;
+      seg.bgEndMs = bgEndMs;
+    }
+  }
+  return seg;
 };
 
 // One reference link/video ({ id, url, label, note }) — external study
