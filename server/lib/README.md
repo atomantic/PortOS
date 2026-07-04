@@ -221,7 +221,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
 | `telegramClient.js` | Telegram bot client. |
-| `vaultCrypto.js` | Privacy Center PII Vault field-level encryption (issue #2140). AES-256-GCM `encryptValue`/`decryptValue` (`v1:<iv>:<tag>:<ct>` format, per-value 12-byte IV), `ensureVaultKey()` self-heal (generates `PRIVACY_VAULT_KEY` into `.env` on first write, never logs the value), `isVaultKeyConfigured()`, and the per-type `maskValue(type, plaintext)` display masking (last-4 / domain-visible / street-masked). Plaintext must never be logged by callers. |
+| `vaultCrypto.js` | Privacy Center PII Vault field-level encryption (issue #2140). AES-256-GCM `encryptValue`/`decryptValue` (`v1:<iv>:<tag>:<ct>` format, per-value 12-byte IV), `ensureVaultKey()` self-heal (generates `PRIVACY_VAULT_KEY` into the install root's `.env` on first write, replacing any invalid line; never logs the value), key resolution that falls back to reading `.env` so decrypt/status survive a server restart, `isVaultKeyConfigured()`, and the per-type `maskValue(type, plaintext)` display masking (last-4 / domain-visible / street-masked). Plaintext must never be logged by callers. |
 
 ## Model & config
 

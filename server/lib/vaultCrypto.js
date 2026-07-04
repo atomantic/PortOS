@@ -18,6 +18,7 @@
  */
 
 import { randomBytes, createCipheriv, createDecipheriv } from 'crypto';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 import { PATHS, tryReadFile, atomicWrite } from './fileUtils.js';
 
@@ -26,7 +27,30 @@ const IV_BYTES = 12;
 const KEY_BYTES = 32;
 const FORMAT_VERSION = 'v1';
 
-const DEFAULT_ENV_PATH = join(PATHS.root, '.env');
+// Anchor to the INSTALL root, not the code root: the encrypted rows live in
+// the ONE install-shared Postgres, so the key must live next to that data. A
+// server booted from a CoS git worktree (PORTOS_DATA_ROOT pinned, #1947) has
+// no .env in its checkout — anchoring to PATHS.root there would mint a
+// throwaway key in the worktree, encrypt shared rows with it, and destroy the
+// key when the worktree is pruned (irreversible PII loss).
+const DEFAULT_ENV_PATH = join(PATHS.installRoot, '.env');
+
+// Test hook: unit tests point this at a temp .env so the read-path fallback
+// below never touches (or is satisfied by) the real install's key.
+let envPathOverride = null;
+export function __setVaultEnvPathForTests(path) { envPathOverride = path; }
+const resolveEnvPath = () => envPathOverride ?? DEFAULT_ENV_PATH;
+
+/** First VALID key among all PRIVACY_VAULT_KEY= lines in the .env file. */
+function readKeyFromEnvFile(envPath) {
+  let content = '';
+  try { content = readFileSync(envPath, 'utf8'); } catch { return null; }
+  for (const match of content.matchAll(/^PRIVACY_VAULT_KEY=(.*)$/gm)) {
+    const raw = match[1].trim();
+    if (parseKey(raw)) return raw;
+  }
+  return null;
+}
 
 /** Parse a hex- or base64-encoded 32-byte key; null when absent/invalid. */
 function parseKey(raw) {
@@ -41,8 +65,23 @@ function parseKey(raw) {
   return null;
 }
 
+/**
+ * Resolve the vault key: `process.env` first, then the `.env` file. The file
+ * fallback is what makes READS survive a server restart — nothing loads `.env`
+ * into `process.env` at boot (PortOS has no dotenv), so without it every
+ * decrypt/status call would fail after `pm2 restart` until the next WRITE
+ * happened to run `ensureVaultKey()`. A key found in the file is adopted into
+ * `process.env` so subsequent calls take the fast path.
+ */
 function getVaultKey() {
-  return parseKey(process.env.PRIVACY_VAULT_KEY);
+  const fromEnv = parseKey(process.env.PRIVACY_VAULT_KEY);
+  if (fromEnv) return fromEnv;
+  const fromFile = readKeyFromEnvFile(resolveEnvPath());
+  if (fromFile) {
+    process.env.PRIVACY_VAULT_KEY = fromFile;
+    return parseKey(fromFile);
+  }
+  return null;
 }
 
 /** True when PRIVACY_VAULT_KEY holds a valid 32-byte key. */
@@ -51,27 +90,33 @@ export function isVaultKeyConfigured() {
 }
 
 /**
- * Self-heal a missing vault key: when `PRIVACY_VAULT_KEY` is unset or invalid,
- * generate 32 random bytes, append the hex form to `.env` (created if absent),
- * and set `process.env` so the running server picks it up immediately. Reads
- * the `.env` file first so a key added after boot is adopted rather than
- * duplicated. Returns `{ generated }`. Never logs the key value.
+ * Self-heal a missing vault key: when `PRIVACY_VAULT_KEY` is unset or invalid
+ * in both `process.env` and the `.env` file, generate 32 random bytes, write
+ * the hex form to `.env` (created if absent), and set `process.env` so the
+ * running server picks it up immediately. Any existing INVALID
+ * `PRIVACY_VAULT_KEY=` lines (e.g. an uncommented `.env.example` placeholder)
+ * are REPLACED, not appended-around — appending would leave the invalid first
+ * line winning future reads and silently re-rotate the key on every restart,
+ * orphaning previously encrypted rows. Returns `{ generated }`. Never logs
+ * the key value.
  */
-export async function ensureVaultKey({ envPath = DEFAULT_ENV_PATH } = {}) {
-  if (isVaultKeyConfigured()) return { generated: false };
+export async function ensureVaultKey({ envPath = resolveEnvPath() } = {}) {
+  if (parseKey(process.env.PRIVACY_VAULT_KEY)) return { generated: false };
 
-  const content = (await tryReadFile(envPath)) ?? '';
-  const existing = content.match(/^PRIVACY_VAULT_KEY=(.*)$/m);
-  if (existing && parseKey(existing[1])) {
-    process.env.PRIVACY_VAULT_KEY = existing[1].trim();
+  const fromFile = readKeyFromEnvFile(envPath);
+  if (fromFile) {
+    process.env.PRIVACY_VAULT_KEY = fromFile;
     return { generated: false };
   }
 
   const key = randomBytes(KEY_BYTES).toString('hex');
-  const separator = content && !content.endsWith('\n') ? '\n' : '';
-  await atomicWrite(envPath, `${content}${separator}PRIVACY_VAULT_KEY=${key}\n`);
+  const content = (await tryReadFile(envPath)) ?? '';
+  // Drop any invalid PRIVACY_VAULT_KEY lines (none are valid — checked above).
+  const cleaned = content.replace(/^PRIVACY_VAULT_KEY=.*(\r?\n|$)/gm, '');
+  const separator = cleaned && !cleaned.endsWith('\n') ? '\n' : '';
+  await atomicWrite(envPath, `${cleaned}${separator}PRIVACY_VAULT_KEY=${key}\n`);
   process.env.PRIVACY_VAULT_KEY = key;
-  console.log('🔐 Generated PRIVACY_VAULT_KEY and appended it to .env (vault encryption engaged)');
+  console.log('🔐 Generated PRIVACY_VAULT_KEY and wrote it to .env (vault encryption engaged)');
   return { generated: true };
 }
 
@@ -142,9 +187,13 @@ export function maskValue(type, plaintext) {
       return `${value[0]}•••@${value.slice(at + 1)}`;
     }
     case 'address': {
-      const comma = value.indexOf(',');
-      if (comma === -1) return '•••';
-      return `•••${value.slice(comma)}`;
+      // Keep only the trailing city/state segments visible. Masking just the
+      // FIRST comma segment would leak the street whenever the value starts
+      // with a non-street segment ("c/o Adam Eivy, 123 Main St, ...").
+      const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
+      if (parts.length < 2) return '•••';
+      const visible = parts.slice(parts.length >= 3 ? -2 : -1);
+      return `•••, ${visible.join(', ')}`;
     }
     default:
       return `${value[0]}•••`;

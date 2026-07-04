@@ -4,19 +4,27 @@
  * against a temp .env, and the per-type display masking.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
+  __setVaultEnvPathForTests,
 } from './vaultCrypto.js';
 
 // Fixed 32-byte test key (hex). Never a real key.
 const HEX_KEY = 'a'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
 
+// Point the module's .env fallback at a nonexistent file so "key not
+// configured" tests can't be satisfied by (or write into) the real install's
+// .env. Individual tests re-point it at their own temp files.
+const NO_ENV = join(tmpdir(), 'vault-crypto-no-such-dir', '.env');
+beforeAll(() => __setVaultEnvPathForTests(NO_ENV));
+
 afterAll(() => {
+  __setVaultEnvPathForTests(null);
   if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
   else process.env.PRIVACY_VAULT_KEY = originalKey;
 });
@@ -83,6 +91,40 @@ describe('encryptValue / decryptValue', () => {
   });
 });
 
+describe('key resolution survives a restart (read-path .env fallback)', () => {
+  let dir;
+  let envPath;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'vault-restart-'));
+    envPath = join(dir, '.env');
+    __setVaultEnvPathForTests(envPath);
+    delete process.env.PRIVACY_VAULT_KEY;
+  });
+
+  afterEach(() => {
+    __setVaultEnvPathForTests(NO_ENV);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads decrypt/status from .env when process.env is empty (post-restart)', () => {
+    // Simulate: key generated pre-restart lives in .env; process.env is fresh.
+    writeFileSync(envPath, `PRIVACY_VAULT_KEY=${HEX_KEY}\n`);
+    process.env.PRIVACY_VAULT_KEY = HEX_KEY;
+    const ct = encryptValue('survives restart');
+    delete process.env.PRIVACY_VAULT_KEY; // the "restart"
+    expect(isVaultKeyConfigured()).toBe(true); // status stays truthful
+    expect(decryptValue(ct)).toBe('survives restart'); // reveal works without a prior write
+    expect(process.env.PRIVACY_VAULT_KEY).toBe(HEX_KEY); // adopted for the fast path
+  });
+
+  it('ignores invalid PRIVACY_VAULT_KEY lines and adopts the first valid one', () => {
+    writeFileSync(envPath, `PRIVACY_VAULT_KEY=not-a-key\nPRIVACY_VAULT_KEY=${HEX_KEY}\n`);
+    expect(isVaultKeyConfigured()).toBe(true);
+    expect(process.env.PRIVACY_VAULT_KEY).toBe(HEX_KEY);
+  });
+});
+
 describe('ensureVaultKey', () => {
   let dir;
   let envPath;
@@ -127,6 +169,24 @@ describe('ensureVaultKey', () => {
     expect(isVaultKeyConfigured()).toBe(true);
   });
 
+  it('REPLACES an invalid PRIVACY_VAULT_KEY line instead of appending a duplicate', async () => {
+    // e.g. the user uncommented the .env.example placeholder. Appending around
+    // it would let the invalid first line win future reads → silent key
+    // rotation on every restart, orphaning previously encrypted rows.
+    writeFileSync(envPath, 'OTHER_VAR=1\nPRIVACY_VAULT_KEY=<64 hex chars>\nLAST_VAR=2\n');
+    expect(await ensureVaultKey({ envPath })).toEqual({ generated: true });
+    const content = readFileSync(envPath, 'utf8');
+    expect(content.match(/^PRIVACY_VAULT_KEY=/gm)).toHaveLength(1);
+    expect(content).toMatch(/^PRIVACY_VAULT_KEY=[0-9a-f]{64}$/m);
+    expect(content).toContain('OTHER_VAR=1');
+    expect(content).toContain('LAST_VAR=2');
+    // Idempotent across the next "restart": the same key is adopted, not rotated.
+    const adopted = process.env.PRIVACY_VAULT_KEY;
+    delete process.env.PRIVACY_VAULT_KEY;
+    expect(await ensureVaultKey({ envPath })).toEqual({ generated: false });
+    expect(process.env.PRIVACY_VAULT_KEY).toBe(adopted);
+  });
+
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 });
 
@@ -151,6 +211,10 @@ describe('maskValue', () => {
   it('masks the street segment of an address', () => {
     expect(maskValue('address', '123 Main St, Portland, OR 97201')).toBe('•••, Portland, OR 97201');
     expect(maskValue('address', '123 Main St')).toBe('•••');
+    // A leading non-street segment must not shift the street into view.
+    expect(maskValue('address', 'c/o Adam Eivy, 123 Main St, Portland, OR 97201')).toBe('•••, Portland, OR 97201');
+    // Two segments: only the last is visible (both would disclose the street).
+    expect(maskValue('address', '123 Main St, Portland')).toBe('•••, Portland');
   });
 
   it('falls back to first-char masking for other types', () => {
