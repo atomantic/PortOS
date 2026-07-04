@@ -1029,9 +1029,12 @@ describe('getPostStats — byModule averaging, days window cutoff, empty-window 
 
   it('averages and rounds byModule scores across multiple tasks in a session', async () => {
     const today = new Date().toISOString().split('T')[0];
+    // The session-level `score` is deliberately a different number from the
+    // task-mean so this can't pass by mistakenly reading the session score
+    // instead of averaging byModule's own per-task scores.
     mockSessions([
       {
-        date: today, score: 68,
+        date: today, score: 40,
         tasks: [
           { module: 'mental-math', type: 'doubling-chain', score: 60 },
           { module: 'mental-math', type: 'multiplication', score: 75 },
