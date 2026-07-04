@@ -559,13 +559,21 @@ function scoreReactionTime(drillData, questions) {
   // median RT vs a reference curve drives the score (issue #2094). A false start
   // (pressing before the stimulus) invalidates its trial; in choice mode a wrong
   // target also invalidates it. In simple mode "correct" == a clean, timed press.
+  // The latency score is then scaled by the VALID-TRIAL RATE — otherwise one
+  // lucky 200ms press among a run of false starts would persist a perfect 100
+  // headline score. Mirrors the blended-score convention everywhere else, where
+  // completion/invalid trials fold into the headline number while the separated
+  // medianMs/accuracy metrics stay pure.
   const valid = recomputed.filter(q => q.correct && !q.falseStart && q.responseMs > 0);
   const latencies = valid.map(q => q.responseMs);
   const medianMs = median(latencies);
   const bestMs = latencies.length ? Math.min(...latencies) : null;
-  const score = medianMs == null
+  const totalTrials = recomputed.length;
+  const validRate = totalTrials ? valid.length / totalTrials : 0;
+  const latencyScore = medianMs == null
     ? 0
-    : Math.min(100, Math.max(0, Math.round((100 * (refMs - medianMs)) / (refMs - fastMs))));
+    : Math.min(100, Math.max(0, (100 * (refMs - medianMs)) / (refMs - fastMs)));
+  const score = Math.round(latencyScore * validRate);
 
   // A press attempt is any non-false-start trial with a real latency; accuracy is
   // the share of those that were valid (in simple mode every clean press is valid,

@@ -316,8 +316,26 @@ describe('cognitive drill scorers (recompute the answer key, never trust client)
     expect(fast.medianMs).toBe(240);
     expect(slow.medianMs).toBe(520);
     expect(fast.score).toBeGreaterThan(slow.score);
-    // simple-mode reference curve: 200ms→100, 600ms→0. Median 240 → round(100*(600-240)/400)=90.
+    // simple-mode reference curve: 200ms→100, 600ms→0. Median 240, all trials
+    // valid (validRate 1) → round(100*(600-240)/400)=90.
     expect(fast.score).toBe(90);
+  });
+
+  it('reaction-time: one lucky valid press among false starts cannot score 100 (valid-rate scaling)', () => {
+    const drillData = { type: 'reaction-time', config: { mode: 'simple' }, trials: Array.from({ length: 4 }, () => ({ delayMs: 500 })) };
+    const { score, medianMs, accuracy } = scoreCognitiveDrill('reaction-time', drillData, [
+      { index: 0, answered: 'react', responseMs: 200 }, // perfect latency
+      { index: 1, answered: null, responseMs: 0, falseStart: true },
+      { index: 2, answered: null, responseMs: 0, falseStart: true },
+      { index: 3, answered: null, responseMs: 0, falseStart: true },
+    ]);
+    // Latency component is perfect (200ms → 100) but only 1 of 4 trials is valid →
+    // 100 × 0.25 = 25. The separated medianMs metric stays pure (200).
+    expect(medianMs).toBe(200);
+    expect(score).toBe(25);
+    // accuracy (valid over pressed) is 1 — false starts fold into the headline
+    // score and completion, not into the answered-only accuracy.
+    expect(accuracy).toBe(1);
   });
 
   it('reaction-time scores 0 when every trial is a false start (no valid latency)', () => {
