@@ -4,6 +4,10 @@
 
 - **[issue-2150] Activity timeline** — a new `/timeline` page shows a unified, day-by-day view of your activity (emails sent/received and calendar events, with more sources coming), backed by a machine-local `human_activity_events` store that your existing message and calendar syncs populate automatically. Pick any day (deep-linkable via `/timeline/:date`), see an hourly activity histogram and per-source tallies, and browse the day's events. Only metadata and a short summary line are stored — full message bodies stay in their per-source caches — and the timeline is machine-local (never federated to peers), like Tribe.
 
+## Privacy Center
+
+- **[issue-2140] Encrypted PII Vault** — PortOS can now store your identity facts (legal name, addresses, phones, emails, DOB, ID documents, financial-account stubs) in an encrypted-at-rest vault: values are AES-256-GCM encrypted with a key auto-provisioned into your `.env` on first use, the API only ever shows masked values (like `••••6789` or `j•••@example.com`) unless you explicitly reveal one, and sensitive document types can never be marked for use in the upcoming data-broker scans. This is Phase 1 of the Privacy Center (epic #2138) — the UI arrives in Phase 3.
+
 ## Songs
 
 - **[issue-2109] The live vocal Tuner now locks onto the note you're singing instead of flickering.** Holding a steady note used to make the readout strobe — the note label flipped between neighbors, the needle lurched, and the display dropped to "—" on every breath or consonant. The tuner now holds a stable reading through brief dropouts (dimming while it coasts), only blanks after a real pause, keeps one note label while your pitch wanders up to ~60¢ around it, and re-locks promptly when you actually change notes — so a held note shows one label with a gently moving needle.
