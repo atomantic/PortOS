@@ -1040,6 +1040,41 @@ CREATE TABLE IF NOT EXISTS lora_training_runs (
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_status ON lora_training_runs (status);
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_runs (character_id);
 
+-- Privacy Center: PII Vault (issue #2140, epic #2138). Encrypted-at-rest
+-- identity facts — `value_enc` is AES-256-GCM ciphertext (`v1:<iv>:<tag>:<ct>`,
+-- key from PRIVACY_VAULT_KEY; see server/lib/vaultCrypto.js). Plaintext is
+-- NEVER stored; `masked_value` is the display form. Machine-local — no
+-- federation, no tombstones (deferred, #2148); a delete is a hard DELETE.
+-- `use_for_scans` gates which facts the broker scan engine may disclose
+-- (hard-false for ssn/passport/drivers_license/financial_account — enforced
+-- app-side). Mirrors the privacy blocks in server/lib/db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS privacy_vault_records (
+  id UUID PRIMARY KEY,
+  type TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  value_enc TEXT NOT NULL,
+  masked_value TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'current',
+  valid_from DATE,
+  valid_to DATE,
+  share_with_twin BOOLEAN NOT NULL DEFAULT FALSE,
+  use_for_scans BOOLEAN NOT NULL DEFAULT FALSE,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Type is the primary list filter (all addresses, all emails, ...).
+CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type);
+-- Explicit consent audit rows (v1 subject is always 'self'); the broker
+-- opt-out engine builds on this trail. Append-only.
+CREATE TABLE IF NOT EXISTS privacy_consents (
+  id UUID PRIMARY KEY,
+  subject TEXT NOT NULL DEFAULT 'self',
+  scope TEXT NOT NULL,
+  method TEXT NOT NULL,
+  granted_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Deletion audit log (incident #1248-follow-up). Append-only forensic trail of
 -- every tombstone / un-tombstone / hard-delete of user-authored records, written
 -- by a DB trigger so it captures deletions from ANY source (app, a test suite's
