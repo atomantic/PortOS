@@ -15,6 +15,8 @@
  * NO AI-provider calls happen anywhere in this module.
  */
 
+import { shuffle } from '../lib/arrayUtils.js';
+
 // Coarse module tag stored on scored cognitive tasks, so stats read as
 // `byDrill['cognitive:<type>']` (parallel to `mental-math:<type>`).
 export const COGNITIVE_MODULE = 'cognitive';
@@ -102,17 +104,6 @@ export function median(nums) {
   if (!list.length) return null;
   const mid = Math.floor(list.length / 2);
   return list.length % 2 ? list[mid] : Math.round((list[mid - 1] + list[mid]) / 2);
-}
-
-// Fisher-Yates shuffle. Used by Schulte table cell placement and mental
-// rotation option ordering — never a naive `sort(() => Math.random() - 0.5)`.
-function shuffle(arr) {
-  const out = [...arr];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
 }
 
 // --- Mental rotation: grid-cell shape helpers -------------------------------

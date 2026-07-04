@@ -30,7 +30,9 @@ import {
   getMultiplicationProgress,
   getCognitiveProgress,
   generateDrill,
+  getAdaptivePreview,
   getPostStats,
+  getAdaptivePreview,
   deriveTaskAccuracy,
   deriveTaskCompletion,
 } from './meatspacePost.js';
@@ -668,13 +670,15 @@ describe('submitPostSession — memory drill schedule advance', () => {
     expect(memoryWrite).toBeUndefined();
   });
 
-  it('does not advance a schedule for an unsupported memory drill type with no memoryItemId', async () => {
+  it('does not advance a schedule for a supported memory task with no memoryItemId', async () => {
     await submitPostSession({
       cadence: 'daily',
       modules: ['memory'],
       tasks: [{
         module: 'memory',
         type: 'memory-fill-blank',
+        // No memoryItemId — the schedule/mastery advance loop gates on it
+        // regardless of whether the type is in POST_SUPPORTED_MEMORY_TYPES.
         questions: [{ prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500 }],
         totalMs: 500,
       }],
@@ -683,6 +687,131 @@ describe('submitPostSession — memory drill schedule advance', () => {
 
     const memoryWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-memory-items'));
     expect(memoryWrite).toBeUndefined();
+  });
+
+  // Regression (issue #2099, fix #1): memory-fill-blank used to be ABSENT from
+  // POST_SUPPORTED_MEMORY_TYPES, so submitPostSession forced its score to 0
+  // (treating it as an "unsupported memory drill") and the schedule/mastery
+  // advance loop below skipped it entirely — any fill-blank work done inside a
+  // scored session was silently unrecorded. It must now behave exactly like
+  // memory-sequence/memory-element-flash: trust the client-computed score and
+  // advance the drilled item's schedule + mastery.
+  it('trusts the client score and advances schedule/mastery for a memory-fill-blank task (issue #2099/#2116)', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['memory'],
+      tasks: [{
+        module: 'memory',
+        type: 'memory-fill-blank',
+        memoryItemId: 'song-1',
+        questions: [
+          { prompt: 'a ____ line', expected: 'test', answered: 'test', correct: true, responseMs: 500, chunkId: 'verse-1' },
+        ],
+        score: 85,
+        totalMs: 500,
+      }],
+      tags: {},
+    });
+
+    // Client-computed score is trusted for this now-supported type, not forced to 0.
+    expect(session.tasks[0].score).toBe(85);
+
+    const memoryWrites = atomicWrite.mock.calls.filter(([path]) => String(path).includes('post-memory-items'));
+    expect(memoryWrites.length).toBe(2); // schedule advance + mastery merge
+    const scheduleWrite = memoryWrites[0];
+    const updatedItem = scheduleWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedItem.schedule.intervalDays).toBeGreaterThan(0);
+    const masteryWrite = memoryWrites[memoryWrites.length - 1];
+    const updatedMastery = masteryWrite[1].items.find(i => i.id === 'song-1');
+    expect(updatedMastery.mastery.chunks['verse-1']).toEqual({ correct: 1, attempts: 1, lastPracticed: expect.any(String) });
+  });
+});
+
+// =============================================================================
+// WEIGHTED SESSION SCORE — scoring.weights (issue #2099, fix #3)
+//
+// DEFAULT_CONFIG.scoring.weights + the postConfigUpdateSchema.scoring.weights
+// slice existed but were never read anywhere — computeSessionScore was a
+// plain unweighted mean. Wired here: uniform (default) weights must reproduce
+// the exact old unweighted-mean score; skewed weights must shift the blend
+// toward the higher-weighted module's score. LLM/memory tasks trust the
+// client-supplied `score` verbatim (no server-side rescoring), which makes
+// them the simplest fixture for asserting exact blended-score math.
+// =============================================================================
+
+describe('submitPostSession — weighted scoring (issue #2099)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const llmTask = (score) => ({
+    module: 'llm-drills', type: 'word-association', responses: [], score, totalMs: 1000,
+  });
+  const memoryTask = (score) => ({
+    module: 'memory', type: 'memory-sequence', questions: [], score, totalMs: 500,
+  });
+
+  it('uniform default weights reproduce the plain unweighted mean', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      return Promise.resolve(defaultValue); // post-config → baseDefaults (all weights 1.0)
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(100), memoryTask(0)],
+      tags: {},
+    });
+
+    expect(session.score).toBe(50); // (100 + 0) / 2
+  });
+
+  it('a configured module weight skews the blended score toward the higher-weighted module', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        // De-emphasize memory (0.5) — mirrors the real 0-1 range
+        // postConfigUpdateSchema.scoring.weights accepts. llm-drills is
+        // absent from this patch and must fall back to the default weight
+        // (1.0), not drop out.
+        return Promise.resolve({ scoring: { weights: { memory: 0.5 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(100), memoryTask(80)],
+      tags: {},
+    });
+
+    // (100*1 + 80*0.5) / (1+0.5) = 140/1.5 = 93.33 → 93
+    expect(session.score).toBe(93);
+  });
+
+  it('a zero weight excludes that module\'s task from the blend entirely', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        return Promise.resolve({ scoring: { weights: { memory: 0 } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills', 'memory'],
+      tasks: [llmTask(80), memoryTask(0)],
+      tags: {},
+    });
+
+    // memory weight 0 drops out entirely → score is just the llm-drills task's own score
+    expect(session.score).toBe(80);
   });
 });
 
@@ -996,6 +1125,66 @@ describe('progressive cognitive drills', () => {
     const stored = session.tasks[0];
     expect(stored.config.level).toBe(0);
     expect(Number.isFinite(stored.accuracy)).toBe(true);
+// ADAPTIVE PREVIEW / resolveDrillConfig PARITY — multiplication (issue #2099, fix #2)
+//
+// getAdaptivePreview used to always build multiplication's preview off the
+// generic maxDigits Adaptive knob, even though resolveDrillConfig hands
+// multiplication's difficulty entirely to the progressive ladder whenever
+// `progressive !== false` (the default) — so the previewed maxDigits
+// adjustment could never actually apply. This locks the two functions'
+// multiplication branch in parity for both progressive modes.
+// =============================================================================
+
+describe('getAdaptivePreview — multiplication parity with resolveDrillConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      return Promise.resolve(defaultValue);
+    });
+  });
+
+  it('previews the progressive ladder rung (not a maxDigits knob) when progressive is on (the default)', async () => {
+    const preview = await getAdaptivePreview();
+    const resolved = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+
+    expect(preview.drills.multiplication.ladder).toBe(true);
+    // Same rung resolveDrillConfig would actually generate a drill at.
+    expect(preview.drills.multiplication.level).toBe(resolved.progression.level);
+    expect(preview.drills.multiplication.factors).toEqual(resolved.progression.factors);
+    // The generic Adaptive maxDigits field must NOT be present — showing it
+    // would advertise an adjustment resolveDrillConfig will never apply.
+    expect(preview.drills.multiplication.field).toBeUndefined();
+    expect(preview.drills.multiplication.to).toBeUndefined();
+  });
+
+  it('previews the maxDigits Adaptive knob when progressive is turned off', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) {
+        return Promise.resolve({ mentalMath: { drillTypes: { multiplication: { progressive: false } } } });
+      }
+      return Promise.resolve(defaultValue);
+    });
+
+    const preview = await getAdaptivePreview();
+    const resolved = await resolveDrillConfig('multiplication', { count: 10, maxDigits: 2 });
+
+    // No live adaptation without scored history, but the field/shape must
+    // match the maxDigits knob resolveDrillConfig's Adaptive branch would use
+    // — not the ladder shape.
+    expect(preview.drills.multiplication.ladder).toBeUndefined();
+    expect(preview.drills.multiplication.field).toBe('maxDigits');
+    expect(resolved.progression == null).toBe(true);
+    expect(resolved.config.maxDigits).toBe(2);
+  });
+
+  it('other math drill types are unaffected (still the generic Adaptive preview)', async () => {
+    const preview = await getAdaptivePreview();
+    expect(preview.drills['doubling-chain'].field).toBe('steps');
+    expect(preview.drills['doubling-chain'].ladder).toBeUndefined();
   });
 });
 
@@ -1155,5 +1344,348 @@ describe('adaptive signal is accuracy-driven — fast-sloppy vs slow-accurate di
     const { adaptive } = await resolveDrillConfig('doubling-chain', { steps: 8 });
     expect(adaptive.reason).toBe('insufficient-completion');
     expect(adaptive.applied).toBe(false);
+  });
+});
+
+// =============================================================================
+// getPostStats — byModule averaging, days-window cutoff, empty-window shape,
+// streak passthrough (issue #2102 gap 1)
+// =============================================================================
+
+describe('getPostStats — byModule averaging, days window cutoff, empty-window shape', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function mockSessions(sessions) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      if (String(path).includes('post-sessions')) return Promise.resolve({ sessions });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  it('averages and rounds byModule scores across multiple tasks in a session', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    // The session-level `score` is deliberately a different number from the
+    // task-mean so this can't pass by mistakenly reading the session score
+    // instead of averaging byModule's own per-task scores.
+    mockSessions([
+      {
+        date: today, score: 40,
+        tasks: [
+          { module: 'mental-math', type: 'doubling-chain', score: 60 },
+          { module: 'mental-math', type: 'multiplication', score: 75 },
+        ],
+      },
+    ]);
+    const stats = await getPostStats(30);
+    // (60 + 75) / 2 = 67.5 — JS Math.round rounds .5 up to 68.
+    expect(stats.byModule['mental-math']).toBe(68);
+  });
+
+  it('includes a session dated exactly at the cutoff boundary (s.date >= cutoff), excludes the day before', async () => {
+    const days = 5;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const [y, m, d] = cutoffStr.split('-').map(Number);
+    const dayBeforeStr = new Date(Date.UTC(y, m - 1, d) - 86400000).toISOString().split('T')[0];
+
+    mockSessions([
+      { date: cutoffStr, score: 100, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 100 }] },
+      { date: dayBeforeStr, score: 0, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 0 }] },
+    ]);
+    const stats = await getPostStats(days);
+    expect(stats.sessionCount).toBe(1);
+    expect(stats.overall).toBe(100);
+  });
+
+  it('returns the zeroed empty-window shape when nothing falls inside the window, but streaks still pass through from all-time history', async () => {
+    const oldDate = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+    mockSessions([
+      { date: oldDate, score: 50, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 50 }] },
+    ]);
+    const stats = await getPostStats(5);
+    expect(stats.sessionCount).toBe(0);
+    expect(stats.overall).toBeNull();
+    expect(stats.byModule).toEqual({});
+    expect(stats.byDrill).toEqual({});
+    expect(stats.byDrillCount).toEqual({});
+    expect(stats.byDrillAccuracy).toEqual({});
+    expect(stats.byDrillCompletion).toEqual({});
+    // Streaks are computed over ALL history, independent of the stats window —
+    // the empty-window branch must still spread them onto the result.
+    expect(stats.lastDate).toBe(oldDate);
+    expect(stats.completedToday).toBe(false);
+  });
+
+  it('passes streak fields through unchanged alongside a non-empty window', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    mockSessions([
+      { date: today, score: 80, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 80 }] },
+    ]);
+    const stats = await getPostStats(30);
+    expect(stats.completedToday).toBe(true);
+    expect(stats.currentStreak).toBe(1);
+    expect(stats.todayScore).toBe(80);
+  });
+});
+
+// =============================================================================
+// resolveDrillConfig / getAdaptivePreview — adaptive integration across ALL
+// math drill types (issue #2102 gap 3). The pure `adaptDrillConfig` policy is
+// already exhaustively covered in postAdaptive.test.js; these tests exercise
+// the INTEGRATION — real scored session history flowing through getPostStats
+// -> getAdaptiveSignal -> resolveDrillConfig/getAdaptivePreview — for the
+// three types that previously only had multiplication/doubling-chain covered.
+// =============================================================================
+
+describe('resolveDrillConfig — adaptive integration for serial-subtraction/powers/estimation', () => {
+  const today = new Date().toISOString().split('T')[0];
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function mockAdaptiveSessions(type, accuracy, count = 3) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) {
+        return Promise.resolve({
+          sessions: [{
+            date: today,
+            score: 55,
+            tasks: Array.from({ length: count }, () => ({
+              module: 'mental-math', type, score: 55, accuracy, completion: 1, questions: [],
+            })),
+          }],
+        });
+      }
+      if (p.includes('post-config')) return Promise.resolve({ adaptive: { enabled: true } });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  it('serial-subtraction: sustained high accuracy nudges MORE steps (harder)', async () => {
+    mockAdaptiveSessions('serial-subtraction', 1);
+    const { adaptive, config } = await resolveDrillConfig('serial-subtraction', { steps: 10 });
+    expect(adaptive.reason).toBe('harder');
+    expect(config.steps).toBeGreaterThan(10);
+  });
+
+  it('serial-subtraction: sustained low accuracy nudges FEWER steps (easier)', async () => {
+    mockAdaptiveSessions('serial-subtraction', 0);
+    const { adaptive, config } = await resolveDrillConfig('serial-subtraction', { steps: 10 });
+    expect(adaptive.reason).toBe('easier');
+    expect(config.steps).toBeLessThan(10);
+  });
+
+  it('powers: sustained high accuracy nudges a HIGHER max exponent (harder)', async () => {
+    mockAdaptiveSessions('powers', 1);
+    const { adaptive, config } = await resolveDrillConfig('powers', { maxExponent: 10 });
+    expect(adaptive.reason).toBe('harder');
+    expect(config.maxExponent).toBeGreaterThan(10);
+  });
+
+  it('powers: sustained low accuracy nudges a LOWER max exponent (easier)', async () => {
+    mockAdaptiveSessions('powers', 0);
+    const { adaptive, config } = await resolveDrillConfig('powers', { maxExponent: 10 });
+    expect(adaptive.reason).toBe('easier');
+    expect(config.maxExponent).toBeLessThan(10);
+  });
+
+  it('estimation: sustained high accuracy TIGHTENS tolerance (lower % = harder)', async () => {
+    mockAdaptiveSessions('estimation', 1);
+    const { adaptive, config } = await resolveDrillConfig('estimation', { tolerancePct: 10 });
+    expect(adaptive.reason).toBe('harder');
+    expect(config.tolerancePct).toBeLessThan(10);
+  });
+
+  it('estimation: sustained low accuracy WIDENS tolerance (higher % = easier)', async () => {
+    mockAdaptiveSessions('estimation', 0);
+    const { adaptive, config } = await resolveDrillConfig('estimation', { tolerancePct: 10 });
+    expect(adaptive.reason).toBe('easier');
+    expect(config.tolerancePct).toBeGreaterThan(10);
+  });
+
+  it('holds under the sample gate even with a perfect accuracy signal', async () => {
+    mockAdaptiveSessions('serial-subtraction', 1, 2); // 2 samples, gate is minSamples=3
+    const { adaptive, config } = await resolveDrillConfig('serial-subtraction', { steps: 10 });
+    expect(adaptive.reason).toBe('insufficient-samples');
+    expect(adaptive.applied).toBe(false);
+    expect(config.steps).toBe(10);
+  });
+});
+
+describe('getAdaptivePreview', () => {
+  const today = new Date().toISOString().split('T')[0];
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('reports enabled:false and leaves every drill unapplied when the Adaptive toggle is off', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-config')) return Promise.resolve({ adaptive: { enabled: false } });
+      return Promise.resolve(defaultValue);
+    });
+    const preview = await getAdaptivePreview();
+    expect(preview.enabled).toBe(false);
+    expect(preview.windowDays).toBeGreaterThan(0);
+    expect(preview.thresholds.minSamples).toBeGreaterThan(0);
+    expect(Object.keys(preview.drills)).toEqual(
+      expect.arrayContaining(['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'])
+    );
+  });
+
+  it('previews the effective per-type nudge from recent scored performance when enabled', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) {
+        return Promise.resolve({
+          sessions: [{
+            date: today,
+            score: 55,
+            tasks: Array.from({ length: 3 }, () => ({
+              module: 'mental-math', type: 'multiplication', score: 55, accuracy: 1, completion: 1, questions: [],
+            })),
+          }],
+        });
+      }
+      if (p.includes('post-config')) {
+        return Promise.resolve({
+          adaptive: { enabled: true },
+          // progressive:false exercises the generic Adaptive nudge path — with the
+          // ladder on (default), the preview shows the ladder rung instead (see the
+          // parity describe below, issue #2099).
+          mentalMath: { drillTypes: { multiplication: { maxDigits: 2, progressive: false } } },
+        });
+      }
+      return Promise.resolve(defaultValue);
+    });
+    const preview = await getAdaptivePreview();
+    expect(preview.enabled).toBe(true);
+    expect(preview.drills.multiplication.reason).toBe('harder');
+    expect(preview.drills.multiplication.config.maxDigits).toBe(3);
+    // A type with no recent samples falls back to "not enough signal yet".
+    expect(preview.drills['doubling-chain'].reason).toBe('insufficient-samples');
+  });
+});
+
+// =============================================================================
+// submitPostSession — non-memory task types recomputed server-side, session
+// score rollup, and persistence (issue #2102 gap 7). The memory-drill branch
+// is already covered above; this covers math/cognitive/LLM.
+// =============================================================================
+
+describe('submitPostSession — non-memory task types', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({ sessions: [] });
+      if (p.includes('post-memory-items')) return Promise.resolve({ items: [] });
+      return Promise.resolve(defaultValue); // post-config.json -> baseDefaults clone
+    });
+  });
+
+  it('rescores a math task server-side, ignoring client-tampered expected/correct', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math',
+        type: 'doubling-chain',
+        config: { startValue: 4, steps: 2 },
+        questions: [
+          { prompt: '4 x 2', expected: 999, answered: 8, correct: false, responseMs: 500 },
+          { prompt: '8 x 2', expected: 999, answered: 16, correct: false, responseMs: 500 },
+        ],
+        totalMs: 1000,
+      }],
+      tags: {},
+    });
+
+    const task = session.tasks[0];
+    expect(task.questions[0].expected).toBe(8);
+    expect(task.questions[0].correct).toBe(true);
+    expect(task.accuracy).toBe(1);
+    expect(task.score).toBeGreaterThan(0);
+  });
+
+  it('rescores a cognitive task server-side via scoreCognitiveDrill, ignoring client score', async () => {
+    const drillData = {
+      type: 'digit-span',
+      config: { direction: 'forward', maxLength: 5 },
+      sequences: [{ digits: [1, 2, 3], length: 3 }],
+    };
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['cognitive'],
+      tasks: [{
+        module: 'cognitive',
+        type: 'digit-span',
+        drillData,
+        questions: [{ index: 0, answered: '123', responseMs: 1000 }],
+        score: 0, // client-sent score must be ignored — server recomputes via the answer key
+        totalMs: 1000,
+      }],
+      tags: {},
+    });
+
+    const task = session.tasks[0];
+    expect(task.questions[0].correct).toBe(true);
+    expect(task.score).toBeGreaterThan(0);
+  });
+
+  it('trusts the client-computed score for LLM drill tasks (never re-scored server-side)', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['llm-drills'],
+      tasks: [{
+        module: 'llm-drills',
+        type: 'word-association',
+        responses: [{ questionIndex: 0, response: 'church', responseMs: 3000, llmScore: 90 }],
+        score: 87,
+        totalMs: 3000,
+      }],
+      tags: {},
+    });
+    expect(session.tasks[0].score).toBe(87);
+  });
+
+  it('rolls up the session score as the mean of all task scores', async () => {
+    const session = await submitPostSession({
+      cadence: 'daily',
+      modules: ['mental-math', 'llm-drills'],
+      tasks: [
+        {
+          module: 'mental-math', type: 'doubling-chain',
+          config: { startValue: 4, steps: 1 },
+          questions: [{ prompt: '4 x 2', answered: 8, responseMs: 500 }],
+          totalMs: 500,
+        },
+        { module: 'llm-drills', type: 'word-association', responses: [], score: 50, totalMs: 1000 },
+      ],
+      tags: {},
+    });
+    const expectedMean = Math.round((session.tasks[0].score + 50) / 2);
+    expect(session.score).toBe(expectedMean);
+  });
+
+  it('persists the computed session via atomicWrite with the durationMs/tags rollup', async () => {
+    await submitPostSession({
+      cadence: 'daily',
+      modules: ['mental-math'],
+      tasks: [{
+        module: 'mental-math', type: 'doubling-chain',
+        config: { startValue: 4, steps: 1 },
+        questions: [{ prompt: '4 x 2', answered: 8, responseMs: 500 }],
+        totalMs: 1234,
+      }],
+      tags: { mood: 'focused' },
+    });
+
+    const sessionWrite = atomicWrite.mock.calls.find(([path]) => String(path).includes('post-sessions'));
+    expect(sessionWrite).toBeTruthy();
+    const persisted = sessionWrite[1].sessions[0];
+    expect(persisted.durationMs).toBe(1234);
+    expect(persisted.tags).toEqual({ mood: 'focused' });
+    expect(persisted.id).toBeTruthy();
+    expect(persisted.date).toBeTruthy();
   });
 });

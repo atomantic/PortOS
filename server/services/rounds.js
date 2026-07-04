@@ -50,6 +50,11 @@ export const RECORDINGS_MAX = 64;      // saved vocal takes for layered playback
 export const REFERENCES_MAX = 12;      // reference links/videos (e.g. TikTok)
 export const PARTNERS_MAX = 12;        // partner-song ids (rounds sung together)
 export const URL_MAX_LENGTH = 512;     // uploaded-file path/url
+// Reference-audio analysis (#2106): labeled time ranges on a reference's
+// attached audio ("0:00–0:14 melody alone"). Bounded so a hand-edited file
+// can't balloon a reference; a layered TikTok build rarely has more than a
+// handful of voice entrances.
+export const REF_SEGMENTS_MAX = 24;    // labeled time ranges per reference
 // Per-take pitch analysis (#1027). The pitch track is a DOWNSAMPLED tuner trace
 // kept for replay/training so it isn't recomputed on every open; bound it so a
 // long take can't bloat data/rounds.json. `accuracy.perNote` mirrors the
@@ -243,11 +248,58 @@ const sanitizeRecording = (r) => {
   return rec;
 };
 
+// One labeled time range on a reference's attached audio (#2106):
+// `{ layerId, startMs, endMs }` — "this span is the bass part alone". `layerId`
+// ties the span to a voice layer (free text, same convention as recordings);
+// times are clamped non-negative integers and a zero/negative-length span is
+// dropped (it selects no audio). Used by the client's analysis view to extract
+// a per-layer pitch track from the span.
+//
+// Optional stacked-mix backing window (#2121): `bgStartMs`/`bgEndMs` mark a
+// slice just BEFORE the voice enters (the earlier layers alone) so the client
+// can spectral-subtract the backing and extract a voice that never appears
+// solo. Purely additive — the pair only persists when it forms a valid range
+// that ENDS AT OR BEFORE the segment start (`bgEndMs <= startMs`); a window
+// overlapping the segment would already contain the new voice, so subtracting
+// it would cancel the very part being extracted. A legacy solo segment (no bg
+// fields) round-trips unchanged.
+const sanitizeRefSegment = (s) => {
+  if (!s || typeof s !== 'object') return null;
+  const startRaw = finiteOrNull(s.startMs);
+  const endRaw = finiteOrNull(s.endMs);
+  if (startRaw === null || endRaw === null) return null;
+  const startMs = Math.max(0, Math.round(startRaw));
+  const endMs = Math.max(0, Math.round(endRaw));
+  if (endMs <= startMs) return null;
+  const seg = {
+    layerId: trimField(s.layerId, ID_MAX_LENGTH),
+    startMs,
+    endMs,
+  };
+  const bgStartRaw = finiteOrNull(s.bgStartMs);
+  const bgEndRaw = finiteOrNull(s.bgEndMs);
+  if (bgStartRaw !== null && bgEndRaw !== null) {
+    const bgStartMs = Math.max(0, Math.round(bgStartRaw));
+    const bgEndMs = Math.max(0, Math.round(bgEndRaw));
+    if (bgEndMs > bgStartMs && bgEndMs <= startMs) {
+      seg.bgStartMs = bgStartMs;
+      seg.bgEndMs = bgEndMs;
+    }
+  }
+  return seg;
+};
+
 // One reference link/video ({ id, url, label, note }) — external study
 // material for the song (a TikTok performance, a tutorial, a chord chart).
 // `url` is required (a reference without a target is meaningless); label/note
 // are free text. The client decides how to render each url (TikTok videos
 // embed; everything else is a link).
+//
+// Optional reference-audio analysis (#2106): `audioFilename` (an /api/uploads
+// file, same convention as recordings[].filename) and `segments` (bounded
+// labeled time ranges) only appear when set — absent keys stay absent so a
+// legacy/pre-feature reference round-trips byte-identical (purely additive,
+// no migration).
 const sanitizeReference = (r) => {
   if (!r || typeof r !== 'object') return null;
   const url = trimField(r.url, URL_MAX_LENGTH);
@@ -255,12 +307,23 @@ const sanitizeReference = (r) => {
   // non-PortOS writer can't persist a javascript:/data: URL that a renderer
   // might trust (mirrors the client's isHttpUrl guard).
   if (!/^https?:\/\//i.test(url)) return null;
-  return {
+  const ref = {
     id: trimField(r.id, ID_MAX_LENGTH) || `ref-${randomUUID().slice(0, 8)}`,
     url,
     label: trimField(r.label, LABEL_MAX_LENGTH),
     note: trimField(r.note, FIELD_MAX_LENGTH),
   };
+  const audioFilename = trimField(r.audioFilename, URL_MAX_LENGTH);
+  if (audioFilename) {
+    ref.audioFilename = audioFilename;
+    // Segments are time ranges INTO the attached audio — meaningless without
+    // it. Persisting them only alongside an audioFilename makes the invariant
+    // structural: removing the audio clears them, so stale ranges can't
+    // resurrect against a later, different recording.
+    const segments = sanitizeList(r.segments, sanitizeRefSegment, REF_SEGMENTS_MAX);
+    if (segments.length) ref.segments = segments;
+  }
+  return ref;
 };
 
 // One sheet-music part — a harmony variation of the song's base score

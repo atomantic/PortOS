@@ -186,6 +186,10 @@ export const submitPostSession = (data, options = {}) => request('/meatspace/pos
   ...options
 });
 export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
+export const getPostProgress = (days, options = {}) => request(
+  `/meatspace/post/progress${days != null ? `?days=${days}` : ''}`,
+  options
+);
 export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
 export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');

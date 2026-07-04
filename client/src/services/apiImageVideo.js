@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
 // generateImage / getImageGenStatus / generateAvatar live in apiSystem.js for
@@ -280,6 +280,81 @@ export const installLoraFromHuggingface = ({ url, family, silent = false } = {})
   body: JSON.stringify(family ? { url, family } : { url }),
   silent,
 });
+
+// Streaming HF LoRA install — same install as installLoraFromHuggingface but
+// reads a byte-level progress stream. Resolves with the new sidecar on the
+// `complete` frame; rejects with an Error carrying `.code` (e.g.
+// 'HF_UNKNOWN_FAMILY', 'HF_ALREADY_INSTALLED') on an `error` frame, so the page
+// can drive the same inline family-confirm retry it does for the POST path.
+// `onProgress({ received, total, progress })` fires per throttled download tick
+// — `progress` is 0..1, or null when the server had no Content-Length to divide.
+//
+// Uses fetch() + a stream reader rather than EventSource, mirroring
+// streamLocalLlmTest: (1) a POST (not an EventSource GET) — this install mutates
+// state, and a state-changing GET would be CSRF-reachable via a top-level
+// cross-origin navigation; (2) EventSource auto-reconnects on any transport
+// drop, which for this NON-idempotent install would silently start a second
+// multi-GB download — a single fetch never retries; (3) it honors session expiry
+// — a 401 AUTH_REQUIRED bounces to /login via maybeRedirectToLogin exactly like
+// request(), instead of dead-ending on a generic stream error. Frames are
+// SSE-encoded (`data: {json}\n\n`).
+export async function installLoraFromHuggingfaceStream({ url, family, onProgress, signal } = {}) {
+  const response = await fetch(`${API_BASE}/loras/install/huggingface/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(family ? { url, family } : { url }),
+    signal,
+  });
+  if (!response.ok || !response.body?.getReader) {
+    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    maybeRedirectToLogin(response, err);
+    const e = new Error(err.error || `HTTP ${response.status}`);
+    e.code = err.code || null;
+    throw e;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sidecar;
+  let streamError = null;
+
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return; // skip SSE blank separators / comments
+    let frame;
+    try { frame = JSON.parse(trimmed.slice(5).trim()); } catch { return; }
+    if (frame.type === 'progress') onProgress?.(frame);
+    else if (frame.type === 'complete') sidecar = frame.sidecar;
+    else if (frame.type === 'error') {
+      streamError = new Error(frame.message || 'HuggingFace install failed');
+      streamError.code = frame.code || null;
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) consume(line);
+    }
+    if (buffer.trim()) consume(buffer);
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+
+  // An `error` frame is the server's terminal failure signal — surface it (with
+  // its code) over a truncation error.
+  if (streamError) throw streamError;
+  // Clean EOF that never delivered a `complete` frame (server killed mid-stream,
+  // proxy cut the body) — throw so the caller's spinner clears; an intentional
+  // cancel sets signal.aborted and the caller suppresses that.
+  if (!sidecar && !signal?.aborted) throw new Error('Download stream ended before completing');
+  return sidecar;
+}
 
 // Civitai LoRA suggestions per runner family. Cached server-side for 1h.
 // Pass `force: true` to bust the cache and re-fetch from Civitai.

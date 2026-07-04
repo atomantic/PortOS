@@ -20,6 +20,7 @@ import {
   advanceScheduleFromSession,
   mergeMasteryFromSession,
   getMastery,
+  getChunkMasteryOrder,
   generateMemoryDrill,
   getDueMemoryItems,
   advanceSchedule,
@@ -153,6 +154,134 @@ describe('deleteMemoryItem', () => {
 });
 
 // =============================================================================
+// UPDATE MEMORY ITEM — built-in "mastery only" restriction (gap #8, issue #2102)
+// =============================================================================
+
+describe('updateMemoryItem', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns null for an unknown id', async () => {
+    readJSONFile.mockResolvedValue({ items: [] });
+    const result = await updateMemoryItem('does-not-exist', { title: 'New Title' });
+    expect(result).toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('built-in items: applies a mastery update', async () => {
+    readJSONFile.mockResolvedValue({ items: [{ ...ELEMENTS_SONG }] });
+    const newMastery = { overallPct: 42, chunks: {}, elements: {} };
+    const result = await updateMemoryItem('elements-song', { mastery: newMastery });
+    expect(result.mastery).toEqual(newMastery);
+    expect(atomicWrite).toHaveBeenCalled();
+  });
+
+  it('built-in items: applies a schedule update', async () => {
+    readJSONFile.mockResolvedValue({ items: [{ ...ELEMENTS_SONG }] });
+    const newSchedule = { ease: 2.8, intervalDays: 3, nextReview: '2026-07-10T00:00:00.000Z', lastReviewed: '2026-07-07T00:00:00.000Z' };
+    const result = await updateMemoryItem('elements-song', { schedule: newSchedule });
+    expect(result.schedule).toEqual(newSchedule);
+  });
+
+  it('built-in items: ignores title/lines/chunks updates (mastery/schedule only)', async () => {
+    readJSONFile.mockResolvedValue({ items: [{ ...ELEMENTS_SONG }] });
+    const originalTitle = ELEMENTS_SONG.title;
+    const originalLineCount = ELEMENTS_SONG.content.lines.length;
+    const result = await updateMemoryItem('elements-song', {
+      title: 'Hacked Title',
+      lines: ['only one line now'],
+    });
+    // Neither mastery nor schedule was in the patch, so the built-in branch's
+    // "if (updates.mastery || updates.schedule)" guard is never entered — the
+    // item is returned completely untouched (no write at all).
+    expect(result.title).toBe(originalTitle);
+    expect(result.content.lines.length).toBe(originalLineCount);
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('custom items: applies title/lines/chunks updates freely', async () => {
+    readJSONFile.mockResolvedValue({
+      items: [{
+        id: 'custom-1', title: 'Old Title', builtin: false, type: 'text',
+        content: { lines: [{ text: 'old line' }], chunks: [] },
+        mastery: { overallPct: 0, chunks: {}, elements: {} },
+      }],
+    });
+    const result = await updateMemoryItem('custom-1', {
+      title: 'New Title',
+      lines: ['new line one', 'new line two'],
+    });
+    expect(result.title).toBe('New Title');
+    expect(result.content.lines).toEqual([{ text: 'new line one' }, { text: 'new line two' }]);
+  });
+});
+
+// =============================================================================
+// getChunkMasteryOrder — spaced-repetition practice ordering (gap #8, issue #2102)
+// =============================================================================
+
+describe('getChunkMasteryOrder', () => {
+  it('sorts chunks worst-mastery-first', () => {
+    const item = {
+      content: {
+        chunks: [
+          { id: 'verse-1', lineRange: [0, 2], label: 'Verse 1' },
+          { id: 'verse-2', lineRange: [3, 5], label: 'Verse 2' },
+          { id: 'verse-3', lineRange: [6, 8], label: 'Verse 3' },
+        ],
+      },
+      mastery: {
+        chunks: {
+          'verse-1': { correct: 9, attempts: 10, lastPracticed: '2026-07-01T00:00:00.000Z' },
+          'verse-2': { correct: 1, attempts: 10, lastPracticed: '2026-07-02T00:00:00.000Z' },
+          // verse-3 has no recorded stats
+        },
+      },
+    };
+    const order = getChunkMasteryOrder(item);
+    expect(order.map(c => c.id)).toEqual(['verse-3', 'verse-2', 'verse-1']);
+    expect(order.find(c => c.id === 'verse-1').accuracy).toBe(90);
+    expect(order.find(c => c.id === 'verse-2').accuracy).toBe(10);
+    expect(order.find(c => c.id === 'verse-3').accuracy).toBe(0);
+    expect(order.find(c => c.id === 'verse-3').attempts).toBe(0);
+    expect(order.find(c => c.id === 'verse-3').lastPracticed).toBeNull();
+  });
+
+  it('derives hint levels from accuracy thresholds (0/1/2/3)', () => {
+    const item = {
+      content: {
+        chunks: [
+          { id: 'a', lineRange: [0, 0], label: 'A' }, // 95% -> no hints (3)
+          { id: 'b', lineRange: [1, 1], label: 'B' }, // 75% -> minimal (2)
+          { id: 'c', lineRange: [2, 2], label: 'C' }, // 50% -> partial (1)
+          { id: 'd', lineRange: [3, 3], label: 'D' }, // 20% -> full hints (0)
+        ],
+      },
+      mastery: {
+        chunks: {
+          a: { correct: 19, attempts: 20 },
+          b: { correct: 3, attempts: 4 },
+          c: { correct: 1, attempts: 2 },
+          d: { correct: 1, attempts: 5 },
+        },
+      },
+    };
+    const order = getChunkMasteryOrder(item);
+    const byId = Object.fromEntries(order.map(c => [c.id, c]));
+    expect(byId.a.hintLevel).toBe(3);
+    expect(byId.b.hintLevel).toBe(2);
+    expect(byId.c.hintLevel).toBe(1);
+    expect(byId.d.hintLevel).toBe(0);
+  });
+
+  it('returns an empty array when the item has no chunks', () => {
+    expect(getChunkMasteryOrder({ content: {}, mastery: {} })).toEqual([]);
+    expect(getChunkMasteryOrder({})).toEqual([]);
+  });
+});
+
+// =============================================================================
 // DRILL GENERATION
 // =============================================================================
 
@@ -175,6 +304,21 @@ describe('generateMemoryDrill', () => {
       expect(q.prompt).toContain('____');
       expect(q.fullText).toBeTruthy();
       expect(q.answers.length).toBeGreaterThan(0);
+    }
+  });
+
+  // Regression (issue #2116): generateFillBlank used to return only an
+  // `answers[]` array of { index, word, element } objects with no scalar
+  // `expected` — the client's fill-blank scoring path (and any generic
+  // consumer expecting `expected`, like DrillQuestionReview) had nothing
+  // consistent to read. `expected` must now be the primary (first blanked)
+  // word, and it must always be ONE of the acceptable `answers[]` words.
+  it('stamps a scalar `expected` on every fill-blank question, matching the primary acceptable answer', async () => {
+    const drill = await generateMemoryDrill({ mode: 'fill-blank', count: 5 });
+    for (const q of drill.questions) {
+      expect(typeof q.expected).toBe('string');
+      expect(q.expected).toBe(q.answers[0].word);
+      expect(q.answers.map(a => a.word)).toContain(q.expected);
     }
   });
 

@@ -81,7 +81,9 @@ export default function PostDrillRunner({ session }) {
   if (state !== 'drilling' || !currentDrill) return null;
 
   const question = currentDrill.questions?.[currentQuestionIndex];
-  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type) || currentDrill.type === 'memory-fill-blank';
+  // MEMORY_DRILL_TYPES now includes 'memory-fill-blank' (issue #2099/#2116),
+  // so the explicit extra check this used to need is gone.
+  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 

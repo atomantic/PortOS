@@ -12,23 +12,17 @@ vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() }
 
 import PostDrillConfig from './PostDrillConfig';
 import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
+import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
-// The 14 generatable LLM drill types (mirror server + client constants).
-const ALL_LLM_TYPES = [
-  'pun-wordplay', 'word-association', 'compound-chain', 'bridge-word',
-  'double-meaning', 'idiom-twist', 'story-recall', 'verbal-fluency',
-  'wit-comeback', 'what-if', 'alternative-uses', 'story-prompt',
-  'invention-pitch', 'reframe',
-];
-const LABELS = {
-  'pun-wordplay': 'Pun & Wordplay', 'word-association': 'Word Association',
-  'compound-chain': 'Compound Chain', 'bridge-word': 'Bridge Word',
-  'double-meaning': 'Double Meaning', 'idiom-twist': 'Idiom Twist',
-  'story-recall': 'Story Recall', 'verbal-fluency': 'Verbal Fluency',
-  'wit-comeback': 'Wit & Comeback', 'what-if': 'What If?',
-  'alternative-uses': 'Alternative Uses', 'story-prompt': 'Story Prompt',
-  'invention-pitch': 'Invention Pitch', 'reframe': 'Reframe',
-};
+// The generatable LLM drill types + labels, imported from the canonical
+// client constant (mirrors server LLM_DRILL_TYPES in meatspacePostLlm.js) —
+// NOT a hardcoded parallel copy, so this test can't stay green against a
+// stale list if a drill type is ever added/removed/relabeled.
+const ALL_LLM_TYPES = LLM_DRILL_TYPES;
+// The 5 legacy drills that ship enabled by default (server DEFAULT_CONFIG);
+// everything else in ALL_LLM_TYPES is newly-exposed and defaults to opt-in.
+const LEGACY_ENABLED_TYPES = ['pun-wordplay', 'word-association', 'story-recall', 'verbal-fluency', 'wit-comeback'];
+const NEWLY_EXPOSED_TYPES = ALL_LLM_TYPES.filter(t => !LEGACY_ENABLED_TYPES.includes(t));
 
 // Mirrors the server DEFAULT_CONFIG: only the 5 legacy LLM drills ship enabled.
 const config = {
@@ -81,7 +75,7 @@ describe('PostDrillConfig', () => {
   it('renders a card for every one of the 14 LLM drill types', () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     for (const type of ALL_LLM_TYPES) {
-      expect(screen.getByText(LABELS[type])).toBeTruthy();
+      expect(screen.getByText(DRILL_LABELS[type])).toBeTruthy();
     }
   });
 
@@ -102,12 +96,11 @@ describe('PostDrillConfig', () => {
     // Every type is persisted so the config never silently omits a card the user saw.
     expect(Object.keys(saved).sort()).toEqual([...ALL_LLM_TYPES].sort());
     // The 5 legacy drills stay enabled...
-    for (const t of ['pun-wordplay', 'word-association', 'story-recall', 'verbal-fluency', 'wit-comeback']) {
+    for (const t of LEGACY_ENABLED_TYPES) {
       expect(saved[t].enabled).toBe(true);
     }
-    // ...and the 9 newly-exposed drills default to disabled (opt-in).
-    for (const t of ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist',
-      'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe']) {
+    // ...and the newly-exposed drills default to disabled (opt-in).
+    for (const t of NEWLY_EXPOSED_TYPES) {
       expect(saved[t].enabled).toBe(false);
     }
   });
