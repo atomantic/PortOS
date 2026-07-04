@@ -166,7 +166,10 @@ export default function Loras() {
   // Shared install runner: `family` is undefined for the first attempt
   // (server autodetects) and set to the override on the inline-confirm retry.
   const runHfInstall = useCallback(async (url, family) => {
-    if (!url || hfInstalling) return;
+    // Cross-guard against the curated video quick-install: both write the shared
+    // hfProgress, so allowing them to overlap makes both progress readouts show
+    // interleaved byte counts. Only one HF install runs at a time.
+    if (!url || hfInstalling || installingVideoRepo) return;
     setHfInstalling(true);
     setHfProgress(null);
     await installLoraFromHuggingfaceStream({ url, family, onProgress: setHfProgress })
@@ -187,7 +190,7 @@ export default function Loras() {
         }
       })
       .finally(() => { setHfInstalling(false); setHfProgress(null); });
-  }, [hfInstalling, refresh]);
+  }, [hfInstalling, installingVideoRepo, refresh]);
 
   const handleHfInstall = useCallback((e) => {
     e?.preventDefault?.();
@@ -200,7 +203,9 @@ export default function Loras() {
   // in-flight repo in its own state because the Civitai `installingSuggestion`
   // key is modelId/versionId-based — video installs have neither.
   const installVideoSuggestion = useCallback(async (card) => {
-    if (!card?.installUrl || installingVideoRepo) return;
+    // Cross-guard against the form install (see runHfInstall) — one HF install
+    // at a time so they don't clobber the shared hfProgress.
+    if (!card?.installUrl || installingVideoRepo || hfInstalling) return;
     setInstallingVideoRepo(card.repo);
     setHfProgress(null);
     await installLoraFromHuggingfaceStream({ url: card.installUrl, family: card.runnerFamily, onProgress: setHfProgress })
@@ -210,7 +215,7 @@ export default function Loras() {
       })
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
       .finally(() => { setInstallingVideoRepo(null); setHfProgress(null); });
-  }, [installingVideoRepo, refresh]);
+  }, [installingVideoRepo, hfInstalling, refresh]);
 
   const handleDelete = async (filename) => {
     setDeleting(filename);
@@ -300,7 +305,7 @@ export default function Loras() {
           />
           <button
             type="submit"
-            disabled={hfInstalling || !hfUrl.trim()}
+            disabled={hfInstalling || !!installingVideoRepo || !hfUrl.trim()}
             className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {hfInstalling ? (hfPct != null ? `Downloading ${hfPct}%` : 'Downloading…') : 'Install'}
@@ -369,6 +374,7 @@ export default function Loras() {
         installingSuggestionKey={installingSuggestion}
         installingVideoRepo={installingVideoRepo}
         installingVideoProgress={hfProgress}
+        videoInstallBusy={hfInstalling}
         onRefresh={() => refreshSuggestions({ force: true })}
         onInstallVideo={installVideoSuggestion}
         onInstall={async (card, url, versionId) => {
@@ -466,7 +472,7 @@ function MediaFilter({ value, onChange }) {
   );
 }
 
-function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installedFilenames, installedHfRepos, installingSuggestionKey, installingVideoRepo, installingVideoProgress, onRefresh, onInstall, onInstallVideo }) {
+function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installedFilenames, installedHfRepos, installingSuggestionKey, installingVideoRepo, installingVideoProgress, videoInstallBusy, onRefresh, onInstall, onInstallVideo }) {
   const curated = suggestions?.curated || [];
   const runners = suggestions?.runners || {};
   const video = suggestions?.video || [];
@@ -529,6 +535,7 @@ function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installed
           installedHfRepos={installedHfRepos}
           installingVideoRepo={installingVideoRepo}
           installingVideoProgress={installingVideoProgress}
+          videoInstallBusy={videoInstallBusy}
           onInstall={onInstallVideo}
         />
       )}
@@ -540,7 +547,7 @@ function SuggestionsPanel({ suggestions, loading, mediaFilter = 'all', installed
 // like the Civitai sections — it's a small hand-picked list installed via the
 // HF path. Installed-state matches on the repo (HF installs carry no
 // modelId/versionId).
-function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo, installingVideoProgress, onInstall }) {
+function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo, installingVideoProgress, videoInstallBusy, onInstall }) {
   const list = cards || [];
   return (
     <div>
@@ -563,6 +570,9 @@ function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo,
               installed={installedHfRepos?.has(card.repo)}
               installing={installingVideoRepo === card.repo}
               progress={installingVideoRepo === card.repo ? installingVideoProgress : null}
+              // Disable every quick-install button while ANY HF install is in
+              // flight (this card's, another card's, or the form's) — one at a time.
+              busy={!!installingVideoRepo || videoInstallBusy}
               onInstall={onInstall}
             />
           ))}
@@ -572,7 +582,7 @@ function VideoSuggestionsSection({ cards, installedHfRepos, installingVideoRepo,
   );
 }
 
-function VideoSuggestionCard({ card, installed, installing, progress, onInstall }) {
+function VideoSuggestionCard({ card, installed, installing, progress, busy, onInstall }) {
   const pct = pctOf(progress);
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
@@ -606,8 +616,8 @@ function VideoSuggestionCard({ card, installed, installing, progress, onInstall 
             <button
               type="button"
               onClick={() => onInstall(card)}
-              disabled={installing}
-              className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+              disabled={installing || busy}
+              className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {installing ? (pct != null ? `Installing ${pct}%` : 'Installing…') : 'Quick install'}
             </button>

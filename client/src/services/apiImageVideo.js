@@ -306,13 +306,16 @@ export function installLoraFromHuggingfaceStream({ url, family, onProgress } = {
       }
     };
     es.onerror = () => {
-      // A normal completion/error already closed the ES above; this only fires
-      // on a real transport failure (non-2xx open, dropped stream), which
-      // EventSource surfaces as readyState CLOSED with no auto-retry. Reject so
-      // the caller's spinner clears instead of hanging forever.
-      if (es.readyState === EventSource.CLOSED) {
-        reject(new Error('Download stream closed before completing'));
-      }
+      // This is a ONE-SHOT, non-idempotent install — a reconnect would start a
+      // second server-side download of the same multi-GB LoRA. EventSource
+      // auto-reconnects on ANY transport drop (firing onerror with readyState
+      // CONNECTING, not CLOSED), so close it on the first error to stop the
+      // reconnect, then reject. A normal completion/error already closed the ES
+      // in onmessage, so this fires only on a genuine transport failure (a
+      // failed open, or a drop before the terminal frame) — the settled promise
+      // makes a late reject a no-op.
+      es.close();
+      reject(new Error('Download stream closed before completing'));
     };
   });
 }
