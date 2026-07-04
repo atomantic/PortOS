@@ -142,7 +142,12 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
         <audio controls preload="none" src={getUploadUrl(reference.audioFilename)} className="h-8 max-w-[180px]" />
         <button
           type="button"
-          onClick={() => onUpdate('audioFilename', '')}
+          onClick={() => {
+            // Segments are offsets into THIS audio — clear them with it so
+            // stale ranges can't resurrect against a different recording.
+            onUpdate('segments', []);
+            onUpdate('audioFilename', '');
+          }}
           className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-400 hover:text-port-error"
         >
           <X size={13} /> Remove audio
@@ -246,8 +251,13 @@ function Waveform({ samples, durationMs, segments, playheadMs, onSeek }) {
 
 // --- Analysis view -----------------------------------------------------------
 
+// Sentinel compare/apply target for the round's BASE melody (song.score).
+// A melody-layer proposal must update the base score, not grow a duplicate
+// "Melody" entry in scoreParts (which the parts editor deliberately excludes).
+const BASE_TARGET = '__base__';
+
 export default function ReferenceAnalysis({
-  reference, layers = [], scoreParts = [], tempo = null, songKey = '',
+  reference, layers = [], scoreParts = [], baseScore = '', tempo = null, songKey = '',
   onUpdateReference, onApplyPart, onClose,
 }) {
   const audioRef = useRef(null);
@@ -361,20 +371,28 @@ export default function ReferenceAnalysis({
         return;
       }
       setProposal({ layerId: seg.layerId, text });
-      // Default the comparison to the stored part whose role matches the
-      // segment's layer (layer ids double as harmony-part roles). Only when
-      // the segment actually HAS a layer and the part a non-empty role — an
-      // unassigned segment ('' layerId) must not silently preselect a
-      // role-less hand-added part as the overwrite target.
-      const match = seg.layerId ? scoreParts.find((p) => p.role && p.role === seg.layerId) : null;
-      setCompareId(match?.id || '');
+      // Default the comparison target. A melody segment targets the BASE
+      // score (song.score) — the round's melody lives there, not in
+      // scoreParts. Other layers match the stored part whose role equals the
+      // segment's layer (layer ids double as harmony-part roles) — only when
+      // the segment actually HAS a layer and the part a non-empty role, so an
+      // unassigned segment ('' layerId) can't silently preselect a role-less
+      // hand-added part as the overwrite target.
+      if (seg.layerId === 'melody') {
+        setCompareId(BASE_TARGET);
+      } else {
+        const match = seg.layerId ? scoreParts.find((p) => p.role && p.role === seg.layerId) : null;
+        setCompareId(match?.id || '');
+      }
     }, 30);
   }, [decoded, tempo, songKey, scoreParts]);
 
-  const comparePart = useMemo(
-    () => scoreParts.find((p) => p.id === compareId) || null,
-    [scoreParts, compareId],
-  );
+  const comparePart = useMemo(() => {
+    if (compareId === BASE_TARGET) {
+      return { id: BASE_TARGET, label: 'Melody (base score)', role: 'melody', score: baseScore, isBase: true };
+    }
+    return scoreParts.find((p) => p.id === compareId) || null;
+  }, [scoreParts, compareId, baseScore]);
 
   const diffRows = useMemo(() => {
     if (!proposal?.text || !comparePart?.score) return null;
@@ -388,13 +406,20 @@ export default function ReferenceAnalysis({
       toast.error('The proposed part has no parseable notes to apply.');
       return;
     }
+    if (comparePart?.isBase) {
+      // Melody proposals write the BASE score, never a scoreParts entry.
+      onApplyPart?.({ base: true, score: proposal.text });
+      return;
+    }
     onApplyPart?.({
       id: comparePart?.id || '',
       // Prefer the harmony-part vocabulary label; a custom layer id falls back
       // to the layer's own label (harmonyPartLabel returns '' for unknown ids).
       label: comparePart?.label
         || (proposal.layerId ? (harmonyPartLabel(proposal.layerId) || layerLabel(proposal.layerId)) : 'Extracted part'),
-      role: comparePart?.role ?? (proposal.layerId || ''),
+      // A melody-layer proposal explicitly applied as a NEW part must not mint
+      // a pseudo-"melody" role in scoreParts (the parts editor excludes it).
+      role: comparePart?.role ?? (proposal.layerId === 'melody' ? '' : proposal.layerId || ''),
       score: proposal.text,
     });
   }, [proposal, comparePart, onApplyPart, layerLabel]);
@@ -558,6 +583,7 @@ export default function ReferenceAnalysis({
                 className="bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:border-port-accent focus:outline-none"
               >
                 <option value="">New part</option>
+                <option value={BASE_TARGET}>Melody (base score)</option>
                 {scoreParts.map((p) => <option key={p.id} value={p.id}>{p.label || p.role || p.id}</option>)}
               </select>
             </div>
@@ -620,7 +646,7 @@ export default function ReferenceAnalysis({
               onClick={applyProposal}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-port-accent text-white hover:bg-port-accent/90"
             >
-              {comparePart ? 'Apply to current part' : 'Add as new part'}
+              {comparePart?.isBase ? 'Apply to base melody' : comparePart ? 'Apply to current part' : 'Add as new part'}
             </button>
             <button
               type="button"

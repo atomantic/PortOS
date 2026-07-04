@@ -181,6 +181,35 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
     expect(part.id).toBe('part-bass');
     expect(part.role).toBe('bass');
   });
+
+  it('routes a melody-layer proposal to the base score, not scoreParts', async () => {
+    installFakeAudio();
+    const onApplyPart = vi.fn();
+    render(
+      <ReferenceAnalysis
+        reference={{ ...baseRef, segments: [{ layerId: 'melody', startMs: 0, endMs: 1000 }] }}
+        layers={layers}
+        scoreParts={[]}
+        baseScore="| A3q |"
+        tempo={60}
+        songKey="C"
+        onUpdateReference={vi.fn()}
+        onApplyPart={onApplyPart}
+        onClose={vi.fn()}
+      />,
+    );
+    const extract = screen.getByRole('button', { name: /extract part/i });
+    await waitFor(() => expect(extract.disabled).toBe(false));
+    fireEvent.click(extract);
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+
+    // Melody defaults to the base-score target and applies as { base: true }.
+    expect(screen.getByLabelText(/compare \/ apply to/i).value).toBe('__base__');
+    fireEvent.click(screen.getByRole('button', { name: /apply to base melody/i }));
+    const applied = onApplyPart.mock.calls[0][0];
+    expect(applied.base).toBe(true);
+    expect(applied.score).toMatch(/A3/);
+  });
 });
 
 describe('ReferenceAudioAttach', () => {
@@ -190,11 +219,14 @@ describe('ReferenceAudioAttach', () => {
     expect(screen.getByRole('button', { name: /capture from mic/i })).toBeTruthy();
   });
 
-  it('shows the attached state and clears via Remove audio', () => {
+  it('shows the attached state and clears audio AND segments via Remove audio', () => {
     const onUpdate = vi.fn();
     render(<ReferenceAudioAttach reference={{ id: 'r', url: 'https://x.com', audioFilename: 'a.wav' }} onUpdate={onUpdate} />);
     expect(screen.getByText(/audio attached/i)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /remove audio/i }));
     expect(onUpdate).toHaveBeenCalledWith('audioFilename', '');
+    // Segments are offsets into the removed audio — cleared with it so stale
+    // ranges can't resurrect against a later, different recording.
+    expect(onUpdate).toHaveBeenCalledWith('segments', []);
   });
 });

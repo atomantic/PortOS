@@ -294,9 +294,15 @@ const sanitizeReference = (r) => {
     note: trimField(r.note, FIELD_MAX_LENGTH),
   };
   const audioFilename = trimField(r.audioFilename, URL_MAX_LENGTH);
-  if (audioFilename) ref.audioFilename = audioFilename;
-  const segments = sanitizeList(r.segments, sanitizeRefSegment, REF_SEGMENTS_MAX);
-  if (segments.length) ref.segments = segments;
+  if (audioFilename) {
+    ref.audioFilename = audioFilename;
+    // Segments are time ranges INTO the attached audio — meaningless without
+    // it. Persisting them only alongside an audioFilename makes the invariant
+    // structural: removing the audio clears them, so stale ranges can't
+    // resurrect against a later, different recording.
+    const segments = sanitizeList(r.segments, sanitizeRefSegment, REF_SEGMENTS_MAX);
+    if (segments.length) ref.segments = segments;
+  }
   return ref;
 };
 

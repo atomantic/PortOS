@@ -319,11 +319,17 @@ export default function RoundEditor() {
     ...prev, references: prev.references.filter((r) => r.id !== rid),
   }));
 
-  // Apply an extracted reference part into the scoreParts DRAFT (#2106). An
-  // `id` targeting an existing part replaces its score; otherwise the part is
-  // appended with a temp id (stripped on save). Nothing persists until the
-  // header Save — the same explicit-save model as recordings and AI derive.
+  // Apply an extracted reference part into the DRAFT (#2106). `base: true`
+  // updates the round's base melody (song.score); otherwise an `id` targeting
+  // an existing part replaces its score, and anything else is appended with a
+  // temp id (stripped on save). Nothing persists until the header Save — the
+  // same explicit-save model as recordings and AI derive.
   const applyProposedPart = useCallback((part) => {
+    if (part.base) {
+      setSong((prev) => (prev ? { ...prev, score: part.score } : prev));
+      toast.success('Base melody updated in the draft — Save the song to keep it');
+      return;
+    }
     const parts = song?.scoreParts || [];
     const exists = part.id && parts.some((p) => p.id === part.id);
     if (!exists && parts.length >= SCORE_PARTS_MAX) {
@@ -429,6 +435,7 @@ export default function RoundEditor() {
             reference={(song.references || []).find((r) => r.id === analyzeId) || null}
             layers={song.layers || []}
             scoreParts={song.scoreParts || []}
+            baseScore={song.score || ''}
             tempo={song.tempo ?? null}
             songKey={song.key || ''}
             onUpdateReference={updateReference}
