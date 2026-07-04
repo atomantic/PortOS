@@ -1313,6 +1313,44 @@ async function ensureSchemaImpl() {
       granted_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // ─── Privacy Center: Trusted Organizations registry (issue #2141, epic
+    // #2138) ──────────────────────────────────────────────────────────────
+    // Every organization that has (or had) the user's PII, with a trust
+    // stance and per-org holdings linking to the exact vault records each org
+    // holds. Data backbone for the change-of-address inventory (Phase 4) and
+    // the "who has my PII" view. Machine-local: no federation, no tombstones
+    // (same deferred scope as the vault, #2148). Mirrors the privacy blocks
+    // in init-db.sql.
+    `CREATE TABLE IF NOT EXISTS privacy_orgs (
+      id UUID PRIMARY KEY,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'other',
+      website TEXT NOT NULL DEFAULT '',
+      trust TEXT NOT NULL DEFAULT 'trusted',
+      status TEXT NOT NULL DEFAULT 'active',
+      contact JSONB NOT NULL DEFAULT '{}'::jsonb,
+      social_account_id TEXT,
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_privacy_orgs_trust ON privacy_orgs (trust)`,
+    `CREATE INDEX IF NOT EXISTS idx_privacy_orgs_status ON privacy_orgs (status)`,
+    // Which vault records each org holds. Composite PK (no surrogate id) — an
+    // org either holds a given vault record or it doesn't, so the pair IS the
+    // identity. Cascade both ways: deleting the org or the vault record drops
+    // its holdings rows.
+    `CREATE TABLE IF NOT EXISTS privacy_org_holdings (
+      org_id UUID NOT NULL REFERENCES privacy_orgs (id) ON DELETE CASCADE,
+      vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'current',
+      noted_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (org_id, vault_record_id)
+    )`,
+    // Reverse lookup: "which orgs hold vault record X" (getOrgsHoldingRecord).
+    `CREATE INDEX IF NOT EXISTS idx_privacy_org_holdings_vault_record ON privacy_org_holdings (vault_record_id)`,
+
     // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
     // Append-only forensic trail of EVERY tombstone (soft-delete), un-tombstone
     // (recovery), and hard-delete of user-authored records — written by a DB

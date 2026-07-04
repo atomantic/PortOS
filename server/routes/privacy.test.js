@@ -20,8 +20,19 @@ vi.mock('../services/privacyVault.js', () => ({
   getVaultStatus: vi.fn(async () => ({ keyConfigured: true, recordCounts: { email: 1 } })),
 }));
 
+vi.mock('../services/privacyOrgs.js', () => ({
+  createOrg: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-000000000002', name: input.name, trust: input.trust ?? 'trusted' })),
+  listOrgs: vi.fn(async () => [{ id: 'o1', name: 'Acme Bank', trust: 'trusted' }]),
+  getOrg: vi.fn(async () => null),
+  updateOrg: vi.fn(async (id, patch) => ({ id, ...patch })),
+  deleteOrg: vi.fn(async () => ({ ok: true })),
+  setOrgHoldings: vi.fn(async (id, holdings) => holdings.map((h) => ({ orgId: id, ...h }))),
+  getHoldingsForOrg: vi.fn(async () => [{ orgId: 'o1', vaultRecordId: 'v1', vaultMaskedValue: 'a•••@b.com' }]),
+}));
+
 const privacyRoutes = (await import('./privacy.js')).default;
 const service = await import('../services/privacyVault.js');
+const orgService = await import('../services/privacyOrgs.js');
 
 const VALID_UUID = 'c0ffee00-0000-4000-8000-000000000001';
 
@@ -114,5 +125,92 @@ describe('GET /api/privacy/vault/:id', () => {
   it('404s a missing record', async () => {
     const res = await request(makeApp()).get(`/api/privacy/vault/${VALID_UUID}`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/privacy/orgs', () => {
+  it('lists orgs and accepts trust/status/category filters', async () => {
+    const res = await request(makeApp()).get('/api/privacy/orgs');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'o1', name: 'Acme Bank', trust: 'trusted' }]);
+
+    expect((await request(makeApp()).get('/api/privacy/orgs?trust=unwanted')).status).toBe(200);
+    expect(orgService.listOrgs).toHaveBeenCalledWith({ trust: 'unwanted' });
+    expect((await request(makeApp()).get('/api/privacy/orgs?trust=bogus')).status).toBe(400);
+  });
+});
+
+describe('POST /api/privacy/orgs', () => {
+  it('creates an org from a valid body', async () => {
+    const res = await request(makeApp()).post('/api/privacy/orgs').send({ name: 'Acme Bank', category: 'bank' });
+    expect(res.status).toBe(201);
+    expect(orgService.createOrg).toHaveBeenCalledWith({ name: 'Acme Bank', category: 'bank' });
+  });
+
+  it('rejects a missing name, an unknown category/trust, and unknown keys', async () => {
+    expect((await request(makeApp()).post('/api/privacy/orgs').send({})).status).toBe(400);
+    expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', category: 'nope' })).status).toBe(400);
+    expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', trust: 'nope' })).status).toBe(400);
+    expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', extra: 1 })).status).toBe(400);
+  });
+});
+
+describe('GET /api/privacy/orgs/:id', () => {
+  it('404s a missing org', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/orgs/${VALID_UUID}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /api/privacy/orgs/:id', () => {
+  it('applies a partial patch', async () => {
+    const res = await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}`).send({ trust: 'unwanted' });
+    expect(res.status).toBe(200);
+    expect(orgService.updateOrg).toHaveBeenCalledWith(VALID_UUID, { trust: 'unwanted' });
+  });
+
+  it('rejects a non-uuid id and an unknown enum value', async () => {
+    expect((await request(makeApp()).put('/api/privacy/orgs/not-a-uuid').send({ name: 'x' })).status).toBe(400);
+    expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}`).send({ status: 'nope' })).status).toBe(400);
+  });
+});
+
+describe('DELETE /api/privacy/orgs/:id', () => {
+  it('deletes by id and validates the uuid', async () => {
+    expect((await request(makeApp()).delete(`/api/privacy/orgs/${VALID_UUID}`)).status).toBe(200);
+    expect(orgService.deleteOrg).toHaveBeenCalledWith(VALID_UUID);
+    expect((await request(makeApp()).delete('/api/privacy/orgs/nope')).status).toBe(400);
+  });
+});
+
+describe('GET /api/privacy/orgs/:id/holdings', () => {
+  it('returns the joined masked holdings for the org', async () => {
+    orgService.getOrg.mockResolvedValueOnce({ id: VALID_UUID, name: 'Acme Bank' });
+    const res = await request(makeApp()).get(`/api/privacy/orgs/${VALID_UUID}/holdings`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ orgId: 'o1', vaultRecordId: 'v1', vaultMaskedValue: 'a•••@b.com' }]);
+  });
+
+  it('404s a missing org before ever querying holdings', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/orgs/${VALID_UUID}/holdings`);
+    expect(res.status).toBe(404);
+    expect(orgService.getHoldingsForOrg).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/privacy/orgs/:id/holdings', () => {
+  it('replace-sets holdings from a valid body', async () => {
+    const res = await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`)
+      .send({ holdings: [{ vaultRecordId: VALID_UUID, status: 'current' }] });
+    expect(res.status).toBe(200);
+    expect(orgService.setOrgHoldings).toHaveBeenCalledWith(
+      VALID_UUID, [{ vaultRecordId: VALID_UUID, status: 'current' }],
+    );
+  });
+
+  it('accepts an empty list (clears all holdings) and rejects an unknown status', async () => {
+    expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`).send({ holdings: [] })).status).toBe(200);
+    expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`)
+      .send({ holdings: [{ vaultRecordId: VALID_UUID, status: 'nope' }] })).status).toBe(400);
   });
 });

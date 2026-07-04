@@ -42,7 +42,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
 | `postValidation.js` | MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill generation/scoring, sessions, memory builder, training log. |
-| `privacyValidation.js` | Privacy Center PII Vault schemas (issue #2140) — vault record create/update (partial PUT), list query, UUID params; the vault type/status vocabularies + the sensitive-type (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type scan defaults. |
+| `privacyValidation.js` | Privacy Center schemas — PII Vault (issue #2140): vault record create/update (partial PUT), list query, UUID params; the vault type/status vocabularies + the sensitive-type (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type scan defaults. Trusted Organizations registry (issue #2141): org create/update (partial PUT), list query, UUID params, and the replace-set holdings schema. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |
