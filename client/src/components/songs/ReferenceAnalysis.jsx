@@ -364,6 +364,13 @@ export default function ReferenceAnalysis({
     const seg = segments[idx];
     const bgStartMs = field === 'bgStartMs' ? ms : seg.bgStartMs;
     const bgEndMs = field === 'bgEndMs' ? ms : seg.bgEndMs;
+    // The backing window must end at or before the voice enters (seg.startMs) —
+    // a window overlapping the segment already contains the new voice, so
+    // subtracting it would cancel the part we're trying to recover.
+    if (bgEndMs > seg.startMs) {
+      toast.error('The backing reference must end before the voice enters (before this segment’s start).');
+      return;
+    }
     if (bgEndMs - bgStartMs < MIN_BACKING_MS) {
       toast.error(`The backing reference must be at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s and end before the voice enters.`);
       return;
@@ -408,9 +415,14 @@ export default function ReferenceAnalysis({
   const extractSegment = useCallback((seg) => {
     if (!decoded) return;
     const stacked = isStacked(seg);
-    // Defense-in-depth against a too-short backing window (e.g. a hand-edited or
-    // peer-synced segment the server accepted but that can't hold an FFT frame):
-    // don't let stacked extraction silently degrade to solo-on-the-mix.
+    // Guard the backing-window invariants before running the DSP (covers a
+    // too-short window and one that overlaps the segment because the segment
+    // start was later moved earlier) — either would make stacked extraction
+    // subtract the wrong audio and silently propose a wrong part.
+    if (stacked && seg.bgEndMs > seg.startMs) {
+      toast.error('The backing reference overlaps this segment — set it to end before the voice enters, then extract.');
+      return;
+    }
     if (stacked && (seg.bgEndMs - seg.bgStartMs) < MIN_BACKING_MS) {
       toast.error(`The backing reference is too short — give it at least ${(MIN_BACKING_MS / 1000).toFixed(1)}s of the layers before the voice enters.`);
       return;

@@ -323,6 +323,30 @@ describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
     expect(screen.getByLabelText(/backing reference end/i)).toBeTruthy();
   });
 
+  it('rejects a backing window that overlaps the segment (must end before the voice enters)', async () => {
+    installFakeAudio();
+    render(
+      <ControlledAnalysis
+        initialRef={{ ...baseRef, segments: [{ layerId: 'bass', startMs: 3000, endMs: 6000 }] }}
+        layers={layers}
+        scoreParts={[]}
+        tempo={60}
+        songKey="C"
+        onApplyPart={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
+    expect(await screen.findByRole('button', { name: /extract from mix/i })).toBeTruthy();
+    // Push backing end to 4s — past the segment start (3s), so it overlaps the
+    // voice. Rejected with a toast; stacked mode stays intact.
+    const bgEnd = screen.getByLabelText(/backing reference end/i);
+    fireEvent.change(bgEnd, { target: { value: '4' } });
+    fireEvent.blur(bgEnd);
+    expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/must end before the voice enters/i));
+    expect(screen.getByRole('button', { name: /extract from mix/i })).toBeTruthy();
+  });
+
   it('recovers a new voice from a stacked mix end-to-end (toggle → extract from mix)', async () => {
     // [0, 0.8s]: C4 backing alone. [0.8, 1.8s]: C4 + a new A4 (440) on top.
     const audio = concatArr(harmonicTone(262, 0.8), mixArr(harmonicTone(262, 1.0), harmonicTone(440, 1.0)));

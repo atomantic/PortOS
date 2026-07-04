@@ -258,8 +258,11 @@ const sanitizeRecording = (r) => {
 // Optional stacked-mix backing window (#2121): `bgStartMs`/`bgEndMs` mark a
 // slice just BEFORE the voice enters (the earlier layers alone) so the client
 // can spectral-subtract the backing and extract a voice that never appears
-// solo. Purely additive — the pair only persists together when it forms a
-// valid positive-length range, so a legacy solo segment round-trips unchanged.
+// solo. Purely additive — the pair only persists when it forms a valid range
+// that ENDS AT OR BEFORE the segment start (`bgEndMs <= startMs`); a window
+// overlapping the segment would already contain the new voice, so subtracting
+// it would cancel the very part being extracted. A legacy solo segment (no bg
+// fields) round-trips unchanged.
 const sanitizeRefSegment = (s) => {
   if (!s || typeof s !== 'object') return null;
   const startRaw = finiteOrNull(s.startMs);
@@ -278,7 +281,7 @@ const sanitizeRefSegment = (s) => {
   if (bgStartRaw !== null && bgEndRaw !== null) {
     const bgStartMs = Math.max(0, Math.round(bgStartRaw));
     const bgEndMs = Math.max(0, Math.round(bgEndRaw));
-    if (bgEndMs > bgStartMs) {
+    if (bgEndMs > bgStartMs && bgEndMs <= startMs) {
       seg.bgStartMs = bgStartMs;
       seg.bgEndMs = bgEndMs;
     }
