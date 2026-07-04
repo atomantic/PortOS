@@ -22,7 +22,7 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
-import { isOllamaClaudeProvider, isClaudeCommand, leanClaudeAuthEnv } from '../lib/providerModels.js';
+import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
@@ -629,10 +629,7 @@ export async function spawnViaRunner(agentId, task, opts) {
     prompt,
     workspacePath,
     model,
-    // leanClaudeAuthEnv: `--bare` (lean-mode Ollama claude) reads auth strictly
-    // from ANTHROPIC_API_KEY — mirror the auth token in before provider.envVars
-    // so an explicit user-configured key wins.
-    envVars: { ...claudeSettingsEnv, ...leanClaudeAuthEnv(provider), ...provider.envVars },
+    envVars: { ...claudeSettingsEnv, ...provider.envVars },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });

@@ -260,24 +260,6 @@ export function applyLeanClaudeArgs(provider, args, command = provider?.command)
 }
 
 /**
- * `--bare` reads Anthropic auth strictly from `ANTHROPIC_API_KEY` (or an
- * apiKeyHelper) — OAuth and keychain are never consulted. The Ollama-backed
- * Claude providers authenticate with `ANTHROPIC_AUTH_TOKEN=ollama` instead,
- * so mirror that value into `ANTHROPIC_API_KEY` (Ollama ignores the key
- * contents) unless the provider already sets one. Spread the result BEFORE
- * `provider.envVars` so an explicit user-configured key always wins.
- * @param {{command?:string, ollamaBacked?:boolean, envVars?:Object}} provider
- * @param {string} [command]
- * @returns {Object} `{ ANTHROPIC_API_KEY }` or `{}`
- */
-export function leanClaudeAuthEnv(provider, command = provider?.command) {
-  if (!isOllamaClaudeProvider(provider, command)) return {};
-  const envVars = provider?.envVars || {};
-  if (envVars.ANTHROPIC_API_KEY) return {};
-  return { ANTHROPIC_API_KEY: envVars.ANTHROPIC_AUTH_TOKEN || 'ollama' };
-}
-
-/**
  * Extract the pinned model id from provider.args when a model flag is baked
  * in. Supports separated form (`--model X` / `-m X`) and joined form
  * (`--model=X` / `-m=X`). Returns null when no model flag is present or the

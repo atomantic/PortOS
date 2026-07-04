@@ -16,7 +16,6 @@ import {
   isClaudeCommand,
   isOllamaClaudeProvider,
   applyLeanClaudeArgs,
-  leanClaudeAuthEnv,
   LEAN_CLAUDE_ARGS
 } from './providerModels.js';
 
@@ -413,23 +412,6 @@ describe('providerModels', () => {
       const args = ['--dangerously-skip-permissions'];
       expect(applyLeanClaudeArgs({ command: 'claude' }, args)).toBe(args);
       expect(applyLeanClaudeArgs({ ollamaBacked: true, command: 'opencode' }, args)).toBe(args);
-    });
-  });
-
-  describe('leanClaudeAuthEnv', () => {
-    it('mirrors ANTHROPIC_AUTH_TOKEN into ANTHROPIC_API_KEY for bare mode', () => {
-      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude', envVars: { ANTHROPIC_AUTH_TOKEN: 'ollama' } }))
-        .toEqual({ ANTHROPIC_API_KEY: 'ollama' });
-    });
-
-    it('falls back to the literal "ollama" when no auth token is configured', () => {
-      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude' }))
-        .toEqual({ ANTHROPIC_API_KEY: 'ollama' });
-    });
-
-    it('yields nothing when the provider already sets ANTHROPIC_API_KEY or is not lean', () => {
-      expect(leanClaudeAuthEnv({ ollamaBacked: true, command: 'claude', envVars: { ANTHROPIC_API_KEY: 'real' } })).toEqual({});
-      expect(leanClaudeAuthEnv({ command: 'claude' })).toEqual({});
     });
   });
 });

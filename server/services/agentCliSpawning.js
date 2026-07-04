@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, leanClaudeAuthEnv } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -424,10 +424,7 @@ export async function spawnDirectly({
     // The pm2 shim must be prepended onto the FINAL PATH (after any
     // provider.envVars override) so a `--dangerously-skip-permissions` agent
     // can't `pm2 kill` the shared daemon.
-    // leanClaudeAuthEnv: `--bare` reads auth strictly from ANTHROPIC_API_KEY, so
-    // Ollama-backed claude sessions get one mirrored from their auth token
-    // (before provider.envVars so an explicit user-configured key wins).
-    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...leanClaudeAuthEnv(provider), ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
+    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {
