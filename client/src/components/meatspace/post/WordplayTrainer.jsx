@@ -68,6 +68,12 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
   // Which mode we've already kicked off generation for, so the URL-driven
   // effect below doesn't regenerate on every render.
   const initiatedRef = useRef(null);
+  // Per-run generation token (CLAUDE.md's {target, generation} pattern). Every
+  // generation start bumps it; a completing runMode aborts unless its captured
+  // token is still current — so a superseded run (re-enter the same mode, or a
+  // direct mode→mode URL change mid-generation) can't land a stale drill or
+  // strand `loading`. Bumped on every clear too, to invalidate an in-flight run.
+  const genRef = useRef(0);
   const [drill, setDrill] = useState(null);
   const [loading, setLoading] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -132,6 +138,7 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
       // generating" (the `drill || loading` guard below), wedging it on a
       // permanent spinner. Guard against a re-run loop — only clear when dirty.
       if (drill || loading || feedback || results.length || initiatedRef.current) {
+        genRef.current += 1; // invalidate any in-flight generation for the mode we left
         setDrill(null); setLoading(false); setQuestionIndex(0);
         setInputValue(''); setItems([]); setFeedback(null); setResults([]);
         initiatedRef.current = null;
@@ -140,17 +147,22 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
     }
     // A drill left over from a PREVIOUS mode (e.g. browser-back to the grid, then
     // pick a different mode — the URL changed without going through
-    // handleBackToModes) must be cleared first. Otherwise the `drill || loading`
-    // guard below would keep the stale drill and skip generating this mode's, so
-    // this mode's UI would render against the wrong drill's data.
+    // handleBackToModes) must be cleared first, and any in-flight generation for
+    // it invalidated, so this mode's UI never renders against the wrong drill.
     if (drill && drill.type !== selectedMode) {
+      genRef.current += 1;
       setDrill(null); setQuestionIndex(0); setInputValue(''); setItems([]);
       setFeedback(null); setResults([]);
       initiatedRef.current = null;
       return; // re-runs with drill cleared, then generates below
     }
     if (initiatedRef.current === selectedMode) return;
-    if (drill || loading) { initiatedRef.current = selectedMode; return; }
+    // Short-circuit ONLY on an existing drill (which, past the clear above, must
+    // match this mode). Do NOT short-circuit on `loading`: if a run is loading it
+    // belongs to a DIFFERENT mode (initiatedRef !== selectedMode here), so fall
+    // through to generate this mode — the genRef token neutralizes the orphaned
+    // run's result instead of letting its stale `loading` wedge this one.
+    if (drill) { initiatedRef.current = selectedMode; return; }
     // Wait for the cache-status fetch before deciding cold vs warm — null means
     // "not loaded yet", which must NOT be treated as cold (would bounce a warm
     // mode back to the grid on every fresh load).
@@ -177,8 +189,9 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
   const currentPrompt = prompts[questionIndex];
 
   async function runMode(modeId, useProviderId, useModel) {
-    // Mark this mode as initiated synchronously (before any await) so the
-    // URL-driven effect never fires a second generation for the same mode.
+    // Capture a fresh generation token synchronously (before any await), and mark
+    // this mode initiated so the URL effect doesn't fire a second generation.
+    const gen = ++genRef.current;
     initiatedRef.current = modeId;
     setLoading(true);
     setDrill(null);
@@ -191,9 +204,10 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
     setActiveModel(useModel);
 
     const generated = await generatePostDrill(modeId, { count: 5 }, useProviderId, useModel).catch(() => null);
-    // Abort if a newer mode was selected mid-generation (browser-back then a
-    // different mode) — this stale drill must not land under the new mode's URL.
-    if (initiatedRef.current !== modeId) return;
+    // Abort if a newer generation superseded this one (re-enter same mode, a
+    // different mode, or a clear) — this stale drill must not land, and this run
+    // must not touch `loading` (which now belongs to the newer run).
+    if (gen !== genRef.current) return;
     setLoading(false);
     if (generated) {
       setDrill(generated);

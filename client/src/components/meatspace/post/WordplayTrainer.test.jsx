@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // Stub every API call WordplayTrainer (and the shared WordplayDrillUI scoring
 // core it now delegates to) can reach — mirrors the mocking convention used
@@ -108,6 +108,33 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
 
     fireEvent.click(screen.getByText('Bridge Word')); // enter mode B
     await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument()); // B generated, not wedged
+  });
+
+  it('ignores a superseded generation when the same mode is re-entered mid-generation (issue #2098)', async () => {
+    let resolveFirst;
+    generatePostDrill
+      .mockImplementationOnce(() => new Promise(r => { resolveFirst = r; })) // run #1 (deferred)
+      .mockResolvedValueOnce({
+        type: 'compound-chain',
+        challenges: [{ rootWord: 'water', position: 'prefix', minExpected: 1 }],
+      }); // run #2
+
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+
+    fireEvent.click(await screen.findByText('Compound Chain')); // enter A → run #1 (deferred)
+    await waitFor(() => expect(screen.getByText(/Generating/i)).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button')[0]);         // back to grid (invalidates run #1)
+    await screen.findByText('Compound Chain');
+    fireEvent.click(screen.getByText('Compound Chain'));       // re-enter A → run #2 resolves
+    await waitFor(() => expect(screen.getByText('water')).toBeInTheDocument());
+
+    // The stale run #1 finally resolves — its token is superseded, so it must NOT
+    // swap the drill out from under the live run #2.
+    await act(async () => {
+      resolveFirst({ type: 'compound-chain', challenges: [{ rootWord: 'fire', position: 'prefix', minExpected: 1 }] });
+    });
+    expect(screen.getByText('water')).toBeInTheDocument();
+    expect(screen.queryByText('fire')).toBeNull();
   });
 
   it('does not submit a training entry before the round completes', async () => {
