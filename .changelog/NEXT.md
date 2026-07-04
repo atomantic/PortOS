@@ -1,5 +1,13 @@
 # Unreleased Changes
 
+## Songs
+
+- **[issue-2109] The live vocal Tuner now locks onto the note you're singing instead of flickering.** Holding a steady note used to make the readout strobe — the note label flipped between neighbors, the needle lurched, and the display dropped to "—" on every breath or consonant. The tuner now holds a stable reading through brief dropouts (dimming while it coasts), only blanks after a real pause, keeps one note label while your pitch wanders up to ~60¢ around it, and re-locks promptly when you actually change notes — so a held note shows one label with a gently moving needle.
+
+## Rounds
+
+- **[issue-2104] Fixed: 500 Miles' reference TikTok videos now show up on older installs.** The built-in "500 Miles" round shipped with three TikTok reference performances, but any install that already had its data saved from before those were added never picked them up — the Reference material section stayed empty. A one-time backfill now restores the three references for those installs, without touching anything you may have added of your own.
+
 ## Media
 
 - **[issue-2036] Sketch & Annotation Canvas (phase 2): re-render an image guided by your annotations.** The annotate page (`/media/annotate/:mediaKey`) gained a "Re-render" action: draw over a generated image, then feed your markup back through local img2img so the marks reshape the render. A confirmation dialog names the exact local model it will run (no surprise AI calls) and lets you add an optional prompt and tune how much to change before it starts; the new render is queued and appears in Media History. Requires a local FLUX img2img runner — the action explains when one isn't available. Phase 3 (blank-canvas storyboard) remains open on #2036.
@@ -10,6 +18,10 @@
 - **Multiplication drills now ramp up instead of starting hard.** The mental-math multiplication drill used to open at a fixed 2-digit × 2-digit difficulty (e.g. `566 × 191`) for everyone. It now climbs a mastery-gated ladder — `1×1` → `1×2` → `1×1×1` → `2×2` → … — starting at single-digit × single-digit and advancing to the next rung only after you answer a level quickly *and* accurately (≥90% correct within a per-rung speed target). The drill header and the config page show your current rung and per-level mastery. On by default; turn off "Progressive difficulty" on the Multiplication card to go back to the manual Max Digits setting.
 - **Morse trainer audio now works on mobile Safari.** iOS Safari starts the Web Audio context suspended and only unlocks it once `resume()` fully settles. The trainer fired `resume()` without awaiting it, so the first tones were scheduled against a still-suspended clock and never sounded on iPhone/iPad. It now awaits the resume before scheduling any tone (matching the app's other audio modules), so Copy, Head Copy, and Send-mode keying all produce sound on mobile Safari.
 - **The Elements Song trainer is now mobile-friendly and speed-readable.** The periodic-table memorization view no longer overflows off the right edge of a phone screen: the mastery summary, search box, and Mastery/Category toggle now stack and stretch to full width on small screens, the periodic table uses smaller cells (with a scroll-hint fade so it's clear the grid pans horizontally), and the header shrinks to fit. It also gained a **Rapid Read** practice mode that RSVP-flashes the lyrics one word at a time (reusing the app's speed reader) — run the whole song from the Practice list, or tap the gauge icon on any verse to speed-read just that section.
+
+## Rounds
+
+- **[issue-2108] Built-in rounds now document their melody variant points.** Ah Poor Bird, Rose Rose Rose Red, and Zum Gali Gali carried melody/lyric choices that differ from other printed versions with no note explaining why — so a future accuracy check (or the AI evaluate feature) could mistake a deliberate variant for an error. Their notation now spells out each variant (Ah Poor Bird's C natural vs. the harmonic-minor C♯; Rose's verse and ending-note choices; Zum Gali Gali's D-minor transposition and refrain-only form) and cites the sources it was checked against.
 
 ## Fixed
 
