@@ -43,6 +43,38 @@ describe('submitTrainingEntry', () => {
     expect(atomicWrite).toHaveBeenCalledOnce();
   });
 
+  it('persists a per-question breakdown when supplied (issue #2114)', async () => {
+    const questions = [
+      { prompt: 'news___', response: 'paper', responseMs: 4200, score: 85, feedback: 'Nice.', correct: true },
+      { items: ['firehouse'], responseMs: 5100, score: 40, feedback: 'Partial.', correct: false },
+    ];
+
+    const entry = await submitTrainingEntry({
+      module: 'llm-drills',
+      drillType: 'bridge-word',
+      questionCount: 2,
+      correctCount: 1,
+      totalMs: 9300,
+      questions,
+    });
+
+    expect(entry.questions).toEqual(questions);
+    const savedData = atomicWrite.mock.calls[0][1];
+    expect(savedData.entries[0].questions).toEqual(questions);
+  });
+
+  it('omits the questions field entirely when not supplied (back-compat)', async () => {
+    const entry = await submitTrainingEntry({
+      module: 'mental-math',
+      drillType: 'multiplication',
+      questionCount: 10,
+      correctCount: 7,
+      totalMs: 45000,
+    });
+
+    expect(entry).not.toHaveProperty('questions');
+  });
+
   it('appends to existing entries', async () => {
     readJSONFile.mockResolvedValue({
       entries: [{ id: 'old', module: 'mental-math', drillType: 'powers' }]

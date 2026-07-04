@@ -67,6 +67,16 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     }));
     const entry = submitTrainingEntry.mock.calls[0][0];
     expect(entry.totalMs).toBeGreaterThanOrEqual(0);
+
+    // Per-question breakdown (issue #2114) — one entry per scored response,
+    // carrying the score/feedback already computed for the results screen.
+    expect(entry.questions).toHaveLength(1);
+    expect(entry.questions[0]).toMatchObject({
+      items: ['firehouse'],
+      score: 85,
+      feedback: 'Nice compounds!',
+      correct: true,
+    });
   });
 
   it('does not submit a training entry before the round completes', async () => {

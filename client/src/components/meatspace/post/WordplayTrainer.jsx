@@ -9,7 +9,7 @@ import ProviderModelSelector from '../../ProviderModelSelector';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar, scoreWordplayResponse } from './WordplayDrillUI';
-import { countLlmCorrect } from './constants';
+import { countLlmCorrect, LLM_TRAINING_CORRECT_THRESHOLD } from './constants';
 
 // Coarse module bucket for training-log entries — matches the module
 // PostLlmDrillRunner's in-session runner logs LLM/wordplay drills under
@@ -258,12 +258,25 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
       // that practice happened anywhere (issue #2097). Fire-and-forget, same
       // pattern as MorseTrainer's logTraining: a failed background write
       // shouldn't interrupt the results screen the user is already seeing.
+      // `questions` carries the per-question breakdown already computed in
+      // `results` (issue #2114) — the drill cache means these prompts are
+      // reusable, so a future progress dashboard can trend which individual
+      // wordplay prompts get missed rather than only the round aggregate.
       submitTrainingEntry({
         module: TRAINING_MODULE,
         drillType: selectedMode,
         questionCount: results.length,
         correctCount: countLlmCorrect(results),
         totalMs: Date.now() - roundStartRef.current,
+        questions: results.map(r => ({
+          prompt: r.prompt,
+          response: r.response,
+          items: r.items,
+          responseMs: r.responseMs,
+          score: r.score,
+          feedback: r.feedback,
+          correct: (r.score ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+        })),
       }).catch(() => {});
     } else {
       setQuestionIndex(questionIndex + 1);
