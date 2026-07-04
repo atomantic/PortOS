@@ -164,10 +164,17 @@ export async function getOrgsHoldingRecord(vaultRecordId) {
  * a bad `vaultRecordId` partway through the upsert loop (foreign key
  * violation, see below) would leave the DELETE committed but only some of
  * the new rows written: neither the old nor the requested holdings set.
+ * `FOR UPDATE` row-locks the org for the duration of the transaction (same
+ * pattern as `updateVaultRecord` in privacyVault.js) — without it, two
+ * concurrent replace calls for the same org (e.g. a double-click, or two
+ * browser tabs saving holdings at once) can both pass the existence check,
+ * each delete against the pre-existing set, and each upsert their own rows —
+ * leaving the UNION of both requests rather than the last full replacement,
+ * silently defeating the documented replace-set semantics.
  */
 export async function setOrgHoldings(orgId, holdings) {
   await withTransaction(async (client) => {
-    const { rows: orgRows } = await client.query(`SELECT id FROM privacy_orgs WHERE id = $1`, [orgId]);
+    const { rows: orgRows } = await client.query(`SELECT id FROM privacy_orgs WHERE id = $1 FOR UPDATE`, [orgId]);
     if (!orgRows[0]) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
 
     const ids = holdings.map((h) => h.vaultRecordId);

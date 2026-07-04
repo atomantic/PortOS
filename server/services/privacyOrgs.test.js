@@ -151,6 +151,18 @@ describe('setOrgHoldings', () => {
     expect(queryMock).not.toHaveBeenCalled(); // getHoldingsForOrg never reached
   });
 
+  it('row-locks the org with FOR UPDATE to serialize concurrent replace calls', async () => {
+    const client = mockTransaction(async (sql) => {
+      if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
+      if (/DELETE FROM privacy_org_holdings/.test(sql)) return { rows: [] };
+      return { rows: [] };
+    });
+    queryMock.mockResolvedValue({ rows: [] });
+    await setOrgHoldings('o1', []);
+    const lockCall = client.query.mock.calls.find(([sql]) => /FROM privacy_orgs WHERE id/.test(sql));
+    expect(lockCall[0]).toMatch(/FOR UPDATE/);
+  });
+
   it('deletes the complement and upserts the given set, all inside one transaction', async () => {
     const client = mockTransaction(async (sql) => {
       if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
