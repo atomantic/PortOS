@@ -15,6 +15,9 @@ import {
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
   isMergeQueueSignal,
   createMergeQueueTracker,
+  REVIEW_LOOP_IDLE_TIMEOUT_MS,
+  isReviewLoopSignal,
+  createReviewLoopTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -286,6 +289,80 @@ describe('tuiHandshake — merge-queue idle suppression (#2074)', () => {
     // whole point is that the silent gap is when the grace is needed.
     tracker.observe('waiting...');
     tracker.observe('');
+    expect(tracker.active).toBe(true);
+  });
+});
+
+// Observed 2026-07-02 (agent-61508f36) — a do:release run's multi-reviewer
+// loop correctly backgrounded a slow codex review and polled for it rather
+// than blocking, but the reviewer's silent working stretch exceeded the
+// 3-minute default and the runner reaped the still-waiting release as a false
+// `idle-complete` success before it reached the merge gate, leaving PR #2084
+// open. Mirrors the merge-queue suppression above.
+describe('tuiHandshake — review-loop idle suppression', () => {
+  it('extends the idle timeout well past the default 3-minute window', () => {
+    expect(REVIEW_LOOP_IDLE_TIMEOUT_MS).toBe(900000);
+    expect(REVIEW_LOOP_IDLE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TUI_IDLE_TIMEOUT_MS);
+  });
+
+  it('isReviewLoopSignal matches multi-reviewer-loop chrome (case-insensitive)', () => {
+    expect(isReviewLoopSignal('Review plan: [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(isReviewLoopSignal('--- Review pass 1/2: codex ---')).toBe(true);
+  });
+
+  it('isReviewLoopSignal ignores ordinary implementation/output chrome', () => {
+    expect(isReviewLoopSignal('Editing server/services/agentTuiSpawning.js')).toBe(false);
+    expect(isReviewLoopSignal('● high · (12s · running tests)')).toBe(false);
+    expect(isReviewLoopSignal('')).toBe(false);
+    expect(isReviewLoopSignal(null)).toBe(false);
+    expect(isReviewLoopSignal(undefined)).toBe(false);
+  });
+
+  // Regression for false-positive latches found across three rounds of local
+  // review: bare substrings ('review pass', 'review loop', 'multi-reviewer',
+  // 'multi-reviewer summary') would match this project's own CLAUDE.md
+  // convention ("run a simplify/self-review pass before committing") and this
+  // repo's bundled slashdo docs — which say "review loop"/"multi-reviewer"
+  // dozens of times, include the literal instruction text "Review plan:
+  // {REVIEW_AGENTS}...", AND (codex review's finding) render a fully-formed
+  // example of their own "## Multi-Reviewer Summary" aggregate-report heading
+  // in a sample output block — latching the tracker for ANY CoS agent's
+  // ordinary narration or docs-editing, not just an actual do:release/do:pr/
+  // do:rpr run.
+  it('isReviewLoopSignal does NOT match ordinary self-review narration or doc prose', () => {
+    expect(isReviewLoopSignal('running the self-review pass before committing')).toBe(false);
+    expect(isReviewLoopSignal('## Local Agent Code Review Loop')).toBe(false);
+    expect(isReviewLoopSignal('You are a Copilot review loop agent.')).toBe(false);
+    expect(isReviewLoopSignal('the multi-reviewer wrapper dispatches each listed agent')).toBe(false);
+    expect(isReviewLoopSignal('Print the resolved plan before starting: `Review plan: {REVIEW_AGENTS} (mode: ...)`')).toBe(false);
+    expect(isReviewLoopSignal('## Multi-Reviewer Summary')).toBe(false);
+  });
+
+  it('createReviewLoopTracker latches on first signal and stays active through silence', () => {
+    const tracker = createReviewLoopTracker();
+    expect(tracker.active).toBe(false);
+    tracker.observe('implementing the fix, running the suite');
+    expect(tracker.active).toBe(false);
+    // Enters the multi-reviewer loop — latches.
+    expect(tracker.observe('Review plan: [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(tracker.active).toBe(true);
+    // Subsequent quiet reviewer-wait chunks (no marker) must NOT un-latch it —
+    // the whole point is that the silent gap is when the grace is needed.
+    tracker.observe('waiting for codex...');
+    tracker.observe('');
+    expect(tracker.active).toBe(true);
+  });
+
+  // Regression for codex review [P2] (iteration 2): a real TUI can deliver
+  // the banner split across two onData chunks (token-by-token streaming),
+  // so checking only the current chunk in isolation would miss it.
+  it('createReviewLoopTracker latches on a marker split across two chunks', () => {
+    const tracker = createReviewLoopTracker();
+    // Split right before the '[' that anchors the pattern — neither half
+    // alone contains "review plan: [".
+    tracker.observe('Now starting the review loop. Review plan:');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe(' [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
     expect(tracker.active).toBe(true);
   });
 });
