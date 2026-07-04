@@ -101,6 +101,20 @@ All steps stay gated on the cos autonomy domain + daily action budget exactly as
 - New pass kinds in `writersRoom/evaluator.js` `KIND_META`: `cuts` (adversarial cut pass over the work body) and `revise` (brief-driven rewrite that receives the old draft as raw material + a WHAT TO KEEP section).
 - Multi-pass "Polish" runner: evaluate → cuts → apply safe cuts → revise → re-evaluate → keep/revert gate against body snapshots (add body history under `data/writers-room/works/<id>/` if absent), with cycle count and live SSE progress. Triggered by an explicit user action (satisfies the AI policy), cycles configurable.
 
+### Phase 10 — Generation-side craft doctrine (worldbuilding laws, character framework, structure rules)
+
+Coverage audit (2026-07-04) found PortOS built the **editor** — the 68 checks police craft violations after drafting — but not the **curriculum**: the doctrine autonovel's CRAFT.md injects *before* the writer model drafts. Prevention up-front is far cheaper than detection + revision later, especially in autonomous runs. Gaps and fixes:
+
+- **Worldbuilding doctrine (biggest gap — absent on both sides).** Add Sanderson's Laws to the universe expansion prompt (`universeBuilderExpand.js` `buildExpansionPrompt` — code-built, no template migration): limitations > powers; magic/tech costs must drive plot decisions; solutions via established rules must be foreshadowed; iceberg depth; interconnection ("pulling one thread moves everything"); 2–3 societal implications per major system. Add a matching editorial check pair (`world.unforeshadowed-solution`, `world.cost-free-power`) so the doctrine is also verifiable.
+- **Character framework.** Extend character generation (`universe-character-expand.md`, Story Builder characters step) and the bible shapes with Ghost → Wound → Lie → Want → Need chain, Three Sliders (proactivity/likability/competence — "high on at least two, or one plus visible growth"), and declared arc type. The existing `arc.*`/`character.*` checks reconcile against these authored fields instead of inferring.
+- **Structure rules at generation.** Beat-sheet/season prompts: try-fail mandate ("60%+ of middle scenes end 'Yes, but' or 'No, and'"), checkable beat rules (Catalyst external; Break Into Two is a choice; All Is Lost includes a death of something), MICE-style thread nesting (close in reverse order of opening) in the arc prompts.
+- **Le Guin style doctrine** ("style is not ornament — it IS the fantasy"; prefer strong nouns/verbs over adjective-noun clichés) into the style-guide → prompt flow.
+- Shipped-template edits need the standard stage-prompt hash migration.
+
+### Phase 11 — Foundation-quality gate in Series Autopilot
+
+autonovel scores its foundation (world / characters / outline) against a 13-dimension weighted rubric (lore 40% / character 30% / structure 20% / craft 10%) and iterates until ≥ 7.5 **before drafting a single chapter**. PortOS autopilot has `verifyArc` (structure only) but drafts against an unscored universe/cast. Add a `foundationGate` autopilot step after arc/episode generation and before beat sheets: judge the universe canon + character records + arc against the Phase 10 doctrine (weighted rubric, calibration ladder), run a bounded improve loop (like `verifyArc`'s `MAX_ARC_VERIFY_ROUNDS`) targeting the weakest dimension, pause with residual findings if it can't converge. This is the "correct it up-front, not in editor mode" mechanism for autonomous runs.
+
 ### Future (parked)
 
 - **Scheduled autopilot runs** — cron-scheduled Series Autopilot via the task scheduler; sanctioned under the AI policy as a user-configured scheduled automation, but needs an explicit setup UI naming provider/model + budget cap.
