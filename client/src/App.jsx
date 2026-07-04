@@ -31,6 +31,7 @@ const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDeta
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
+const Timeline = lazyWithReload(() => import('./pages/Timeline'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
@@ -258,6 +259,8 @@ export default function App() {
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           <Route path="messages/:tab" element={<Messages />} />
           <Route path="tribe" element={<Tribe />} />
+          <Route path="timeline" element={<Timeline />} />
+          <Route path="timeline/:date" element={<Timeline />} />
           <Route path="openclaw" element={<OpenClawPage />} />
           <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />

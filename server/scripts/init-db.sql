@@ -131,6 +131,29 @@ CREATE TABLE IF NOT EXISTS tribe_memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_tribe_memory_links_memory ON tribe_memory_links (memory_id);
 
+-- Human activity timeline (#2150) — unified, machine-local event store fed by
+-- message/calendar syncs (later: iMessage, Spotify, YouTube, Signal). Metadata +
+-- short summary only; full bodies stay in per-source caches. Idempotent via the
+-- unique (source, dedupe_key) index + ON CONFLICT DO NOTHING. Machine-local like
+-- Tribe (ADR 2026-06-26-tribe-and-universe-runs-local.md) — excluded from peer sync.
+CREATE TABLE IF NOT EXISTS human_activity_events (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  account_id TEXT,
+  kind TEXT NOT NULL,
+  happened_at TIMESTAMPTZ NOT NULL,
+  duration_s INTEGER,
+  title TEXT,
+  summary TEXT,
+  url TEXT,
+  participants JSONB DEFAULT '[]'::jsonb,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_human_activity_dedupe ON human_activity_events (source, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_human_activity_happened ON human_activity_events (happened_at);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.

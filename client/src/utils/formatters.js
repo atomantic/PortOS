@@ -53,10 +53,12 @@ export function formatDateFull(date) {
 /**
  * Format a Date as a clock time string with seconds (e.g., "02:30:45 PM")
  * @param {Date} date - Date object
+ * @param {object} [options] - { timeZone } — render in a specific IANA timezone
+ *   (e.g. the server's configured user timezone) instead of the browser's
  * @returns {string} Formatted clock time
  */
-export function formatClockTime(date) {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+export function formatClockTime(date, { timeZone } = {}) {
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', ...(timeZone ? { timeZone } : {}) });
 }
 
 /**
