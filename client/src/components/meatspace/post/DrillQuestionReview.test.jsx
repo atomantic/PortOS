@@ -121,6 +121,33 @@ describe('DrillQuestionReview — digit-span', () => {
     expect(screen.getByText('skipped')).toBeInTheDocument();
     expect(screen.getByText('123')).toBeInTheDocument();
   });
+
+  it('backward drills show the TRUE shown sequence plus the reversed expected recall (regression: expected is the recall order, not what was shown)', () => {
+    const questions = [
+      { prompt: '3-digit (backward)', index: 0, expected: '321', answered: '123', correct: false, responseMs: 1100, length: 3 },
+    ];
+    const drillData = {
+      config: { direction: 'backward' },
+      sequences: [{ digits: [1, 2, 3], length: 3 }],
+    };
+    render(<DrillQuestionReview type="digit-span" questions={questions} drillData={drillData} />);
+    expect(screen.getByText('Shown')).toBeInTheDocument();
+    expect(screen.getByText('Expected')).toBeInTheDocument();
+    // Shown column carries the digits as displayed (123), Expected the
+    // required reversed recall (321) — previously "Shown" wrongly showed 321.
+    expect(screen.getAllByText('123').length).toBeGreaterThan(0); // shown + (wrong) recalled
+    expect(screen.getByText('321')).toBeInTheDocument();
+  });
+
+  it('backward drills without drillData still derive the shown sequence by un-reversing expected', () => {
+    const questions = [
+      { prompt: '3-digit (backward)', index: 0, expected: '321', answered: null, correct: false, responseMs: 0, length: 3 },
+    ];
+    render(<DrillQuestionReview type="digit-span" questions={questions} />);
+    // Direction inferred from the prompt; shown = expected un-reversed.
+    expect(screen.getByText('123')).toBeInTheDocument(); // shown
+    expect(screen.getByText('321')).toBeInTheDocument(); // expected recall
+  });
 });
 
 describe('DrillQuestionReview — stroop', () => {

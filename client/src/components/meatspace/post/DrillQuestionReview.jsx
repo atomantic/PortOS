@@ -185,9 +185,26 @@ function NBackReview({ questions, missed }) {
 }
 
 // =============================================================================
-// DIGIT SPAN — shown digits vs recalled digits, per round.
+// DIGIT SPAN — shown digits vs recalled digits, per round. `q.expected` is the
+// required RECALL order (reversed for backward drills), NOT the shown
+// sequence — so the "Shown" column derives the true shown digits from
+// `drillData.sequences[q.index]` when available, else by un-reversing
+// `expected` for backward drills. A backward drill gets an extra "Expected"
+// column so the review teaches both what was shown and the required answer.
 // =============================================================================
-function DigitSpanReview({ questions, missed }) {
+function DigitSpanReview({ questions, missed, drillData }) {
+  // Direction is per-drill (all rounds share it). Fall back to the prompt
+  // text ("3-digit (backward)") for history records without drillData.
+  const isBackward = drillData?.config?.direction === 'backward'
+    || (!drillData?.config?.direction && questions.some((q) => /backward/.test(q.prompt || '')));
+
+  const shownFor = (q) => {
+    const seq = drillData?.sequences?.[q.index]?.digits;
+    if (Array.isArray(seq)) return seq.join('');
+    if (q.expected == null) return null;
+    return isBackward ? [...String(q.expected)].reverse().join('') : String(q.expected);
+  };
+
   return (
     <div>
       <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
@@ -196,6 +213,7 @@ function DigitSpanReview({ questions, missed }) {
           <tr className="text-gray-500 text-left border-b border-port-border">
             <th className="py-1 pr-2 font-medium">Round</th>
             <th className="py-1 pr-2 font-medium">Shown</th>
+            {isBackward && <th className="py-1 pr-2 font-medium">Expected</th>}
             <th className="py-1 pr-2 font-medium">Recalled</th>
             <th className="py-1 pr-2 font-medium text-center">Result</th>
             <th className="py-1 pl-2 font-medium text-right">Time</th>
@@ -207,7 +225,10 @@ function DigitSpanReview({ questions, missed }) {
             return (
               <tr key={i} className={`border-b border-port-border/30 ${rowTint(q.correct, unanswered)}`}>
                 <td className="py-1 pr-2 text-gray-400">{q.prompt}</td>
-                <td className="py-1 pr-2 font-mono text-white tracking-widest">{q.expected ?? '—'}</td>
+                <td className="py-1 pr-2 font-mono text-white tracking-widest">{shownFor(q) ?? '—'}</td>
+                {isBackward && (
+                  <td className="py-1 pr-2 font-mono text-port-success tracking-widest">{q.expected ?? '—'}</td>
+                )}
                 <td className="py-1 pr-2 font-mono tracking-widest">
                   {unanswered ? <span className="italic text-gray-500 tracking-normal">skipped</span> : q.answered}
                 </td>
@@ -356,8 +377,9 @@ function TimingReview({ questions, missed, type }) {
  * pure-speed drills (schulte-table/reaction-time) each get a type-appropriate
  * view because their `questions[]` capture different things per trial.
  *
- * `drillData` is the generated drill (only used by Stroop, to look up each
- * color's swatch hex) — optional, and safely ignored by every other type.
+ * `drillData` is the generated drill — used by Stroop (color swatch hex
+ * lookup) and digit-span (true shown-digit sequence + direction). Optional,
+ * and safely ignored by every other type.
  */
 export default function DrillQuestionReview({ type, questions, drillData }) {
   const list = questions || [];
@@ -369,7 +391,7 @@ export default function DrillQuestionReview({ type, questions, drillData }) {
     case 'n-back':
       return <NBackReview questions={list} missed={missed} />;
     case 'digit-span':
-      return <DigitSpanReview questions={list} missed={missed} />;
+      return <DigitSpanReview questions={list} missed={missed} drillData={drillData} />;
     case 'stroop':
       return <StroopReview questions={list} missed={missed} drillData={drillData} />;
     case 'schulte-table':
