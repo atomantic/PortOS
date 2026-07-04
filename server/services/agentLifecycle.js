@@ -23,6 +23,7 @@ import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalys
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
@@ -335,13 +336,21 @@ export async function spawnAgentForTask(task) {
     // Lean mode: an Ollama-backed Claude session gets `--bare --strict-mcp-config`
     // (see applyLeanClaudeArgs) so the user's personal environment — hooks,
     // plugins, MCP servers, global CLAUDE.md — doesn't drown the small local
-    // model. Lean sessions also split the prompt: the PortOS operating contract
-    // rides in a system-prompt file (`--append-system-prompt-file`) while the
-    // pasted/stdin prompt carries only the task itself. Split stays gated on
-    // lean mode until `--append-system-prompt-file` is validated on the
-    // standard interactive claude providers.
+    // model. This is orthogonal to the prompt split below.
     const leanMode = isOllamaClaudeProvider(provider);
-    const splitSystemPrompt = leanMode && isClaudeCommand(provider.command);
+
+    // System/user prompt split: for ANY Claude Code session (TUI or headless
+    // CLI), the PortOS operating contract rides in a real system prompt via
+    // `--append-system-prompt-file` while the pasted/stdin prompt carries only
+    // the task — so the model weights the contract as instructions, not
+    // conversation (and hosted providers get better prompt-cache reuse on the
+    // stable system block). Gated on a light-context Claude command: non-Claude
+    // providers (codex, antigravity, opencode) have no equivalent flag and keep
+    // the combined prompt; API providers never take the light path so the split
+    // is a no-op for them. `--append-system-prompt-file` validated on claude CLI
+    // v2.1.201 in both `--print` and stream-json arg shapes.
+    const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
+    const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
 
     // Build the agent prompt. `provider.type` drives the light-vs-full split
     // inside buildAgentPrompt — see its doc comment.

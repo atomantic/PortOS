@@ -602,7 +602,7 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).toMatch(/^## Completion$/m);
   });
 
-  describe('split system/user prompt (lean Ollama claude)', () => {
+  describe('split system/user prompt (Claude providers)', () => {
     const wt = { branchName: 'cos/t/a', worktreePath: '/tmp/wt', baseBranch: 'main' };
     const splitTask = () => makeTask({ metadata: { context: 'Some context', openPR: false } });
 
@@ -647,6 +647,28 @@ describe('buildAgentPrompt — provider type routing', () => {
         splitTask(), {}, '/r', wt, isTruthyMeta,
         { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude' });
       expect(prompt).toMatch(/\/do:push/);
+    });
+
+    it('splits a STANDARD (non-lean) claude TUI too, keeping slashdo in the system prompt', async () => {
+      const parts = await buildAgentPrompt(
+        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude', split: true });
+      // Task in the user prompt, contract (with slashdo — NOT slashdo-free) in system.
+      expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
+      expect(parts.userPrompt).not.toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).toMatch(/\/do:push/);
+    });
+
+    it('split parts carry exactly the combined prompt for a standard claude CLI (no drift)', async () => {
+      const opts = { providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude' };
+      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, opts);
+      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, { ...opts, split: true });
+      const reassembled = parts.userPrompt.replace(
+        /\n\nBegin working on the task now\.\n$/,
+        '\n\n' + parts.systemPrompt.replace(/\n$/, '') + '\n\nBegin working on the task now.\n'
+      );
+      expect(reassembled).toBe(combined);
     });
   });
 

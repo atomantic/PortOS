@@ -238,6 +238,18 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).not.toContain('--append-system-prompt-file');
   });
 
+  it('adds the system-prompt file to a STANDARD claude CLI WITHOUT lean flags', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'claude-code', command: 'claude' },
+      'claude-opus-4-8',
+      {},
+      { systemPromptFile: '/data/cos/agents/agent-2/system-prompt.md' },
+    );
+    expect(config.args).not.toContain('--bare');
+    const idx = config.args.indexOf('--append-system-prompt-file');
+    expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-2/system-prompt.md');
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.
