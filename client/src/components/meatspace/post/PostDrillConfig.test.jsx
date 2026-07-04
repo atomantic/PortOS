@@ -357,6 +357,18 @@ describe('PostDrillConfig', () => {
       expect(toastModule.default.error).toHaveBeenCalled();
     });
 
+    it('a blocked LLM "Enable all" reveals the collapsed LLM section so the provider picker is visible', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      // Every preset collapses the LLM section; the bulk button stays visible.
+      fireEvent.click(screen.getByText('Balanced daily'));
+      expect(screen.queryByText('AI Provider')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      // The gate blocks the bulk enable (no provider chosen) but opens the
+      // section so the "pick a provider above" toast points at a real control.
+      expect(screen.getByText('AI Provider')).toBeTruthy();
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+    });
+
     it('LLM "Enable all" enables every LLM drill once a provider is chosen', async () => {
       getProviders.mockResolvedValue({
         providers: [{ id: 'prov-1', name: 'Test Provider', type: 'api', enabled: true, models: [] }],

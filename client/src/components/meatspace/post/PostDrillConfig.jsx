@@ -620,6 +620,10 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   // gate). Disabling never calls a provider, so it's unguarded.
   function setAllLlmEnabled(enabled) {
     if (enabled && !llmProviderId) {
+      // Reveal the section (without enabling any drills) so the AI Provider
+      // picker the toast points at is actually on screen — it renders inside
+      // the {llmEnabled && …} block and every preset turns llmEnabled off.
+      setLlmEnabled(true);
       toast.error('Pick an AI provider above before enabling all LLM drills');
       return;
     }
