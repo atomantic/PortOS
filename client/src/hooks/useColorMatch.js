@@ -206,7 +206,12 @@ export default function useColorMatch({ score, stream, bpm = null, countInBars =
     trackerRef.current = createPitchTracker(graph.analyser, {
       a4,
       // Keep hz + clarity — grade() reads hz for scoring and samples both
-      // (plus cents-from-target) into the persisted tuner trace.
+      // (plus cents-from-target) into the persisted tuner trace. Grading wants
+      // the raw signal, so opt out of the tuner-readout hysteresis: a single
+      // clarity gate (no acquire/hold split) and an immediate null on an unclear
+      // frame (no release-window hold) rather than coasting on a stale pitch.
+      holdClarity: 0.9,
+      releaseFrames: 0,
       onUpdate: (u) => { pitchRef.current = { hz: u.hz, clarity: u.clarity ?? null }; },
     });
 
