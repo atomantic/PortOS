@@ -671,6 +671,13 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                   </div>
                 ))}
               </div>
+              {/* These are enabled but not in a default composed session — LLM
+                  drills stay opt-in for provider-cost consent (issue #2100). */}
+              {!moduleAllowed('llm') && (
+                <p className="mt-3 text-xs text-gray-500">
+                  Not in Full POST / Quick sessions. Add “Wit &amp; Memory (AI)” under Config → Session Composition to include them.
+                </p>
+              )}
             </div>
           )}
 

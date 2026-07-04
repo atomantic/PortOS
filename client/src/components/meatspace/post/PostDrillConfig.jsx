@@ -1,9 +1,20 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, Save, Brain, Bell, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ArrowLeft, Save, Brain, Bell, Target, Layers, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
+import { GOAL_DEFS } from './constants';
+
+// Modules a Full/Quick composed session can draw from (issue #2100). `memory`
+// has no launcher-composed drill yet, so it's listed for forward-compat but is
+// a no-op in composition today.
+const SESSION_MODULE_OPTIONS = [
+  { id: 'mental-math', label: 'Mental Math' },
+  { id: 'cognitive', label: 'Cognitive' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'llm-drills', label: 'Wit & Memory (AI)' },
+];
 
 // Human labels for the adaptive difficulty knob each math drill tunes.
 const ADAPTIVE_FIELD_LABELS = {
@@ -522,8 +533,29 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   const [reminderTime, setReminderTime] = useState(
     () => config?.reminder?.time || '09:00'
   );
+  // Practice goals (issue #2100) — all optional; clearing a field clears that
+  // goal. Seeded from saved config; the launcher/widget render progress vs these.
+  const [goals, setGoals] = useState(() => ({ ...(config?.goals || {}) }));
+  // Which modules a Full/Quick COMPOSED session draws from (issue #2100). The
+  // default (mental-math + cognitive + memory) excludes LLM drills so they're
+  // never auto-run without provider-cost consent — check "Wit & Memory" to opt
+  // them into composed sessions.
+  const [sessionModules, setSessionModules] = useState(
+    () => Array.isArray(config?.sessionModules) ? config.sessionModules : ['mental-math', 'cognitive', 'memory']
+  );
   const [providers, setProviders] = useState([]);
   const [saving, setSaving] = useState(false);
+
+  const setGoalField = (key, raw) => setGoals(prev => {
+    const next = { ...prev };
+    const n = parseInt(raw, 10);
+    if (raw === '' || Number.isNaN(n)) delete next[key];
+    else next[key] = n;
+    return next;
+  });
+  const toggleModule = (m) => setSessionModules(prev => (
+    prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]
+  ));
 
   useEffect(() => {
     getProviders().then(p => setProviders((p?.providers || []).filter(enabledApiProviderFilter))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
@@ -691,6 +723,9 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       mentalMath: { drillTypes },
       adaptive: { enabled: adaptiveEnabled },
       reminder: { enabled: reminderEnabled, time: reminderTime },
+      sessionModules,
+      // Drop empty/invalid entries; `{}` is a valid patch that clears all goals.
+      goals: Object.fromEntries(Object.entries(goals).filter(([, v]) => typeof v === 'number' && v > 0)),
       cognitive: {
         enabled: cognitiveEnabled,
         drillTypes: cognitiveDrillTypes
@@ -785,6 +820,72 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
             />
           </div>
         )}
+      </div>
+
+      {/* Goals Section — optional practice targets (issue #2100). Leave a field
+          blank to leave that goal unset; the launcher/widget only show goals
+          with a value. */}
+      <div className="p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+        <div className="flex items-center gap-2">
+          <Target size={16} className="text-port-accent" />
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Goals</h3>
+        </div>
+        <p className="text-xs text-gray-500">
+          Optional. Set a target and the launcher and Daily POST widget show your progress toward it. Leave blank to hide a goal.
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {GOAL_DEFS.map(def => (
+            <div key={def.key}>
+              <label htmlFor={`goal-${def.key}`} className="block text-xs text-gray-400 mb-1">
+                {def.label}{def.unit ? ` (${def.unit})` : ''}
+              </label>
+              <input
+                id={`goal-${def.key}`}
+                type="number"
+                min="1"
+                inputMode="numeric"
+                value={goals[def.key] ?? ''}
+                onChange={e => setGoalField(def.key, e.target.value)}
+                placeholder="—"
+                className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Session Composition — which modules a Full/Quick composed session draws
+          from (issue #2100). LLM drills are excluded by default so they never
+          run without provider-cost consent; check "Wit & Memory (AI)" to opt in. */}
+      <div className="p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+        <div className="flex items-center gap-2">
+          <Layers size={16} className="text-port-accent" />
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Session Composition</h3>
+        </div>
+        <p className="text-xs text-gray-500">
+          Which modules a Full POST or Quick session mixes together. AI (LLM) drills are off by default so they never run without your say-so — enable them here to include them in composed sessions.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {SESSION_MODULE_OPTIONS.map(opt => {
+            const on = sessionModules.includes(opt.id);
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="checkbox"
+                aria-checked={on}
+                onClick={() => toggleModule(opt.id)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                  on
+                    ? 'bg-port-accent/20 text-port-accent border-port-accent/50'
+                    : 'bg-port-bg text-gray-400 border-port-border hover:text-white'
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Mental Math Section */}
