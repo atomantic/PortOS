@@ -315,10 +315,14 @@ export const memoryDrillRequestSchema = z.object({
 const MORSE_MAX_KOCH_LEVEL = 41;
 
 // One recorded prompt→guess character within a Morse round. `guessed` is
-// nullable ('' or null = a miss, distinct from a wrong character); the server
-// recomputes accuracy from these so `correct` is advisory.
+// nullable ('' or null = a miss, distinct from a wrong character); `sent` may be
+// '' for an insertion (an extra typed character with no transmitted counterpart)
+// — the server drops empty-sent items from the confusion matrix but still counts
+// them against round accuracy. The `sent` key must still be present (a missing
+// key is rejected); the server recomputes `correct` from the pair, so it's
+// advisory here.
 const morseRoundItemSchema = z.object({
-  sent: z.string().min(1).max(8),
+  sent: z.string().max(8),
   guessed: z.string().max(16).nullable().optional(),
   correct: z.boolean().optional(),
   responseMs: z.number().min(0).optional().default(0),

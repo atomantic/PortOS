@@ -67,15 +67,33 @@ async function saveMorseProgress(data) {
   await atomicWrite(MORSE_FILE, data);
 }
 
+// Serialize every read-modify-write against the single shared progress file so
+// the two mutating paths can't clobber each other. A round that advances the
+// Koch level fires BOTH a level PUT (updatePrefs) and a round POST from the
+// client at once; without this tail their load→mutate→save cycles interleave
+// and whichever saves last drops the other's change (the just-earned level, or
+// the just-finished round). atomicWrite makes each file write atomic but not the
+// surrounding read-modify-write — see CLAUDE.md "serialize writes server-side".
+let morseWriteTail = Promise.resolve();
+function withMorseWriteTail(fn) {
+  const run = morseWriteTail.then(fn, fn);
+  // The tail must never stay rejected (that would reject every future write);
+  // callers still receive the real result/rejection via `run`.
+  morseWriteTail = run.then(() => {}, () => {});
+  return run;
+}
+
 function normalizeItems(items) {
   return (Array.isArray(items) ? items : []).map((it) => {
     const sent = String(it?.sent ?? '').toUpperCase();
     // Absent/null guess (a miss) normalizes to '' — distinct from a wrong guess.
     const guessed = it?.guessed == null ? '' : String(it.guessed).toUpperCase();
+    // correct is recomputed from the normalized pair (not trusted from the
+    // client) so the stored accuracy can't drift from the sent/guessed record.
     return {
       sent,
       guessed,
-      correct: typeof it?.correct === 'boolean' ? it.correct : sent === guessed,
+      correct: sent === guessed,
       responseMs: Number.isFinite(it?.responseMs) ? Math.max(0, Math.round(it.responseMs)) : 0,
     };
   });
@@ -87,30 +105,32 @@ function normalizeItems(items) {
  * can't drift from the recorded sent/guessed pairs.
  */
 export async function appendMorseRound(round) {
-  const data = await loadMorseProgress();
-  const now = new Date().toISOString();
-  const items = normalizeItems(round.items);
-  const correctCount = items.filter((i) => i.correct).length;
-  const accuracy = items.length > 0 ? Math.round((correctCount / items.length) * 100) : 0;
+  return withMorseWriteTail(async () => {
+    const data = await loadMorseProgress();
+    const now = new Date().toISOString();
+    const items = normalizeItems(round.items);
+    const correctCount = items.filter((i) => i.correct).length;
+    const accuracy = items.length > 0 ? Math.round((correctCount / items.length) * 100) : 0;
 
-  const record = {
-    id: randomUUID(),
-    date: now.split('T')[0],
-    timestamp: now,
-    mode: MORSE_MODES.includes(round.mode) ? round.mode : 'copy',
-    kochLevel: typeof round.kochLevel === 'number' ? clampLevel(round.kochLevel) : (data.kochLevel ?? DEFAULT_KOCH_LEVEL),
-    wpm: Number.isFinite(round.wpm) ? round.wpm : null,
-    farnsworthWpm: Number.isFinite(round.farnsworthWpm) ? round.farnsworthWpm : null,
-    items,
-    accuracy,
-    durationMs: Number.isFinite(round.durationMs) ? Math.max(0, Math.round(round.durationMs)) : 0,
-  };
+    const record = {
+      id: randomUUID(),
+      date: now.split('T')[0],
+      timestamp: now,
+      mode: MORSE_MODES.includes(round.mode) ? round.mode : 'copy',
+      kochLevel: typeof round.kochLevel === 'number' ? clampLevel(round.kochLevel) : (data.kochLevel ?? DEFAULT_KOCH_LEVEL),
+      wpm: Number.isFinite(round.wpm) ? round.wpm : null,
+      farnsworthWpm: Number.isFinite(round.farnsworthWpm) ? round.farnsworthWpm : null,
+      items,
+      accuracy,
+      durationMs: Number.isFinite(round.durationMs) ? Math.max(0, Math.round(round.durationMs)) : 0,
+    };
 
-  data.rounds.push(record);
-  if (data.rounds.length > MAX_ROUNDS) data.rounds = data.rounds.slice(-MAX_ROUNDS);
-  await saveMorseProgress(data);
-  console.log(`📻 Morse round logged: ${record.mode} ${correctCount}/${items.length} (${accuracy}%) @ Koch ${record.kochLevel}`);
-  return record;
+    data.rounds.push(record);
+    if (data.rounds.length > MAX_ROUNDS) data.rounds = data.rounds.slice(-MAX_ROUNDS);
+    await saveMorseProgress(data);
+    console.log(`📻 Morse round logged: ${record.mode} ${correctCount}/${items.length} (${accuracy}%) @ Koch ${record.kochLevel}`);
+    return record;
+  });
 }
 
 /**
@@ -120,26 +140,28 @@ export async function appendMorseRound(round) {
  * device clobbering a real server level with its own stale localStorage value.
  */
 export async function setKochLevel({ kochLevel, adopt = false, settings } = {}) {
-  const data = await loadMorseProgress();
-  const alreadySet = data.kochLevel != null;
+  return withMorseWriteTail(async () => {
+    const data = await loadMorseProgress();
+    const alreadySet = data.kochLevel != null;
 
-  let adopted = false;
-  if (adopt) {
-    if (!alreadySet) {
+    let adopted = false;
+    if (adopt) {
+      if (!alreadySet) {
+        data.kochLevel = clampLevel(kochLevel);
+        adopted = true;
+      }
+      // else: keep the server's authoritative level; adoption is a no-op.
+    } else {
       data.kochLevel = clampLevel(kochLevel);
-      adopted = true;
     }
-    // else: keep the server's authoritative level; adoption is a no-op.
-  } else {
-    data.kochLevel = clampLevel(kochLevel);
-  }
 
-  if (settings && typeof settings === 'object') {
-    data.settings = { ...(data.settings || {}), ...settings };
-  }
+    if (settings && typeof settings === 'object') {
+      data.settings = { ...(data.settings || {}), ...settings };
+    }
 
-  await saveMorseProgress(data);
-  return { kochLevel: data.kochLevel ?? DEFAULT_KOCH_LEVEL, kochLevelSet: data.kochLevel != null, adopted, settings: data.settings };
+    await saveMorseProgress(data);
+    return { kochLevel: data.kochLevel ?? DEFAULT_KOCH_LEVEL, kochLevelSet: data.kochLevel != null, adopted, settings: data.settings };
+  });
 }
 
 /**
@@ -186,7 +208,10 @@ export async function getMorseProgress(days = 30) {
   for (const r of rounds) {
     for (const it of (r.items || [])) {
       const sent = it.sent;
-      if (!sent) continue; // items always key on the sent character
+      // Empty sent = an insertion (an extra typed char with no transmitted
+      // counterpart): it counted against the round's accuracy on append, but has
+      // no character to attribute a confusion / mastery entry to, so skip it here.
+      if (!sent) continue;
       const guessed = it.guessed || '∅'; // '∅' = a miss / empty guess (a real bucket)
       confusionMatrix[sent] ||= {};
       confusionMatrix[sent][guessed] = (confusionMatrix[sent][guessed] || 0) + 1;

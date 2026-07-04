@@ -244,6 +244,16 @@ describe('resultsToItems (per-character flatten for the confusion matrix)', () =
     expect(items[2]).toEqual({ sent: 'S', guessed: '', correct: false, responseMs: 0 });
   });
 
+  it('records an extra typed character as an empty-sent insertion error', () => {
+    // K→KM: K is a correct copy, but the extra M must not vanish (which would
+    // read as a perfect round) — it becomes an empty-sent error item.
+    const items = resultsToItems([{ prompt: 'K', guess: 'KM', correct: false, responseMs: 100 }]);
+    expect(items).toEqual([
+      { sent: 'K', guessed: 'K', correct: true, responseMs: 100 },
+      { sent: '', guessed: 'M', correct: false, responseMs: 100 },
+    ]);
+  });
+
   it('flattens a multi-question round into per-character items', () => {
     const items = resultsToItems([
       { prompt: 'K', guess: 'K', correct: true, responseMs: 100 },

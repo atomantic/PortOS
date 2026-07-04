@@ -857,16 +857,22 @@ function ModeGrid({ onPick }) {
 const ROUND_SIZE = 10;
 
 // Flatten per-question copy results ({ prompt, guess, correct, responseMs }) into
-// per-character sent→guessed items for the server's confusion matrix. Each prompt
-// is aligned positionally with its guess: a missing/short guess yields '' (a miss,
-// scored wrong). The question's responseMs is attributed to each of its characters.
+// per-character sent→guessed items for the server's confusion matrix. Aligned
+// positionally over the LONGER of prompt/guess so nothing is silently dropped:
+//   - a missing/short guess char yields guessed '' (a miss, scored wrong);
+//   - an EXTRA typed char beyond the prompt yields sent '' (an insertion). An
+//     insertion has no transmitted character, so the server excludes empty-sent
+//     items from the confusion matrix / per-character mastery, but still counts
+//     them in the round's accuracy — so a `K`→`KM` round reads as an error, not a
+//     perfect copy. The question's responseMs is attributed to each character.
 export function resultsToItems(results) {
   const items = [];
   for (const r of results) {
     const promptChars = (r.prompt || '').toUpperCase().split('');
     const guessChars = (r.guess || '').toUpperCase().split('');
-    for (let i = 0; i < promptChars.length; i++) {
-      const sent = promptChars[i];
+    const len = Math.max(promptChars.length, guessChars.length);
+    for (let i = 0; i < len; i++) {
+      const sent = promptChars[i] ?? '';
       const guessed = guessChars[i] ?? '';
       items.push({ sent, guessed, correct: sent === guessed, responseMs: r.responseMs ?? 0 });
     }

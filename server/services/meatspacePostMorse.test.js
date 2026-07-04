@@ -56,12 +56,44 @@ describe('appendMorseRound', () => {
     expect(round.accuracy).toBe(0);
   });
 
+  it('counts an empty-sent insertion against round accuracy', async () => {
+    // K→KM flattens to [{K,K},{'',M}] — the insertion drops accuracy to 50%.
+    const round = await appendMorseRound({
+      mode: 'copy',
+      items: [
+        { sent: 'K', guessed: 'K', correct: true },
+        { sent: '', guessed: 'M', correct: false },
+      ],
+    });
+    expect(round.accuracy).toBe(50);
+  });
+
   it('appends to existing rounds', async () => {
     readJSONFile.mockResolvedValue({ kochLevel: 3, settings: null, rounds: [{ id: 'old' }] });
     await appendMorseRound({ mode: 'copy', items: [{ sent: 'K', guessed: 'K', correct: true }] });
     const saved = atomicWrite.mock.calls[0][1];
     expect(saved.rounds).toHaveLength(2);
     expect(saved.rounds[0].id).toBe('old');
+  });
+});
+
+describe('serialized writes (no lost update between round POST and level PUT)', () => {
+  it('a concurrent round append and level change both persist', async () => {
+    // Back the mocked file with a real in-memory store so a lost read-modify-
+    // write would actually drop one of the two mutations.
+    let store = { kochLevel: null, settings: null, rounds: [] };
+    readJSONFile.mockImplementation(async () => JSON.parse(JSON.stringify(store)));
+    atomicWrite.mockImplementation(async (_path, data) => { store = JSON.parse(JSON.stringify(data)); });
+
+    // These are exactly the two writes the client fires at once when a round
+    // advances the Koch level. Serialized, both must land.
+    await Promise.all([
+      appendMorseRound({ mode: 'copy', items: [{ sent: 'K', guessed: 'K', correct: true }] }),
+      setKochLevel({ kochLevel: 7 }),
+    ]);
+
+    expect(store.rounds).toHaveLength(1); // the finished round survived
+    expect(store.kochLevel).toBe(7);      // the level advance survived
   });
 });
 
@@ -147,6 +179,27 @@ describe('getMorseProgress', () => {
 
     // Confusion pairs (sent !== guessed), worst-first by count.
     expect(p.confusionPairs[0]).toEqual({ sent: 'M', guessed: 'R', count: 2 });
+  });
+
+  it('excludes empty-sent insertions from the confusion matrix and mastery', async () => {
+    readJSONFile.mockResolvedValue({
+      kochLevel: 5,
+      settings: null,
+      rounds: [
+        {
+          id: 'r1', date: today(), mode: 'copy',
+          items: [
+            { sent: 'K', guessed: 'K', correct: true },
+            { sent: '', guessed: 'M', correct: false }, // insertion — no sent
+          ],
+        },
+      ],
+    });
+    const p = await getMorseProgress(30);
+    // The insertion contributes no confusion cell and no character in mastery.
+    expect(p.confusionMatrix['']).toBeUndefined();
+    expect(p.charAccuracy.map((c) => c.char)).toEqual(['K']);
+    expect(p.confusionPairs).toEqual([]);
   });
 
   it('builds a per-mode trend series with effective WPM', async () => {
