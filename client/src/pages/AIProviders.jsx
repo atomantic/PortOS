@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -12,10 +12,12 @@ import {
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
+  formatDateTime,
 } from '../utils/formatters';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
 import Modal from '../components/ui/Modal';
+import { FormField } from '../components/ui/FormField';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -136,6 +138,13 @@ export default function AIProviders() {
   };
 
   const supportsModelRefresh = (provider) => {
+    // Claude Ollama (ollama-backed claude CLI/TUI) refreshes its model list from
+    // the local Ollama daemon — including the TUI variant, which the server now
+    // refreshes via the type==='tui' && ollamaBacked branch. Check this before
+    // the generic TUI gate so the TUI variant's Refresh Models button shows.
+    if (isOllamaBackedProvider(provider)) {
+      return true;
+    }
     if (isTuiProvider(provider)) {
       return false;
     }
@@ -410,7 +419,7 @@ export default function AIProviders() {
           </div>
 
           {runProviderIsTui && (
-            <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+            <div className="text-xs text-port-accent bg-port-accent/10 border border-port-accent/20 rounded-lg px-3 py-2">
               TUI providers spawn a PTY-backed run that streams output here and is stoppable from the run list.
             </div>
           )}
@@ -512,9 +521,9 @@ export default function AIProviders() {
                   {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
                     <p className="text-xs">
                       Tiers:
-                      {provider.lightModel && <span className="ml-1 text-green-400">{provider.lightModel}</span>}
-                      {provider.mediumModel && <span className="ml-1 text-yellow-400">{provider.mediumModel}</span>}
-                      {provider.heavyModel && <span className="ml-1 text-red-400">{provider.heavyModel}</span>}
+                      {provider.lightModel && <span className="ml-1 text-port-success">{provider.lightModel}</span>}
+                      {provider.mediumModel && <span className="ml-1 text-port-warning">{provider.mediumModel}</span>}
+                      {provider.heavyModel && <span className="ml-1 text-port-error">{provider.heavyModel}</span>}
                     </p>
                   )}
                   {provider.headlessArgs?.length > 0 && (
@@ -654,7 +663,7 @@ export default function AIProviders() {
                   <div className="min-w-0">
                     <p className="text-sm text-white break-words">{run.prompt}</p>
                     <p className="text-xs text-gray-500 break-words">
-                      {run.providerName} • {run.workspaceName || 'No workspace'} • {new Date(run.startTime).toLocaleString()}
+                      {run.providerName} • {run.workspaceName || 'No workspace'} • {formatDateTime(run.startTime)}
                     </p>
                   </div>
                 </div>
@@ -821,8 +830,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
       </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Name *</label>
+          <FormField label="Name *">
             <input
               type="text"
               value={formData.name}
@@ -830,10 +838,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               required
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Type *</label>
+          <FormField label="Type *">
             <select
               value={formData.type}
               onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value }))}
@@ -843,12 +850,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               <option value="tui">TUI</option>
               <option value="api">API</option>
             </select>
-          </div>
+          </FormField>
 
           {(formData.type === 'cli' || formData.type === 'tui') && (
             <>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Command *</label>
+              <FormField label="Command *">
                 <input
                   type="text"
                   value={formData.command}
@@ -857,10 +863,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   required={formData.type === 'cli' || formData.type === 'tui'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Arguments (space-separated)</label>
+              <FormField label="Arguments (space-separated)">
                 <input
                   type="text"
                   value={formData.args}
@@ -868,11 +873,10 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   placeholder={formData.type === 'tui' ? '--dangerously-skip-permissions' : '--print -p'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
 
               {formData.type === 'cli' && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Headless Args (for simple prompt tasks)</label>
+                <FormField label="Headless Args (for simple prompt tasks)">
                   <input
                     type="text"
                     value={formData.headlessArgs}
@@ -883,13 +887,12 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   <p className="text-xs text-gray-500 mt-1">
                     Extra CLI flags for lightweight prompt-in/text-out mode (brain classifier, etc.)
                   </p>
-                </div>
+                </FormField>
               )}
 
               {formData.type === 'tui' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Prompt Paste Delay (ms)</label>
+                  <FormField label="Prompt Paste Delay (ms)">
                     <input
                       type="number"
                       min="250"
@@ -898,9 +901,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                       onChange={(e) => setFormData(prev => ({ ...prev, tuiPromptDelayMs: e.target.value }))}
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Idle Complete (ms)</label>
+                  </FormField>
+                  <FormField label="Idle Complete (ms)">
                     <input
                       type="number"
                       min="10000"
@@ -909,7 +911,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                       onChange={(e) => setFormData(prev => ({ ...prev, tuiIdleTimeoutMs: e.target.value }))}
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
-                  </div>
+                  </FormField>
                   <p className="sm:col-span-2 text-xs text-gray-500">
                     TUI providers open an attachable shell session, paste the agent prompt, parse terminal output, and complete after the terminal is idle.
                   </p>
@@ -920,8 +922,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
 
           {formData.type === 'api' && (
             <>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Endpoint *</label>
+              <FormField label="Endpoint *">
                 <input
                   type="url"
                   value={formData.endpoint}
@@ -930,10 +931,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   required={formData.type === 'api'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">API Key</label>
+              <FormField label="API Key">
                 <input
                   type="password"
                   value={formData.apiKey}
@@ -941,15 +941,14 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   placeholder={provider?.hasApiKey ? 'Key set — leave blank to keep' : 'Optional'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
             </>
           )}
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">
+          <FormField label={<>
               Available Models
               {formData.type === 'api' && <span className="text-xs text-gray-500 ml-2">(Use Refresh button after saving)</span>}
-            </label>
+            </>}>
             <textarea
               value={(formData.models || []).join(', ')}
               onChange={(e) => {
@@ -966,10 +965,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <p className="text-xs text-gray-500 mt-1">
               Comma-separated list of available models. For API providers, use Refresh to auto-populate.
             </p>
-          </div>
+          </FormField>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Default Model</label>
+          <FormField label="Default Model">
             {availableModels.length > 0 ? (
               <select
                 value={formData.defaultModel}
@@ -995,17 +993,16 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 ? 'Model to use when no tier is specified'
                 : 'Save and test provider to fetch available models'}
             </p>
-          </div>
+          </FormField>
 
           {/* Model Tiers */}
           <div className="border-t border-port-border pt-4 mt-4">
             <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-green-500 mr-1"></span>
+              <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-success mr-1"></span>
                   Light (fast)
-                </label>
+                </>}>
                 {availableModels.length > 0 ? (
                   <select
                     value={formData.lightModel}
@@ -1026,12 +1023,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   />
                 )}
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-yellow-500 mr-1"></span>
+              </FormField>
+              <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-warning mr-1"></span>
                   Medium (balanced)
-                </label>
+                </>}>
                 {availableModels.length > 0 ? (
                   <select
                     value={formData.mediumModel}
@@ -1052,12 +1048,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   />
                 )}
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">
-                  <span className="inline-block w-2 h-2 rounded-full bg-red-500 mr-1"></span>
+              </FormField>
+              <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
+                  <span className="inline-block w-2 h-2 rounded-full bg-port-error mr-1"></span>
                   Heavy (powerful)
-                </label>
+                </>}>
                 {availableModels.length > 0 ? (
                   <select
                     value={formData.heavyModel}
@@ -1078,7 +1073,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   />
                 )}
-              </div>
+              </FormField>
             </div>
             <p className="text-xs text-gray-500 mt-2">
               {availableModels.length > 0
@@ -1087,8 +1082,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             </p>
           </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Timeout (ms)</label>
+          <FormField label="Timeout (ms)">
             <input
               type="number"
               inputMode="numeric"
@@ -1111,13 +1105,12 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`;
               })()}
             </p>
-          </div>
+          </FormField>
 
           <div className="border-t border-port-border pt-4 mt-4">
             <h4 className="text-sm font-medium text-gray-300 mb-3">Context Window</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Planning Window</label>
+              <FormField label="Planning Window">
                 <input
                   type="number"
                   inputMode="numeric"
@@ -1131,11 +1124,10 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 <p className="text-xs text-gray-500 mt-1">
                   {plannedContextLabel ? `Budgeter uses ${plannedContextLabel}` : 'Leave blank to use model/provider defaults'}
                 </p>
-              </div>
+              </FormField>
 
               {formData.type === 'api' && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Local num_ctx</label>
+                <FormField label="Local num_ctx">
                   <input
                     type="number"
                     inputMode="numeric"
@@ -1149,14 +1141,14 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   <p className="text-xs text-gray-500 mt-1">
                     Sent to compatible local backends; used for planning when no model window is known.
                   </p>
-                </div>
+                </FormField>
               )}
             </div>
           </div>
 
           {/* Fallback Provider */}
           <div className="border-t border-port-border pt-4 mt-4">
-            <label className="block text-sm text-gray-400 mb-1">Fallback Provider</label>
+            <FormField label="Fallback Provider">
             <select
               value={formData.fallbackProvider}
               onChange={(e) => setFormData(prev => ({
@@ -1177,10 +1169,10 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <p className="text-xs text-gray-500 mt-1">
               If this provider hits a usage limit or becomes unavailable, tasks will automatically use the fallback provider.
             </p>
+            </FormField>
 
             {formData.fallbackProvider && (
-              <div className="mt-3">
-                <label className="block text-sm text-gray-400 mb-1">Fallback Model</label>
+              <FormField label="Fallback Model" className="mt-3">
                 {fallbackModelOptions.length > 0 ? (
                   <select
                     value={formData.fallbackModel}
@@ -1204,7 +1196,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 <p className="text-xs text-gray-500 mt-1">
                   Model to run on the fallback provider. Leave blank to use that provider's default model.
                 </p>
-              </div>
+              </FormField>
             )}
           </div>
 

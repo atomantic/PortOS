@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -14,6 +14,7 @@ import {
 } from '../utils/formatters';
 import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import { FormField } from '../components/ui/FormField';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -27,6 +28,20 @@ export default function PromptManager() {
     else p.set('tab', next);
     setSearchParams(p, { replace: true });
   };
+  // Selected stage / variable live in the URL (`?stage=` / `?var=`) so the open
+  // record is deep-linkable and reload-safe. Unlike the `tab` param above (a view
+  // toggle that uses replace), record selection is a PUSH so Back returns to the
+  // previously-open record — matching Authors/Music/Sharing.
+  const setParam = (key, val) => {
+    const p = new URLSearchParams(searchParams);
+    if (val == null || val === '') p.delete(key);
+    else p.set(key, val);
+    setSearchParams(p);
+  };
+  const selectedStage = searchParams.get('stage');
+  const selectedVar = searchParams.get('var');
+  const setSelectedStage = (name) => setParam('stage', name);
+  const setSelectedVar = (key) => setParam('var', key);
   const [stages, setStages] = useState({});
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);
@@ -38,14 +53,12 @@ export default function PromptManager() {
     'memory-evaluate', 'app-detection'
   ];
 
-  // Stage editing
-  const [selectedStage, setSelectedStage] = useState(null);
+  // Stage editing (selection is URL-driven — see selectedStage above)
   const [stageTemplate, setStageTemplate] = useState('');
   const [stageConfig, setStageConfig] = useState({});
   const [preview, setPreview] = useState('');
 
-  // Variable editing
-  const [selectedVar, setSelectedVar] = useState(null);
+  // Variable editing (selection is URL-driven — see selectedVar above)
   const [varForm, setVarForm] = useState({ key: '', name: '', category: '', content: '' });
 
   // Stage creation
@@ -92,25 +105,34 @@ export default function PromptManager() {
     setLoading(false);
   };
 
-  const loadStage = async (name) => {
-    setSelectedStage(name);
-    const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
-    setStageTemplate(res.template || '');
-    // Normalize a server-returned timeout via parseTimeoutMs so the editor
-    // shares the validator's accept set: integers OR digit-only strings
-    // (e.g. legacy `'900000'` from pre-validation installs) round-trip
-    // through the UI, while non-positive / non-integer / garbage values
-    // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
-    // surface them as touched. Only set the key when the server actually
-    // shipped a value — otherwise the next save would write `timeout: null`
-    // (the server's explicit-clear sentinel) for stages the user never
-    // touched, conflating "key absent" with "user cleared the override".
-    const cfg = { name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] };
-    const timeout = parseTimeoutMs(res.timeout);
-    if (timeout !== null) cfg.timeout = timeout;
-    setStageConfig(cfg);
-    setPreview('');
-  };
+  // Fetch the URL-selected stage's template + config. Keyed on selectedStage so
+  // a deep link / reload restores the open editor; a cleared param resets it.
+  useEffect(() => {
+    if (!selectedStage) { setStageTemplate(''); setStageConfig({}); setPreview(''); return; }
+    let cancelled = false;
+    fetch(`/api/prompts/${selectedStage}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(res => {
+        if (cancelled || !res) return;
+        setStageTemplate(res.template || '');
+        // Normalize a server-returned timeout via parseTimeoutMs so the editor
+        // shares the validator's accept set: integers OR digit-only strings
+        // (e.g. legacy `'900000'` from pre-validation installs) round-trip
+        // through the UI, while non-positive / non-integer / garbage values
+        // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
+        // surface them as touched. Only set the key when the server actually
+        // shipped a value — otherwise the next save would write `timeout: null`
+        // (the server's explicit-clear sentinel) for stages the user never
+        // touched, conflating "key absent" with "user cleared the override".
+        const cfg = { name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] };
+        const timeout = parseTimeoutMs(res.timeout);
+        if (timeout !== null) cfg.timeout = timeout;
+        setStageConfig(cfg);
+        setPreview('');
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedStage]);
 
   const saveStage = async () => {
     setSaving(true);
@@ -138,11 +160,25 @@ export default function PromptManager() {
     setPreview(data.preview);
   };
 
-  const loadVariable = (key) => {
-    setSelectedVar(key);
-    const v = variables[key];
-    setVarForm({ key, name: v.name || '', category: v.category || '', content: v.content || '' });
-  };
+  // Hydrate the variable editor from the URL-selected key. Depends on `variables`
+  // so it fills in once the list loads, but a `varHydratedRef` guard keyed on the
+  // selected key ensures a later `variables` refresh (Reload, or deleting a
+  // *different* variable) does NOT re-hydrate — which would silently discard the
+  // open key's in-progress edits. Mirrors the hydratedRef pattern the Authors /
+  // Artists editors use. No param means create mode.
+  const varHydratedRef = useRef(null);
+  useEffect(() => {
+    if (!selectedVar) {
+      varHydratedRef.current = null;
+      setVarForm({ key: '', name: '', category: '', content: '' });
+      return;
+    }
+    if (variables[selectedVar] && varHydratedRef.current !== selectedVar) {
+      const v = variables[selectedVar];
+      setVarForm({ key: selectedVar, name: v.name || '', category: v.category || '', content: v.content || '' });
+      varHydratedRef.current = selectedVar;
+    }
+  }, [selectedVar, variables]);
 
   const saveVariable = async () => {
     setSaving(true);
@@ -163,6 +199,7 @@ export default function PromptManager() {
   const deleteVariable = async (key) => {
     const res = await fetch(`/api/prompts/variables/${key}`, { method: 'DELETE' });
     if (!res.ok) { toast.error('Failed to delete variable: ' + await res.text()); return; }
+    if (selectedVar === key) setSelectedVar(null);
     await loadData();
   };
 
@@ -365,7 +402,7 @@ export default function PromptManager() {
                   }`}
                 >
                   <button
-                    onClick={() => loadStage(name)}
+                    onClick={() => setSelectedStage(name)}
                     className="flex-1 min-w-0 text-left"
                   >
                     <div className="flex items-center gap-1">
@@ -392,7 +429,14 @@ export default function PromptManager() {
 
           {/* Stage Editor */}
           <div className="lg:col-span-2 space-y-4">
-            {selectedStage ? (
+            {selectedStage && !stages[selectedStage] ? (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                That stage could not be found — it may have been deleted or renamed.{' '}
+                <button onClick={() => setSelectedStage(null)} className="text-port-accent hover:underline">
+                  Clear selection
+                </button>
+              </div>
+            ) : selectedStage ? (
               <>
                 <div className="bg-port-card border border-port-border rounded-xl p-4">
                   <div className="flex items-center justify-between mb-4">
@@ -476,8 +520,7 @@ export default function PromptManager() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Template</label>
+                  <FormField label="Template">
                     <textarea
                       value={stageTemplate}
                       onChange={(e) => setStageTemplate(e.target.value)}
@@ -486,7 +529,7 @@ export default function PromptManager() {
                     <p className="text-xs text-gray-500 mt-1">
                       Use {'{{variable}}'} for substitution, {'{{#array}}...{{/array}}'} for iteration
                     </p>
-                  </div>
+                  </FormField>
                 </div>
 
                 {/* Preview Panel */}
@@ -534,7 +577,7 @@ export default function PromptManager() {
                   }`}
                 >
                   <button
-                    onClick={() => loadVariable(key)}
+                    onClick={() => setSelectedVar(key)}
                     className="flex-1 text-left"
                   >
                     <div className="font-medium">{v.name || key}</div>
@@ -553,6 +596,14 @@ export default function PromptManager() {
 
           {/* Variable Editor */}
           <div className="lg:col-span-2">
+            {selectedVar && !variables[selectedVar] ? (
+              <div className="bg-port-card border border-port-border rounded-xl p-12 text-center text-gray-500">
+                That variable could not be found — it may have been deleted.{' '}
+                <button onClick={() => setSelectedVar(null)} className="text-port-accent hover:underline">
+                  New variable
+                </button>
+              </div>
+            ) : (
             <div className="bg-port-card border border-port-border rounded-xl p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-medium text-white">
@@ -569,8 +620,7 @@ export default function PromptManager() {
 
               <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Key *</label>
+                  <FormField label="Key *">
                     <input
                       type="text"
                       value={varForm.key}
@@ -579,9 +629,8 @@ export default function PromptManager() {
                       placeholder="variableKey"
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Name</label>
+                  </FormField>
+                  <FormField label="Name">
                     <input
                       type="text"
                       value={varForm.name}
@@ -589,11 +638,10 @@ export default function PromptManager() {
                       placeholder="Human Readable Name"
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
-                  </div>
+                  </FormField>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Category</label>
+                <FormField label="Category">
                   <select
                     value={varForm.category}
                     onChange={(e) => setVarForm({ ...varForm, category: e.target.value })}
@@ -605,19 +653,19 @@ export default function PromptManager() {
                     <option value="rules">Rules</option>
                     <option value="system">System</option>
                   </select>
-                </div>
+                </FormField>
 
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Content *</label>
+                <FormField label="Content *">
                   <textarea
                     value={varForm.content}
                     onChange={(e) => setVarForm({ ...varForm, content: e.target.value })}
                     className="w-full h-48 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
                     placeholder="Variable content..."
                   />
-                </div>
+                </FormField>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}
@@ -690,8 +738,7 @@ export default function PromptManager() {
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">Skill Template (Markdown)</label>
+                  <FormField label="Skill Template (Markdown)">
                     <textarea
                       value={jobSkillContent}
                       onChange={(e) => setJobSkillContent(e.target.value)}
@@ -700,7 +747,7 @@ export default function PromptManager() {
                     <p className="text-xs text-gray-500 mt-1">
                       Sections: ## Prompt Template, ## Steps, ## Expected Outputs, ## Success Criteria
                     </p>
-                  </div>
+                  </FormField>
                 </div>
 
                 {/* Preview Panel */}
@@ -739,8 +786,7 @@ export default function PromptManager() {
 
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Stage Key *</label>
+                <FormField label="Stage Key *">
                   <input
                     type="text"
                     value={newStageForm.stageName}
@@ -749,9 +795,8 @@ export default function PromptManager() {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   />
                   <p className="text-xs text-gray-500 mt-1">Lowercase, hyphens only</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">Display Name *</label>
+                </FormField>
+                <FormField label="Display Name *">
                   <input
                     type="text"
                     value={newStageForm.name}
@@ -759,11 +804,10 @@ export default function PromptManager() {
                     placeholder="My Stage"
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   />
-                </div>
+                </FormField>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Description</label>
+              <FormField label="Description">
                 <input
                   type="text"
                   value={newStageForm.description}
@@ -771,7 +815,7 @@ export default function PromptManager() {
                   placeholder="What this stage does"
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
-              </div>
+              </FormField>
 
               <div className="space-y-4">
                 <div>
@@ -837,15 +881,14 @@ export default function PromptManager() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Template</label>
+              <FormField label="Template">
                 <textarea
                   value={newStageForm.template}
                   onChange={(e) => setNewStageForm({ ...newStageForm, template: e.target.value })}
                   className="w-full h-64 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
                   placeholder="Enter your prompt template here..."
                 />
-              </div>
+              </FormField>
 
               <div className="flex gap-2 justify-end">
                 <button
@@ -926,8 +969,7 @@ function StageTimeoutField({ timeout, providerFallback, onCommit }) {
     if (ms != null) onCommit(ms);
   });
   return (
-    <div>
-      <label className="block text-sm text-gray-400 mb-1">Timeout override (ms)</label>
+    <FormField label="Timeout override (ms)">
       <input
         type="number"
         inputMode="numeric"
@@ -946,6 +988,6 @@ function StageTimeoutField({ timeout, providerFallback, onCommit }) {
           ? `≈ ${formatDurationMs(timeout)} per run`
           : 'Leave blank to use the provider default'}
       </p>
-    </div>
+    </FormField>
   );
 }

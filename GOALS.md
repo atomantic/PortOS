@@ -63,7 +63,6 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 ## Secondary Goals
 
 - **Multi-Modal Identity Capture**: Voice, video, and image-based identity modeling beyond text
-- **Apple Health Integration**: Live sync from iOS and bulk historical import to unify all health data in one place
 - **Chronotype-Aware Scheduling**: Align task scheduling to natural energy patterns derived from genome sleep markers
 - **Music & Audio Production**: MusicGen-style local generation, whole-episode audio mixing strategy, audio recording / podcast studio (deferred until 128GB hardware arrives)
 - **Inspiration & Mood Board**: A dedicated canvas for collecting visual / textual references that feed into Universe Builder, Writers Room, and Creative Director — distinct from raw Media History
@@ -74,8 +73,8 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 ## Non-Goals
 
 - **Multi-user support**: PortOS is a personal tool built for one person. Adding auth, roles, or multi-tenancy would add complexity with no benefit.
-- **Public internet deployment**: Runs on a private Tailscale network. No HTTPS, CORS, rate limiting, or public-facing hardening needed.
-- **Database-backed persistence (general)**: JSON files are the primary persistence layer — human-readable, git-friendly, and sufficient for single-user scale. PostgreSQL + pgvector is used only for the memory system (vector search requires it). Do not migrate other data stores to a database.
+- **Public internet deployment**: Runs on a private Tailscale network. No CORS, rate limiting, or public-facing hardening needed. (HTTPS is supported via `npm run setup:cert` for browser-API and cert-trust convenience — not as public-exposure hardening.)
+- **ORM / heavyweight database tooling**: PostgreSQL + pgvector is the primary datastore for app-native relational records (see the [storage contract](./docs/STORAGE.md) and the [Postgres ADR](./docs/decisions/2026-06-07-postgres-as-primary-datastore.md)), but PortOS deliberately uses plain SQL — no ORM, no query builder. Binary assets and externally-synced/ephemeral state stay as files under `data/`.
 - **Authentication / Authorization**: Single-user on a private network. Auth would be security theater here.
 - **Cloud hosting**: Runs on your local machine. Your data stays on your hardware.
 
@@ -102,7 +101,7 @@ The active roadmap lives in the GitHub issue tracker — open issues labeled
 | Full Digital Autonomy | Ongoing | Agent tools, Moltworld, scheduling, skill system operational. Expanding platform coverage and autonomy tiers. |
 | Knowledge Legacy | Ongoing | Autobiography, genome, behavioral profiles, written work, built worlds captured. Portable Legacy Export bundle (Digital Twin → Legacy Bundle) ships a self-contained Markdown + JSON + manifest archive, with optional rendered PDF. Richer key-decisions sourcing and deeper domain coverage continue. |
 | Anywhere Access | Complete | Tailscale integration working. Mobile-responsive UI. All features accessible remotely. |
-| Health & Longevity | Ongoing | MeatSpace shipped with death clock, LEV tracker, alcohol/blood/body/epigenetic/eye/genome/lifestyle tracking. Apple Health integration planned. |
+| Health & Longevity | Ongoing | MeatSpace shipped with death clock, LEV tracker, alcohol/blood/body/epigenetic/eye/genome/lifestyle tracking. Apple Health integration shipped (live ingest, metrics/correlation queries, bulk XML/clinical import). |
 | Personal Productivity & Life Management | Ongoing | Calendar (agenda/day/week/month/lifetime/review), Messages inbox + drafts, voice agent, Telegram bot, OpenClaw operator chat all shipped. Proactive CoS speech triggers and voice-tool coverage expanding. |
 | Cognitive Training & Lifelong Learning | Ongoing | POST (math/wordplay/memory/verbal/imagination), Morse, Rapid Reader, Wiki shipped. Adding more training domains and integrating cross-domain insights (e.g. genome-informed cognitive load patterns). |
 

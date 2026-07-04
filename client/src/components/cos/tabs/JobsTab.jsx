@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -307,7 +307,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
 
   const handleSave = async () => {
     const payload = normalizeJobPayload(editData);
-    const result = await api.updateCosJob(job.id, payload).catch(err => {
+    const result = await api.updateCosJob(job.id, payload, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -348,7 +348,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
             )}
             <span className={`px-1.5 py-0.5 text-xs rounded ${
               isShell ? 'bg-emerald-500/20 text-emerald-400' :
-              isScript ? 'bg-purple-500/20 text-purple-400' :
+              isScript ? 'bg-port-accent-2/20 text-port-accent-2' :
               'bg-port-bg text-gray-400'
             }`}>
               {getJobTypeLabel(job)}
@@ -620,7 +620,7 @@ export default function JobsTab() {
   const [newJob, setNewJob] = useState(INITIAL_JOB);
 
   const fetchJobs = useCallback(async () => {
-    const data = await api.getCosJobs().catch(err => {
+    const data = await api.getCosJobs({ silent: true }).catch(err => {
       toast.error(`Failed to load jobs: ${err.message}`);
       return null;
     });
@@ -659,7 +659,7 @@ export default function JobsTab() {
       return;
     }
 
-    const created = await api.createCosJob(normalizeJobPayload(newJob)).catch(err => {
+    const created = await api.createCosJob(normalizeJobPayload(newJob), { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -671,7 +671,7 @@ export default function JobsTab() {
   };
 
   const handleToggle = async (jobId) => {
-    const result = await api.toggleCosJob(jobId).catch(err => {
+    const result = await api.toggleCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -683,7 +683,7 @@ export default function JobsTab() {
 
   const handleTrigger = async (jobId) => {
     toast.loading('Triggering job...', { id: 'job-trigger' });
-    const result = await api.triggerCosJob(jobId).catch(err => {
+    const result = await api.triggerCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });
@@ -699,7 +699,7 @@ export default function JobsTab() {
   };
 
   const handleDelete = async (jobId) => {
-    const result = await api.deleteCosJob(jobId).catch(err => {
+    const result = await api.deleteCosJob(jobId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -750,7 +750,7 @@ export default function JobsTab() {
           <span>{stats.totalRuns} total runs</span>
           {stats.nextDue && (
             <span className={stats.nextDue.isDue ? 'text-port-warning' : ''}>
-              Next: {stats.nextDue.jobName} ({stats.nextDue.isDue ? 'due now' : new Date(stats.nextDue.nextDueAt).toLocaleString()})
+              Next: {stats.nextDue.jobName} ({stats.nextDue.isDue ? 'due now' : formatDateTime(stats.nextDue.nextDueAt)})
             </span>
           )}
         </div>

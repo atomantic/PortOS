@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
@@ -313,6 +313,171 @@ export function scheduleSubmitEnters(write, isFinalized) {
 export const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
 export const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
 
+// Extended idle threshold applied ONLY while a `/do:next --swarm` orchestrator
+// is in its Phase C serialized merge queue (issue #2074). Merging PRs one at a
+// time makes each subsequent PR rebase onto the new `main` and re-run required
+// CI — several minutes of *silent* TUI output per PR (`gh pr checks --watch`
+// shows a static "pending" screen with no repaint). That quiet window routinely
+// blows past the 3-minute default and the runner reaps the still-working
+// orchestrator as `idle-complete`, leaving PRs merged-but-uncleaned or unmerged
+// while `state.json` records `status: completed`. 15 minutes comfortably covers
+// one CI run's silent gap while still bounding a genuinely-dead orchestrator's
+// reap (see MERGE_QUEUE_IDLE_TIMEOUT reap path in agentTuiSpawning.js).
+export const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
+
+// Distinctive markers the swarm orchestrator's TUI prints once it enters the
+// Phase C merge queue. Detection is deliberately conservative: a false POSITIVE
+// only *extends* the idle window (bounded, low-cost), and a false NEGATIVE just
+// preserves the pre-#2074 behavior (no regression) — so this is nothing like the
+// fragile completion-detection regexes we avoid for FINALIZING a run. Matched
+// against ANSI-stripped output. Kept lower-cased for case-insensitive testing.
+const MERGE_QUEUE_MARKERS = [
+  'merge queue',
+  'serialized merge',
+  'phase c',
+  'gh pr merge',
+  'gh pr checks',
+  '--delete-branch',
+];
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the swarm orchestrator has
+ * entered its Phase C serialized merge queue. Callers MUST pass stripped output.
+ * Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isMergeQueueSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  const lower = strippedText.toLowerCase();
+  return MERGE_QUEUE_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * Latching tracker for "this agent is in a serialized merge queue" (issue
+ * #2074). Feed it each ANSI-stripped post-submit chunk via `observe(text)`; it
+ * becomes `active` the first time a merge-queue marker appears and STAYS active
+ * thereafter. Latching (not a sliding window) is deliberate: the whole failure
+ * mode is a *silent* CI wait — no markers print during the quiet gap — so a
+ * recency window would age the flag out exactly when the extended idle grace is
+ * needed. Once latched, the idle reaper uses MERGE_QUEUE_IDLE_TIMEOUT_MS instead
+ * of the 3-minute default. Lives here so the detection logic is unit-testable.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createMergeQueueTracker() {
+  let active = false;
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (isMergeQueueSignal(strippedText)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
+// Extended idle threshold applied while a `/do:release`, `/do:pr`, or `/do:rpr`
+// multi-reviewer loop is waiting on a slow external reviewer (a Copilot cloud
+// review, a headless codex/agy/claude review pass, an Ollama pass, or an
+// arbitrary @<login> human reviewer). Observed 2026-07-02 (agent-61508f36): the
+// review loop correctly backgrounds the reviewer and polls for it rather than
+// blocking — but the reviewer itself can go silent in the wrapped TUI for well
+// over the 3-minute default while it works (e.g. codex reading a large diff),
+// and the runner reaped the still-waiting release agent as `idle-complete` (a
+// false SUCCESS) before it ever reached the merge gate, leaving the release PR
+// open and unmerged. Mirrors the merge-queue grace (#2074) exactly: 15 minutes
+// comfortably covers one reviewer's silent working stretch while still
+// bounding a genuinely-dead agent's reap.
+export const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
+
+// Distinctive markers the multi-reviewer loop (do:release/do:pr/do:rpr) prints
+// once it starts waiting on a reviewer pass. Detection is deliberately
+// conservative, same rationale as MERGE_QUEUE_MARKERS above: a false POSITIVE
+// only extends the (bounded) idle window, and a false NEGATIVE just preserves
+// prior behavior. Matched against ANSI-stripped output.
+//
+// Both patterns are anchored to the literal RENDERED shape rather than a bare
+// substring, because this repo bundles the slashdo docs that DESCRIBE these
+// banners — `lib/slashdo/lib/multi-reviewer-loop.md` alone contains the word
+// "multi-reviewer" dozens of times, the literal phrase "Review plan:" once
+// (inside its own instruction text), AND a fully-rendered example of its own
+// aggregate-report heading ("## Multi-Reviewer Summary", in the doc's sample
+// output block) — so a THIRD marker keyed on that heading alone would latch
+// on any agent reading/quoting that one doc file (codex review flagged this
+// exact collision; verified via `grep -rn "multi-reviewer summary"
+// lib/slashdo/` — it's the only bundled doc containing that literal string).
+// This project's CLAUDE.md convention text is also "run a simplify/
+// self-review pass before committing", whose substring "review pass" would
+// otherwise latch on ANY CoS agent's ordinary narration — not just an actual
+// do:release/do:pr/do:rpr run. Anchoring on the shape only the runtime output
+// actually has (a rendered `[...]` agent list, or a digit/slash pass counter)
+// — verified clean against every bundled slashdo doc — keeps the
+// false-positive rate low without weakening true-positive detection: the
+// review-plan banner alone is a complete, sufficient signal (it prints once,
+// unconditionally, before ANY reviewer pass begins) and the tracker latches
+// permanently once set, so the pass-banner pattern only needs to catch the
+// (rare) case where the plan banner itself was missed.
+const REVIEW_PLAN_PATTERN = /review plan:\s*\[/i;
+const REVIEW_PASS_BANNER_PATTERN = /review pass\s+\d+\s*\/\s*\d+/i;
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the multi-reviewer loop
+ * (do:release/do:pr/do:rpr) has started a reviewer pass. Callers MUST pass
+ * stripped output. Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isReviewLoopSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  return REVIEW_PLAN_PATTERN.test(strippedText) || REVIEW_PASS_BANNER_PATTERN.test(strippedText);
+}
+
+// Rolling tail cap for createReviewLoopTracker's cross-chunk buffer (below).
+// The banner text itself is well under 100 chars (e.g. "Review plan: [claude,
+// codex] (mode: series, stop-mode: all)" is ~62), so this is generous
+// headroom for intervening chrome without letting the buffer grow unbounded
+// over a long-running session.
+const REVIEW_LOOP_TAIL_CAP = 512;
+
+/**
+ * Latching tracker for "this agent is waiting inside a multi-reviewer loop"
+ * (do:release/do:pr/do:rpr). Feed it each ANSI-stripped post-submit chunk via
+ * `observe(text)`; it becomes `active` the first time a review-loop marker
+ * appears and STAYS active thereafter (same latching rationale as
+ * createMergeQueueTracker — the failure mode is a silent external-reviewer
+ * wait, so a recency window would age the flag out exactly when the extended
+ * grace is needed). Once latched, the idle reaper uses
+ * REVIEW_LOOP_IDLE_TIMEOUT_MS instead of the 3-minute default.
+ *
+ * Keeps a small rolling buffer of the most recent REVIEW_LOOP_TAIL_CAP
+ * characters (codex review finding, iteration 2): a real TUI can deliver the
+ * one-shot `Review plan: [` / `Review pass N/M` banner split across two
+ * `onData` chunks — plausible during token-by-token streaming — so checking
+ * only the current chunk in isolation would miss it if the split lands
+ * mid-marker. Concatenating each new chunk onto the tail before testing means
+ * a marker split across a chunk boundary still appears whole on the very next
+ * observation.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createReviewLoopTracker() {
+  let active = false;
+  let tail = '';
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (typeof strippedText !== 'string' || !strippedText) return active;
+      tail = (tail + strippedText).slice(-REVIEW_LOOP_TAIL_CAP);
+      if (isReviewLoopSignal(tail)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
 // ─── Buffer caps (defensive RAM bounds) ───────────────────────────────────
 //
 // RAW caps stay small — the raw PTY stream is only used for paste-marker
@@ -405,15 +570,18 @@ export function buildTuiInvocation(provider, model) {
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
-  // Map a bare Claude id to its Bedrock form when the box is in Bedrock mode
-  // (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
+  // OpenCode TUI: namespace the bare Ollama id (`opencode --model ollama/<id>`).
+  // Otherwise map a bare Claude id to its Bedrock form when the box is in Bedrock
+  // mode (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
   // claude-code-tui runner.
-  const injectedModel = shouldInject
-    ? resolveBedrockCliModel(effectiveModel, {
-      env: { ...process.env, ...provider?.envVars },
-      providerId: provider?.id,
-    })
-    : effectiveModel;
+  const injectedModel = !shouldInject
+    ? effectiveModel
+    : isOpencodeCommand(command)
+      ? prefixOpencodeModel(provider, effectiveModel)
+      : resolveBedrockCliModel(effectiveModel, {
+        env: { ...process.env, ...provider?.envVars },
+        providerId: provider?.id,
+      });
   const args = shouldInject ? [...baseArgs, '--model', injectedModel] : baseArgs;
   return { command, args };
 }

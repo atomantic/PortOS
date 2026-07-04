@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -240,11 +241,11 @@ export default function AccountsTab() {
             <div className="text-xs text-gray-500">Ingestion Enabled</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-purple-400">{Object.keys(stats.byCategory || {}).length}</div>
+            <div className="text-2xl font-bold text-port-accent-2">{Object.keys(stats.byCategory || {}).length}</div>
             <div className="text-xs text-gray-500">Categories</div>
           </div>
           <div className="bg-port-card border border-port-border rounded-lg p-3">
-            <div className="text-2xl font-bold text-green-400">{Object.keys(stats.byPlatform || {}).length}</div>
+            <div className="text-2xl font-bold text-port-success">{Object.keys(stats.byPlatform || {}).length}</div>
             <div className="text-xs text-gray-500">Platforms</div>
           </div>
         </div>
@@ -306,10 +307,7 @@ export default function AccountsTab() {
 
           {/* Username and Display Name */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">
-                Username / Handle *
-              </label>
+            <FormField label="Username / Handle *" labelClassName="block text-xs text-gray-500 mb-1">
               <input
                 type="text"
                 value={form.username}
@@ -317,9 +315,8 @@ export default function AccountsTab() {
                 placeholder={selectedPlatformDef ? `Your ${selectedPlatformDef.label} username` : 'username'}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent min-h-[40px]"
               />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Display Name</label>
+            </FormField>
+            <FormField label="Display Name" labelClassName="block text-xs text-gray-500 mb-1">
               <input
                 type="text"
                 value={form.displayName}
@@ -327,12 +324,11 @@ export default function AccountsTab() {
                 placeholder="Optional display name"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent min-h-[40px]"
               />
-            </div>
+            </FormField>
           </div>
 
           {/* URL */}
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Profile URL</label>
+          <FormField label="Profile URL" labelClassName="block text-xs text-gray-500 mb-1">
             <input
               type="url"
               value={form.url}
@@ -340,11 +336,10 @@ export default function AccountsTab() {
               placeholder={selectedPlatformDef?.urlTemplate?.replace('{username}', form.username || 'username') || 'https://...'}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent min-h-[40px]"
             />
-          </div>
+          </FormField>
 
           {/* Bio */}
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Bio / Description</label>
+          <FormField label="Bio / Description" labelClassName="block text-xs text-gray-500 mb-1">
             <textarea
               value={form.bio}
               onChange={e => setForm(prev => ({ ...prev, bio: e.target.value }))}
@@ -352,11 +347,10 @@ export default function AccountsTab() {
               rows={2}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent resize-y"
             />
-          </div>
+          </FormField>
 
           {/* Notes */}
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Notes</label>
+          <FormField label="Notes" labelClassName="block text-xs text-gray-500 mb-1">
             <textarea
               value={form.notes}
               onChange={e => setForm(prev => ({ ...prev, notes: e.target.value }))}
@@ -364,7 +358,7 @@ export default function AccountsTab() {
               rows={2}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent resize-y"
             />
-          </div>
+          </FormField>
 
           {/* Ingestion toggle */}
           <div className="flex items-center gap-3">
@@ -479,7 +473,7 @@ export default function AccountsTab() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button
                       onClick={() => handleEdit(account)}
                       className="p-1.5 text-gray-400 hover:text-white rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"

@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const STATUS_DOT = {
-  beneficial: 'bg-green-400',
-  typical: 'bg-blue-400',
+  beneficial: 'bg-port-success',
+  typical: 'bg-port-accent',
   concern: 'bg-yellow-400',
   major_concern: 'bg-red-400',
   not_found: 'bg-gray-500'
@@ -20,8 +21,8 @@ const STATUS_LABEL = {
 };
 
 const STATUS_BADGE = {
-  beneficial: { bg: 'bg-green-500/20', text: 'text-green-400', border: 'border-green-500/30' },
-  typical: { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/30' },
+  beneficial: { bg: 'bg-port-success/20', text: 'text-port-success', border: 'border-port-success/30' },
+  typical: { bg: 'bg-port-accent/20', text: 'text-port-accent', border: 'border-port-accent/30' },
   concern: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', border: 'border-yellow-500/30' },
   major_concern: { bg: 'bg-red-500/20', text: 'text-red-400', border: 'border-red-500/30' },
   not_found: { bg: 'bg-gray-500/20', text: 'text-gray-400', border: 'border-gray-500/30' }
@@ -76,7 +77,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
         </div>
         <div className="flex items-center gap-3">
           <div className="flex gap-1.5 text-xs">
-            {statusSummary.beneficial > 0 && <span className="text-green-400">{statusSummary.beneficial} good</span>}
+            {statusSummary.beneficial > 0 && <span className="text-port-success">{statusSummary.beneficial} good</span>}
             {statusSummary.concern > 0 && <span className="text-yellow-400">{statusSummary.concern} concern</span>}
             {statusSummary.major_concern > 0 && <span className="text-red-400">{statusSummary.major_concern} major</span>}
           </div>
@@ -145,7 +146,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       {/* What this means — friendly description */}
                       {marker.description && (
                         <div className={`p-2.5 rounded-lg ${
-                          marker.status === 'beneficial' ? 'bg-green-500/5 border border-green-500/20' :
+                          marker.status === 'beneficial' ? 'bg-port-success/5 border border-port-success/20' :
                           marker.status === 'major_concern' ? 'bg-red-500/5 border border-red-500/20' :
                           marker.status === 'concern' ? 'bg-yellow-500/5 border border-yellow-500/20' :
                           'bg-port-card/50 border border-port-border/50'
@@ -170,8 +171,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       </div>
 
                       {/* Notes */}
-                      <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Your Notes</label>
+                      <FormField labelClassName="text-[10px] font-medium text-gray-500 uppercase tracking-wide" label="Your Notes">
                         <textarea
                           value={marker.notes || ''}
                           onChange={(e) => onEditNotes(marker.id, e.target.value)}
@@ -179,7 +179,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                           rows={2}
                           className="w-full mt-1 p-2 bg-port-card border border-port-border rounded text-sm text-gray-300 placeholder-gray-600 resize-none focus:outline-hidden focus:border-port-accent"
                         />
-                      </div>
+                      </FormField>
 
                       {/* References */}
                       {marker.references?.length > 0 && (

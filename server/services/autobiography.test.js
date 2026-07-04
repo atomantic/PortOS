@@ -48,6 +48,13 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const fs = await import('fs');
   return {
     ensureDir: vi.fn(),
+    // atomicWrite replaced raw writeFile(JSON.stringify) sites (#1837). Route it
+    // through the mocked fs/promises.writeFile so each test's existing
+    // writeFile.mockImplementation capture keeps working unchanged.
+    atomicWrite: vi.fn(async (filePath, data) => {
+      const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+      return fsPromises.writeFile(filePath, payload);
+    }),
     PATHS: { digitalTwin: '/mock/data/digital-twin' },
     readJSONFile: vi.fn(async (filePath, defaultValue) => {
       if (!fs.existsSync(filePath)) return defaultValue;
@@ -186,7 +193,13 @@ describe('Autobiography - getNextPrompt', () => {
 
     const prompt = await getNextPrompt();
 
-    expect(prompt).toBeTruthy();
+    // A real prompt object, not just any truthy value.
+    expect(prompt).toMatchObject({
+      id: expect.any(String),
+      themeId: expect.any(String),
+      text: expect.any(String),
+    });
+    expect(prompt.text.length).toBeGreaterThan(0);
     // usedPrompts should have been reset
     expect(savedData.usedPrompts).toEqual([]);
   });
@@ -229,7 +242,8 @@ describe('Autobiography - getPromptById', () => {
     expect(prompt.id).toBe('childhood-0');
     expect(prompt.themeId).toBe('childhood');
     expect(prompt.themeLabel).toBe('Childhood');
-    expect(prompt.text).toBeTruthy();
+    expect(typeof prompt.text).toBe('string');
+    expect(prompt.text.length).toBeGreaterThan(0);
   });
 
   it('should return null for an invalid ID', () => {
@@ -269,7 +283,8 @@ describe('Autobiography - saveStory', () => {
     expect(story.themeLabel).toBe('Childhood');
     expect(story.content).toBe('My first memory is the old red house.');
     expect(story.wordCount).toBe(8);
-    expect(story.createdAt).toBeTruthy();
+    // createdAt must be a round-trippable ISO-8601 timestamp, not just truthy.
+    expect(new Date(story.createdAt).toISOString()).toBe(story.createdAt);
   });
 
   it('should add the prompt to usedPrompts', async () => {
@@ -341,7 +356,12 @@ describe('Autobiography - updateStory', () => {
 
     expect(updated.content).toBe('Updated content with more words');
     expect(updated.wordCount).toBe(5);
-    expect(updated.updatedAt).toBeTruthy();
+    // updatedAt is a valid ISO timestamp and strictly newer than the
+    // original createdAt (2026-01-01), not merely truthy.
+    expect(new Date(updated.updatedAt).toISOString()).toBe(updated.updatedAt);
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThan(
+      new Date('2026-01-01T00:00:00.000Z').getTime(),
+    );
   });
 
   it('should return null for non-existent story', async () => {
@@ -608,7 +628,10 @@ describe('Autobiography - checkAndPrompt', () => {
 
     expect(result.prompted).toBe(true);
     expect(savedConfig).not.toBeNull();
-    expect(savedConfig.lastPromptAt).toBeTruthy();
+    // lastPromptAt is a valid ISO timestamp, freshly stamped — strictly newer
+    // than the 48h-old value we seeded — not merely truthy.
+    expect(new Date(savedConfig.lastPromptAt).toISOString()).toBe(savedConfig.lastPromptAt);
+    expect(new Date(savedConfig.lastPromptAt).getTime()).toBeGreaterThan(new Date(oldTime).getTime());
     expect(savedConfig.lastPromptId).toBe(result.prompt.id);
   });
 
@@ -684,7 +707,9 @@ describe('Autobiography - generateFollowUps (depth-aware)', () => {
 
     expect(result.followUps).toHaveLength(3);
     expect(saved.stories[0].followUpPrompts).toEqual(['Q1?', 'Q2?', 'Q3?']);
-    expect(saved.stories[0].followUpsGeneratedAt).toBeTruthy();
+    // followUpsGeneratedAt is a round-trippable ISO timestamp, not just truthy.
+    const generatedAt = saved.stories[0].followUpsGeneratedAt;
+    expect(new Date(generatedAt).toISOString()).toBe(generatedAt);
   });
 
   it('passes shallow (depth-1) guidance for a root story', async () => {

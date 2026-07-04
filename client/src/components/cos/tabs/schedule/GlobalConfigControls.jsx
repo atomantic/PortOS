@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { RotateCcw, AlertCircle, Info } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
+import { FormField } from '../../../ui/FormField';
+import { formatDateTime } from '../../../../utils/formatters';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { filterSelectableModels } from '../../../../utils/providers';
@@ -127,6 +129,16 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     setUpdating(false);
   };
 
+  const handleSwarmCountChange = async (value) => {
+    setUpdating(true);
+    // 0 = off, 2..6 = swarm size (server keeps both; 1/out-of-range are dropped).
+    // taskMetadata is replaced wholesale server-side, so spread the existing keys.
+    await onUpdate(taskType, {
+      taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
+    });
+    setUpdating(false);
+  };
+
   const handleSavePrompt = async () => {
     setUpdating(true);
     const prompt = promptValue.trim() === '' ? null : promptValue;
@@ -166,8 +178,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         </Banner>
       )}
 
-      <div>
-        <label className="text-sm text-gray-400 block mb-2">Interval Type</label>
+      <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
         <select
           value={selectedType}
           onChange={(e) => handleTypeChange(e.target.value)}
@@ -192,7 +203,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         ) : (
           <p className="text-xs text-gray-500 mt-1">{INTERVAL_DESCRIPTIONS[selectedType]}</p>
         )}
-      </div>
+      </FormField>
 
       {selectedType === 'perpetual' && (
         <div>
@@ -229,7 +240,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
                 const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
                 return (
                   <p className="text-xs text-port-warning mt-1">
-                    {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${new Date(p.nextRecheckAt).toLocaleString()}` : ''}
+                    {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
                   </p>
                 );
               }
@@ -240,7 +251,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             if (status.reason === 'perpetual-parked') {
               return (
                 <p className="text-xs text-port-warning mt-1">
-                  Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${new Date(status.nextRunAt).toLocaleString()}` : ''}
+                  Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
                 </p>
               );
             }
@@ -254,8 +265,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {!config.taskMetadata?.pipeline?.stages?.length && (
         <>
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">Provider (optional)</label>
+          <FormField label="Provider (optional)" labelClassName="text-sm text-gray-400 block mb-2">
             <select
               value={selectedProviderId}
               onChange={(e) => handleProviderChange(e.target.value)}
@@ -268,10 +278,9 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">Leave as default to use the currently active provider</p>
-          </div>
+          </FormField>
 
-          <div>
-            <label className="text-sm text-gray-400 block mb-2">Model (optional)</label>
+          <FormField label="Model (optional)" labelClassName="text-sm text-gray-400 block mb-2">
             <select
               value={selectedModel}
               onChange={(e) => handleModelChange(e.target.value)}
@@ -287,7 +296,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">Leave as default to use the provider's default model</p>
-          </div>
+          </FormField>
         </>
       )}
 
@@ -317,7 +326,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <label htmlFor={`issue-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">Issue Author Filter</label>
           <select
             id={`issue-author-filter-${taskType}`}
-            value={config.taskMetadata?.issueAuthorFilter || 'owner'}
+            value={config.taskMetadata?.issueAuthorFilter || 'self'}
             onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}
             disabled={updating}
             className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
@@ -327,8 +336,29 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             ))}
           </select>
           <p className="text-xs text-gray-500 mt-1">
-            {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'owner'))?.description}.
+            {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'self'))?.description}.
             {' '}This is the global default — individual apps can override it below.
+          </p>
+        </div>
+      )}
+
+      {SWARM_TASK_TYPES.has(taskType) && (
+        <div>
+          <label htmlFor={`swarm-count-${taskType}`} className="text-sm text-gray-400 block mb-2">Swarm Mode</label>
+          <select
+            id={`swarm-count-${taskType}`}
+            value={config.taskMetadata?.swarmCount || 0}
+            onChange={(e) => handleSwarmCountChange(Number(e.target.value))}
+            disabled={updating}
+            className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+          >
+            {SWARM_COUNT_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {SWARM_COUNT_OPTIONS.find(o => o.value === (config.taskMetadata?.swarmCount || 0))?.description}.
+            {' '}Mirrors slashdo <code>/do:next --swarm</code> — each run partitions independent issues, fans out one worktree agent per issue, and serializes the merges. GitHub/GitLab issue trackers only.
           </p>
         </div>
       )}
@@ -454,7 +484,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
       {status.completedAt && (
         <div className="text-xs text-gray-500">
-          Completed: {new Date(status.completedAt).toLocaleString()}
+          Completed: {formatDateTime(status.completedAt)}
         </div>
       )}
     </div>

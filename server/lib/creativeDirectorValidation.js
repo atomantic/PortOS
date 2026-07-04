@@ -36,6 +36,20 @@ const safeBasename = z.string()
   .refine((v) => v !== '.' && v !== '..',
     'must not be `.` or `..`');
 
+// One cast member — a catalog ingredient seeded into the project (#1808). Stored
+// on the project record and surfaced to the treatment agent for grounding +
+// per-scene casting. `ingredientId` is the stable catalog id so the agent (and a
+// future casting UI) can reference a specific member. The server derives this
+// array from `catalogIngredientIds`; it's accepted on the wire too so a direct
+// API caller (or a sync round-trip) can supply it explicitly.
+export const creativeDirectorCastMemberSchema = z.object({
+  ingredientId: z.string().min(1).max(64),
+  name: z.string().min(1).max(200),
+  type: z.string().max(64).optional(),
+  role: z.string().max(64).optional(),
+  summary: z.string().max(500).optional(),
+});
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -45,6 +59,14 @@ export const creativeDirectorProjectCreateSchema = z.object({
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
   userStory: z.string().max(10000).nullable().optional(),
+  // Catalog "Remix into → Creative Director" handoff (#1761/#1808): the selected
+  // ingredient ids. The service resolves them to live records, folds them into
+  // the project `cast`, and links them via catalog_ingredient_refs. Bounded to
+  // 50 to match the remix multi-select cap.
+  catalogIngredientIds: z.array(z.string().trim().max(64)).max(50).optional(),
+  // Server-derived from catalogIngredientIds; also accepted directly for off-UI
+  // callers and sync. Schema-parity with buildProjectRecord's `cast` field.
+  cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
   // Audio defaults OFF for CD projects — current model audio output is
   // inconsistent across renders and the user can re-enable per-project.
   // (videoGen one-offs still default to enabled.)
@@ -54,6 +76,42 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // used by the stitch step to mix in audio-stage music. Bare CD projects
   // (no pipeline origin) leave this null.
   sourceIssueId: z.string().min(1).max(64).nullable().optional(),
+});
+
+// Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
+// castable atom types (default character/place/object/scene server-side); `limit`
+// caps how many candidates the hybrid search returns. The suggest variant needs a
+// brief to search on; the apply variant derives one from the project when omitted.
+const autoCastTypes = z.array(z.string().trim().min(1).max(64)).max(10).optional();
+const autoCastLimit = z.number().int().min(1).max(50).optional();
+
+export const creativeDirectorAutoCastSuggestSchema = z.object({
+  brief: z.string().min(1).max(10000),
+  types: autoCastTypes,
+  limit: autoCastLimit,
+});
+
+export const creativeDirectorAutoCastApplySchema = z.object({
+  // Omitted → the service derives the brief from the project's name/style/story.
+  brief: z.string().max(10000).optional(),
+  types: autoCastTypes,
+  limit: autoCastLimit,
+  // Auto-compose (#1817): when true, kick off the treatment agent after the cast
+  // is seeded so the director autonomously writes a treatment + scene plan
+  // grounded in the auto-cast cast. The route only honors it when the project has
+  // a non-empty cast and no treatment yet (never clobbers an existing one).
+  compose: z.boolean().optional(),
+  // First-pass gen (#1818): when true, enqueue a catalog portrait render for each
+  // newly auto-cast member that lacks a portrait so the cast "arrives on-model".
+  // Reuses the durable media-job → catalog attach hook (#1359); strictly optional
+  // and only seeds queue-backed image-gen modes (local / codex).
+  generateFirstPass: z.boolean().optional(),
+  // First-pass music bed (#1928, split from #1867): when true, enqueue an
+  // optional background audio render for the project so it "arrives" with a
+  // mood-setting bed. Reuses the durable media-job → project attach hook
+  // (creativeDirectorMusicBedHook); strictly optional and skips gracefully if
+  // no local audio-gen engine is provisioned.
+  generateFirstPassMusicBed: z.boolean().optional(),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /
@@ -96,6 +154,12 @@ export const creativeDirectorSceneSchema = z.object({
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
+  // Per-scene casting (#1808) — the catalog cast members the agent bound to this
+  // scene, referencing the project `cast` by ingredientId. Optional: the agent
+  // only sets it when a scene features specific characters/places, and bare
+  // (non-remix) projects never carry it. Capped at the same 50 as the project
+  // cast so a busy scene can't make the whole treatment fail validation.
+  cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(1).optional(),
     notes: z.string().max(2000).optional(),

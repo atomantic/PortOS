@@ -168,6 +168,36 @@ describe('perpetualWork', () => {
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ actionable: false, reason: 'gh-list-failed', transient: true });
     });
+
+    it('self mode passes --author @me to the list (gh resolves @me natively, no extra lookup)', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([{ number: 1, title: 'mine', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'self' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('@me');
+      // No `gh repo view` owner lookup is needed in self mode.
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'gh' && args[0] === 'repo')).toBe(false);
+    });
+
+    it('an out-of-vocab filter value collapses to the @me self boundary (safe default)', async () => {
+      // Defense-in-depth: callers feed sanitizeTaskMetadata-constrained values,
+      // but if an unknown one ever reaches here it must fall to the @me security
+      // boundary (matching resolveIssueAuthorFilterBlock), never to owner/any.
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([{ number: 1, title: 'mine', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'bogus' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'issue');
+      expect(listCall[1]).toContain('@me');
+    });
   });
 
   describe('detectGitlabIssues (spawn-mocked)', () => {
@@ -194,6 +224,26 @@ describe('perpetualWork', () => {
       routeSpawn({ 'glab issue': { stdout: '', code: 1 } });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ actionable: false, reason: 'glab-list-failed', transient: true });
+    });
+
+    it('self mode resolves the authenticated glab username and filters the list by it', async () => {
+      routeSpawn({
+        'glab api': { stdout: 'octo\n' }, // glab api user -q .username
+        'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'mine', assignees: [], labels: [] }]) },
+        'git branch': { stdout: 'main\n' },
+        'glab mr': { stdout: '[]' }
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'glab' && args[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('octo');
+    });
+
+    it('self mode reports a transient failure when glab api user fails (unauthenticated)', async () => {
+      routeSpawn({ 'glab api': { stdout: '', code: 1 } });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
+      expect(out).toMatchObject({ actionable: false, reason: 'glab-unavailable', transient: true });
     });
   });
 });

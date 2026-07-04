@@ -21,6 +21,27 @@ import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
+import { PORTS } from '../lib/ports.js';
+import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
+
+// Process-level safety net (defense-in-depth, see issue #1878). The main server
+// (server/index.js) already wires this same shared helper via
+// setupProcessErrorHandlers(io); the CoS runner — a separate long-lived PM2
+// process that spawns and supervises child agents — had no such net, so a stray
+// async handler that rejected/threw outside the request lifecycle would crash it
+// with Node's default unhandled output. Reusing the shared helper gives the runner
+// the identical, already-tested convention: log via the emoji-prefixed console.error
+// style, and on an uncaughtException exit cleanly after flushing so PM2 restarts a
+// process that would otherwise be left in an undefined state (boot then reaps any
+// orphaned agents). Called with no `io` — the runner's socket server fans agent
+// output to portos-server, not the error-alert UI, so the UI emit is skipped.
+setupProcessErrorHandlers();
+
+// Timing constants for process termination/cleanup (ms). Named so the grace
+// windows are obvious at each call site instead of bare literals.
+const SIGKILL_GRACE_MS = 5000;       // wait after SIGTERM before forcing SIGKILL
+const ORPHAN_CLEANUP_DELAY_MS = 3000; // delay on boot before reaping orphaned agents
+const SHUTDOWN_DRAIN_MS = 5000;       // SIGTERM drain window before closing the server
 
 // Path + listen constants. These lived adjacent to the command allowlist before
 // it was extracted to ./allowedCommands.js; they must stay here — they're
@@ -30,7 +51,7 @@ const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 const RUNS_DIR = PATHS.runs;
 
-const PORT = process.env.PORT || 5558;
+const PORT = process.env.PORT || PORTS.COS;
 const HOST = process.env.HOST || '127.0.0.1';
 
 // Active agent processes (in memory)
@@ -301,7 +322,8 @@ app.post('/spawn', async (req, res) => {
     if (!existsSync(agentDir)) {
       await ensureDir(agentDir);
     }
-    await writeFile(join(agentDir, 'output.txt'), output).catch(() => {});
+    await writeFile(join(agentDir, 'output.txt'), output)
+      .catch(err => console.error(`❌ Agent ${agentId} failed to persist output.txt: ${err.message}`));
 
     if (paused) {
       activeAgents.delete(agentId);
@@ -322,7 +344,10 @@ app.post('/spawn', async (req, res) => {
       duration,
       outputSize: Buffer.byteLength(output)
     };
-    await writeFile(metadataPath, JSON.stringify(completionMetadata, null, 2)).catch(() => {});
+    // Recovery-critical: completion metadata is how a restart reconstructs a
+    // finished task — never swallow a write failure here, log it.
+    await writeFile(metadataPath, JSON.stringify(completionMetadata, null, 2))
+      .catch(err => console.error(`❌ Agent ${agentId} failed to persist completion metadata: ${err.message}`));
 
     // Emit completion event
     emitToServer('agent:completed', {
@@ -383,13 +408,13 @@ app.post('/terminate/:agentId', (req, res) => {
   agent.process.kill('SIGTERM');
 
   // Force kill after timeout; store handle so it can be cancelled if the
-  // process exits cleanly before the 5s window expires.
+  // process exits cleanly before the grace window expires.
   agent.killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
       agent.process.kill('SIGKILL');
       activeAgents.delete(agentId);
     }
-  }, 5000);
+  }, SIGKILL_GRACE_MS);
 
   res.json({ success: true, agentId });
 });
@@ -447,7 +472,7 @@ app.post('/pause/:agentId', async (req, res) => {
   agent.killTimer = setTimeout(() => {
     const current = activeAgents.get(agentId);
     if (current?.paused) current.process.kill('SIGKILL');
-  }, 5000);
+  }, SIGKILL_GRACE_MS);
 
   res.json({ success: true, agentId, pid: agent.pid, pausedAt });
 });
@@ -471,7 +496,7 @@ app.post('/terminate-all', async (req, res) => {
           agent.process.kill('SIGKILL');
           activeAgents.delete(agentId);
         }
-      }, 5000);
+      }, SIGKILL_GRACE_MS);
     }
   }
 
@@ -625,7 +650,7 @@ app.post('/run', async (req, res) => {
     if (!existsSync(runDir)) {
       await ensureDir(runDir);
     }
-    await writeFile(join(runDir, 'output.txt'), output).catch(() => {});
+    await writeFile(join(runDir, 'output.txt'), output).catch(err => console.error(`❌ Run ${runId} failed to persist output.txt: ${err.message}`));
 
     // Persist completion status to disk BEFORE emitting event
     // This ensures recovery is possible even if the socket event is lost
@@ -639,7 +664,7 @@ app.post('/run', async (req, res) => {
       duration,
       outputSize: Buffer.byteLength(output)
     };
-    await writeFile(metadataPath, JSON.stringify(updatedMetadata, null, 2)).catch(() => {});
+    await writeFile(metadataPath, JSON.stringify(updatedMetadata, null, 2)).catch(err => console.error(`❌ Run ${runId} failed to persist completion metadata: ${err.message}`));
 
     // Emit completion event
     emitToServer('run:complete', {
@@ -733,7 +758,7 @@ app.post('/runs/:runId/stop', (req, res) => {
       run.process.kill('SIGKILL');
       activeRuns.delete(runId);
     }
-  }, 5000);
+  }, SIGKILL_GRACE_MS);
 
   res.json({ success: true, runId });
 });
@@ -808,7 +833,7 @@ server.listen(PORT, HOST, async () => {
     if (orphaned.length > 0) {
       console.log(`🧹 Cleaned ${orphaned.length} orphaned agent(s)`);
     }
-  }, 3000);
+  }, ORPHAN_CLEANUP_DELAY_MS);
 });
 
 // Graceful shutdown
@@ -822,7 +847,7 @@ process.on('SIGTERM', async () => {
   }
 
   // Wait for agents to terminate
-  await new Promise(resolve => setTimeout(resolve, 5000));
+  await new Promise(resolve => setTimeout(resolve, SHUTDOWN_DRAIN_MS));
 
   server.close(() => {
     console.log('👋 CoS Agent Runner stopped');

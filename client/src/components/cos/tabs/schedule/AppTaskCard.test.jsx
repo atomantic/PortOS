@@ -84,4 +84,17 @@ describe('AppTaskCard', () => {
     renderCard({ globalLastRun: null });
     expect(screen.getByText('Never run')).toBeTruthy();
   });
+
+  it('shows a swarm badge when swarmCount ≥ 2 and hides it otherwise', () => {
+    renderCard({ taskMetadata: { swarmCount: 3 } });
+    expect(screen.getByText('×3')).toBeTruthy();
+    expect(screen.getByTitle(/Swarm mode/)).toBeTruthy();
+  });
+
+  it('hides the swarm badge when swarm is off (absent / 0)', () => {
+    renderCard({ taskMetadata: { swarmCount: 0 } });
+    expect(screen.queryByText(/^×\d/)).toBeNull();
+    renderCard({});
+    expect(screen.queryByText(/^×\d/)).toBeNull();
+  });
 });

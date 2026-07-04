@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -275,6 +275,28 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}) {
     return {
       command: provider?.command || 'agy',
       args,
+      stdinMode: 'prompt'
+    };
+  }
+
+  // OpenCode CLI (`opencode run`): headless agent invocation for a local Ollama
+  // model. `opencode run` reads the prompt from stdin and auto-approves tools via
+  // the `permission: "allow"` baked into OPENCODE_CONFIG_CONTENT (the equivalent
+  // of claude's `--dangerously-skip-permissions` / codex's bypass — appropriate
+  // for PortOS's single-user trusted box). The model is namespaced `ollama/<id>`
+  // (prefixOpencodeModel). OpenCode emits plain text (no stream-json), so the
+  // live-output handler falls through to its default text path.
+  if (isOpencodeCommand(provider?.command)) {
+    const baseArgs = provider?.args?.includes('run') ? [...provider.args] : ['run', ...(provider?.args || [])];
+    const model = prefixOpencodeModel(provider, effectiveModel);
+    // Respect a user-baked -m/--model pin (mirrors buildCliArgs) rather than
+    // duplicating the flag — opencode takes the last, silently overriding it.
+    if (model && !hasModelFlag(baseArgs)) {
+      baseArgs.push('-m', model);
+    }
+    return {
+      command: provider.command,
+      args: baseArgs,
       stdinMode: 'prompt'
     };
   }
@@ -531,35 +553,50 @@ export async function spawnDirectly({
   });
 
   claudeProcess.on('error', async (err) => {
-    clearTimeout(initializationTimeout);
-    console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
+    // Runs outside the request lifecycle — an uncaught throw from the awaited
+    // completeAgent/completeAgentRun would crash the process, so wrap the body.
+    try {
+      clearTimeout(initializationTimeout);
+      console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
-    // Release execution lane
-    if (laneName) {
-      release(agentId);
+      // Release execution lane
+      if (laneName) {
+        release(agentId);
+      }
+
+      // Complete tool execution tracking with error
+      if (executionId) {
+        errorExecution(executionId, { message: err.message, category: 'spawn-error' });
+        completeExecution(executionId, { success: false });
+      }
+
+      const agentDataErr = activeAgents.get(agentId);
+      if (agentDataErr?.killTimer) {
+        clearTimeout(agentDataErr.killTimer);
+        agentDataErr.killTimer = null;
+      }
+
+      cosEvents.emit('agent:error', { agentId, error: err.message });
+      await outputBatcher.flush();
+      await completeAgent(agentId, { success: false, error: err.message });
+      await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
+      unregisterSpawnedAgent(claudeProcess.pid);
+      activeAgents.delete(agentId);
+    } catch (handlerErr) {
+      console.error(`❌ Agent ${agentId} error handler failed: ${handlerErr.message}`);
+      activeAgents.delete(agentId);
     }
-
-    // Complete tool execution tracking with error
-    if (executionId) {
-      errorExecution(executionId, { message: err.message, category: 'spawn-error' });
-      completeExecution(executionId, { success: false });
-    }
-
-    const agentDataErr = activeAgents.get(agentId);
-    if (agentDataErr?.killTimer) {
-      clearTimeout(agentDataErr.killTimer);
-      agentDataErr.killTimer = null;
-    }
-
-    cosEvents.emit('agent:error', { agentId, error: err.message });
-    await outputBatcher.flush();
-    await completeAgent(agentId, { success: false, error: err.message });
-    await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
-    unregisterSpawnedAgent(claudeProcess.pid);
-    activeAgents.delete(agentId);
   });
 
   claudeProcess.on('close', async (code) => {
+    // Runs outside the request lifecycle — a throw from outputBatcher.flush,
+    // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
+    // as an unhandled rejection and crash the process. The inner try/finally
+    // only covers finalizeAgent's cleanup; this outer guard is the crash net.
+    // `laneReleased` lets the recovery path free a still-held execution lane
+    // (a throw before releaseAgentLane) without double-releasing one that ran.
+    let laneReleased = false;
+    try {
     clearTimeout(initializationTimeout);
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
@@ -638,6 +675,7 @@ export async function spawnDirectly({
       laneName: agentData?.laneName || laneName,
       errorExecutionMessage: finalError || undefined,
     });
+    laneReleased = true;
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
@@ -683,6 +721,52 @@ export async function spawnDirectly({
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);
+    }
+    } catch (handlerErr) {
+      console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
+      // A paused agent was already persisted + lane-released by markAgentPaused;
+      // if the throw beat the pause guard above, do ONLY the in-memory cleanup
+      // (mirrors the normal pause path) — finalizing it as failed here would
+      // overwrite the paused state and break later resume.
+      if (pausedAgents.has(agentId)) {
+        pausedAgents.delete(agentId);
+        unregisterSpawnedAgent(claudeProcess.pid);
+        activeAgents.delete(agentId);
+      } else {
+        // If the throw beat releaseAgentLane, the lane/execution is still held.
+        // The process now survives instead of restarting, so a held lane would
+        // block later tasks indefinitely — release it on the recovery path too.
+        if (!laneReleased) {
+          try {
+            releaseAgentLane({
+              agentId,
+              success: false,
+              exitCode: code,
+              executionId,
+              laneName,
+              errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
+            });
+          } catch (releaseErr) {
+            console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
+          }
+        }
+        // Persist a terminal failure record so the agent/run don't stay stuck as
+        // running with no live process to finish them — the process now survives
+        // instead of restarting. Mirrors the error handler's completion path;
+        // each call is guarded so a persistence failure can't re-crash.
+        try {
+          await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
+        } catch (completeErr) {
+          console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
+        }
+        try {
+          await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+        } catch (runErr) {
+          console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
+        }
+        unregisterSpawnedAgent(claudeProcess.pid);
+        activeAgents.delete(agentId);
+      }
     }
   });
 

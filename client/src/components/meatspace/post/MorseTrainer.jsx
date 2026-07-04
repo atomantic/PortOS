@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ArrowLeft, Radio, Headphones, Hand, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
+import { ArrowLeft, Radio, Headphones, Hand, EyeOff, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
+import useDrawerTab from '../../../hooks/useDrawerTab';
+import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
+import MorseProgressPanel from './MorseProgressPanel';
+import { streakGlyph } from '../../../lib/streakGlyph.js';
 
-const MORSE_TABLE = {
+export const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
   G: '--.',    H: '....',   I: '..',     J: '.---',   K: '-.-',    L: '.-..',
   M: '--',     N: '-.',     O: '---',    P: '.--.',   Q: '--.-',   R: '.-.',
@@ -23,6 +27,8 @@ const MORSE_BY_LENGTH = MORSE_ENTRIES.reduce((acc, [ch, code]) => {
 
 // Binary tree: walk left for `-` (DAH), right for `.` (DIT). Each node's path
 // from the root spells its morse code; missing paths are nulls (e.g. `----`).
+// Morse is timing-decoded rather than prefix-free, so a node can carry both a
+// letter (e.g. E, T, A) AND have children for longer codes that extend it.
 const MORSE_TREE = (() => {
   const root = { char: '·', code: '', dah: null, dit: null };
   for (const [ch, code] of MORSE_ENTRIES) {
@@ -37,16 +43,62 @@ const MORSE_TREE = (() => {
   return root;
 })();
 
+// Tidy tree layout: true leaves (nodes with no dah/dit children) get
+// sequential x-slots in left-to-right (dah-then-dit) order; every internal
+// node's x is the midpoint of its children. This replaces nested equal-split
+// `flex-1` divs — which gave a missing branch the same width as a populated
+// one at every depth, so a lightly-populated subtree several levels down
+// could visually squeeze/shift everything above it, including the root —
+// with positions derived from each subtree's real size. The root always
+// lands at the midpoint of its two top branches and every node keeps a
+// stable, non-overlapping slot regardless of how deep/sparse its subtree is.
+function layoutMorseTree(root) {
+  const nodes = [];
+  const edges = [];
+  let nextLeafX = 0;
+
+  function visit(node, depth) {
+    if (!node) return null;
+    let x;
+    const dahPos = visit(node.dah, depth + 1);
+    const ditPos = visit(node.dit, depth + 1);
+    const childXs = [dahPos, ditPos].filter(Boolean).map((p) => p.x);
+    if (childXs.length === 0) {
+      x = nextLeafX;
+      nextLeafX += 1;
+    } else {
+      x = childXs.reduce((a, b) => a + b, 0) / childXs.length;
+    }
+    if (dahPos) edges.push({ x1: x, y1: depth, x2: dahPos.x, y2: depth + 1, childCode: node.dah.code });
+    if (ditPos) edges.push({ x1: x, y1: depth, x2: ditPos.x, y2: depth + 1, childCode: node.dit.code });
+    const pos = { x, depth, node };
+    nodes.push(pos);
+    return pos;
+  }
+
+  visit(root, 0);
+  const maxDepth = nodes.reduce((max, n) => Math.max(max, n.depth), 0);
+  return { nodes, edges, width: Math.max(1, nextLeafX), maxDepth };
+}
+
+const MORSE_TREE_LAYOUT = layoutMorseTree(MORSE_TREE);
+const TREE_SLOT_W = 26;
+const TREE_ROW_H = 34;
+
 const KOCH_ORDER = ['K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'P', 'T', 'L', 'W', 'I', '.', 'J', 'Z', '=', 'F', 'O', 'Y', ',', 'V', 'G', '5', '/', 'Q', '9', '2', 'H', '3', '8', 'B', '?', '4', '7', 'C', '1', 'D', '6', '0', 'X'];
 
 const PREFS_KEY = 'portos-post-morse-prefs';
-const DEFAULT_PREFS = { wpm: 18, effectiveWpm: 18, hz: 700, kochLevel: 2, bestAccuracy: 0 };
+// Base Koch level (K, M — the two-character start of the pool). localStorage is
+// now a write-through cache; the server holds the authoritative level. A fresh
+// install with no server level and no cache stays at this base (no regression).
+const DEFAULT_KOCH_LEVEL = 2;
+const DEFAULT_PREFS = { wpm: 18, effectiveWpm: 18, hz: 700, kochLevel: DEFAULT_KOCH_LEVEL, bestAccuracy: 0 };
 
 // Tone envelope ramp — fast enough to avoid clicks, slow enough to feel like a key
 const RAMP_SEC = 0.005;
 const TONE_GAIN = 0.25;
 
-const MODES = [
+export const MODES = [
   {
     id: 'copy',
     label: 'Copy',
@@ -55,6 +107,15 @@ const MODES = [
     bgColor: 'bg-cyan-500/20',
     description: 'Listen to Morse, type what you hear',
     example: 'Koch progression: K, M → add letters as you hit 90%',
+  },
+  {
+    id: 'head-copy',
+    label: 'Head Copy',
+    icon: EyeOff,
+    color: 'text-purple-400',
+    bgColor: 'bg-purple-500/20',
+    description: 'Audio-only — no on-screen code hints or cheat sheet',
+    example: 'Same Koch pool, pure recall — nothing to look at',
   },
   {
     id: 'send',
@@ -66,6 +127,11 @@ const MODES = [
     example: 'Tap short for ·, hold long for —',
   },
 ];
+
+// Training log module name — passed as `module` on every submitTrainingEntry
+// call from this trainer so POST's training stats can group Morse practice
+// under one key regardless of which mode logged it.
+const TRAINING_MODULE = 'morse';
 
 function loadPrefs() {
   const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PREFS_KEY) : null;
@@ -151,12 +217,17 @@ function pickSendPrompt() {
 
 function useAudioContext() {
   const ctxRef = useRef(null);
-  const ensureCtx = useCallback(() => {
+  const ensureCtx = useCallback(async () => {
     if (!ctxRef.current) {
       const Ctor = window.AudioContext || window.webkitAudioContext;
       ctxRef.current = new Ctor();
     }
-    if (ctxRef.current.state === 'suspended') ctxRef.current.resume();
+    // Autoplay policy starts the context suspended until a user gesture — and on
+    // iOS Safari resume() is async, so we MUST await it before scheduling any
+    // oscillator. Firing resume() without awaiting (the old behavior) laid tones
+    // down against a still-suspended clock: silent on mobile Safari. Mirrors the
+    // await-resume idiom in metronome.js / scorePlayback.js / songPlayback.js.
+    if (ctxRef.current.state === 'suspended') await ctxRef.current.resume();
     return ctxRef.current;
   }, []);
   useEffect(() => () => {
@@ -178,18 +249,33 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
   const flushTimerRef = useRef(null);
   const wordTimerRef = useRef(null);
   const patternRef = useRef('');
+  // Per-letter completion log (send mode): each decoded letter's char + the
+  // performance.now() timestamp it flushed at, so SendDrill can derive a
+  // per-character response time (inter-letter delta) for the round it submits.
+  const letterLogRef = useRef([]);
   // Mirror of `pressing` state read by beginPress/endPress so those callbacks
   // stay referentially stable — the global keydown/keyup listener effect
   // depends on them, and re-running per keystroke would tear down the
   // just-scheduled flush timers and cut off the active tone mid-press.
   const pressingRef = useRef(false);
+  // Bumped once per beginPress so a startTone whose resume await settles after a
+  // newer press started can tell it's been superseded and bail.
+  const toneGenRef = useRef(0);
 
   const [pattern, setPattern] = useState('');
   const [decoded, setDecoded] = useState('');
   const [pressing, setPressing] = useState(false);
 
-  const startTone = useCallback(() => {
-    const ctx = ensureCtx();
+  const startTone = useCallback(async () => {
+    const gen = ++toneGenRef.current;
+    const ctx = await ensureCtx();
+    // A fast tap can release (endPress → stopTone), or a newer press can start,
+    // before the first-press-only resume await settles. Bail if the key is no
+    // longer held (`!pressingRef.current`) OR a newer press superseded this one
+    // (`gen !== toneGenRef.current`) — a bare boolean can't distinguish the two,
+    // so two overlapping starts would both create an oscillator and orphan the
+    // first, leaving it droning with no matching stop.
+    if (!pressingRef.current || gen !== toneGenRef.current) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -208,8 +294,10 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     const osc = oscRef.current;
     const gain = gainRef.current;
     if (!osc || !gain) return;
-    const ctx = ensureCtx();
-    const now = ctx.currentTime;
+    // Read the clock straight off the live oscillator's context — a tone is only
+    // playing on an already-running context, so there's nothing to resume here
+    // (and stopTone stays synchronous, which endPress/clear/cleanup rely on).
+    const now = osc.context.currentTime;
     gain.gain.cancelScheduledValues(now);
     gain.gain.setValueAtTime(gain.gain.value, now);
     gain.gain.linearRampToValueAtTime(0, now + RAMP_SEC);
@@ -217,12 +305,13 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     osc.onended = () => { osc.disconnect(); gain.disconnect(); };
     oscRef.current = null;
     gainRef.current = null;
-  }, [ensureCtx]);
+  }, []);
 
   const flushLetter = useCallback(() => {
     const buf = patternRef.current;
     if (!buf) return;
     const ch = MORSE_LOOKUP[buf] || '?';
+    letterLogRef.current.push({ char: ch, at: performance.now() });
     setDecoded((d) => d + ch);
     patternRef.current = '';
     setPattern('');
@@ -262,6 +351,7 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     flushTimerRef.current = null;
     wordTimerRef.current = null;
     patternRef.current = '';
+    letterLogRef.current = [];
     pressStartRef.current = 0;
     lastReleaseRef.current = 0;
     stopTone();
@@ -311,28 +401,118 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, enabled = false }) {
     };
   }, [beginPress, endPress, stopTone, enabled]);
 
-  return { pattern, decoded, pressing, beginPress, endPress, clear };
+  // getLetterLog exposes the ref's current array without making it reactive —
+  // SendDrill reads it once at check time, so a ref (no re-render) is correct.
+  const getLetterLog = useCallback(() => letterLogRef.current, []);
+
+  return { pattern, decoded, pressing, beginPress, endPress, clear, getLetterLog };
 }
 
-export default function MorseTrainer({ onBack }) {
+// Valid `:mode` subroute segments. Anything else (stale/deleted deep link)
+// falls through to the mode grid rather than a blank panel.
+export const MORSE_MODE_IDS = MODES.map((m) => m.id);
+
+// `mode` is the routed `:mode` segment (`/post/morse/:mode`), validated by the
+// caller (PostTab) to one of MORSE_MODE_IDS or null — the URL is the single
+// source of truth for which drill is open, so there is no local mode state.
+export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, onBack }) {
   const [prefs, setPrefs] = useState(loadPrefs);
-  const [mode, setMode] = useState(null);
+  const [trainingStats, setTrainingStats] = useState(null);
+  // Bumped after each round submit so the progress panel refetches its trends /
+  // confusion matrix without a manual reload.
+  const [progressRefresh, setProgressRefresh] = useState(0);
   const ensureCtx = useAudioContext();
   const unitMs = 1.2 / prefs.wpm * 1000;
   const keying = useKeyingDecoder({ unitMs, hz: prefs.hz, ensureCtx, enabled: mode === 'send' });
+  // Head Copy reuses CopyDrill's whole pipeline (Koch pool, round scoring,
+  // level unlock) minus the on-screen morse hints and the reference cheat
+  // sheet — the only meaningful difference the issue asks for.
+  const showReference = mode !== 'head-copy';
+
+  // Hydrate the authoritative Koch level from the server (localStorage is now a
+  // write-through cache). One-time adoption: if the server has never had a level
+  // and this browser's cached level is beyond the base, push it up (adopt:true —
+  // the server ignores it if another device already set a real level).
+  useEffect(() => {
+    let cancelled = false;
+    getMorseProgress(30, { silent: true })
+      .then(async (p) => {
+        if (cancelled || !p) return;
+        if (!p.kochLevelSet) {
+          const cachedLevel = loadPrefs().kochLevel;
+          if (cachedLevel > DEFAULT_KOCH_LEVEL) {
+            const res = await updateMorseLevel({ kochLevel: cachedLevel, adopt: true }, { silent: true }).catch(() => null);
+            if (!cancelled && res?.kochLevel) {
+              setPrefs((prev) => { const n = { ...prev, kochLevel: res.kochLevel }; savePrefs(n); return n; });
+            }
+            return;
+          }
+        }
+        if (typeof p.kochLevel === 'number') {
+          setPrefs((prev) => { const n = { ...prev, kochLevel: p.kochLevel }; savePrefs(n); return n; });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   function updatePrefs(patch) {
     setPrefs((prev) => {
       const next = { ...prev, ...patch };
       if (next.effectiveWpm > next.wpm) next.effectiveWpm = next.wpm;
       savePrefs(next);
+      // Persist a level change to the server (write-through). Settings ride along
+      // so a level advance/reset also syncs the current speed/tone across devices.
+      if (patch.kochLevel != null && patch.kochLevel !== prev.kochLevel) {
+        updateMorseLevel(
+          { kochLevel: patch.kochLevel, settings: { wpm: next.wpm, farnsworthWpm: next.effectiveWpm, toneHz: next.hz } },
+          { silent: true },
+        ).catch(() => {});
+      }
       return next;
     });
   }
 
   function resetProgress() {
-    updatePrefs({ kochLevel: 2, bestAccuracy: 0 });
+    updatePrefs({ kochLevel: DEFAULT_KOCH_LEVEL, bestAccuracy: 0 });
   }
+
+  // Fire-and-forget per-round submit (server persists per-item sent→guessed
+  // results for the trends + confusion matrix). Refreshes the panel on success.
+  const submitRound = useCallback((round) => {
+    submitMorseRound(round, { silent: true })
+      .then(() => setProgressRefresh((n) => n + 1))
+      .catch(() => {});
+  }, []);
+
+  // Fetches the training log's 30-day view and reduces it to what this trainer
+  // shows: overall training streak (shared across every POST training-mode
+  // drill, not Morse-exclusive) plus a Morse-only practice count/accuracy.
+  // byDrill only reports a per-drill-type accuracy%, not raw correct/question
+  // counts, so morseAccuracy is a session-count-weighted average across the
+  // morse-copy/morse-head-copy/morse-send buckets — not a true question-level average.
+  const refreshTrainingStats = useCallback(() => {
+    getTrainingStats(30)
+      .then((stats) => {
+        const morseEntries = Object.entries(stats?.byDrill || {}).filter(([key]) => key.startsWith(`${TRAINING_MODULE}:`));
+        const morseSessions = morseEntries.reduce((sum, [, d]) => sum + (d.practiceCount || 0), 0);
+        const weightedAccuracySum = morseEntries.reduce((sum, [, d]) => sum + (d.accuracy || 0) * (d.practiceCount || 0), 0);
+        const morseAccuracy = morseSessions > 0 ? Math.round(weightedAccuracySum / morseSessions) : null;
+        setTrainingStats({ currentStreak: stats?.currentStreak ?? 0, morseSessions, morseAccuracy });
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { refreshTrainingStats(); }, [refreshTrainingStats]);
+
+  // Fire-and-forget training-log write, mirroring the existing
+  // usePostSession.js training-mode pattern (silent — a failed background log
+  // shouldn't interrupt practice). Refreshes the displayed stats on success.
+  const logTraining = useCallback((patch) => {
+    submitTrainingEntry({ module: TRAINING_MODULE, ...patch })
+      .then(() => refreshTrainingStats())
+      .catch(() => {});
+  }, [refreshTrainingStats]);
 
   return (
     <div className="space-y-6">
@@ -351,24 +531,28 @@ export default function MorseTrainer({ onBack }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_24rem] gap-6">
+      <div className={`grid grid-cols-1 ${showReference ? 'xl:grid-cols-[minmax(0,1fr)_24rem]' : ''} gap-6`}>
         <div className="space-y-6 min-w-0 max-w-2xl">
-          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} />
-          {!mode && <ModeGrid onPick={setMode} />}
+          <SettingsPanel prefs={prefs} updatePrefs={updatePrefs} onResetProgress={resetProgress} trainingStats={trainingStats} />
+          {!mode && <ModeGrid onPick={onSelectMode} />}
           {mode === 'copy' && (
-            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={() => setMode(null)} />
+            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} onSessionComplete={logTraining} onRoundSubmit={submitRound} />
+          )}
+          {mode === 'head-copy' && (
+            <CopyDrill prefs={prefs} updatePrefs={updatePrefs} ensureCtx={ensureCtx} onExit={onExitMode} onSessionComplete={logTraining} onRoundSubmit={submitRound} headCopy />
           )}
           {mode === 'send' && (
-            <SendDrill keying={keying} onExit={() => setMode(null)} />
+            <SendDrill keying={keying} onExit={onExitMode} onSessionComplete={logTraining} onRoundSubmit={submitRound} />
           )}
+          {!mode && <MorseProgressPanel refreshKey={progressRefresh} />}
         </div>
-        <ReferenceWidget keying={keying} mode={mode} />
+        {showReference && <ReferenceWidget keying={keying} mode={mode} />}
       </div>
     </div>
   );
 }
 
-function SettingsPanel({ prefs, updatePrefs, onResetProgress }) {
+function SettingsPanel({ prefs, updatePrefs, onResetProgress, trainingStats }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
       <SliderRow
@@ -397,11 +581,25 @@ function SettingsPanel({ prefs, updatePrefs, onResetProgress }) {
         onChange={(v) => updatePrefs({ hz: v })}
         suffix="Hz"
       />
-      <div className="sm:col-span-3 flex items-center justify-between text-xs text-gray-500 border-t border-port-border pt-3">
+      <div className="sm:col-span-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-xs text-gray-500 border-t border-port-border pt-3">
         <span>
           Koch level: <span className="text-white font-mono">{prefs.kochLevel}</span> /{' '}
           <span className="text-gray-400">{KOCH_ORDER.length}</span> ·{' '}
           Best round: <span className="text-white font-mono">{prefs.bestAccuracy}%</span>
+          {trainingStats && (
+            <>
+              {' '}· <span aria-hidden="true">{streakGlyph(trainingStats.currentStreak)}</span> Training streak:{' '}
+              <span className="text-white font-mono">{trainingStats.currentStreak}</span>d
+              {trainingStats.morseSessions > 0 && (
+                <>
+                  {' '}· Morse logged: <span className="text-white font-mono">{trainingStats.morseSessions}</span>
+                  {trainingStats.morseAccuracy != null && (
+                    <> (<span className="text-white font-mono">{trainingStats.morseAccuracy}%</span> avg)</>
+                  )}
+                </>
+              )}
+            </>
+          )}
         </span>
         <button
           onClick={onResetProgress}
@@ -441,8 +639,12 @@ const REFERENCE_VIEWS = [
   { id: 'list', label: 'List', icon: ListIcon },
 ];
 
+const REFERENCE_VIEW_IDS = REFERENCE_VIEWS.map((v) => v.id);
+
 function ReferenceWidget({ keying, mode }) {
-  const [view, setView] = useState('tree');
+  // Reference tab lives in the `?ref=` search param so it's deep-linkable and
+  // survives reload/share; a stale value degrades to 'tree'.
+  const [view, setView] = useDrawerTab('ref', 'tree', REFERENCE_VIEW_IDS);
   // Only show the in-progress key path in Send mode — in Copy mode the right
   // widget is a passive cheat-sheet, not live feedback for the user.
   const currentPath = mode === 'send' ? keying.pattern : '';
@@ -480,36 +682,39 @@ function ReferenceWidget({ keying, mode }) {
   );
 }
 
-function TreeNode({ node, currentPath }) {
-  if (!node) return <div className="flex-1" />;
-  const matched = !!node.char && currentPath === node.code;
+export function isNodeOnPath(node, currentPath) {
+  // Root's placeholder char ('·') is truthy but isn't a real decoded
+  // character — gate on `currentPath.length > 0` too so an idle/empty path
+  // (reference-only view, or before the first key press) never lights up
+  // the root as if it were the live-keyed match.
+  const matched = !!node.char && currentPath.length > 0 && currentPath === node.code;
   const onPath = currentPath.length > 0 && currentPath.startsWith(node.code) && node.code !== currentPath;
-  const hasChildren = node.dah || node.dit;
-  const display = node.char || (node.code === '' ? '·' : '');
+  return { matched, onPath };
+}
 
+function TreeNodeLabel({ x, depth, node, currentPath }) {
+  const { matched, onPath } = isNodeOnPath(node, currentPath);
+  const display = node.char || (node.code === '' ? '·' : '');
   return (
-    <div className="flex flex-col items-center min-w-0 flex-1">
-      <div
-        className={`text-[11px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-          matched ? 'bg-port-accent text-white font-bold' :
-          onPath ? 'text-port-accent' :
-          display ? 'text-gray-300' : 'text-gray-700'
-        }`}
-        title={node.code || 'start'}
-      >
-        {display || '·'}
-      </div>
-      {hasChildren && (
-        <div className={`flex gap-0.5 mt-0.5 w-full border-t ${onPath || matched ? 'border-port-accent/40' : 'border-port-border'}`}>
-          <TreeNode node={node.dah} currentPath={currentPath} />
-          <TreeNode node={node.dit} currentPath={currentPath} />
-        </div>
-      )}
+    <div
+      className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+        matched ? 'bg-port-accent text-white font-bold' :
+        onPath ? 'text-port-accent bg-port-bg' :
+        display ? 'text-gray-300 bg-port-bg' : 'text-gray-700 bg-port-bg'
+      }`}
+      style={{ left: x * TREE_SLOT_W + TREE_SLOT_W / 2, top: depth * TREE_ROW_H + TREE_ROW_H / 2 }}
+      title={node.code || 'start'}
+    >
+      {display || '·'}
     </div>
   );
 }
 
 function TreeView({ currentPath, mode }) {
+  const { nodes, edges, width, maxDepth } = MORSE_TREE_LAYOUT;
+  const pixelWidth = width * TREE_SLOT_W;
+  const pixelHeight = (maxDepth + 1) * TREE_ROW_H;
+
   return (
     <div>
       <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-gray-500 mb-2">
@@ -518,8 +723,26 @@ function TreeView({ currentPath, mode }) {
         <span>dit →</span>
       </div>
       <div className="overflow-x-auto pb-1">
-        <div className="min-w-[36rem]">
-          <TreeNode node={MORSE_TREE} currentPath={currentPath} />
+        <div className="relative mx-auto" style={{ width: pixelWidth, height: pixelHeight }}>
+          <svg className="absolute inset-0 overflow-visible" width={pixelWidth} height={pixelHeight}>
+            {edges.map((e, i) => {
+              const highlighted = currentPath.length > 0 && currentPath.startsWith(e.childCode);
+              return (
+                <line
+                  key={i}
+                  x1={e.x1 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                  y1={e.y1 * TREE_ROW_H + TREE_ROW_H / 2}
+                  x2={e.x2 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                  y2={e.y2 * TREE_ROW_H + TREE_ROW_H / 2}
+                  className={highlighted ? 'stroke-port-accent' : 'stroke-port-border'}
+                  strokeWidth={highlighted ? 2 : 1}
+                />
+              );
+            })}
+          </svg>
+          {nodes.map(({ x, depth, node }) => (
+            <TreeNodeLabel key={node.code} x={x} depth={depth} node={node} currentPath={currentPath} />
+          ))}
         </div>
       </div>
       <p className="text-[10px] text-gray-500 mt-3">
@@ -630,7 +853,31 @@ function ModeGrid({ onPick }) {
 
 const ROUND_SIZE = 10;
 
-function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
+// Flatten per-question copy results ({ prompt, guess, correct, responseMs }) into
+// per-character sent→guessed items for the server's confusion matrix. Aligned
+// positionally over the LONGER of prompt/guess so nothing is silently dropped:
+//   - a missing/short guess char yields guessed '' (a miss, scored wrong);
+//   - an EXTRA typed char beyond the prompt yields sent '' (an insertion). An
+//     insertion has no transmitted character, so the server excludes empty-sent
+//     items from the confusion matrix / per-character mastery, but still counts
+//     them in the round's accuracy — so a `K`→`KM` round reads as an error, not a
+//     perfect copy. The question's responseMs is attributed to each character.
+export function resultsToItems(results) {
+  const items = [];
+  for (const r of results) {
+    const promptChars = (r.prompt || '').toUpperCase().split('');
+    const guessChars = (r.guess || '').toUpperCase().split('');
+    const len = Math.max(promptChars.length, guessChars.length);
+    for (let i = 0; i < len; i++) {
+      const sent = promptChars[i] ?? '';
+      const guessed = guessChars[i] ?? '';
+      items.push({ sent, guessed, correct: sent === guessed, responseMs: r.responseMs ?? 0 });
+    }
+  }
+  return items;
+}
+
+function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit, onSessionComplete, onRoundSubmit, headCopy = false }) {
   const [prompt, setPrompt] = useState('');
   const [input, setInput] = useState('');
   const [results, setResults] = useState([]);
@@ -638,16 +885,32 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
   const [playing, setPlaying] = useState(false);
   const [done, setDone] = useState(false);
   const inputRef = useRef(null);
+  const roundStartRef = useRef(0);
+  // Set when a prompt finishes playing; drives per-question responseMs (time from
+  // "audio done" to the user's submit) recorded per character in the round.
+  const questionStartRef = useRef(0);
+  // Re-entrancy guard. On the first play of a session `ensureCtx()` awaits the
+  // iOS audio-unlock, and `prompt`/`playing` aren't set until after it — so the
+  // Start Round / New Round button stays live during that window. A second tap
+  // would otherwise start a second overlapping playPrompt, scheduling two Morse
+  // prompts over each other with the UI tracking only whichever set state last.
+  // A ref (not `playing` state) because it must gate synchronously, before the
+  // first await, where a state update wouldn't have rendered yet.
+  const playingRef = useRef(false);
 
   async function startRound() {
+    if (playingRef.current) return;
     setResults([]);
     setFeedback(null);
     setDone(false);
+    roundStartRef.current = Date.now();
     await playPrompt(true);
   }
 
   async function playPrompt(isNew) {
-    const ctx = ensureCtx();
+    if (playingRef.current) return;
+    playingRef.current = true;
+    const ctx = await ensureCtx();
     const text = isNew ? pickKochPrompt(prefs.kochLevel) : prompt;
     if (isNew) {
       setPrompt(text);
@@ -657,6 +920,8 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
     setPlaying(true);
     await playMorse(ctx, text, prefs);
     setPlaying(false);
+    playingRef.current = false;
+    questionStartRef.current = Date.now();
     setTimeout(() => inputRef.current?.focus(), 50);
   }
 
@@ -664,7 +929,8 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
     if (!prompt) return;
     const guess = input.trim().toUpperCase();
     const correct = guess === prompt;
-    const next = [...results, { prompt, guess, correct }];
+    const responseMs = questionStartRef.current ? Date.now() - questionStartRef.current : 0;
+    const next = [...results, { prompt, guess, correct, responseMs }];
     setResults(next);
     setFeedback({ correct, prompt, guess });
     if (next.length >= ROUND_SIZE) {
@@ -686,6 +952,24 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
     }
     updatePrefs(patch);
     setDone(true);
+    const durationMs = roundStartRef.current ? Date.now() - roundStartRef.current : 0;
+    onSessionComplete?.({
+      drillType: headCopy ? 'morse-head-copy' : 'morse-copy',
+      questionCount: rs.length,
+      correctCount,
+      totalMs: durationMs,
+    });
+    // Persist the round server-side with per-character sent→guessed pairs (each
+    // prompt/guess is aligned positionally so a 5-char group yields 5 items) —
+    // the raw material for the confusion matrix and per-character mastery.
+    onRoundSubmit?.({
+      mode: headCopy ? 'head-copy' : 'copy',
+      kochLevel: prefs.kochLevel,
+      wpm: prefs.wpm,
+      farnsworthWpm: prefs.effectiveWpm,
+      durationMs,
+      items: resultsToItems(rs),
+    });
   }
 
   function onKey(e) {
@@ -741,7 +1025,11 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
           Koch level <span className="font-mono text-white">{prefs.kochLevel}</span> — pool: {' '}
           <span className="font-mono text-port-accent">{KOCH_ORDER.slice(0, prefs.kochLevel).join(' ')}</span>
         </p>
-        <p className="text-xs text-gray-500">Listen to a 10-question round. Hit 90% to unlock the next letter.</p>
+        <p className="text-xs text-gray-500">
+          {headCopy
+            ? 'Listen to a 10-question round. No code hints on the results screen — pure recall. Hit 90% to unlock the next letter.'
+            : 'Listen to a 10-question round. Hit 90% to unlock the next letter.'}
+        </p>
         <button
           onClick={startRound}
           className="px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white font-medium rounded-lg transition-colors inline-flex items-center gap-2"
@@ -777,9 +1065,11 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
             <div className="text-3xl font-mono font-bold text-port-accent tracking-widest">
               {feedback.prompt}
             </div>
-            <div className="font-mono text-port-accent/70 text-base tracking-widest">
-              {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
-            </div>
+            {!headCopy && (
+              <div className="font-mono text-port-accent/70 text-base tracking-widest">
+                {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
+              </div>
+            )}
             {!feedback.correct && (
               <div className="text-gray-400 text-xs pt-1">
                 You typed <span className="font-mono text-white">{feedback.guess || '—'}</span>
@@ -814,9 +1104,10 @@ function CopyDrill({ prefs, updatePrefs, ensureCtx, onExit }) {
   );
 }
 
-function SendDrill({ keying, onExit }) {
+function SendDrill({ keying, onExit, onSessionComplete, onRoundSubmit }) {
   const [prompt, setPrompt] = useState(() => pickSendPrompt());
   const [feedback, setFeedback] = useState(null);
+  const promptStartRef = useRef(Date.now());
 
   // Drop any stale keying state from a prior session so "Your sending" starts empty.
   const { clear: clearKeying } = keying;
@@ -827,13 +1118,54 @@ function SendDrill({ keying, onExit }) {
   function decodeNow() {
     const target = prompt.toUpperCase();
     const got = keying.decoded.replace(/\s+/g, ' ').trim().toUpperCase();
-    setFeedback({ correct: got === target, decoded: got, target });
+    const correct = got === target;
+    setFeedback({ correct, decoded: got, target });
+    const durationMs = Date.now() - promptStartRef.current;
+    onSessionComplete?.({
+      drillType: 'morse-send',
+      questionCount: 1,
+      correctCount: correct ? 1 : 0,
+      totalMs: durationMs,
+    });
+    // Record per-character keying accuracy + timing. sent = target char, guessed =
+    // what the decoder resolved at that position. responseMs is the inter-letter
+    // keying interval (letterLog is on the same performance.now() clock, so only
+    // deltas between consecutive letters are meaningful — first char has none).
+    const targetChars = target.replace(/\s+/g, '').split('');
+    const decodedChars = got.replace(/\s+/g, '').split('');
+    const log = keying.getLetterLog?.() || [];
+    // Align over the LONGER sequence (like copy mode) so an over-long send —
+    // e.g. target `KM` keyed as `KMM` — records the surplus keyed character as an
+    // empty-sent insertion error instead of silently scoring a perfect send.
+    const len = Math.max(targetChars.length, decodedChars.length);
+    const items = [];
+    for (let i = 0; i < len; i++) {
+      const sent = targetChars[i] ?? '';
+      const guessed = decodedChars[i] ?? '';
+      const at = log[i]?.at;
+      const prevAt = log[i - 1]?.at;
+      const responseMs = at != null && prevAt != null ? Math.max(0, Math.round(at - prevAt)) : 0;
+      items.push({ sent, guessed, correct: sent === guessed, responseMs });
+    }
+    // Spacing is stripped for letter-level alignment (word gaps aren't Morse
+    // characters), so a send that keys every letter right but botches the word
+    // gap (e.g. `DE K1AB` sent as `DEK1AB`) would otherwise store as 100%. When
+    // the exact-match failed on spacing alone, append one non-letter error item
+    // (empty sent → excluded from the confusion matrix) so the round's accuracy
+    // matches the exact-match verdict.
+    if (!correct && items.length > 0 && items.every((it) => it.correct)) {
+      items.push({ sent: '', guessed: ' ', correct: false, responseMs: 0 });
+    }
+    if (items.length > 0) {
+      onRoundSubmit?.({ mode: 'send', durationMs, items });
+    }
   }
 
   function nextPrompt() {
     keying.clear();
     setFeedback(null);
     setPrompt(pickSendPrompt());
+    promptStartRef.current = Date.now();
   }
 
   return (

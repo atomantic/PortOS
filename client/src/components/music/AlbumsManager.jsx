@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X, ArrowUp, ArrowDown } from 'lucide-react';
 import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
@@ -65,10 +66,13 @@ function Field({ label, hint, children }) {
 }
 
 export default function AlbumsManager() {
+  const navigate = useNavigate();
+  // Selection lives in the URL (`/music/albums/:id`, `/music/albums/new`) so it's
+  // deep-linkable and reload-safe. `id === 'new'` = create; a real id = edit.
+  const { id } = useParams();
   const [albums, setAlbums] = useState([]);
   const [allTracks, setAllTracks] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState(null); // 'new' | id | null
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -109,26 +113,33 @@ export default function AlbumsManager() {
     }
   }, [genJobId, gen.status, gen.filename, gen.path, gen.error]);
 
-  const isCreate = selectedId === 'new';
+  const isCreate = id === 'new';
   const selected = useMemo(
-    () => (isCreate || !selectedId ? null : albums.find((a) => a.id === selectedId) || null),
-    [albums, selectedId, isCreate],
+    () => (isCreate || !id ? null : albums.find((a) => a.id === id) || null),
+    [albums, id, isCreate],
   );
+  const notFound = !isCreate && !!id && !loading && !selected;
   const tracksById = useMemo(() => new Map(allTracks.map((t) => [t.id, t])), [allTracks]);
   const canGenerate = !!(form.title.trim() || form.genre.trim() || form.description.trim());
 
-  const selectAlbum = (a) => {
-    setSelectedId(a.id);
-    setForm(formFromAlbum(a));
+  const selectAlbum = (a) => navigate(`/music/albums/${encodeURIComponent(a.id)}`);
+  const startCreate = () => navigate('/music/albums/new');
+
+  // Hydrate the editor form from the URL-selected album. Keyed on the id so a
+  // list refresh doesn't clobber the open form; resets run for every selection
+  // change (incl. idle / not-found) so a stray render can't land on the previous
+  // album (see Authors.jsx for the base pattern).
+  const hydratedRef = useRef(null);
+  const selectionKey = id ?? null;
+  useEffect(() => {
+    if (loading) return;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  };
-  const startCreate = () => {
-    setSelectedId('new');
-    setForm(emptyForm());
-    setConfirmDelete(false);
-    clearGeneration();
-  };
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromAlbum(selected));
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleGenerateCover = async () => {
     if (isGenerating || uploadingCover) return;
@@ -216,14 +227,14 @@ export default function AlbumsManager() {
       setSaving(false);
       if (!created) return;
       setAlbums((prev) => [...prev, created].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
-      setSelectedId(created.id);
+      navigate(`/music/albums/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.title}"`);
     } else {
       // Did the track list actually change vs the loaded record?
       const original = selected?.trackIds || [];
       const trackIdsChanged = original.length !== form.trackIds.length
         || original.some((id, i) => id !== form.trackIds[i]);
-      const updated = await updateAlbum(selectedId, buildPayload({ includeTrackIds: trackIdsChanged })).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
+      const updated = await updateAlbum(id, buildPayload({ includeTrackIds: trackIdsChanged })).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
       setSaving(false);
       if (!updated) return;
       setAlbums((prev) => prev.map((a) => (a.id === updated.id ? updated : a)).sort((a, b) => (a.title || '').localeCompare(b.title || '')));
@@ -235,8 +246,8 @@ export default function AlbumsManager() {
     if (!selected) return;
     const prior = albums;
     setAlbums((prev) => prev.filter((a) => a.id !== selected.id));
-    setSelectedId(null);
     setConfirmDelete(false);
+    navigate('/music/albums');
     await deleteAlbum(selected.id).catch((err) => { toast.error(err.message || 'Delete failed'); setAlbums(prior); });
   };
 
@@ -272,7 +283,7 @@ export default function AlbumsManager() {
                     type="button"
                     onClick={() => selectAlbum(a)}
                     className={`w-full text-left px-2 py-2 rounded text-sm flex items-center gap-2 ${
-                      a.id === selectedId ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
+                      a.id === id ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
                     }`}
                   >
                     {a.coverImageUrl ? (
@@ -292,7 +303,14 @@ export default function AlbumsManager() {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-lg p-4">
-          {!isCreate && !selected ? (
+          {notFound ? (
+            <div className="text-gray-500 text-sm">
+              That album could not be found — it may have been deleted.{' '}
+              <button type="button" onClick={() => navigate('/music/albums')} className="text-port-accent hover:underline">
+                Back to albums
+              </button>
+            </div>
+          ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">Select an album to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">

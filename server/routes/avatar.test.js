@@ -5,16 +5,21 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-  statSync: vi.fn(),
   createReadStream: vi.fn()
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { data: '/mock/data' }
+vi.mock('fs/promises', () => ({
+  stat: vi.fn()
 }));
 
-import { existsSync, statSync, createReadStream } from 'fs';
+vi.mock('../lib/fileUtils.js', () => ({
+  PATHS: { data: '/mock/data' },
+  pathExists: vi.fn()
+}));
+
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
+import { pathExists } from '../lib/fileUtils.js';
 import avatarRoutes from './avatar.js';
 
 const buildApp = () => {
@@ -31,14 +36,14 @@ describe('avatar routes', () => {
 
   describe('GET /model.glb', () => {
     it('returns 404 JSON when file is missing', async () => {
-      existsSync.mockReturnValue(false);
+      pathExists.mockResolvedValue(false);
       const res = await request(buildApp()).get('/api/avatar/model.glb');
       expect(res.status).toBe(404);
       expect(res.body.error).toMatch(/avatar model/i);
     });
 
     it('streams model.glb content with correct headers', async () => {
-      existsSync.mockReturnValue(true);
+      pathExists.mockResolvedValue(true);
       const fakeStream = Readable.from([Buffer.from('GLB-FAKE-CONTENT')]);
       createReadStream.mockReturnValue(fakeStream);
 
@@ -50,7 +55,7 @@ describe('avatar routes', () => {
     });
 
     it('responds with 404 when stream errors with ENOENT before headers sent', async () => {
-      existsSync.mockReturnValue(true);
+      pathExists.mockResolvedValue(true);
       const errStream = new Readable({
         read() {
           process.nextTick(() => {
@@ -66,11 +71,16 @@ describe('avatar routes', () => {
       expect(res.status).toBe(404);
       // The route sets Content-Type to gltf-binary before piping; res.json() does
       // not overwrite an existing Content-Type, so the body arrives as text.
-      expect(JSON.parse(res.text).error).toMatch(/unavailable/i);
+      const body = JSON.parse(res.text);
+      expect(body.error).toMatch(/unavailable/i);
+      // Standard error envelope: { error, code, timestamp } — same shape
+      // errorMiddleware stamps everywhere else (regression for issue-1836).
+      expect(body.code).toBe('NOT_FOUND');
+      expect(typeof body.timestamp).toBe('number');
     });
 
-    it('responds with 500 on non-ENOENT stream error before headers sent', async () => {
-      existsSync.mockReturnValue(true);
+    it('responds with 500 + full error envelope on non-ENOENT stream error before headers sent', async () => {
+      pathExists.mockResolvedValue(true);
       const errStream = new Readable({
         read() {
           process.nextTick(() => {
@@ -84,12 +94,16 @@ describe('avatar routes', () => {
 
       const res = await request(buildApp()).get('/api/avatar/model.glb');
       expect(res.status).toBe(500);
+      const body = JSON.parse(res.text);
+      expect(body.error).toMatch(/unavailable/i);
+      expect(body.code).toBe('INTERNAL_ERROR');
+      expect(typeof body.timestamp).toBe('number');
     });
   });
 
   describe('variant resolution', () => {
     it('serves a named variant from the avatar dir', async () => {
-      existsSync.mockReturnValue(true);
+      pathExists.mockResolvedValue(true);
       createReadStream.mockReturnValue(Readable.from([Buffer.from('VARIANT-GLB')]));
       const res = await request(buildApp()).get('/api/avatar/model.glb?variant=mini-male-c');
       expect(res.status).toBe(200);
@@ -99,7 +113,7 @@ describe('avatar routes', () => {
     });
 
     it('rejects path-traversal / illegal variant names with 404', async () => {
-      existsSync.mockReturnValue(true);
+      pathExists.mockResolvedValue(true);
       // Stub the stream so the empty-string fallback (which hits the default
       // model.glb GET success path) is deterministic in isolation — don't rely
       // on a prior test's mockReturnValue leaking through vi.clearAllMocks().
@@ -118,8 +132,9 @@ describe('avatar routes', () => {
     // The client probes with HEAD before GET, so the HEAD handler runs the
     // same resolveVariant() guard — pin it independently of the GET path.
     it('HEAD honors a valid variant and rejects traversal', async () => {
-      existsSync.mockReturnValue(true);
-      statSync.mockReturnValue({ size: 5 });
+      // HEAD stats the resolved path directly (no separate existence check) —
+      // a resolved stat means the file is present.
+      stat.mockResolvedValue({ size: 5 });
       const ok = await request(buildApp()).head('/api/avatar/model.glb?variant=mini-male-c');
       expect(ok.status).toBe(200);
       expect(ok.headers['content-type']).toBe('model/gltf-binary');

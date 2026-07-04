@@ -124,7 +124,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
 
     // Persist to server
     const taskIds = newOrder.map(t => t.id);
-    const result = await api.reorderCosTasks(taskIds).catch(err => {
+    const result = await api.reorderCosTasks(taskIds, { silent: true }).catch(err => {
       toast.error(err.message);
       setUserTasksLocal(userTasks); // Revert on error
       return null;
@@ -143,7 +143,7 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
           <button
             onClick={async () => {
-              await api.forceCosEvaluate().catch(err => toast.error(err.message));
+              await api.forceCosEvaluate({ silent: true }).catch(err => toast.error(err.message));
               toast.success('Evaluation triggered');
             }}
             className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"

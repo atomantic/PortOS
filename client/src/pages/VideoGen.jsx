@@ -49,6 +49,7 @@ import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
+import { FormField } from '../components/ui/FormField';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
 import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID } from '../hooks/useModelDownloadStatus';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
@@ -1526,8 +1527,7 @@ export default function VideoGen() {
             disabled={generating}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
+            <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -1535,9 +1535,8 @@ export default function VideoGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="Describe the video you want to generate..."
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Negative Prompt</label>
+            </FormField>
+            <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <textarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
@@ -1545,7 +1544,7 @@ export default function VideoGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="What to avoid..."
               />
-            </div>
+            </FormField>
           </div>
 
           {mode === 'fflf' && keyframesSupported && (
@@ -1647,8 +1646,7 @@ export default function VideoGen() {
 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {models.length > 0 && (
-              <div className="col-span-2 sm:col-span-3">
-                <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
+              <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <ModelSelect
                   models={visibleModels}
                   value={modelId}
@@ -1672,7 +1670,7 @@ export default function VideoGen() {
                     />
                   </div>
                 )}
-              </div>
+              </FormField>
             )}
 
             {/* Video LoRAs — only on ltx2-runtime models (loraFamily non-null)
@@ -1704,8 +1702,7 @@ export default function VideoGen() {
               </div>
             )}
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Resolution</label>
+            <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
                 value={resolutionLabel}
                 onChange={handleResolutionChange}
@@ -1716,10 +1713,9 @@ export default function VideoGen() {
                 )}
                 {VIDEO_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
               </select>
-            </div>
+            </FormField>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Frames</label>
+            <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
                 value={numFrames}
                 onChange={(e) => setNumFrames(Number(e.target.value))}
@@ -1732,7 +1728,7 @@ export default function VideoGen() {
                   Past 241 frames a single-pass render may swap or OOM at 48 GB. For reliable longer clips, render up to ~10s and then use <strong>Extend</strong> on the result — it conditions on the source's full latent rather than a single last frame.
                 </p>
               )}
-            </div>
+            </FormField>
 
             {mode !== 'a2v' && (
               <div>
@@ -1756,8 +1752,7 @@ export default function VideoGen() {
               </div>
             )}
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">FPS</label>
+            <FormField label="FPS" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
                 value={fps}
                 onChange={(e) => setFps(Number(e.target.value))}
@@ -1765,7 +1760,7 @@ export default function VideoGen() {
               >
                 {FPS_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
               </select>
-            </div>
+            </FormField>
 
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
@@ -1788,10 +1783,10 @@ export default function VideoGen() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                Steps {currentModel?.steps && `(default: ${currentModel.steps})`}
-              </label>
+            <FormField
+              label={<>Steps {currentModel?.steps && `(default: ${currentModel.steps})`}</>}
+              labelClassName="block text-xs font-medium text-gray-400 mb-1"
+            >
               <input
                 type="number" min={1} max={150}
                 value={steps}
@@ -1799,12 +1794,12 @@ export default function VideoGen() {
                 placeholder={String(currentModel?.steps || 25)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
-            </div>
+            </FormField>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">
-                CFG Scale {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}
-              </label>
+            <FormField
+              label={<>CFG Scale {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}</>}
+              labelClassName="block text-xs font-medium text-gray-400 mb-1"
+            >
               <input
                 type="number" min={0} max={20} step={0.5}
                 value={guidanceScale}
@@ -1812,7 +1807,7 @@ export default function VideoGen() {
                 placeholder={String(currentModel?.guidance ?? 3.0)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
-            </div>
+            </FormField>
 
             {(mode === 'image' || (mode === 'extend' && currentModel?.runtime !== 'ltx2')) && (
               <div className="col-span-2 sm:col-span-3">
@@ -1830,8 +1825,7 @@ export default function VideoGen() {
               </div>
             )}
 
-            <div className="col-span-2 sm:col-span-3">
-              <label className="block text-xs font-medium text-gray-400 mb-1">Tiling</label>
+            <FormField className="col-span-2 sm:col-span-3" label="Tiling" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
                 value={tiling}
                 onChange={(e) => setTiling(e.target.value)}
@@ -1839,7 +1833,7 @@ export default function VideoGen() {
               >
                 {VIDEO_TILING_OPTIONS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
               </select>
-            </div>
+            </FormField>
 
             {mode !== 'a2v' && (
               <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
@@ -2061,7 +2055,7 @@ export default function VideoGen() {
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
       />
 
-      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
+      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">
         <ImageGenTab />
       </Drawer>
 

@@ -15,7 +15,7 @@
 
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { copyFile, mkdir, writeFile } from 'fs/promises';
+import { copyFile, writeFile } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
@@ -24,6 +24,7 @@ import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
@@ -98,15 +99,9 @@ const STALL_TICK_MS = 30_000;
 export const cancel = (jobId) => {
   if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
   const proc = activeProcess;
-  proc.kill('SIGTERM');
   // Keep activeProcess set until 'close' clears it — the trainer may spend
   // a few seconds writing its cancel checkpoint. Escalate after 8s.
-  setTimeout(() => {
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
-      console.log('⚠️ training child ignored SIGTERM — escalating to SIGKILL');
-      proc.kill('SIGKILL');
-    }
-  }, 8000).unref?.();
+  killWithEscalation(proc, { label: 'training child', stillRunning: () => activeProcess === proc });
   return true;
 };
 
@@ -510,8 +505,8 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   // existence check (TOCTOU), or disk-full — would otherwise propagate to the
   // queue's catch (no crash) but leave the run record `running` forever.
   try {
-    await mkdir(checkpointsDir, { recursive: true });
-    await mkdir(samplesDir, { recursive: true });
+    await ensureDir(checkpointsDir);
+    await ensureDir(samplesDir);
 
     if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
       bin = resolveFlux2Python();
@@ -542,7 +537,7 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
       // NNNN.txt caption pairs, plus preview_1.txt for the periodic sample
       // render. mflux resolves everything from the config's `data` dir.
       const dataDir = join(dir, 'data');
-      await mkdir(dataDir, { recursive: true });
+      await ensureDir(dataDir);
       for (let i = 0; i < manifest.images.length; i += 1) {
         const stem = String(i + 1).padStart(4, '0');
         await copyFile(manifest.images[i].path, join(dataDir, `${stem}.png`));
@@ -990,7 +985,7 @@ async function registerTrainedLora({
   const sidecar = buildTrainedSidecar({
     run, result, filename, previewImageUrl, sizeBytes, selectedStep, autoSelected,
   });
-  await writeFile(`${dest}.metadata.json`, JSON.stringify(sidecar, null, 2) + '\n');
+  await atomicWrite(`${dest}.metadata.json`, JSON.stringify(sidecar, null, 2) + '\n');
   return { sizeBytes, sidecar };
 }
 

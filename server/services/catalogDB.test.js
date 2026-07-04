@@ -76,6 +76,21 @@ describe('seriesRefRoleForType', () => {
   });
 });
 
+// Pure helper — the type→Creative-Director-role vocabulary (#1808). No DB, so it
+// runs in the normal suite and stays the single source of truth for the roles a
+// CD remix uses when attaching ingredients to a project.
+describe('cdRefRoleForType', () => {
+  it('maps known types to CD roles and everything else to reference', () => {
+    expect(catalogDB.cdRefRoleForType('character')).toBe('cast');
+    expect(catalogDB.cdRefRoleForType('place')).toBe('location');
+    expect(catalogDB.cdRefRoleForType('object')).toBe('prop');
+    expect(catalogDB.cdRefRoleForType('scene')).toBe('scene');
+    expect(catalogDB.cdRefRoleForType('idea')).toBe('reference');
+    expect(catalogDB.cdRefRoleForType('faction')).toBe('reference'); // user-defined
+    expect(catalogDB.cdRefRoleForType(undefined)).toBe('reference');
+  });
+});
+
 describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
   it('creates and reads back an ingredient with payload + tags', async () => {
     if (!requireDb('create/get ingredient')) return;
@@ -268,6 +283,45 @@ describe.skipIf(!dbReady)('catalogDB (Postgres CRUD round-trip)', () => {
 
     // Empty / id-less input is a no-op.
     expect(await catalogDB.linkIngredientsToSeries(seriesId, [])).toEqual([]);
+  });
+
+  it('linkIngredientsToCreativeDirector batch-links with creative-director ref_kind + CD roles (#1808)', async () => {
+    if (!requireDb('batch link to CD project')) return;
+    const chr = await catalogDB.createIngredient({ type: 'character', name: 'CD Mira' });
+    const plc = await catalogDB.createIngredient({ type: 'place', name: 'CD Foundry' });
+    const obj = await catalogDB.createIngredient({ type: 'object', name: 'CD Relic' });
+    [chr, plc, obj].forEach((i) => createdIngredientIds.add(i.id));
+    const projectId = `cd-batch-${chr.id}`;
+
+    const linked = await catalogDB.linkIngredientsToCreativeDirector(projectId, [chr, plc, obj]);
+    expect(linked).toHaveLength(3);
+
+    const forRef = await catalogDB.listIngredientsForRef('creative-director', projectId);
+    const roleById = Object.fromEntries(forRef.map((r) => [r.ingredient.id, r.role]));
+    expect(roleById[chr.id]).toBe('cast');
+    expect(roleById[plc.id]).toBe('location');
+    expect(roleById[obj.id]).toBe('prop');
+
+    // The ref is visible from the ingredient side too, under the reserved kind.
+    const refs = await catalogDB.listRefsForIngredient(chr.id);
+    expect(refs.some((r) => r.refKind === 'creative-director' && r.refId === projectId)).toBe(true);
+
+    // Empty / id-less input is a no-op.
+    expect(await catalogDB.linkIngredientsToCreativeDirector(projectId, [])).toEqual([]);
+  });
+
+  it('resolveIngredientsByIds dedupes, preserves pick order, and skips missing ids (#1808)', async () => {
+    if (!requireDb('resolve ingredients by ids')) return;
+    const a = await catalogDB.createIngredient({ type: 'character', name: 'Resolve A' });
+    const b = await catalogDB.createIngredient({ type: 'place', name: 'Resolve B' });
+    [a, b].forEach((i) => createdIngredientIds.add(i.id));
+
+    // Pick order is b, a (reversed), with a duplicate and a nonexistent id mixed in.
+    const resolved = await catalogDB.resolveIngredientsByIds([b.id, a.id, b.id, 'cat-does-not-exist']);
+    expect(resolved.map((i) => i.id)).toEqual([b.id, a.id]);
+
+    expect(await catalogDB.resolveIngredientsByIds([])).toEqual([]);
+    expect(await catalogDB.resolveIngredientsByIds(null)).toEqual([]);
   });
 
   it('creates a scrap, links it as an ingredient source, and hydrates it back', async () => {

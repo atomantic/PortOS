@@ -6,9 +6,10 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
 import { useThemeContext } from '../components/ThemeContext';
-import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot } from 'lucide-react';
+import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, Bot, Maximize2, Minimize2 } from 'lucide-react';
 import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
+import { formatDurationMs } from '../utils/formatters';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
@@ -30,7 +31,7 @@ const QUICK_COMMANDS = [
   { label: 'npm run dev', command: 'npm run dev' },
   // Claude Code slash-command shortcuts — typed + submitted into an interactive
   // `claude` session. The flags are double-dash (`--`); keep them verbatim.
-  { label: '/do:next', command: '/do:next --issues --review-with=claude,codex --merge' },
+  { label: '/do:next', command: '/do:next --issues --self --review-with=claude,codex --merge' },
   { label: '/remote-control', command: '/remote-control' },
 ];
 
@@ -68,16 +69,59 @@ const readTerminalTheme = () => {
   }, mode);
 };
 
-const formatAge = (createdAt) => {
-  const seconds = Math.floor((Date.now() - createdAt) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h${minutes % 60}m`;
-};
-
 const shortId = (id) => id?.slice(0, 6) ?? '';
+
+// Touch-friendly TUI-driving controls shared by the inline quick-commands toolbar
+// and the fullscreen control bar: Ctrl+C, Paste (+ fallback paste input), and the
+// arrow / Enter hot buttons. The Ctrl+C / Paste text labels collapse below `sm` so
+// the cluster stays narrow on a phone; the icons always show.
+function TerminalHotKeys({ sendCtrlC, handlePaste, sendNavKey, showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent }) {
+  return (
+    <>
+      <button
+        onClick={sendCtrlC}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-error/15 hover:bg-port-error/25 text-port-error hover:text-port-error/80 rounded text-xs font-mono transition-colors border border-port-error/30 min-h-[40px] shrink-0"
+        title="Send Ctrl+C interrupt"
+        aria-label="Send Ctrl+C interrupt"
+      >
+        <OctagonX size={14} />
+        <span className="hidden sm:inline">Ctrl+C</span>
+      </button>
+      <button
+        onClick={handlePaste}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-port-accent/80 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px] shrink-0"
+        title="Paste clipboard contents"
+        aria-label="Paste clipboard contents"
+      >
+        <ClipboardPaste size={14} />
+        <span className="hidden sm:inline">Paste</span>
+      </button>
+      {showPasteInput && (
+        <input
+          ref={pasteInputRef}
+          type="text"
+          className="w-32 px-2 py-1.5 bg-port-card text-white text-xs font-mono rounded border border-port-accent/50 focus:outline-none focus:border-port-accent min-h-[40px] placeholder-gray-500 shrink-0"
+          placeholder="Tap & paste here"
+          onPaste={handlePasteInputEvent}
+          onBlur={() => setShowPasteInput(false)}
+        />
+      )}
+      <div className="w-px h-6 bg-port-border shrink-0" />
+      {/* Arrow / Enter hot buttons — touch-friendly TUI nav + shell history */}
+      {NAV_KEYS.map((key) => (
+        <button
+          key={key.label}
+          onClick={() => sendNavKey(key)}
+          className="flex items-center justify-center px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] min-w-[40px] shrink-0"
+          title={`Send ${key.label} key`}
+          aria-label={`Send ${key.label} key`}
+        >
+          <key.Icon size={14} />
+        </button>
+      ))}
+    </>
+  );
+}
 
 export default function Shell() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -135,6 +179,10 @@ export default function Shell() {
   const [appFolders, setAppFolders] = useState([]);
   const [folderDropdownOpen, setFolderDropdownOpen] = useState(false);
   const [showPasteInput, setShowPasteInput] = useState(false);
+  // Fullscreen promotes the terminal to a fixed overlay above the sidebar, hiding
+  // the stacked toolbars so the TUI gets the whole viewport — the key mobile win
+  // where the header/tabs/quick-commands otherwise eat most of the screen.
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const pasteInputRef = useRef(null);
   const dropdownRef = useRef(null);
   const sessionsRef = useRef([]);
@@ -264,24 +312,59 @@ export default function Shell() {
     }
   }, [themeId, themeMode]);
 
+  // Refit the terminal to its container and tell the PTY about the new size.
+  const refitTerminal = useCallback(() => {
+    if (!fitAddonRef.current || !termInstanceRef.current) return;
+    fitAddonRef.current.fit();
+    if (socket && sessionIdRef.current) {
+      socket.emit('shell:resize', {
+        sessionId: sessionIdRef.current,
+        cols: termInstanceRef.current.cols,
+        rows: termInstanceRef.current.rows
+      });
+    }
+  }, [socket]);
+
   // Handle window resize
   useEffect(() => {
-    const handleResize = () => {
-      if (fitAddonRef.current && termInstanceRef.current) {
-        fitAddonRef.current.fit();
-        if (socket && sessionIdRef.current) {
-          socket.emit('shell:resize', {
-            sessionId: sessionIdRef.current,
-            cols: termInstanceRef.current.cols,
-            rows: termInstanceRef.current.rows
-          });
-        }
-      }
-    };
+    window.addEventListener('resize', refitTerminal);
+    return () => window.removeEventListener('resize', refitTerminal);
+  }, [refitTerminal]);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [socket]);
+  // Entering/leaving fullscreen swaps the terminal between the in-flow flex box and
+  // the fixed overlay — a big size change. The ResizeObserver below catches it too,
+  // but refit on the next frame so the new cols/rows reach the PTY immediately
+  // instead of waiting for the observer to settle.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => refitTerminal());
+    return () => cancelAnimationFrame(frame);
+  }, [isFullscreen, refitTerminal]);
+
+  // Refit whenever the terminal *container* changes size — not just the window.
+  // The toolbars (session tabs, live-run banner, quick-commands bar) mount
+  // conditionally on `connected`, which shrinks the flex-1 terminal box after the
+  // one-shot mount fit() has already run. Without re-fitting, xterm keeps its
+  // taller row count and overflows below the fold, hiding the prompt and breaking
+  // scrollback. A ResizeObserver catches every such reflow (the user's "resize the
+  // window and it appears" glitch). rAF-guarded so fit()'s own DOM mutation can't
+  // re-enter the observer in a tight loop.
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let frame = null;
+    const observer = new ResizeObserver(() => {
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        refitTerminal();
+      });
+    });
+    observer.observe(el);
+    return () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [refitTerminal]);
 
   // Handle terminal input
   useEffect(() => {
@@ -329,7 +412,14 @@ export default function Shell() {
     setPendingAttach('new');
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear(): the xterm instance is reused across every session,
+      // and a full-screen TUI (a watched agent-tui claude/codex run) leaves DEC
+      // private modes ON — mouse-motion tracking, focus reporting, bracketed
+      // paste, alt-screen. clear() only wipes the viewport, so those modes would
+      // persist into this fresh shell and make xterm inject escape-sequence
+      // reports (mouse/focus events) as INPUT, echoing as accumulating garbage
+      // at the prompt. reset() restores the terminal to a clean initial state.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mStarting shell session...\x1b[0m');
     }
     const opts = initialOptsRef.current || {};
@@ -346,7 +436,10 @@ export default function Shell() {
     setPendingAttach(sessionId);
     userIdleRef.current = false;
     if (termInstanceRef.current) {
-      termInstanceRef.current.clear();
+      // reset() not clear() — drop any DEC private modes (mouse/focus tracking,
+      // alt-screen) the previously-viewed session left active so they can't
+      // bleed into this one as injected escape-sequence input. See startSession.
+      termInstanceRef.current.reset();
       termInstanceRef.current.writeln('\x1b[36mAttaching to session...\x1b[0m');
     }
     // claim:true → server refuses to displace a different socket. Used by auto-pick
@@ -386,6 +479,23 @@ export default function Shell() {
       navigateRef.current('/shell', { replace: true });
     }
   }, [socket, clearActiveSession, cancelPendingAttach]);
+
+  // Restart = kill the current session, then start a fresh one after a short delay
+  // (gives the server time to tear down the old PTY). The deferred startSession must
+  // respect both staleness and unmount: stopSession() bumps the pending generation,
+  // so capture it and abort the delayed start if the user switched sessions (which
+  // bumps the generation again) or navigated away within the 1s window. Without the
+  // generation guard, a tab click inside the window would fire startSession() and
+  // clobber the in-flight switch.
+  const restartSession = useCallback(() => {
+    stopSession();
+    const gen = pendingAttachRef.current.generation;
+    setTimeout(() => {
+      if (!mountedRef.current) return;
+      if (pendingAttachRef.current.generation !== gen) return;
+      startSession();
+    }, 1000);
+  }, [stopSession, startSession]);
 
   const switchToSession = useCallback((sessionId, { fromUrl = false } = {}) => {
     // Compare against the in-flight attach target if there is one, falling back to the
@@ -536,7 +646,12 @@ export default function Shell() {
       cancelPendingAttach();
       activateSession(sid);
       if (termInstanceRef.current) {
-        termInstanceRef.current.clear();
+        // reset() not clear(): wipe modes/parser state from the prior session
+        // before repainting this one's buffer, so a previously-viewed full-screen
+        // TUI's lingering mouse/focus tracking can't inject garbage here. The
+        // freshly-painted bufferedOutput re-establishes whatever modes THIS
+        // session legitimately uses. See startSession for the full rationale.
+        termInstanceRef.current.reset();
         if (bufferedOutput) {
           termInstanceRef.current.write(bufferedOutput);
         }
@@ -767,14 +882,17 @@ export default function Shell() {
   const isLiveRun = !!activeSession?.external;
 
   return (
-    <div className="h-full flex flex-col p-4 md:p-6">
-      {/* Header */}
+    <div className={isFullscreen
+      ? 'fixed inset-0 z-[70] flex flex-col bg-port-bg p-2'
+      : 'h-full flex flex-col p-4 md:p-6'}>
+      {/* Header (hidden in fullscreen — the compact bottom bar takes over) */}
+      {!isFullscreen && (
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <h1 className="text-xl font-semibold text-white">Shell</h1>
         <div className={`flex items-center gap-2 px-2 py-1 rounded text-sm ${
-          connected ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+          connected ? 'bg-port-success/20 text-port-success' : 'bg-gray-500/20 text-gray-400'
         }`}>
-          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-500'}`} />
+          <div className={`w-2 h-2 rounded-full ${connected ? 'bg-port-success' : 'bg-gray-500'}`} />
           {connected ? 'Connected' : 'Disconnected'}
         </div>
         {interactiveCount > 0 && (
@@ -787,10 +905,19 @@ export default function Shell() {
           </span>
         )}
         <div className="flex items-center gap-2 ml-auto">
+          <button
+            onClick={() => setIsFullscreen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
+            title="Fullscreen terminal"
+            aria-label="Fullscreen terminal"
+          >
+            <Maximize2 size={16} />
+            <span className="hidden sm:inline">Fullscreen</span>
+          </button>
           {/* Restart (kill + new shell) is meaningless for a TUI-run view. */}
           {connected && !isLiveRun && (
             <button
-              onClick={() => { stopSession(); setTimeout(() => { if (mountedRef.current) startSession(); }, 1000); }}
+              onClick={restartSession}
               className="flex items-center gap-1.5 px-2.5 py-2 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded-lg text-sm transition-colors border border-port-border min-h-[40px]"
               title="Restart session (kill + new)"
             >
@@ -801,7 +928,7 @@ export default function Shell() {
           {connected && (
             <button
               onClick={stopSession}
-              className="flex items-center gap-1.5 px-2.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm transition-colors min-h-[40px]"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
               title={isLiveRun ? 'Stop this TUI run' : 'Kill current session'}
             >
               <PowerOff size={16} />
@@ -818,9 +945,10 @@ export default function Shell() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Session tabs */}
-      {sessions.length > 0 && (
+      {!isFullscreen && sessions.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3 pb-1">
           {sessions.map((s) => {
             const isActive = s.sessionId === activeSessionId;
@@ -840,16 +968,16 @@ export default function Shell() {
                       : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
-                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
+                title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatDurationMs(Date.now() - s.createdAt)} old`}
               >
                 <TabIcon size={12} className="shrink-0" />
                 <span className="min-w-0 break-all">{label}</span>
                 {isRun && <span className="w-1.5 h-1.5 rounded-full bg-port-accent animate-pulse shrink-0" title="Live" />}
-                <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
+                <span className="text-[10px] opacity-60 shrink-0">{formatDurationMs(Date.now() - s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}
                   className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
-                    isActive ? 'text-port-accent/60 hover:text-red-400' : 'text-gray-600 hover:text-red-400'
+                    isActive ? 'text-port-accent/60 hover:text-port-error' : 'text-gray-600 hover:text-port-error'
                   }`}
                   title={isRun ? 'Stop run' : 'Kill session'}
                 >
@@ -870,7 +998,7 @@ export default function Shell() {
 
       {/* Live TUI run banner — these views are interactive: type to answer or
           correct the model, or Stop to end it. It won't auto-close while open. */}
-      {connected && isLiveRun && (
+      {!isFullscreen && connected && isLiveRun && (
         <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded bg-port-accent/10 border border-port-accent/30 text-port-accent text-xs">
           <Bot size={14} className="shrink-0" />
           <span>
@@ -881,47 +1009,17 @@ export default function Shell() {
       )}
 
       {/* Quick commands toolbar */}
-      {connected && (
+      {!isFullscreen && connected && (
         <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <button
-            onClick={sendCtrlC}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/15 hover:bg-red-500/25 text-red-400 hover:text-red-300 rounded text-xs font-mono transition-colors border border-red-500/30 min-h-[40px]"
-            title="Send Ctrl+C interrupt"
-          >
-            <OctagonX size={14} />
-            Ctrl+C
-          </button>
-          <button
-            onClick={handlePaste}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-blue-300 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px]"
-            title="Paste clipboard contents"
-          >
-            <ClipboardPaste size={14} />
-            Paste
-          </button>
-          {showPasteInput && (
-            <input
-              ref={pasteInputRef}
-              type="text"
-              className="w-32 px-2 py-1.5 bg-port-card text-white text-xs font-mono rounded border border-port-accent/50 focus:outline-none focus:border-port-accent min-h-[40px] placeholder-gray-500"
-              placeholder="Tap & paste here"
-              onPaste={handlePasteInputEvent}
-              onBlur={() => setShowPasteInput(false)}
-            />
-          )}
-          <div className="w-px h-6 bg-port-border" />
-          {/* Arrow / Enter hot buttons — touch-friendly TUI nav + shell history */}
-          {NAV_KEYS.map((key) => (
-            <button
-              key={key.label}
-              onClick={() => sendNavKey(key)}
-              className="flex items-center justify-center px-2.5 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] min-w-[40px]"
-              title={`Send ${key.label} key`}
-              aria-label={`Send ${key.label} key`}
-            >
-              <key.Icon size={14} />
-            </button>
-          ))}
+          <TerminalHotKeys
+            sendCtrlC={sendCtrlC}
+            handlePaste={handlePaste}
+            sendNavKey={sendNavKey}
+            showPasteInput={showPasteInput}
+            setShowPasteInput={setShowPasteInput}
+            pasteInputRef={pasteInputRef}
+            handlePasteInputEvent={handlePasteInputEvent}
+          />
           <div className="w-px h-6 bg-port-border" />
           {QUICK_COMMANDS.map(({ label, command }) => (
             <button
@@ -967,14 +1065,42 @@ export default function Shell() {
         </div>
       )}
 
-      {/* Terminal container */}
-      <div className="flex-1 bg-port-bg rounded-lg border border-port-border overflow-hidden">
+      {/* Terminal container — drops the rounded border in fullscreen so it sits flush */}
+      <div className={`flex-1 bg-port-bg overflow-hidden ${isFullscreen ? '' : 'rounded-lg border border-port-border'}`}>
         <div
           ref={terminalRef}
           className="w-full h-full"
           style={{ padding: '8px' }}
         />
       </div>
+
+      {/* Fullscreen control bar — compact, single-row, horizontally scrollable so
+          the TUI-driving keys stay reachable by thumb without the stacked toolbars. */}
+      {isFullscreen && (
+        <div className="flex items-center gap-1.5 mt-2 overflow-x-auto pb-1">
+          <button
+            onClick={() => setIsFullscreen(false)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs transition-colors border border-port-border min-h-[40px] shrink-0"
+            title="Exit fullscreen"
+            aria-label="Exit fullscreen"
+          >
+            <Minimize2 size={14} />
+            <span className="hidden sm:inline">Exit</span>
+          </button>
+          <div className="w-px h-6 bg-port-border shrink-0" />
+          {connected && (
+            <TerminalHotKeys
+              sendCtrlC={sendCtrlC}
+              handlePaste={handlePaste}
+              sendNavKey={sendNavKey}
+              showPasteInput={showPasteInput}
+              setShowPasteInput={setShowPasteInput}
+              pasteInputRef={pasteInputRef}
+              handlePasteInputEvent={handlePasteInputEvent}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

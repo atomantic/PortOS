@@ -114,7 +114,7 @@ export default function InboxTab({ accounts }) {
     let totalPruned = 0;
     for (const acct of targets) {
       toast(`Syncing ${acct.name} (${mode})...`, { icon: '📧' });
-      const result = await api.syncMessageAccount(acct.id, mode).catch(err => {
+      const result = await api.syncMessageAccount(acct.id, mode, { silent: true }).catch(err => {
         toast.error(`${acct.name}: ${err?.message || 'Sync failed'}`);
         return null;
       });
@@ -174,7 +174,7 @@ export default function InboxTab({ accounts }) {
     }
     setActionInProgress(msg.id);
     toast(`${action === 'archive' ? 'Archiving' : 'Deleting'}...`, { icon: '📧' });
-    const result = await api.executeMessageAction(msg.accountId, msg.id, action).catch(err => {
+    const result = await api.executeMessageAction(msg.accountId, msg.id, action, { silent: true }).catch(err => {
       toast.error(err?.message || `${action} failed`);
       return null;
     });
@@ -221,7 +221,7 @@ export default function InboxTab({ accounts }) {
         <button
           onClick={handleEvaluate}
           disabled={evaluating || syncing}
-          className="flex items-center gap-1 px-3 py-2 bg-purple-500/10 text-purple-400 rounded-lg text-sm hover:bg-purple-500/20 transition-colors disabled:opacity-50"
+          className="flex items-center gap-1 px-3 py-2 bg-port-accent-2/10 text-port-accent-2 rounded-lg text-sm hover:bg-port-accent-2/20 transition-colors disabled:opacity-50"
           title="AI triage — evaluate messages for recommended actions"
         >
           <Sparkles size={14} className={evaluating ? 'animate-pulse' : ''} />

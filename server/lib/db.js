@@ -371,8 +371,13 @@ async function ensureSchemaImpl() {
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ
     )`,
+    // Known emails/handles for a person — the deterministic key that maps a
+    // calendar attendee / message counterpart back to this tracked person so
+    // touchpoints can be auto-logged (#2033).
+    `ALTER TABLE tribe_people ADD COLUMN IF NOT EXISTS emails TEXT[] DEFAULT '{}'`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags)`,
+    `CREATE INDEX IF NOT EXISTS idx_tribe_people_emails ON tribe_people USING gin (emails)`,
     `CREATE TABLE IF NOT EXISTS tribe_touchpoints (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
@@ -382,11 +387,17 @@ async function ensureSchemaImpl() {
       source VARCHAR(32) NOT NULL DEFAULT 'user',
       calendar_account_id TEXT,
       calendar_event_id TEXT,
+      dedupe_key TEXT,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // Idempotency key for auto-logged touchpoints (calendar event id / message
+    // thread+day). Partial unique index so re-syncs never double-log a person
+    // for the same event/thread-day; NULL for hand-logged user touchpoints.
+    `ALTER TABLE tribe_touchpoints ADD COLUMN IF NOT EXISTS dedupe_key TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_person ON tribe_touchpoints (person_id, happened_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_tribe_touchpoints_calendar ON tribe_touchpoints (calendar_account_id, calendar_event_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_tribe_touchpoints_dedupe ON tribe_touchpoints (person_id, dedupe_key) WHERE dedupe_key IS NOT NULL`,
     `CREATE TABLE IF NOT EXISTS tribe_memory_links (
       person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
       memory_id UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,

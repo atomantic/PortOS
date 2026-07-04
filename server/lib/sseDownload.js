@@ -8,14 +8,9 @@
 
 import { inspectModelCache } from './hfCache.js';
 import { downloadHfRepo } from './hfDownload.js';
+import { SSE_HEADERS } from './sseHeaders.js';
 
 const inFlight = new Map(); // repo -> { promise, kill }
-
-export const SSE_HEADERS = {
-  'Content-Type': 'text/event-stream',
-  'Cache-Control': 'no-cache',
-  Connection: 'keep-alive',
-};
 
 /**
  * Open an SSE response and return write-safe helpers. Canonical replacement

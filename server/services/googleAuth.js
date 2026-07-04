@@ -1,7 +1,7 @@
 import { OAuth2Client } from 'google-auth-library';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
@@ -29,7 +29,7 @@ export async function getCredentials() {
 export async function saveCredentials({ clientId, clientSecret }) {
   await ensureAuthDir();
   const credentials = { clientId, clientSecret, redirectUri: OAUTH_REDIRECT_URI };
-  await writeFile(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2));
+  await atomicWrite(CREDENTIALS_FILE, credentials);
   oAuth2Client = null; // Reset client
   console.log('📅 Google OAuth credentials saved');
   return credentials;
@@ -44,7 +44,7 @@ export async function getTokens() {
 
 async function saveTokens(tokens) {
   await ensureAuthDir();
-  await writeFile(TOKENS_FILE, JSON.stringify(tokens, null, 2));
+  await atomicWrite(TOKENS_FILE, tokens);
   console.log('📅 Google OAuth tokens saved');
 }
 

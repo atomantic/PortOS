@@ -22,6 +22,14 @@ export const analyzeMusicVideoProject = (id, options = {}) => request(`/music-vi
   method: 'POST', ...options,
 });
 
+// Autonomous shot planner (#1855): propose one scene per analyzed audio
+// section and seed them onto the board. `seedPrompts` (default true) also
+// best-effort asks the active provider for a first-pass framePrompt/prompt
+// per scene. Returns `{ project, scenesAdded, promptsSeeded, promptsSkippedReason }`.
+export const planMusicVideoProject = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/plan`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
@@ -38,3 +46,16 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/reorder`, {
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
+
+// ---- Render (#1760, Phase 2) ----
+// Kick off the master-bed render; resolves to { jobId }. Progress streams over
+// the SSE URL below (subscribe with useSseProgress). cancel stops an in-flight job.
+export const renderMusicVideoProject = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/render`, { method: 'POST', ...options });
+
+// EventSource URL for a render job's progress stream (consumed by useSseProgress).
+export const musicVideoRenderEventsUrl = (jobId) =>
+  `/api/music-video/render/${encodeURIComponent(jobId)}/events`;
+
+export const cancelMusicVideoRender = (jobId, options = {}) =>
+  request(`/music-video/render/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });

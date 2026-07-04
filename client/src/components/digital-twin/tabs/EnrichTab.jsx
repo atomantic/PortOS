@@ -13,6 +13,7 @@ import {Sparkles,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import ListEnrichment from '../ListEnrichment';
@@ -287,10 +288,10 @@ export default function EnrichTab({ onRefresh }) {
             <h2 className="text-xl font-semibold text-white">{categoryConfig?.label}</h2>
           </div>
         </div>
-        <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+        <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
           <div className="flex items-center gap-3">
-            <Check className="w-5 h-5 text-green-400" />
-            <span className="text-green-400">All questions for this category have been answered. Great job!</span>
+            <Check className="w-5 h-5 text-port-success" />
+            <span className="text-port-success">All questions for this category have been answered. Great job!</span>
           </div>
         </div>
       </div>
@@ -414,10 +415,10 @@ export default function EnrichTab({ onRefresh }) {
 
         {/* Category completion */}
         {categoryProgress?.completed && (
-          <div className="mt-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+          <div className="mt-6 p-4 bg-port-success/10 border border-port-success/30 rounded-lg">
             <div className="flex items-center gap-3">
-              <Check className="w-5 h-5 text-green-400" />
-              <span className="text-green-400">
+              <Check className="w-5 h-5 text-port-success" />
+              <span className="text-port-success">
                 This category is complete! Continue answering to add more depth.
               </span>
             </div>
@@ -465,7 +466,7 @@ export default function EnrichTab({ onRefresh }) {
               key={key}
               onClick={() => startCategory(key)}
               className={`p-4 min-h-[120px] bg-port-card rounded-lg border transition-all text-left hover:border-port-accent ${
-                isComplete ? 'border-green-500/30' : 'border-port-border'
+                isComplete ? 'border-port-success/30' : 'border-port-border'
               }`}
             >
               <div className="flex items-start justify-between mb-3">
@@ -473,7 +474,7 @@ export default function EnrichTab({ onRefresh }) {
                   <Icon className={`w-5 h-5 text-${config.color}-400`} />
                 </div>
                 {isComplete ? (
-                  <Check className="w-5 h-5 text-green-400" />
+                  <Check className="w-5 h-5 text-port-success" />
                 ) : (
                   <ChevronRight className="w-5 h-5 text-gray-500" />
                 )}
@@ -486,7 +487,7 @@ export default function EnrichTab({ onRefresh }) {
                 <span className="text-gray-500">
                   {catProgress?.answered || 0} {catProgress?.listBased ? 'items added' : 'questions answered'}
                 </span>
-                <span className={isComplete ? 'text-green-400' : 'text-gray-500'}>
+                <span className={isComplete ? 'text-port-success' : 'text-gray-500'}>
                   {catProgress?.percentage || 0}%
                 </span>
               </div>
@@ -494,7 +495,7 @@ export default function EnrichTab({ onRefresh }) {
               {/* Mini progress bar */}
               <div className="h-1 bg-port-border rounded-full mt-2 overflow-hidden">
                 <div
-                  className={`h-full transition-all ${isComplete ? 'bg-green-500' : 'bg-port-accent'}`}
+                  className={`h-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
                   style={{ width: `${catProgress?.percentage || 0}%` }}
                 />
               </div>
@@ -525,7 +526,7 @@ export default function EnrichTab({ onRefresh }) {
           className="w-full p-4 flex items-center justify-between hover:bg-port-border/30 transition-colors"
         >
           <div className="flex items-center gap-3">
-            <PenTool className="w-6 h-6 text-cyan-400" />
+            <PenTool className="w-6 h-6 text-port-accent" />
             <div className="text-left">
               <h3 className="font-medium text-white">Analyze Your Writing</h3>
               <p className="text-sm text-gray-400">Extract communication patterns from your actual writing</p>
@@ -542,8 +543,7 @@ export default function EnrichTab({ onRefresh }) {
             </p>
 
             {/* Provider Selection */}
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-              <label className="text-sm text-gray-400">Analyze with:</label>
+            <FormField className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" labelClassName="text-sm text-gray-400" label="Analyze with:">
               <select
                 value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
                 onChange={(e) => {
@@ -560,7 +560,7 @@ export default function EnrichTab({ onRefresh }) {
                   ))
                 ))}
               </select>
-            </div>
+            </FormField>
 
             {/* Writing Samples */}
             <div className="space-y-3">
@@ -600,7 +600,7 @@ export default function EnrichTab({ onRefresh }) {
               <button
                 onClick={analyzeWriting}
                 disabled={analyzingWriting}
-                className="px-4 py-3 min-h-[44px] bg-cyan-600 text-white rounded-lg text-sm hover:bg-cyan-500 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="px-4 py-3 min-h-[44px] bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {analyzingWriting ? (
                   <>
@@ -667,7 +667,7 @@ export default function EnrichTab({ onRefresh }) {
                       <button
                         onClick={saveWritingStyle}
                         disabled={savingWritingStyle}
-                        className="px-3 py-2 min-h-[40px] bg-green-600 text-white rounded text-sm hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-1"
+                        className="px-3 py-2 min-h-[40px] bg-port-success text-white rounded text-sm hover:bg-port-success/80 disabled:opacity-50 flex items-center justify-center gap-1"
                       >
                         {savingWritingStyle ? (
                           <BrailleSpinner />

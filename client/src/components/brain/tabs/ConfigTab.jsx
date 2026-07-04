@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
+import { formatDateTime } from '../../../utils/formatters';
 import {Settings,
   Save,
   Zap,
@@ -103,7 +104,7 @@ export default function ConfigTab({ onRefresh }) {
   const handleSaveEmbedding = async () => {
     setSavingEmbedding(true);
     const result = await api
-      .updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel })
+      .updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel }, { silent: true })
       .catch(err => { toast.error(err.message || 'Failed to save embedding config'); return null; });
     setSavingEmbedding(false);
     if (result) {
@@ -138,7 +139,7 @@ export default function ConfigTab({ onRefresh }) {
       weeklyReviewTime
     };
 
-    const result = await api.updateBrainSettings(updatedSettings).catch(err => {
+    const result = await api.updateBrainSettings(updatedSettings, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to save settings');
       return null;
     });
@@ -511,19 +512,19 @@ export default function ConfigTab({ onRefresh }) {
               <span>Daily digest at {dailyDigestTime}</span>
             </div>
             <div className="flex items-center gap-2">
-              <CheckCircle size={14} className="text-purple-400" />
+              <CheckCircle size={14} className="text-port-accent-2" />
               <span>Weekly review on {weeklyReviewDay.charAt(0).toUpperCase() + weeklyReviewDay.slice(1)}s at {weeklyReviewTime}</span>
             </div>
             {settings.lastDailyDigest && (
               <div className="flex items-center gap-2 text-gray-500">
                 <Clock size={14} />
-                <span>Last digest: {new Date(settings.lastDailyDigest).toLocaleString()}</span>
+                <span>Last digest: {formatDateTime(settings.lastDailyDigest)}</span>
               </div>
             )}
             {settings.lastWeeklyReview && (
               <div className="flex items-center gap-2 text-gray-500">
                 <Clock size={14} />
-                <span>Last review: {new Date(settings.lastWeeklyReview).toLocaleString()}</span>
+                <span>Last review: {formatDateTime(settings.lastWeeklyReview)}</span>
               </div>
             )}
           </div>

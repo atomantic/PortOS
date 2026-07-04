@@ -91,25 +91,25 @@ export default function MemoryTab({ onRefresh }) {
     let result;
     switch (activeType) {
       case 'people':
-        result = await api.updateBrainPerson(editingId, editForm).catch(err => {
+        result = await api.updateBrainPerson(editingId, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'projects':
-        result = await api.updateBrainProject(editingId, editForm).catch(err => {
+        result = await api.updateBrainProject(editingId, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.updateBrainIdea(editingId, editForm).catch(err => {
+        result = await api.updateBrainIdea(editingId, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.updateBrainAdminItem(editingId, editForm).catch(err => {
+        result = await api.updateBrainAdminItem(editingId, editForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -117,7 +117,7 @@ export default function MemoryTab({ onRefresh }) {
       case 'memories': {
         const { tagInput, ...memData } = editForm;
         if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await api.updateBrainMemory(editingId, memData).catch(err => {
+        result = await api.updateBrainMemory(editingId, memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -138,25 +138,25 @@ export default function MemoryTab({ onRefresh }) {
     let result;
     switch (activeType) {
       case 'people':
-        result = await api.createBrainPerson(addForm).catch(err => {
+        result = await api.createBrainPerson(addForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'projects':
-        result = await api.createBrainProject({ ...addForm, status: addForm.status || 'active' }).catch(err => {
+        result = await api.createBrainProject({ ...addForm, status: addForm.status || 'active' }, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.createBrainIdea(addForm).catch(err => {
+        result = await api.createBrainIdea(addForm, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.createBrainAdminItem({ ...addForm, status: addForm.status || 'open' }).catch(err => {
+        result = await api.createBrainAdminItem({ ...addForm, status: addForm.status || 'open' }, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -164,7 +164,7 @@ export default function MemoryTab({ onRefresh }) {
       case 'memories': {
         const { tagInput, ...memData } = addForm;
         if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
-        result = await api.createBrainMemory(memData).catch(err => {
+        result = await api.createBrainMemory(memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -185,31 +185,31 @@ export default function MemoryTab({ onRefresh }) {
     let failed = false;
     switch (activeType) {
       case 'people':
-        await api.deleteBrainPerson(id).catch(err => {
+        await api.deleteBrainPerson(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'projects':
-        await api.deleteBrainProject(id).catch(err => {
+        await api.deleteBrainProject(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'ideas':
-        await api.deleteBrainIdea(id).catch(err => {
+        await api.deleteBrainIdea(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'admin':
-        await api.deleteBrainAdminItem(id).catch(err => {
+        await api.deleteBrainAdminItem(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
         break;
       case 'memories':
-        await api.deleteBrainMemory(id).catch(err => {
+        await api.deleteBrainMemory(id, { silent: true }).catch(err => {
           toast.error(err.message);
           failed = true;
         });
@@ -228,19 +228,19 @@ export default function MemoryTab({ onRefresh }) {
     const update = { status: 'done' };
     switch (activeType) {
       case 'projects':
-        result = await api.updateBrainProject(record.id, update).catch(err => {
+        result = await api.updateBrainProject(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'ideas':
-        result = await api.updateBrainIdea(record.id, update).catch(err => {
+        result = await api.updateBrainIdea(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
         break;
       case 'admin':
-        result = await api.updateBrainAdminItem(record.id, update).catch(err => {
+        result = await api.updateBrainAdminItem(record.id, update, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -600,7 +600,7 @@ export default function MemoryTab({ onRefresh }) {
             )}
             <button
               onClick={() => handleSendToCatalog(record)}
-              className="p-1.5 text-gray-400 hover:text-purple-300 rounded hover:bg-purple-500/20"
+              className="p-1.5 text-gray-400 hover:text-port-accent-2 rounded hover:bg-port-accent-2/20"
               title="Send to Catalog"
               aria-label="Send to Catalog"
             >

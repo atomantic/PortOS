@@ -1,4 +1,4 @@
-# PortOS Setup Script for Windows PowerShell
+﻿# PortOS Setup Script for Windows PowerShell
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -60,13 +60,23 @@ npm install
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
-# Rebuild native bindings
+# Rebuild native bindings. Use `npm rebuild esbuild` instead of invoking a
+# hardcoded client/node_modules/esbuild/install.js path: esbuild is a transitive
+# dep (via vite) that npm may place anywhere inside the client dependency tree, so
+# the fixed client/node_modules/esbuild/install.js path doesn't exist when npm
+# nests it deeper — that path mismatch is what aborted setup.ps1 with
+# MODULE_NOT_FOUND on Windows (issue #1792). `npm rebuild esbuild --prefix client`
+# resolves esbuild wherever it landed within client's tree and re-runs its
+# binary-download postinstall. Mirrors the cross-platform `npm run setup` script
+# and setup.sh.
 Write-Host ""
 Write-Host "Rebuilding esbuild, node-pty & sharp..." -ForegroundColor Yellow
-node client/node_modules/esbuild/install.js
+npm rebuild esbuild --prefix client
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-node server/node_modules/esbuild/install.js
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# esbuild may not be a direct server dependency — don't fail setup if it's absent
+# (matches the `|| true` guard around the same step in `npm run setup`).
+npm rebuild esbuild --prefix server
+$global:LASTEXITCODE = 0
 npm rebuild node-pty sharp --prefix server
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

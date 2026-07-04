@@ -2,6 +2,13 @@
 // visualization. Rings are Dunbar-inspired concentric circles (support is the
 // innermost / closest, village the outermost / weak ties). The ring `cadenceDays`
 // defaults mirror DEFAULT_RING_CADENCE in server/services/tribe.js — keep in sync.
+//
+// The cadence STATE MACHINE (external/missing/overdue/soon/steady) lives in the
+// shared, authoritative `tribeCadence.js` (mirrored from server/lib/tribeCadence.js)
+// so the page, the Tribe Care dashboard widget, and the proactive-alert check all
+// route through one implementation. `contactStatus` below only layers presentation
+// (label/tone) on top of that shared `cadenceStatus` — do not re-implement the rules.
+import { cadenceStatus, daysSinceDate } from './tribeCadence.js';
 
 // The four inner rings are the Dunbar tribe (capped, care-cadenced). `external` is
 // a fifth, uncapped classification OUTSIDE the tribe — people known or previously
@@ -28,27 +35,27 @@ export const ENERGY = [
 ];
 
 // Whole days from an ISO date (YYYY-MM-DD) to today, or null if unparseable.
-export function daysBetween(date) {
-  if (!date) return null;
-  const start = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(start.getTime())) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.floor((today - start) / 86400000);
-}
+// Backed by the shared `daysSinceDate` so the client and server compute
+// elapsed days identically.
+export const daysBetween = daysSinceDate;
 
-// Cadence health for a contact: missing / overdue / soon (<=7d) / steady.
-// `daysRemaining` is cadenceDays - elapsed (negative once overdue); null when
-// there's no recorded last contact (distinct from a 0-days-remaining contact).
+// Cadence health for a contact: missing / overdue / soon (<=7d) / steady, plus
+// an `external` state that never nags. The state/`daysRemaining` come straight
+// from the shared `cadenceStatus`; this wrapper only attaches the UI label +
+// Tailwind tone so there is exactly one implementation of the cadence rules.
+const STATUS_PRESENTATION = {
+  external: { label: 'External', tone: 'text-slate-400' },
+  missing: { label: 'No touchpoint', tone: 'text-gray-300' },
+  overdue: { tone: 'text-rose-300' },
+  soon: { tone: 'text-amber-300' },
+  steady: { tone: 'text-emerald-300' },
+};
 export function contactStatus(contact) {
-  // External people carry no care cadence — never nag about an overdue nemesis.
-  if (contact.ring === 'external') return { label: 'External', tone: 'text-slate-400', state: 'external', daysRemaining: null };
-  const elapsed = daysBetween(contact.lastContact);
-  if (elapsed == null) return { label: 'No touchpoint', tone: 'text-gray-300', state: 'missing', daysRemaining: null };
-  const daysRemaining = Number(contact.cadenceDays || 45) - elapsed;
-  if (daysRemaining < 0) return { label: `${Math.abs(daysRemaining)}d overdue`, tone: 'text-rose-300', state: 'overdue', daysRemaining };
-  if (daysRemaining <= 7) return { label: `${daysRemaining}d left`, tone: 'text-amber-300', state: 'soon', daysRemaining };
-  return { label: `${daysRemaining}d left`, tone: 'text-emerald-300', state: 'steady', daysRemaining };
+  const { state, daysRemaining } = cadenceStatus(contact);
+  const { label, tone } = STATUS_PRESENTATION[state];
+  if (label) return { label, tone, state, daysRemaining };
+  const dueLabel = state === 'overdue' ? `${Math.abs(daysRemaining)}d overdue` : `${daysRemaining}d left`;
+  return { label: dueLabel, tone, state, daysRemaining };
 }
 
 // Status → SVG stroke color for the circle-map nodes.

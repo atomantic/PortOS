@@ -1,6 +1,6 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, ensureDirs } from '../lib/fileUtils.js';
 
 // Inline CORS middleware snippet for generated projects (no cors package dependency)
 const CORS_SNIPPET = `app.use((req, res, next) => {
@@ -38,7 +38,7 @@ export async function scaffoldPortOS(repoPath, name, dirName, uiPort, apiPort, a
       'concurrently': '^8.2.2'
     }
   };
-  await writeFile(join(repoPath, 'package.json'), JSON.stringify(rootPkg, null, 2));
+  await atomicWrite(join(repoPath, 'package.json'), rootPkg);
 
   // === Client package.json ===
   const clientPkg = {
@@ -68,7 +68,7 @@ export async function scaffoldPortOS(repoPath, name, dirName, uiPort, apiPort, a
       'vite': '^6.0.6'
     }
   };
-  await writeFile(join(clientDir, 'package.json'), JSON.stringify(clientPkg, null, 2));
+  await atomicWrite(join(clientDir, 'package.json'), clientPkg);
 
   // === Client vite.config.js ===
   await writeFile(join(clientDir, 'vite.config.js'), `import { defineConfig } from 'vite';
@@ -277,7 +277,7 @@ export default function AIProvidersPage() {
       'vitest': '^2.1.8'
     }
   };
-  await writeFile(join(serverDir, 'package.json'), JSON.stringify(serverPkg, null, 2));
+  await atomicWrite(join(serverDir, 'package.json'), serverPkg);
 
   // === Server index.js ===
   await writeFile(join(serverDir, 'index.js'), `import express from 'express';
@@ -347,10 +347,10 @@ export default defineConfig({
         type: 'cli',
         command: 'claude',
         args: ['--print'],
-        models: ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-8'],
+        models: ['claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-4-8'],
         defaultModel: 'claude-opus-4-8',
         lightModel: 'claude-haiku-4-5',
-        mediumModel: 'claude-sonnet-4-6',
+        mediumModel: 'claude-sonnet-5',
         heavyModel: 'claude-opus-4-8',
         timeout: 300000,
         enabled: true,
@@ -397,7 +397,7 @@ export default defineConfig({
       }
     }
   };
-  await writeFile(join(dataDir, 'providers.json'), JSON.stringify(defaultProviders, null, 2));
+  await atomicWrite(join(dataDir, 'providers.json'), defaultProviders);
   addStep('Create default data', 'done');
 
   // === GitHub Actions CI ===

@@ -556,7 +556,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn) {
   }
 
   // Check if the agent actually committed work before treating as orphaned
-  const commitFound = checkForTaskCommit(taskId, ROOT_DIR);
+  const commitFound = await checkForTaskCommit(taskId, ROOT_DIR);
   if (commitFound) {
     emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
     await updateTask(taskId, { status: 'completed' }, task.taskType || 'user');
@@ -653,7 +653,11 @@ Once the issue is resolved, reset the original task to pending.`;
       description,
       priority: 'HIGH',
       context: `Auto-generated from repeated orphan failures for task ${taskId}`,
-      approvalRequired: false // Auto-approved for orphan issues
+      // Requires approval, matching every other error-driven task creator
+      // (autoFixer.js, agentErrorAnalysis.js) — repeated orphaning is an
+      // infra/process-flakiness signal, not a diagnosed code bug, so an
+      // unsupervised agent shouldn't be turned loose on the codebase from it.
+      approvalRequired: true
     }, 'internal').catch(err => {
       emitLog('error', `Failed to create investigation task: ${err.message}`, { taskId, error: err.message });
     });

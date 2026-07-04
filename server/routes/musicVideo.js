@@ -17,6 +17,7 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoPlanRequestSchema,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -33,6 +34,8 @@ import {
   reorderProjectScenes,
 } from '../services/musicVideo/projects.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
+import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { planProject } from '../services/musicVideo/planner.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -98,6 +101,39 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   const updated = await setProjectAnalysis(project.id, analysis);
   res.json(updated);
 }));
+
+// Autonomous shot planner (#1855, the secondary "autonomous mode" path):
+// propose one scene per analyzed audio section (energy-aware durations fall
+// out of the cached section boundaries) and seed them onto the director
+// scene board. Director-first — this only seeds editable scenes, same as a
+// hand-added one. `seedPrompts` (default true) additionally best-effort asks
+// the active/given AI provider for a first-pass framePrompt/prompt per scene;
+// a missing provider or parse failure degrades to plain scenes rather than
+// failing the request (see `promptsSeeded`/`promptsSkippedReason` in the body).
+router.post('/:id/plan', asyncHandler(async (req, res) => {
+  const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
+  const result = await planProject(req.params.id, { seedPrompts, providerId, model });
+  res.json(result);
+}));
+
+// --- Render (#1760, Phase 2) ---
+// Assemble the scenes' i2v clips into one MP4 over the track as the master audio
+// bed. Kickoff returns { jobId }; progress streams over SSE (mirrors
+// videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
+router.post('/:id/render', asyncHandler(async (req, res) => {
+  res.json(await renderMusicVideo(req.params.id));
+}));
+
+// SSE progress stream for a render job. Two-segment path — distinct from the
+// one-segment GET /:id project read, so it can't shadow it.
+router.get('/render/:jobId/events', (req, res) => {
+  const ok = attachRenderSseClient(req.params.jobId, res);
+  if (!ok) throw new ServerError('Render job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+
+router.post('/render/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelRender(req.params.jobId) });
+});
 
 // --- Director scene board ---
 

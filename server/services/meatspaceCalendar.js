@@ -6,10 +6,10 @@
  * based on birth date and life expectancy.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getDeathClock } from './meatspace.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -190,7 +190,7 @@ async function loadActivities() {
 
 async function saveActivities(data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(ACTIVITIES_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(ACTIVITIES_FILE, data);
 }
 
 // === Default Activities ===
@@ -223,7 +223,7 @@ async function loadEvents() {
 
 async function saveEvents(data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(EVENTS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(EVENTS_FILE, data);
 }
 
 export async function getLifeEvents() {

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Calendar, Plus, Trash2, Eye, EyeOff, ChevronDown } from 'lucide-react';
+import { FormField } from '../../../ui/FormField';
 import { EVENT_TYPE_STYLES, EVENT_TYPES, MONTH_NAMES_FULL } from './lifeGridMath';
 
 export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
@@ -82,7 +83,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                   </button>
                   <button
                     onClick={() => onRemove(event.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                    className="opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
                     title="Remove"
                   >
                     <Trash2 size={12} />
@@ -96,8 +97,7 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
           {adding ? (
             <form onSubmit={handleSubmit} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Name</label>
+                <FormField label="Name" labelClassName="text-xs text-gray-400 mb-1 block">
                   <input
                     type="text"
                     value={name}
@@ -106,9 +106,8 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                     className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
                     autoFocus
                   />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Type</label>
+                </FormField>
+                <FormField label="Type" labelClassName="text-xs text-gray-400 mb-1 block">
                   <select
                     value={type}
                     onChange={e => setType(e.target.value)}
@@ -118,11 +117,10 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                       <option key={t.id} value={t.id}>{t.label}</option>
                     ))}
                   </select>
-                </div>
+                </FormField>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-400 mb-1 block">Recurrence</label>
+                <FormField label="Recurrence" labelClassName="text-xs text-gray-400 mb-1 block">
                   <select
                     value={recurrence}
                     onChange={e => setRecurrence(e.target.value)}
@@ -131,11 +129,10 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                     <option value="yearly">Yearly</option>
                     <option value="once">One-time</option>
                   </select>
-                </div>
+                </FormField>
                 {recurrence === 'yearly' ? (
                   <div className="flex gap-2">
-                    <div className="flex-1">
-                      <label className="text-xs text-gray-400 mb-1 block">Month</label>
+                    <FormField className="flex-1" label="Month" labelClassName="text-xs text-gray-400 mb-1 block">
                       <select
                         value={month}
                         onChange={e => setMonth(parseInt(e.target.value))}
@@ -145,9 +142,8 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                           <option key={i} value={i}>{m}</option>
                         ))}
                       </select>
-                    </div>
-                    <div className="w-16">
-                      <label className="text-xs text-gray-400 mb-1 block">Day</label>
+                    </FormField>
+                    <FormField className="w-16" label="Day" labelClassName="text-xs text-gray-400 mb-1 block">
                       <input
                         type="number"
                         value={day}
@@ -156,18 +152,17 @@ export default function LifeEventsPanel({ events, onAdd, onToggle, onRemove }) {
                         max="31"
                         className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
                       />
-                    </div>
+                    </FormField>
                   </div>
                 ) : (
-                  <div>
-                    <label className="text-xs text-gray-400 mb-1 block">Date</label>
+                  <FormField label="Date" labelClassName="text-xs text-gray-400 mb-1 block">
                     <input
                       type="date"
                       value={date}
                       onChange={e => setDate(e.target.value)}
                       className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-sm text-white focus:border-port-accent focus:outline-hidden"
                     />
-                  </div>
+                  </FormField>
                 )}
               </div>
               <div className="flex gap-2">

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from '../ui/Toast';
 import ProviderModelSelector from '../ProviderModelSelector';
+import { FormField } from '../ui/FormField';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import { filterSelectableModels, getProviderTimeout } from '../../utils/providers';
 import {
@@ -26,9 +27,11 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     Promise.all([
-      fetch(`/api/prompts/${encodeURIComponent(stageName)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/providers').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/prompts/${encodeURIComponent(stageName)}`, { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch('/api/providers', { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([s, p]) => {
       if (cancelled) return;
       // Normalize stage.timeout through parseTimeoutMs so a legacy on-disk
@@ -43,7 +46,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       setActiveProviderId(p?.activeProvider || null);
       setLoaded(true);
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [stageName]);
 
   const persist = async (next) => {
@@ -200,10 +203,11 @@ function StageTimeoutInput({ value, providerFallback, onCommit }) {
   }
 
   return (
-    <div className="space-y-0.5">
-      <label className="block text-[9px] uppercase tracking-wider text-gray-500">
-        Timeout override (ms)
-      </label>
+    <FormField
+      className="space-y-0.5"
+      labelClassName="block text-[9px] uppercase tracking-wider text-gray-500"
+      label="Timeout override (ms)"
+    >
       <input
         type="number"
         inputMode="numeric"
@@ -218,6 +222,6 @@ function StageTimeoutInput({ value, providerFallback, onCommit }) {
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
       />
       <div className="text-[10px] text-gray-500">{hint}</div>
-    </div>
+    </FormField>
   );
 }

@@ -380,7 +380,7 @@ describe('Brain Routes', () => {
   // ===========================================================================
 
   describe('GET /api/brain/people', () => {
-    it('should return all people', async () => {
+    it('should return all people as a raw array when no pagination params are passed', async () => {
       brainService.getPeople.mockResolvedValue([
         { id: 'people-001', name: 'John' },
         { id: 'people-002', name: 'Jane' }
@@ -389,7 +389,42 @@ describe('Brain Routes', () => {
       const response = await request(app).get('/api/brain/people');
 
       expect(response.status).toBe(200);
+      expect(Array.isArray(response.body)).toBe(true);
       expect(response.body).toHaveLength(2);
+    });
+
+    it('should return a bounded envelope when limit/offset are passed', async () => {
+      brainService.getPeople.mockResolvedValue([
+        { id: 'people-001', name: 'John' },
+        { id: 'people-002', name: 'Jane' },
+        { id: 'people-003', name: 'Jim' }
+      ]);
+
+      const response = await request(app).get('/api/brain/people?limit=1&offset=1');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        people: [{ id: 'people-002', name: 'Jane' }],
+        total: 3,
+        limit: 1,
+        offset: 1
+      });
+    });
+
+    it('should treat limit=0 as a pagination request and clamp to the default limit', async () => {
+      brainService.getPeople.mockResolvedValue([
+        { id: 'people-001', name: 'John' },
+        { id: 'people-002', name: 'Jane' }
+      ]);
+
+      const response = await request(app).get('/api/brain/people?limit=0');
+
+      expect(response.status).toBe(200);
+      // limit=0 is invalid → falls back to the default (50), so all rows return
+      // inside the envelope (not the raw array, since pagination was requested).
+      expect(response.body.people).toHaveLength(2);
+      expect(response.body.total).toBe(2);
+      expect(response.body.limit).toBe(50);
     });
   });
 
@@ -634,7 +669,22 @@ describe('Brain Routes', () => {
       const response = await request(app).get('/api/brain/memories');
 
       expect(response.status).toBe(200);
+      expect(Array.isArray(response.body)).toBe(true);
       expect(response.body).toHaveLength(2);
+    });
+
+    it('should return a bounded envelope when limit/offset are passed', async () => {
+      brainService.getMemoryEntries.mockResolvedValue([
+        { id: 'mem-001', title: 'Morning jog' },
+        { id: 'mem-002', title: 'Dinner with family' },
+        { id: 'mem-003', title: 'Late-night idea' }
+      ]);
+
+      const response = await request(app).get('/api/brain/memories?limit=2');
+
+      expect(response.status).toBe(200);
+      expect(response.body.memories).toHaveLength(2);
+      expect(response.body).toMatchObject({ total: 3, limit: 2, offset: 0 });
     });
   });
 

@@ -5,7 +5,14 @@ import {
 import { HeartPulse, Plus, X, Check, TrendingUp, TrendingDown } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import useChartColors from '../../hooks/useChartColors.js';
 import { classifyBP, bpLongevityImpact, BP_CATEGORIES } from './bpClassification';
+
+// Stage 1 hypertension reference line sits between the warning (elevated) and
+// error (stage 2) tokens — an intentional 3-tier severity escalation with no
+// matching --port-* token, so it stays a literal color rather than collapsing
+// onto warning or error and losing the middle step.
+const BP_STAGE_1_COLOR = '#f97316';
 
 const EMPTY_FORM = { date: '', systolic: '', diastolic: '' };
 
@@ -16,6 +23,7 @@ function parseNum(v) {
 }
 
 export default function BloodPressureCard() {
+  const chartColors = useChartColors();
   const [readings, setReadings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -89,7 +97,7 @@ export default function BloodPressureCard() {
         {!showForm && (
           <button
             onClick={openForm}
-            className="flex items-center gap-1 text-xs text-port-accent hover:text-blue-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
           >
             <Plus size={14} /> Add Reading
           </button>
@@ -154,24 +162,24 @@ export default function BloodPressureCard() {
         <>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
               <XAxis
                 dataKey="label"
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: chartColors.axis, fontSize: 11 }}
                 interval={Math.max(0, Math.floor(chartData.length / 12))}
               />
               <YAxis
-                tick={{ fill: '#6b7280', fontSize: 11 }}
+                tick={{ fill: chartColors.axis, fontSize: 11 }}
                 domain={[dataMin => Math.max(40, Math.floor(dataMin - 10)), dataMax => Math.ceil(dataMax + 10)]}
-                label={{ value: 'mmHg', angle: -90, position: 'insideLeft', fill: '#6b7280', fontSize: 11 }}
+                label={{ value: 'mmHg', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 11 }}
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend />
-              <ReferenceLine y={120} stroke="#f59e0b" strokeDasharray="3 3" label={{ value: 'Elevated', fill: '#f59e0b', fontSize: 10, position: 'right' }} />
-              <ReferenceLine y={130} stroke="#f97316" strokeDasharray="3 3" label={{ value: 'Stage 1', fill: '#f97316', fontSize: 10, position: 'right' }} />
-              <ReferenceLine y={140} stroke="#ef4444" strokeDasharray="3 3" label={{ value: 'Stage 2', fill: '#ef4444', fontSize: 10, position: 'right' }} />
-              <Line type="monotone" dataKey="systolic" name="Systolic" stroke="#ef4444" dot={chartData.length <= 90} strokeWidth={2} connectNulls />
-              <Line type="monotone" dataKey="diastolic" name="Diastolic" stroke="#3b82f6" dot={chartData.length <= 90} strokeWidth={2} connectNulls />
+              <ReferenceLine y={120} stroke={chartColors.warning} strokeDasharray="3 3" label={{ value: 'Elevated', fill: chartColors.warning, fontSize: 10, position: 'right' }} />
+              <ReferenceLine y={130} stroke={BP_STAGE_1_COLOR} strokeDasharray="3 3" label={{ value: 'Stage 1', fill: BP_STAGE_1_COLOR, fontSize: 10, position: 'right' }} />
+              <ReferenceLine y={140} stroke={chartColors.error} strokeDasharray="3 3" label={{ value: 'Stage 2', fill: chartColors.error, fontSize: 10, position: 'right' }} />
+              <Line type="monotone" dataKey="systolic" name="Systolic" stroke={chartColors.error} dot={chartData.length <= 90} strokeWidth={2} connectNulls />
+              <Line type="monotone" dataKey="diastolic" name="Diastolic" stroke={chartColors.accent} dot={chartData.length <= 90} strokeWidth={2} connectNulls />
             </LineChart>
           </ResponsiveContainer>
 

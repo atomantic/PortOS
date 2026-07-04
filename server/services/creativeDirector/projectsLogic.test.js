@@ -38,6 +38,28 @@ describe('buildProjectRecord', () => {
       timelineProjectId: null, finalVideoId: null, treatment: null, runs: [],
     });
   });
+
+  it('defaults cast to [] and passes a supplied cast through (#1808)', () => {
+    const bare = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 },
+      { id: 'cd-1', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' },
+    );
+    expect(bare.cast).toEqual([]);
+
+    const cast = [{ ingredientId: 'cat-c', name: 'Mara', type: 'character', role: 'cast' }];
+    const seeded = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9, cast },
+      { id: 'cd-2', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' },
+    );
+    expect(seeded.cast).toEqual(cast);
+
+    // A malformed (non-array) cast coerces to [] rather than persisting junk.
+    const bad = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9, cast: 'nope' },
+      { id: 'cd-3', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' },
+    );
+    expect(bad.cast).toEqual([]);
+  });
 });
 
 describe('applyProjectPatch', () => {
@@ -69,6 +91,15 @@ describe('applyTreatment — status preservation', () => {
   });
   it('throws on an invalid treatment', () => {
     expect(() => applyTreatment({ id: 'cd-1', status: 'planning' }, { logline: '', synopsis: '', scenes: [] })).toThrow(/Treatment validation failed/);
+  });
+  it('preserves per-scene cast the agent supplied (#1808)', () => {
+    const sceneCast = [{ ingredientId: 'cat-c', name: 'Mara', role: 'cast' }];
+    const treatment = {
+      ...VALID_TREATMENT,
+      scenes: [{ ...VALID_TREATMENT.scenes[0], cast: sceneCast }],
+    };
+    const next = applyTreatment({ id: 'cd-1', status: 'planning' }, treatment);
+    expect(next.treatment.scenes[0].cast).toEqual(sceneCast);
   });
 });
 

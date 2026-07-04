@@ -19,11 +19,10 @@
  *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
 
-import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
+import { atomicWrite, DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
@@ -206,10 +205,11 @@ export const DEFAULT_TASK_INTERVALS = {
   // CoS side for the SAME reasons as plan-task (a CoS-managed worktree under
   // cos/<task>/<agent> would hide the issue-<num> slug from the in-flight scan
   // and trigger cleanupAgentWorktree's auto-merge into the source repo's HEAD).
-  // `issueAuthorFilter` gates which issues are claimable: 'owner' (default,
-  // matching /claim --issues) only claims issues the repo owner filed; 'any'
-  // claims any open issue. Per-app override supported via taskTypeOverrides.
-  'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
+  // `issueAuthorFilter` gates which issues are claimable: 'self' (default, the
+  // slashdo `/do:next --self` security boundary) only claims issues YOU filed
+  // (`@me`); 'owner' only claims issues the repo owner filed; 'any' claims any
+  // open issue. Per-app override supported via taskTypeOverrides.
+  'claim-issue':         { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'self' } },
   // claim-work is the SINGLE-SOURCE router: one toggle per app that ships the
   // next work item from whatever tracker the app is configured for
   // (app.workTracker, default 'auto' → resolved from the git origin host). At
@@ -223,7 +223,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
   // `issueAuthorFilter` applies only when the resolved tracker is a forge
   // (github/gitlab); it's inert for plan/jira.
-  'claim-work':          { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'owner' } },
+  'claim-work':          { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true, issueAuthorFilter: 'self' } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -551,7 +551,7 @@ export async function loadSchedule() {
 async function saveSchedule(schedule) {
   await ensureDataDir();
   schedule.lastUpdated = new Date().toISOString();
-  await writeFile(SCHEDULE_FILE, JSON.stringify(schedule, null, 2));
+  await atomicWrite(SCHEDULE_FILE, schedule);
 }
 
 // ============================================================

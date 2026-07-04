@@ -559,7 +559,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         />
       </mesh>
 
-      {/* Interior-mapped window panes (three-fenestra) — parallax fake-3D lit
+      {/* Interior-mapped window panes (InteriorMappingMaterial) — parallax fake-3D lit
           rooms on selected online towers. Night-only (by day the tower reads as a
           sunlit solid) and gated to the high quality preset by the caller. */}
       {!daytime && interiorWindows && buildingHasInteriorWindows(app, height) && (

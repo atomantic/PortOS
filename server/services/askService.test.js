@@ -351,4 +351,74 @@ describe('runAsk', () => {
     expect(modelIdx).toBeGreaterThanOrEqual(0);
     expect(args[modelIdx + 1]).toBe('o4-mini');
   });
+
+  it('runs `opencode run --model ollama/<id>` for an OpenCode Ollama provider', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'opencode-ollama',
+      type: 'cli',
+      enabled: true,
+      command: 'opencode',
+      args: ['run'],
+      ollamaBacked: true,
+      defaultModel: 'qwen2.5:7b',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'test question' })) {
+      events.push(evt);
+    }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).toContain('run');
+    const modelIdx = args.indexOf('--model');
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(args[modelIdx + 1]).toBe('ollama/qwen2.5:7b');
+  });
+
+  it('prepends the `run` subcommand for an OpenCode provider whose args dropped it', async () => {
+    // e.g. the TUI-shaped variant (args: []) selected as the Ask provider —
+    // without `run`, bare `opencode` would launch the interactive TUI and hang.
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'opencode-ollama-tui',
+      type: 'tui',
+      enabled: true,
+      command: 'opencode',
+      args: [],
+      ollamaBacked: true,
+      defaultModel: 'qwen2.5:7b',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'test question' })) {
+      events.push(evt);
+    }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args[0]).toBe('run');
+    expect(args[args.indexOf('--model') + 1]).toBe('ollama/qwen2.5:7b');
+  });
 });

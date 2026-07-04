@@ -3,9 +3,10 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
+import { resolveInstallRoot } from './lib/dataRoot.js';
 import { PORTS } from './lib/ports.js';
+import { estimateTokens } from './lib/contextBudget.js';
 import { existsSync } from 'fs';
-import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getSelfHost } from './lib/peerSelfHost.js';
@@ -85,6 +86,7 @@ import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
 import mediaCollectionsRoutes from './routes/mediaCollections.js';
 import mediaAnnotationsRoutes from './routes/mediaAnnotations.js';
+import mediaSketchesRoutes from './routes/mediaSketches.js';
 import dataSyncRoutes from './routes/dataSync.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
@@ -103,6 +105,7 @@ import characterRoutes from './routes/character.js';
 import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
 import videoGenRoutes from './routes/videoGen.js';
+import videoDownloadRoutes from './routes/videoDownload.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
@@ -119,6 +122,10 @@ import conflictJournalRoutes from './routes/conflictJournal.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
+import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
+import { initMusicVideoSceneVideoHook } from './services/musicVideoSceneVideoHook.js';
+import { initCreativeDirectorMusicBedHook } from './services/creativeDirectorMusicBedHook.js';
+import { initCreativeDirectorSceneImageHook } from './services/creativeDirectorSceneImageHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
@@ -164,7 +171,8 @@ import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
 import { setUserCatalogTypes } from './lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice } from './services/catalogUserTypes/store.js';
-import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, getCurrentVersion } from './services/updateChecker.js';
+import { startUpdateScheduler, clearStaleUpdateInProgress, processUpdateMarker } from './services/updateChecker.js';
+import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
@@ -175,6 +183,7 @@ import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
+import { registerPostReminderSchedule } from './services/meatspacePostReminder.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { runMigrations } from '../scripts/run-migrations.js';
 import { verifyCollectionVersions } from './lib/collectionStore.js';
@@ -234,7 +243,11 @@ const DATA_REFERENCE_DIR = join(__dirname, '..', 'data.reference');
 // existing installs hit "Stage X not found" until the user manually runs
 // `npm run migrations` or `npm run update`. Idempotent and cheap when the
 // applied-list is already current.
-await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
+// Prefer PORTOS_DATA_ROOT (set at real launch in ecosystem.config.cjs) over the
+// import.meta.url-derived path so a server booted from inside a CoS agent
+// worktree still resolves to the real install; runMigrations also skips a
+// worktree-rooted path as a backstop (#1947).
+await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catch(err => {
   // Log the full stack (or stringified err for non-Error throws) so failures
   // during boot are diagnosable without rerunning under a debugger.
   console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
@@ -259,7 +272,7 @@ const aiToolkitHooks = {
     });
   },
   onRunCompleted: (metadata, output) => {
-    const estimatedTokens = Math.ceil(output.length / 4);
+    const estimatedTokens = estimateTokens(output);
     recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
@@ -340,51 +353,21 @@ if (activeLocalLlmBackend === 'ollama') {
     console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
 }
 
-// Swap the toolkit's generic executeCliRun for PortOS's variant that adds
-// CLI-provider-specific args building (Codex `exec -`, Antigravity `agy --print`,
-// Claude Code `-p -`). The toolkit's in-tree implementation is also safe
-// (no shell, prompt via stdin) — the PortOS variant exists for the per-CLI
-// invocation conventions, not for security.
+// Register PortOS's CLI + TUI runners through the toolkit's declared extension
+// points (setCliRunner / setTuiRunner) instead of overwriting private props.
+// The CLI variant adds per-provider argv building (Codex `exec -`, Antigravity
+// `agy --print`, Claude Code `-p -`); the toolkit's in-tree implementation is
+// also safe (no shell, prompt via stdin) — the variant exists for the per-CLI
+// invocation conventions, not for security. The TUI runner has no toolkit
+// built-in: registering it lets POST /api/runs with a TUI provider dispatch
+// here instead of 400ing. Both runners track their child process / pty via the
+// toolkit's external-run registry, so the toolkit's own stopRun/isRunActive/
+// deleteRun account for live runs without any sibling-method monkey-patching.
 import { executeCliRun as executeCliRunFixed } from './services/runner.js';
 import { executeTuiRun as executeTuiRunFixed } from './lib/tuiPromptRunner.js';
-aiToolkit.services.runner.executeCliRun = executeCliRunFixed;
-// Attach the TUI executor so POST /api/runs with a TUI provider dispatches
-// here instead of erroring. The toolkit's runs router checks for
-// `runnerService.executeTuiRun` and 400s otherwise — without this patch,
-// runs UI would be unable to start TUI runs even though the staged-LLM path
-// (promptRunner.js) already routes TUI internally.
-aiToolkit.services.runner.executeTuiRun = executeTuiRunFixed;
-// Also patch stopRun + isRunActive so they consult `_portosActiveRuns`
-// (where the PortOS CLI variant tracks child processes), not just the
-// toolkit's internal `activeRuns` map. Without this, the runs router
-// would report live CLI runs as inactive and refuse to stop them.
-const originalStopRun = aiToolkit.services.runner.stopRun.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.stopRun = async (runId) => {
-  const portosActive = aiToolkit.services.runner._portosActiveRuns?.get(runId);
-  if (portosActive) {
-    if (portosActive.kill) portosActive.kill('SIGTERM');
-    aiToolkit.services.runner._portosActiveRuns.delete(runId);
-    return true;
-  }
-  return originalStopRun(runId);
-};
-const originalIsRunActive = aiToolkit.services.runner.isRunActive.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.isRunActive = (runId) => {
-  if (aiToolkit.services.runner._portosActiveRuns?.has(runId)) return true;
-  return originalIsRunActive(runId);
-};
-// Patch deleteRun so that deleting an in-flight PortOS CLI run also kills the
-// child process before removing the on-disk directory. Without this patch,
-// deleteRun only checks the toolkit's internal `activeRuns` map (which is
-// empty for PortOS CLI runs) and silently leaves a zombie child process running.
-const originalDeleteRun = aiToolkit.services.runner.deleteRun.bind(aiToolkit.services.runner);
-aiToolkit.services.runner.deleteRun = async function (runId, ...args) {
-  if (this._portosActiveRuns?.has?.(runId)) {
-    await this.stopRun(runId);
-  }
-  return originalDeleteRun.call(this, runId, ...args);
-};
-console.log('🔧 Patched aiToolkit runner.executeCliRun + stopRun + isRunActive + deleteRun with PortOS CLI variants');
+aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
+aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
+console.log('🔧 Registered PortOS CLI + TUI runners via aiToolkit runner extension points');
 
 // Note: prompts service is initialized automatically by createAIToolkit()
 
@@ -461,6 +444,7 @@ app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
 app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/media/annotations', mediaAnnotationsRoutes);
+app.use('/api/media/sketches', mediaSketchesRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/client-errors', clientErrorsRoutes);
 app.use('/api/backup', backupRoutes);
@@ -530,6 +514,7 @@ app.use('/api/character', characterRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
 app.use('/api/video-gen', videoGenRoutes);
+app.use('/api/devtools/video-download', videoDownloadRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
@@ -594,8 +579,15 @@ recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot reco
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
-// Pre-fill POST drill cache in background
+// Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
+// cache fill only happens on explicit user request (see meatspacePostRoutes.js).
 initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
+// Register the optional daily POST reminder (opt-in, off by default) if the
+// user has enabled it — deterministic cron nudge, no LLM calls.
+// catchUpMissedSlot: true so a reminder whose slot elapsed while the server
+// was down (or during a redeploy) still fires once we're back up, instead of
+// silently waiting for tomorrow's tick (#2015).
+registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
@@ -632,49 +624,17 @@ getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reco
 // Re-arm any voice timers that survived a restart (independent of voice.enabled —
 // a pending reminder should still fire even if voice is currently off).
 initVoiceTimers().catch(err => console.error(`❌ Voice timer init failed: ${err.message}`));
-// Check for update completion marker from a previous update cycle
-const updateMarkerPath = join(PATHS.data, 'update-complete.json');
-const removeMarker = () => unlink(updateMarkerPath).catch(e => {
-  if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
-});
-
-(async () => {
-  let raw;
-  try { raw = await readFile(updateMarkerPath, 'utf-8'); }
-  catch (err) {
-    if (err?.code === 'ENOENT') return; // No marker = no recent update
-    console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
-    return removeMarker();
-  }
-
-  let marker;
-  try { marker = JSON.parse(raw); }
-  catch (err) {
-    console.error(`❌ Corrupted update marker (invalid JSON): ${err?.message ?? err}`);
-    return removeMarker();
-  }
-
-  if (!marker.version || !marker.completedAt) {
-    console.error(`❌ Update marker missing required fields (version: ${marker.version}, completedAt: ${marker.completedAt})`);
-    return removeMarker();
-  }
-
-  const runningVersion = await getCurrentVersion();
-  if (marker.version !== runningVersion) {
-    console.error(`❌ Update marker version (${marker.version}) doesn't match running version (${runningVersion}) — recording as failed`);
-    await recordUpdateResult({ version: marker.version, success: false, completedAt: marker.completedAt, log: `Version mismatch: expected ${marker.version}, running ${runningVersion}` })
-      .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
-    return removeMarker();
-  }
-
-  console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
-  await recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
-    .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
-  return removeMarker();
-})().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
+// Check for update completion marker from a previous update cycle. The full
+// read/validate/record/cleanup lifecycle lives in updateChecker.js.
+processUpdateMarker().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
 
 // Clear stale updateInProgress if the server was killed mid-update
 clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
+
+// Capture the commit this process booted at, so /api/update/status can detect
+// a bare `git pull` that advanced on-disk HEAD without restarting (issue #1779).
+// Best-effort — a tarball/non-git install just yields no boot commit.
+captureBootCommit().catch(err => console.error(`❌ Boot commit capture failed: ${err.message}`));
 
 // Start periodic update checker (checks GitHub releases every 30 min)
 startUpdateScheduler();
@@ -798,6 +758,26 @@ ensureSelf()
     // onto its analysis snapshot + work collection on completion, even if the
     // editor unmounted mid-render (#1363). Also depends on the queue being loaded.
     initWritersRoomSceneImageHook();
+    // Music Video scene-image hook — durably files a queued reference-frame
+    // render onto its project scene's `referenceImageId` on completion, even if
+    // the director board unmounted mid-render (#1760 Phase 1b). Also depends on
+    // the queue being loaded.
+    initMusicVideoSceneImageHook();
+    // Music Video scene-video hook — durably files a queued i2v scene clip onto
+    // its project scene's `videoHistoryId` on completion, even if the director
+    // board unmounted mid-render (#1760 Phase 1). Also depends on the queue
+    // being loaded.
+    initMusicVideoSceneVideoHook();
+    // Creative Director music-bed hook — durably files a queued first-pass
+    // audio render onto its project's `musicBed` field on completion, even if
+    // the requesting client unmounted mid-render (#1928). Also depends on the
+    // queue being loaded.
+    initCreativeDirectorMusicBedHook();
+    // Creative Director scene-frame hook — durably files a queued first-pass
+    // reference-frame render onto its project scene's `sourceImageFile` on
+    // completion, even if no client is watching (#1867). Also depends on the
+    // queue being loaded.
+    initCreativeDirectorSceneImageHook();
     // Pipeline filename hooks — stamp `filename` onto stage records on
     // media-job completion so the UI can still render them after the
     // 24h media-job archive TTL elapses.
@@ -1085,14 +1065,45 @@ ensureSelf()
     process.exit(1);
   });
 
-const closeServer = (server, label) => new Promise((resolve) => {
-  if (!server) return resolve();
-  server.close((err) => {
-    if (err) console.error(`⚠️ Error closing ${label}: ${err.message}`);
-    else console.log(`✅ ${label} closed`);
+// Run an async close but resolve anyway after `ms` — so a close that never
+// settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
+// leaked DB client) can't hang shutdown; process.exit() reclaims the resources at
+// the OS level. `run(finish)` receives a settle-once callback: finish() /
+// finish(successMsg) / finish(errMsg, true). The backstop is .unref()'d so it
+// never keeps the event loop alive on its own.
+const withGrace = (label, ms, run) => new Promise((resolve) => {
+  let settled = false;
+  const finish = (msg, isErr) => {
+    if (settled) return;
+    settled = true;
+    if (msg) (isErr ? console.error : console.log)(msg);
     resolve();
-  });
+  };
+  run(finish);
+  setTimeout(() => finish(`⚠️ ${label} close exceeded ${ms}ms — proceeding`, true), ms).unref?.();
 });
+
+// graceMs is deliberately short: closeAllConnections() force-drops every
+// connection, so there is no graceful drain left to wait for — the only thing that
+// can outlast it is a WebSocket-upgraded socket the server no longer tracks (and
+// io.close()'s engine.close() already tore those down protocol-side; the OS reaps
+// the TCP remnant on process.exit). So don't tax every restart waiting on it.
+// ERR_SERVER_NOT_RUNNING means it was already closed (io.close() closes whichever
+// server is its current this.httpServer) — success for us, not a failure.
+const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, (finish) => {
+  if (!server) return finish();
+  server.close((err) => {
+    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finish(`⚠️ Error closing ${label}: ${err.message}`, true);
+    else finish(`✅ ${label} closed`);
+  });
+  // Order matters: close() above stops accepting NEW connections; NOW force-drop
+  // the existing long-lived ones (SSE + keep-alive). (Node 18.2+.)
+  server.closeAllConnections?.();
+});
+
+// Hard ceiling on graceful shutdown: if Socket.IO/HTTP don't close within this
+// window, force-exit so PM2 isn't left waiting on a hung process.
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
 
 let shuttingDown = false;
 const shutdown = async (signal) => {
@@ -1113,22 +1124,41 @@ const shutdown = async (signal) => {
   const forceExitTimer = setTimeout(() => {
     console.error('⚠️ Graceful shutdown timed out, forcing exit');
     process.exit(1);
-  }, 10000);
+  }, GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+  // Don't let the safety timer itself keep the event loop alive — if every
+  // other handle has closed we should exit immediately, not wait out the timer.
+  forceExitTimer.unref?.();
 
-  await new Promise((resolve) => {
-    io.close((err) => {
-      if (err) console.error(`⚠️ Error closing Socket.IO: ${err.message}`);
-      else console.log('✅ Socket.IO server closed');
-      resolve();
-    });
-  });
-  await closeServer(httpServer, 'HTTP server');
-  await closeServer(localHttpServer, 'Local HTTP server');
+  // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
+  // below don't wait on connections that never end on their own.
+  try { httpServer.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(http): ${e.message}`); }
+  try { localHttpServer?.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(mirror): ${e.message}`); }
+
+  // socket.io's io.close() closes engine.io AND its current this.httpServer — and
+  // every io.attach() reassigns this.httpServer (socket.io index.js:303), so with
+  // HTTPS on (io.attach(localHttpServer) at boot) io.close() closes the *mirror*,
+  // not the primary :5555 server. The historical bug was calling close() a second
+  // time on that already-closed server: Node registers the callback as a one-time
+  // 'close' listener for an event that already fired, so it never runs and shutdown
+  // hangs forever — the real cause of the reconcile "stopping apps" hang.
+  await withGrace('Socket.IO', 3000, (finish) =>
+    io.close((err) => finish(err ? `⚠️ Error closing Socket.IO: ${err.message}` : '✅ Socket.IO closed', !!err)));
+  // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
+  // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
+  // the bounded backstop in closeServer guarantees neither can hang shutdown even
+  // if a future socket.io version changes which server it owns.
+  await Promise.all([
+    closeServer(httpServer, 'HTTP server'),
+    closeServer(localHttpServer, 'Local HTTP mirror')
+  ]);
 
   const { close } = await import('./lib/db.js');
   if (typeof close === 'function') {
-    await close();
-    console.log('✅ DB pool closed');
+    // Bound the DB pool close: pool.end() waits for every checked-out client to
+    // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
+    // otherwise stall shutdown until the force-exit timer.
+    await withGrace('DB pool', 3000, (finish) =>
+      close().then(() => finish('✅ DB pool closed'), (err) => finish(`⚠️ DB pool close failed: ${err.message}`, true)));
   } else {
     console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
   }

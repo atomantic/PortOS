@@ -13,6 +13,7 @@ import {
   pickPrimaryFile,
   pickPreviewImage,
   pickVersion,
+  searchCivitaiLoras,
   slugifyForFilename,
 } from './civitai.js';
 
@@ -304,6 +305,35 @@ describe('fetchCivitaiModel', () => {
     const fetchImpl = async () => { called = true; return mockJsonResponse({}); };
     await expect(fetchCivitaiModel('abc', { fetchImpl })).rejects.toThrow(/Invalid Civitai model id/);
     expect(called).toBe(false);
+  });
+  it('passes a default abort signal so a hung Civitai response times out', async () => {
+    let opts = null;
+    const fetchImpl = async (_url, o) => { opts = o; return mockJsonResponse({ id: 1 }); };
+    await fetchCivitaiModel('123', { fetchImpl });
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+  it('honors a caller-provided abort signal', async () => {
+    let opts = null;
+    const fetchImpl = async (_url, o) => { opts = o; return mockJsonResponse({ id: 1 }); };
+    const signal = AbortSignal.timeout(5000);
+    await fetchCivitaiModel('123', { fetchImpl, signal });
+    expect(opts.signal).toBe(signal);
+  });
+});
+
+describe('searchCivitaiLoras', () => {
+  it('passes a default abort signal so a hung search times out', async () => {
+    let opts = null;
+    const fetchImpl = async (_url, o) => { opts = o; return mockJsonResponse({ items: [], metadata: {} }); };
+    await searchCivitaiLoras({ runnerFamily: 'mflux', fetchImpl });
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+  it('honors a caller-provided abort signal', async () => {
+    let opts = null;
+    const fetchImpl = async (_url, o) => { opts = o; return mockJsonResponse({ items: [], metadata: {} }); };
+    const signal = AbortSignal.timeout(5000);
+    await searchCivitaiLoras({ runnerFamily: 'mflux', fetchImpl, signal });
+    expect(opts.signal).toBe(signal);
   });
 });
 

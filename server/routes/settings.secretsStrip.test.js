@@ -85,3 +85,109 @@ describe('PUT /api/settings — secrets-strip', () => {
     expect(readSettingsFile().timezone).toBe('Europe/Berlin');
   });
 });
+
+// Regression for #1821: third-party API tokens stored OUTSIDE the `secrets.*`
+// hierarchy (`imageGen.hfToken`, `civitai.apiKey`) must never be echoed by
+// GET /api/settings. The Settings UI reads only their presence from dedicated
+// status routes, so stripping the raw values is non-breaking.
+describe('GET /api/settings — external token redaction', () => {
+  it('omits imageGen.hfToken and civitai.apiKey while preserving siblings', async () => {
+    seedSettings({
+      timezone: 'UTC',
+      imageGen: { hfToken: 'hf_secret123', defaultModel: 'flux' },
+      civitai: { apiKey: 'civ_secret456', autoDownload: true },
+    });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    // Tokens are stripped from the response...
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+    expect(res.body.civitai?.apiKey).toBeUndefined();
+    // ...but their sibling config is preserved.
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    expect(res.body.civitai?.autoDownload).toBe(true);
+    // ...and the on-disk values are untouched (redaction is response-only).
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
+    expect(persisted.civitai?.apiKey).toBe('civ_secret456');
+  });
+
+  it('leaves settings without those keys unchanged', async () => {
+    seedSettings({ timezone: 'UTC', imageGen: { defaultModel: 'flux' } });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    expect(res.body.civitai).toBeUndefined();
+  });
+
+  it('does not spread a malformed array-valued civitai into index keys', async () => {
+    seedSettings({ civitai: ['legacy-junk'] });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.civitai)).toBe(true);
+    expect(res.body.civitai[0]).toBe('legacy-junk');
+  });
+
+  it('also redacts the tokens from the PUT /api/settings save response', async () => {
+    // Tokens already persisted; an unrelated save must not echo them back —
+    // otherwise the leak just moves from initial load to the save round-trip.
+    seedSettings({
+      imageGen: { hfToken: 'hf_secret123', defaultModel: 'flux' },
+      civitai: { apiKey: 'civ_secret456' },
+    });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'UTC' });
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+    expect(res.body.civitai?.apiKey).toBeUndefined();
+    expect(res.body.imageGen?.defaultModel).toBe('flux');
+    // On-disk values survive the redaction.
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
+    expect(persisted.civitai?.apiKey).toBe('civ_secret456');
+  });
+
+  // Because GET no longer returns the tokens, a client that rebuilds a full
+  // top-level object from a GET and PUTs it back (e.g. patchSettingsSlice)
+  // sends an `imageGen`/`civitai` object WITHOUT the token. The server must
+  // re-inject the persisted token so an unrelated slice save doesn't silently
+  // delete the credential.
+  it('preserves a persisted hfToken when a PUT replaces imageGen without it', async () => {
+    seedSettings({ imageGen: { hfToken: 'hf_keepme', mode: 'local' } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ imageGen: { mode: 'external', local: { pythonPath: '/usr/bin/python3' } } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.imageGen?.mode).toBe('external');
+    expect(persisted.imageGen?.local?.pythonPath).toBe('/usr/bin/python3');
+    // And the save response still doesn't echo the preserved token.
+    expect(res.body.imageGen?.hfToken).toBeUndefined();
+  });
+
+  it('preserves a persisted civitai.apiKey when a PUT replaces civitai without it', async () => {
+    seedSettings({ civitai: { apiKey: 'civ_keepme', autoDownload: true } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ civitai: { autoDownload: false } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.civitai?.apiKey).toBe('civ_keepme');
+    expect(persisted.civitai?.autoDownload).toBe(false);
+  });
+
+  it('leaves a persisted token untouched when the PUT omits its parent entirely', async () => {
+    seedSettings({ imageGen: { hfToken: 'hf_keepme' }, timezone: 'UTC' });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'America/Los_Angeles' });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.timezone).toBe('America/Los_Angeles');
+  });
+});

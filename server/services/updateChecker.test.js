@@ -20,6 +20,11 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn()
 }));
 
+vi.mock('fs/promises', () => ({
+  readFile: vi.fn(),
+  unlink: vi.fn().mockResolvedValue(undefined)
+}));
+
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(),
   UPSTREAM_OWNER: 'atomantic',
@@ -27,7 +32,14 @@ vi.mock('../lib/gitRemote.js', () => ({
   UPSTREAM_FULL_NAME: 'atomantic/PortOS'
 }));
 
+// Keep getUpdateStatus unit tests hermetic — install-sync detection has its own
+// suite (installState.test.js); here it must not spawn real git/fs.
+vi.mock('./installState.js', () => ({
+  getInstallState: vi.fn().mockResolvedValue(null)
+}));
+
 import { readJSONFile, ensureDir, atomicWrite } from '../lib/fileUtils.js';
+import { readFile, unlink } from 'fs/promises';
 import { execGh } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import {
@@ -40,6 +52,7 @@ import {
   clearStaleUpdateInProgress,
   getRemoteInfo,
   syncFork,
+  processUpdateMarker,
   updateEvents
 } from './updateChecker.js';
 
@@ -747,5 +760,54 @@ describe('syncFork', () => {
       alreadyUpToDate: false
     }));
     expect(saved.lastForkSync.syncedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe('processUpdateMarker', () => {
+  const ENOENT = Object.assign(new Error('not found'), { code: 'ENOENT' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // getCurrentVersion + loadState both read via readJSONFile — distinguish by path.
+    readJSONFile.mockImplementation((p) =>
+      String(p).endsWith('package.json') ? { version: '1.2.3' } : {});
+  });
+
+  it('returns silently and records nothing when no marker exists', async () => {
+    readFile.mockRejectedValueOnce(ENOENT);
+    await processUpdateMarker();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it('records success and removes the marker when versions match', async () => {
+    readFile.mockResolvedValueOnce(JSON.stringify({ version: '1.2.3', completedAt: '2026-06-30T00:00:00Z' }));
+    await processUpdateMarker();
+    const saved = JSON.parse(atomicWrite.mock.calls.at(-1)[1]);
+    expect(saved.lastUpdateResult).toMatchObject({ version: '1.2.3', success: true });
+    expect(unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('records failure when the marker version mismatches the running version', async () => {
+    readFile.mockResolvedValueOnce(JSON.stringify({ version: '9.9.9', completedAt: '2026-06-30T00:00:00Z' }));
+    await processUpdateMarker();
+    const saved = JSON.parse(atomicWrite.mock.calls.at(-1)[1]);
+    expect(saved.lastUpdateResult).toMatchObject({ version: '9.9.9', success: false });
+    expect(saved.lastUpdateResult.log).toMatch(/mismatch/i);
+    expect(unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a corrupt (invalid JSON) marker without recording a result', async () => {
+    readFile.mockResolvedValueOnce('{ not json');
+    await processUpdateMarker();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes a marker missing required fields without recording a result', async () => {
+    readFile.mockResolvedValueOnce(JSON.stringify({ version: '1.2.3' })); // no completedAt
+    await processUpdateMarker();
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(unlink).toHaveBeenCalledTimes(1);
   });
 });

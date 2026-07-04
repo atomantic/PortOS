@@ -11,6 +11,14 @@ vi.mock('fs', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(),
+  // atomicWrite replaced the raw fs.writeFile(JSON.stringify) index-save site (#1837);
+  // route it through the mocked fs.promises.writeFile (this file mocks 'fs', not
+  // 'fs/promises') so saveIndex resolves cleanly without touching real disk.
+  atomicWrite: vi.fn(async (filePath, data) => {
+    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2)
+    const { promises } = await import('fs')
+    return promises.writeFile(filePath, payload)
+  }),
   PATHS: { memory: '/mock/data/memory' }
 }))
 

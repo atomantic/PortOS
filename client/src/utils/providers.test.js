@@ -8,6 +8,8 @@ import {
   isEmbeddingModel,
   isVisionModel,
   visionLocalModelFilter,
+  isToolUseModel,
+  toolUseLocalModelFilter,
   localBackendForProvider,
   effectiveModelContextWindow,
   mergeModelLists,
@@ -16,6 +18,7 @@ import {
   isCliProvider,
   isApiProvider,
   isProcessProvider,
+  isOllamaBackedProvider,
   isClaudeCodePlanCli,
   enabledApiProviderFilter,
   providerTypeClass,
@@ -85,6 +88,19 @@ describe('provider type predicates', () => {
     expect(isProcessProvider(api)).toBe(false);
   });
 
+  it('isOllamaBackedProvider matches the marker or an Ollama base URL', () => {
+    // explicit marker (Claude Ollama CLI + TUI samples carry this)
+    expect(isOllamaBackedProvider({ type: 'tui', ollamaBacked: true })).toBe(true);
+    expect(isOllamaBackedProvider({ type: 'cli', ollamaBacked: true })).toBe(true);
+    // inferred from ANTHROPIC_BASE_URL (port 11434 or "ollama" host)
+    expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(true);
+    expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://my-ollama:1234' } })).toBe(true);
+    // plain claude TUI / cloud providers are NOT ollama-backed
+    expect(isOllamaBackedProvider({ type: 'tui', command: 'claude' })).toBe(false);
+    expect(isOllamaBackedProvider({ type: 'cli', command: 'claude', envVars: {} })).toBe(false);
+    expect(isOllamaBackedProvider(null)).toBe(false);
+  });
+
   it('all predicates safely return false for nullish input', () => {
     expect(isTuiProvider(null)).toBe(false);
     expect(isTuiProvider(undefined)).toBe(false);
@@ -92,6 +108,7 @@ describe('provider type predicates', () => {
     expect(isApiProvider(null)).toBe(false);
     expect(isApiProvider(undefined)).toBe(false);
     expect(isProcessProvider(null)).toBe(false);
+    expect(isOllamaBackedProvider(undefined)).toBe(false);
   });
 });
 
@@ -113,6 +130,13 @@ describe('isClaudeCodePlanCli', () => {
   it('excludes Bedrock/Vertex-routed claude CLIs (billed via cloud, not the plan)', () => {
     expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } })).toBe(false);
     expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_VERTEX: '1' } })).toBe(false);
+  });
+
+  it('excludes Ollama-backed Claude (local model — never plan/API-billed)', () => {
+    // Claude Ollama CLI carries the ollamaBacked marker + ANTHROPIC_BASE_URL
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
+    // inferred purely from the base URL too
+    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
   });
 
   it('safely returns false for nullish input', () => {
@@ -219,6 +243,38 @@ describe('isVisionModel (mirror of server localModelHeuristics)', () => {
   });
 });
 
+describe('isToolUseModel (mirror of server localModelHeuristics)', () => {
+  it('flags known tool-use-capable model ids', () => {
+    for (const id of [
+      'qwen2.5:7b', 'qwen3:32b', 'llama3.1:8b', 'llama3.3:70b',
+      'mistral-small:24b', 'mixtral:8x7b', 'command-r:35b', 'hermes3:8b', 'glm-4:9b', 'gpt-oss:20b',
+    ]) {
+      expect(isToolUseModel(id), id).toBe(true);
+    }
+  });
+
+  it('does not flag non-tool families or non-strings', () => {
+    for (const id of ['llama3:8b', 'gemma2:9b', 'phi3:mini', 'nomic-embed-text', '']) {
+      expect(isToolUseModel(id), id).toBe(false);
+    }
+    expect(isToolUseModel(null)).toBe(false);
+  });
+});
+
+describe('toolUseLocalModelFilter', () => {
+  it('restricts local backends to tool-use models', () => {
+    const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+    expect(toolUseLocalModelFilter('qwen2.5:7b', ollama)).toBe(true);
+    expect(toolUseLocalModelFilter('gemma2:9b', ollama)).toBe(false);
+  });
+
+  it('leaves cloud/CLI providers untouched', () => {
+    const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+    expect(toolUseLocalModelFilter('gpt-4o', cloud)).toBe(true);
+    expect(toolUseLocalModelFilter('anything', undefined)).toBe(true);
+  });
+});
+
 describe('localBackendForProvider', () => {
   it('detects Ollama by endpoint or name', () => {
     expect(localBackendForProvider({ endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
@@ -244,6 +300,7 @@ describe('effectiveModelContextWindow', () => {
     expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-mini')).toBe(400_000);
     expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-nano')).toBe(128_000);
     expect(effectiveModelContextWindow({ type: 'tui' }, 'claude-opus-4-8')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-sonnet-5')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-sonnet-4-6')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
     expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-haiku-4-5')).toBe(200_000);

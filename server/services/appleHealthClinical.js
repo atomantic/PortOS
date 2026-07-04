@@ -6,9 +6,8 @@
  * into blood-tests.json.
  */
 
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
 import { getBloodTests } from './meatspaceHealth.js';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 
@@ -285,7 +284,7 @@ export async function importClinicalRecords(jsonStrings, io) {
   const newValues = fhirData.totalParsed;
 
   await ensureDir(PATHS.meatspace);
-  await writeFile(BLOOD_TESTS_FILE, JSON.stringify(merged, null, 2));
+  await atomicWrite(BLOOD_TESTS_FILE, merged);
 
   const summary = {
     clinicalRecords: jsonStrings.length,

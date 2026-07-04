@@ -300,7 +300,8 @@ function pickDownbeats(beats, onset, fps) {
  */
 function segmentSections(energy, fps, durationSec) {
   if (durationSec <= 0) return [];
-  const single = [{ label: 'Section 1', startSec: 0, endSec: Number(durationSec.toFixed(3)) }];
+  // A lone section carries the full (normalized) energy by definition.
+  const single = [{ label: 'Section 1', startSec: 0, endSec: Number(durationSec.toFixed(3)), energy: 1 }];
   if (durationSec < MIN_SECTION_SEC * 2) return single;
 
   const winFrames = Math.max(1, Math.round(SECTION_WINDOW_SEC * fps));
@@ -343,12 +344,32 @@ function segmentSections(energy, fps, durationSec) {
 
   const cutTimes = boundaries.map((w) => (w * winFrames) / fps);
   const edges = [0, ...cutTimes, durationSec];
+
+  // Per-section loudness: the mean windowed energy over each section's span,
+  // normalized to the loudest section (0..1). This drives the energy-weighted
+  // auto-arranger (#1915) — louder sections earn more, shorter scene cuts. It is
+  // an ADDITIVE field on the section shape; older cached analyses simply omit it
+  // and the arranger falls back to an even spread.
+  const winSec = winFrames / fps;
+  const sectionMeans = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    let sum = 0;
+    let n = 0;
+    for (let w = 0; w < winCount; w++) {
+      const tw = w * winSec; // window start time
+      if (tw >= edges[i] && tw < edges[i + 1]) { sum += profile[w]; n += 1; }
+    }
+    sectionMeans.push(n > 0 ? sum / n : 0);
+  }
+  const maxMean = Math.max(0, ...sectionMeans);
+
   const sections = [];
   for (let i = 0; i < edges.length - 1; i++) {
     sections.push({
       label: `Section ${i + 1}`,
       startSec: Number(edges[i].toFixed(3)),
       endSec: Number(edges[i + 1].toFixed(3)),
+      energy: maxMean > 0 ? Number((sectionMeans[i] / maxMean).toFixed(3)) : 1,
     });
   }
   return sections;
@@ -362,7 +383,7 @@ function segmentSections(energy, fps, durationSec) {
  * @param {number} sampleRate
  * @param {{ hop?: number }} [opts]
  * @returns {{ bpm: number|null, beats: number[], downbeats: number[],
- *   sections: Array<{label:string,startSec:number,endSec:number}>,
+ *   sections: Array<{label:string,startSec:number,endSec:number,energy:number}>,
  *   durationSec: number }}
  */
 export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {

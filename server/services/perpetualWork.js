@@ -161,6 +161,9 @@ const FORGE_ISSUE_CONFIG = {
       const owner = (r.stdout || '').trim();
       return (r.code !== 0 || !owner) ? { error: 'gh-unavailable' } : { owner };
     },
+    // `--self` mode: gh natively understands the `@me` token for `--author`, so
+    // no extra lookup is needed — the API resolves it to the authenticated user.
+    resolveSelf: async () => ({ author: '@me' }),
     normalize: (raw) => raw
   },
   'claim-issue-gitlab': {
@@ -178,6 +181,14 @@ const FORGE_ISSUE_CONFIG = {
       const owner = await resolveRemoteOwner(repoPath);
       return owner ? { owner } : { error: 'glab-owner-unresolved' };
     },
+    // `--self` mode: glab's `--author` expects a username (no `@me` token), so
+    // resolve the authenticated account via the API; transient if glab is
+    // unauthenticated / unreachable.
+    resolveSelf: async (repoPath) => {
+      const r = await runCli('glab', ['api', 'user', '-q', '.username'], repoPath);
+      const author = (r.stdout || '').trim();
+      return (r.code !== 0 || !author) ? { error: 'glab-unavailable' } : { author };
+    },
     // GitLab keys the number on `iid` and returns labels as plain strings.
     normalize: (raw) => raw.map((r) => ({ number: r.iid, title: r.title, labels: r.labels, assignees: r.assignees }))
   }
@@ -186,21 +197,33 @@ const FORGE_ISSUE_CONFIG = {
 /**
  * Shared claim-issue detector for both forges (config in FORGE_ISSUE_CONFIG).
  * Counts open issues that pass the same skip-list the claim agent applies,
- * honoring the author filter ('owner' = only the repo owner's issues, default;
- * 'any' = every author). The in-flight scan runs only when the list is
- * non-empty, so an empty queue parks without a wasted branch/PR scan.
+ * honoring the author filter ('self' = only issues YOU filed (`@me`), the
+ * default and the slashdo `/do:next --self` security boundary; 'owner' = only
+ * the repo owner's issues; 'any' = every author). The in-flight scan runs only
+ * when the list is non-empty, so an empty queue parks without a wasted
+ * branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'owner' } = {}) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } = {}) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
 
   const args = [...cfg.listArgs];
-  if (issueAuthorFilter !== 'any') {
+  // Resolve the author filter symmetrically with resolveIssueAuthorFilterBlock:
+  // 'any' = no filter; 'owner' = repo/project owner; everything else (the 'self'
+  // default plus any out-of-vocab value) = the @me security boundary. Transient
+  // resolver failures skip this dispatch and retry next tick rather than parking
+  // a full cadence.
+  if (issueAuthorFilter === 'any') {
+    // no --author filter
+  } else if (issueAuthorFilter === 'owner') {
     const { owner, error } = await cfg.resolveOwner(repoPath);
-    // Transient: skip this dispatch and retry next tick rather than parking a full cadence.
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     args.push('--author', owner);
+  } else {
+    const { author, error } = await cfg.resolveSelf(repoPath);
+    if (error) return { actionable: false, count: 0, reason: error, transient: true };
+    args.push('--author', author);
   }
 
   const res = await runCli(cfg.cli, args, repoPath);

@@ -1,7 +1,62 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
-import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN } from '../components/meatspace/post/constants';
+import {
+  LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
+  WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD,
+} from '../components/meatspace/post/constants';
+
+// sessionStorage key for the single in-progress run. Single-user tool → one
+// active run at a time, so a single key is enough. Restored on refresh so a
+// mid-drill reload resumes the same drill queue + completed results, and a
+// reload on the completed-but-unsaved results screen keeps the results.
+const RUN_STORAGE_KEY = 'post.activeRun';
+// Only an active or completed-unsaved run is worth resuming. A run that was
+// still generating a drill (`loading`) lost its in-flight request to the
+// reload, and an `idle`/`saved` run has nothing live to restore.
+const RESTORABLE_STATES = new Set(['drilling', 'between-drills', 'complete']);
+
+// uuid v4 usable in non-secure contexts. `crypto.randomUUID` only exists in a
+// secure context (HTTPS / localhost) — PortOS is commonly reached over plain
+// HTTP via Tailscale, where it's undefined — but `crypto.getRandomValues` is
+// available there too, so derive a spec-valid v4 from it (the server validates
+// the id with Zod `.uuid()`). Math.random is the last-ditch fallback.
+function newRunId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const b = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+  const h = [...b].map(x => x.toString(16).padStart(2, '0'));
+  return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
+}
+
+function loadRunSnapshot() {
+  if (typeof sessionStorage === 'undefined') return null;
+  const raw = sessionStorage.getItem(RUN_STORAGE_KEY);
+  if (!raw) return null;
+  let snap = null;
+  try { snap = JSON.parse(raw); } catch { return null; } // corrupt storage → start fresh
+  if (!snap || typeof snap !== 'object') return null;
+  if (snap.state === 'saving') {
+    // A scored session re-saves idempotently (client-supplied id → upsert), so
+    // restoring a mid-save run to `complete` is safe. A TRAINING save instead
+    // loops non-idempotent training-log writes; restoring it would let a re-save
+    // double-log every drill — and the entries were most likely already posted —
+    // so drop it rather than resume.
+    if (snap.isTraining) return null;
+    snap.state = 'complete';
+  }
+  if (!RESTORABLE_STATES.has(snap.state)) return null;
+  return snap;
+}
+
+function clearRunSnapshot() {
+  if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(RUN_STORAGE_KEY);
+}
 
 function computeSessionScoreFromResults(results) {
   if (!results.length) return 0;
@@ -27,6 +82,18 @@ function computeSessionScoreFromResults(results) {
   return Math.round(results.reduce((s, r) => s + (r.score || 0), 0) / results.length);
 }
 
+// Memory drill questions carry chunk/element attribution the server needs to
+// bucket mastery bookkeeping (item.mastery.chunks / item.mastery.elements) —
+// chunkId on memory-sequence questions (via findChunkForLine), element on
+// memory-element-flash questions. Non-memory questions never have these, so
+// this only adds fields when present rather than sending explicit nulls.
+function memoryAttribution(q) {
+  const attrs = {};
+  if (q?.chunkId != null) attrs.chunkId = q.chunkId;
+  if (q?.element != null) attrs.element = q.element;
+  return attrs;
+}
+
 // States: idle → loading → drilling → between-drills → complete → saving → saved
 const STATES = {
   IDLE: 'idle',
@@ -39,22 +106,60 @@ const STATES = {
 };
 
 export function usePostSession() {
-  const [state, setState] = useState(STATES.IDLE);
-  const [drills, setDrills] = useState([]); // queued drill configs
-  const [currentDrillIndex, setCurrentDrillIndex] = useState(0);
-  const [currentDrill, setCurrentDrill] = useState(null); // generated questions
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState([]); // answers for current drill
-  const [drillResults, setDrillResults] = useState([]); // completed drill results
-  const [sessionScore, setSessionScore] = useState(0);
+  // Seed once from any persisted in-progress run so a refresh mid-drill (or on
+  // the completed-unsaved results screen) resumes instead of dropping the run.
+  const [restored] = useState(loadRunSnapshot);
+  const [state, setState] = useState(restored?.state ?? STATES.IDLE);
+  const [drills, setDrills] = useState(restored?.drills ?? []); // queued drill configs
+  const [currentDrillIndex, setCurrentDrillIndex] = useState(restored?.currentDrillIndex ?? 0);
+  const [currentDrill, setCurrentDrill] = useState(restored?.currentDrill ?? null); // generated questions
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(restored?.currentQuestionIndex ?? 0);
+  const [answers, setAnswers] = useState(restored?.answers ?? []); // answers for current drill
+  const [drillResults, setDrillResults] = useState(restored?.drillResults ?? []); // completed drill results
+  const [sessionScore, setSessionScore] = useState(restored?.sessionScore ?? 0);
   const [savedSession, setSavedSession] = useState(null);
-  const [isTraining, setIsTraining] = useState(false);
+  const [isTraining, setIsTraining] = useState(restored?.isTraining ?? false);
+  // Run id doubles as the client-generated session id (idempotent submit) and
+  // the /post/session/:id results URL — so a saved session's URL === its run id.
+  const [runId, setRunId] = useState(restored?.runId ?? null);
+  const [tags, setTags] = useState(restored?.tags ?? {}); // session tags captured at launch
   const [lastAnswer, setLastAnswer] = useState(null); // { correct, expected, answered } for training feedback
-  const questionStartRef = useRef(Date.now());
-  const drillStartRef = useRef(Date.now());
+  // Seed the timing refs from the restored snapshot so a mid-drill refresh keeps
+  // measuring elapsed time from the ORIGINAL question/drill start — otherwise the
+  // in-flight question's responseMs (and the drill's totalMs) would reset to 0 on
+  // reload, under-counting time and inflating the speed bonus.
+  const questionStartRef = useRef(restored?.questionStartedAt ?? Date.now());
+  const drillStartRef = useRef(restored?.drillStartedAt ?? Date.now());
   const finishDrillRef = useRef(null);
 
-  const startSession = useCallback(async (drillConfigs, training = false) => {
+  // Persist the live run to sessionStorage on every meaningful change; clear it
+  // once idle/saved (nothing live to resume). Kept minimal — only the fields
+  // needed to rebuild the runner and results screen after a reload.
+  useEffect(() => {
+    if (state === STATES.IDLE || state === STATES.SAVED) {
+      clearRunSnapshot();
+      return;
+    }
+    // While a drill is generating (initial start, next drill, or LLM scoring),
+    // do NOT overwrite the last stable snapshot: `loading` isn't restorable, and
+    // the in-flight request can't be resumed — but the COMPLETED results already
+    // captured in the prior drilling/between-drills snapshot must survive a
+    // refresh during generation. Keeping the last good snapshot lets a refresh
+    // resume at the between-drills screen instead of dropping the whole run.
+    if (state === STATES.LOADING) return;
+    if (typeof sessionStorage === 'undefined') return;
+    sessionStorage.setItem(RUN_STORAGE_KEY, JSON.stringify({
+      runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex,
+      answers, drillResults, sessionScore, isTraining, tags,
+      // Persist the timing anchors (mutated synchronously on each question/drill
+      // transition, just before the state change that fires this effect) so a
+      // refresh resumes the clock instead of restarting it.
+      questionStartedAt: questionStartRef.current,
+      drillStartedAt: drillStartRef.current,
+    }));
+  }, [runId, state, drills, currentDrillIndex, currentDrill, currentQuestionIndex, answers, drillResults, sessionScore, isTraining, tags]);
+
+  const startSession = useCallback(async (drillConfigs, training = false, sessionTags = {}) => {
     // drillConfigs: [{ type, config, timeLimitSec }]
     if (!drillConfigs?.length) {
       toast.error('No drills configured');
@@ -67,9 +172,13 @@ export function usePostSession() {
     setDrillResults([]);
     setSavedSession(null);
     setLastAnswer(null);
+    // New run → new client-side id (also the future /post/session/:id) and the
+    // tags to submit, so both survive a mid-run refresh via the snapshot.
+    setRunId(newRunId());
+    setTags(sessionTags || {});
 
     const first = drillConfigs[0];
-    const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model).catch(err => {
+    const drill = await generatePostDrill(first.type, first.config, first.providerId, first.model, { silent: true }).catch(err => {
       toast.error(`Failed to generate drill: ${err.message}`);
       setState(STATES.IDLE);
       return null;
@@ -98,11 +207,16 @@ export function usePostSession() {
     const speedBonus = Math.max(0, 1 - avgResponseMs / timeLimitMs);
     const score = Math.min(100, Math.max(0, Math.round((correctRatio * 0.8 + speedBonus * 0.2) * 100)));
 
+    const isMemoryDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
     const result = {
-      module: 'mental-math',
+      module: isMemoryDrill ? 'memory' : 'mental-math',
       type: currentDrill.type,
       config: currentDrill.config,
       questions: finalAnswers,
+      // Memory drills: carry the drilled item's id through to session submit so
+      // the server can map this review back to it and advance its
+      // spaced-repetition schedule (mirrors the MemoryBuilder practice flow).
+      ...(isMemoryDrill && currentDrill.memoryItemId ? { memoryItemId: currentDrill.memoryItemId } : {}),
       score,
       totalMs
     };
@@ -134,10 +248,23 @@ export function usePostSession() {
     // For estimation drills, check within tolerance
     let correct;
     let answered;
+    // Fill-blank element attribution: which specific answers[] entry the
+    // user's guess matched (if any) — set only on an unambiguous correct
+    // match, since a wrong guess against a multi-blank prompt can't be
+    // attributed to any one blank/element (issue #2099 codex review).
+    let matchedElement;
     if (hasFillBlankAnswers) {
       answered = value;
       const normalized = value !== null ? String(value).toLowerCase().trim() : '';
-      correct = q.answers.some(a => String(a).toLowerCase().trim() === normalized);
+      // q.answers holds ACCEPTABLE-WORD OBJECTS ({ index, word, element }), not
+      // scalars — comparing via String(a) on an object always produced
+      // "[object Object]" so this could never match, silently scoring every
+      // fill-blank answer wrong (issue #2116). Compare against the object's
+      // `.word` (falling back to the raw value for a plain-string entry, for
+      // forward/backward compatibility with any other producer).
+      const matched = q.answers.find(a => String(a?.word ?? a).toLowerCase().trim() === normalized);
+      correct = !!matched;
+      matchedElement = matched?.element ?? null;
     } else if (isTextAnswer) {
       answered = value;
       correct = value !== null && String(value).toLowerCase().trim() === String(q.expected).toLowerCase().trim();
@@ -157,7 +284,13 @@ export function usePostSession() {
       expected: q.expected,
       answered,
       correct,
-      responseMs
+      responseMs,
+      ...memoryAttribution(q),
+      // Fill-blank's per-answer element (see matchedElement above) takes
+      // priority over memoryAttribution(q)'s question-level element field
+      // (which fill-blank questions never carry — only memory-element-flash
+      // does), so mergeMasteryFromSession can credit the matched element.
+      ...(matchedElement != null ? { element: matchedElement } : {})
     };
 
     const newAnswers = [...answers, answer];
@@ -199,7 +332,7 @@ export function usePostSession() {
     setState(STATES.LOADING);
 
     const next = drills[nextIndex];
-    const drill = await generatePostDrill(next.type, next.config, next.providerId, next.model).catch(err => {
+    const drill = await generatePostDrill(next.type, next.config, next.providerId, next.model, { silent: true }).catch(err => {
       toast.error(`Failed to generate drill: ${err.message}`);
       setState(STATES.IDLE);
       return null;
@@ -223,7 +356,8 @@ export function usePostSession() {
       expected: q.expected,
       answered: null,
       correct: false,
-      responseMs: 0
+      responseMs: 0,
+      ...memoryAttribution(q)
     }));
 
     const finalAnswers = [...answers, ...remaining];
@@ -241,7 +375,7 @@ export function usePostSession() {
       const timeLimitMs = (drillConfig?.timeLimitSec || 120) * 1000;
       const scoreResult = await scorePostLlmDrill(
         drillResult.type, drillResult.drillData, drillResult.responses,
-        timeLimitMs, drillConfig?.providerId, drillConfig?.model
+        timeLimitMs, drillConfig?.providerId, drillConfig?.model, { silent: true }
       ).catch(err => {
         toast.error(`LLM scoring failed: ${err.message}`);
         return null;
@@ -270,20 +404,70 @@ export function usePostSession() {
     }
   }, [drillResults, currentDrillIndex, drills]);
 
-  const saveSession = useCallback(async (tags = {}) => {
+  // Interactive cognitive drills (n-back / digit-span / stroop) build their own
+  // fully-formed result (questions + local score) and hand it back here. Unlike
+  // LLM drills there is no async scoring call — the server recomputes the score
+  // deterministically from drillData on submit. Mirrors completeLlmDrill's
+  // advance/complete bookkeeping.
+  const completeCognitiveDrill = useCallback((drillResult) => {
+    const newResults = [...drillResults, drillResult];
+    setDrillResults(newResults);
+
+    if (currentDrillIndex + 1 < drills.length) {
+      setState(STATES.BETWEEN_DRILLS);
+    } else {
+      setSessionScore(computeSessionScoreFromResults(newResults));
+      setState(STATES.COMPLETE);
+    }
+  }, [drillResults, currentDrillIndex, drills]);
+
+  const saveSession = useCallback(async (overrideTags = {}) => {
     setState(STATES.SAVING);
+    // Prefer the tags captured at launch (survive a refresh via the snapshot);
+    // an explicit arg still wins per-key for a live save.
+    const finalTags = { ...tags, ...(overrideTags || {}) };
 
     // Training mode: log each drill to the training log, don't save scored session
     if (isTraining) {
       for (const r of drillResults) {
         const questionCount = r.questions?.length || r.responses?.length || 0;
-        const correctCount = r.questions?.filter(q => q.correct)?.length ?? 0;
+        // LLM drills score via completeLlmDrill, which stores the scored
+        // responses under `r.responses` (with an `llmScore` field) rather
+        // than `r.questions` (with a boolean `correct`) — the two shapes come
+        // from two different result-building paths (finishDrill vs
+        // completeLlmDrill). Reading `.correct` off `r.questions` for an LLM
+        // drill always found `undefined`, so every LLM training entry
+        // (including wordplay) silently logged correctCount=0 regardless of
+        // actual performance (issue #2097).
+        const isLlmDrill = LLM_DRILL_TYPES.includes(r.type);
+        const correctCount = isLlmDrill
+          ? countLlmCorrect(r.responses || [])
+          : (r.questions?.filter(q => q.correct)?.length ?? 0);
+        // Per-question breakdown (issue #2114) — the standalone Wordplay tab
+        // (WordplayTrainer.jsx) already threads this through; extend the same
+        // breakdown to the in-session runner's completed wordplay rounds so
+        // both entry points populate it, not just the standalone tab. Scoped
+        // to the four wordplay types since those are the only ones whose
+        // `r.responses` entries (post-completeLlmDrill) carry a prompt/response
+        // shape a future dashboard could render per-question.
+        const questions = WORDPLAY_LLM_DRILL_TYPES.includes(r.type)
+          ? (r.responses || []).map(resp => ({
+            prompt: resp.prompt,
+            response: resp.response,
+            items: resp.items,
+            responseMs: resp.responseMs,
+            score: resp.llmScore != null ? resp.llmScore : undefined,
+            feedback: resp.llmFeedback,
+            correct: (resp.llmScore ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+          }))
+          : undefined;
         await submitTrainingEntry({
           module: r.module,
           drillType: r.type,
           questionCount,
           correctCount,
           totalMs: r.totalMs || 0,
+          ...(questions ? { questions } : {}),
         }).catch(() => {});
       }
       toast.success('Training session logged');
@@ -293,21 +477,32 @@ export function usePostSession() {
 
     const modules = [...new Set(drillResults.map(r => r.module))];
     const session = await submitPostSession({
+      // Client-generated id → an auto-retry after a dropped response upserts the
+      // same record server-side instead of double-recording the session.
+      id: runId || newRunId(),
       cadence: 'daily',
       modules,
       tasks: drillResults,
-      tags
-    }).catch(err => {
+      tags: finalTags
+    }, { silent: true }).catch(err => {
       toast.error(`Failed to save session: ${err.message}`);
       setState(STATES.COMPLETE);
       return null;
     });
     if (!session) return null;
     setSavedSession(session);
+    // Replace the pre-save estimate (computeSessionScoreFromResults, a plain
+    // per-domain average) with the server's authoritative score — which now
+    // additionally honors configured per-module scoring.weights (issue
+    // #2099). Without this, PostSessionResults keeps showing the local
+    // estimate even in the SAVED state, silently diverging from the score
+    // that was actually persisted/toasted whenever weights aren't uniform
+    // (issue #2099 codex review).
+    setSessionScore(session.score);
     toast.success(`POST complete — score: ${session.score}`);
     setState(STATES.SAVED);
     return session;
-  }, [drillResults, isTraining]);
+  }, [drillResults, isTraining, tags, runId]);
 
   const reset = useCallback(() => {
     setState(STATES.IDLE);
@@ -320,7 +515,10 @@ export function usePostSession() {
     setSessionScore(0);
     setSavedSession(null);
     setIsTraining(false);
+    setRunId(null);
+    setTags({});
     setLastAnswer(null);
+    clearRunSnapshot();
   }, []);
 
   return {
@@ -335,6 +533,7 @@ export function usePostSession() {
     sessionScore,
     savedSession,
     isTraining,
+    runId,
     lastAnswer,
     startSession,
     submitAnswer,
@@ -343,6 +542,7 @@ export function usePostSession() {
     nextDrill,
     timeExpired,
     completeLlmDrill,
+    completeCognitiveDrill,
     saveSession,
     reset
   };

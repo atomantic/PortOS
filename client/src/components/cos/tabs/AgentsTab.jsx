@@ -57,21 +57,21 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   }, [dateBuckets, loadedDates]);
 
   const handleKill = async (agentId) => {
-    const result = await api.killCosAgent(agentId).catch(err => { toast.error(err.message); return null; });
+    const result = await api.killCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent force killed');
     onRefresh();
   };
 
   const handlePause = async (agentId) => {
-    const result = await api.pauseCosAgent(agentId, 'Paused from CoS agent list').catch(err => { toast.error(err.message); return null; });
+    const result = await api.pauseCosAgent(agentId, 'Paused from CoS agent list', { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent paused');
     onRefresh();
   };
 
   const handleDelete = useCallback(async (agentId) => {
-    const result = await api.deleteCosAgent(agentId).catch(err => { toast.error(err.message); return null; });
+    const result = await api.deleteCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     setLoadedAgents(prev => {
       const deleted = prev.find(a => a.id === agentId);
@@ -100,7 +100,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
       app: app || undefined,
       type,
       screenshots
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -112,7 +112,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
 
   const handleClearCompleted = async () => {
     setConfirmingClear(false);
-    const result = await api.clearCompletedCosAgents().catch(err => { toast.error(err.message); return null; });
+    const result = await api.clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     setLoadedAgents([]);
     setLoadedDates(new Set());

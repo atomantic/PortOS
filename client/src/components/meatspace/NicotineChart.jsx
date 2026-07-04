@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import useChartColors from '../../hooks/useChartColors.js';
 import { localDateStr } from './constants';
 
 const VIEWS = [
@@ -26,6 +27,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function NicotineChart({ onRefreshKey, onViewChange }) {
+  const chartColors = useChartColors();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('30d');
@@ -96,18 +98,18 @@ export default function NicotineChart({ onRefreshKey, onViewChange }) {
       ) : (
         <ResponsiveContainer width="100%" height={250}>
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
             <XAxis
               dataKey="label"
-              tick={{ fill: '#6b7280', fontSize: 11 }}
+              tick={{ fill: chartColors.axis, fontSize: 11 }}
               interval={view === '7d' ? 0 : view === '30d' ? 2 : 6}
             />
-            <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} label={{ value: 'mg', angle: -90, position: 'insideLeft', fill: '#6b7280', fontSize: 10 }} />
+            <YAxis tick={{ fill: chartColors.axis, fontSize: 11 }} label={{ value: 'mg', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 10 }} />
             <Tooltip content={<CustomTooltip />} />
             <Bar
               dataKey="mg"
               radius={[2, 2, 0, 0]}
-              fill="#9ca3af"
+              fill={chartColors.axis}
               maxBarSize={view === '7d' ? 40 : view === '30d' ? 16 : 8}
             />
           </BarChart>

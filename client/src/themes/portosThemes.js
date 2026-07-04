@@ -12,6 +12,16 @@ const baseStatusColors = {
   '--port-on-error': '255 255 255',
 };
 
+// Secondary accent — a semantic home for the "purple/violet" highlight used
+// throughout the app for AI-generated / recommendation / secondary-emphasis
+// content (issue #1909). Every theme defines its own value tuned to its
+// palette (see each theme's `colors` block below); this default only covers
+// any future theme that forgets to set one explicitly.
+const DEFAULT_ACCENT2 = {
+  '--port-accent-2': '168 85 247',
+  '--port-on-accent-2': '255 255 255',
+};
+
 const baseMotionTokens = {
   '--port-motion-fast': '120ms',
   '--port-motion-medium': '220ms',
@@ -50,6 +60,7 @@ export const THEMES = {
       '--port-focus-ring': '59 130 246',
       '--port-on-accent': '255 255 255',
       ...baseStatusColors,
+      ...DEFAULT_ACCENT2,
     },
     tokens: {
       ...classicShapeTokens,
@@ -119,6 +130,10 @@ export const THEMES = {
       '--port-warning': '180 83 9',
       '--port-on-warning': '255 255 255',
       '--port-error': '220 38 38',
+      // violet-700 — darkened from the night theme's violet-500 for AA contrast
+      // on the white card background.
+      '--port-accent-2': '109 40 217',
+      '--port-on-accent-2': '255 255 255',
     },
     tokens: {
       ...classicShapeTokens,
@@ -183,6 +198,10 @@ export const THEMES = {
       '--port-on-success': '6 43 24',
       '--port-on-warning': '55 37 5',
       '--port-on-error': '69 10 24',
+      // violet-400 — a glass-panel-friendly secondary highlight distinct from
+      // the cyan accent and rose error.
+      '--port-accent-2': '192 132 252',
+      '--port-on-accent-2': '37 7 56',
       '--port-text': '236 253 255',
       '--port-text-muted': '160 190 202',
       '--port-control-text': '220 247 252',
@@ -254,6 +273,9 @@ export const THEMES = {
       '--port-on-success': '5 46 22',
       '--port-on-warning': '255 255 255',
       '--port-on-error': '255 255 255',
+      // violet-700 — darkened for AA contrast on the cream/white glass panels.
+      '--port-accent-2': '126 34 206',
+      '--port-on-accent-2': '255 255 255',
       '--port-text': '12 30 36',
       '--port-text-muted': '78 102 110',
       '--port-control-text': '36 60 70',
@@ -326,6 +348,10 @@ export const THEMES = {
       '--port-on-success': '0 28 12',
       '--port-on-warning': '26 20 0',
       '--port-on-error': '255 255 255',
+      // Neon violet — distinct from the neon-green accent and magenta chart-2,
+      // matching the cyberpunk palette's saturation.
+      '--port-accent-2': '178 102 255',
+      '--port-on-accent-2': '20 0 38',
       '--port-text': '218 255 238',
       '--port-text-muted': '112 166 139',
       '--port-control-text': '207 255 230',
@@ -399,6 +425,9 @@ export const THEMES = {
       '--port-on-success': '255 255 255',
       '--port-on-warning': '255 255 255',
       '--port-on-error': '255 255 255',
+      // Plum ink — readable on cream paper, distinct from the rose error ink.
+      '--port-accent-2': '106 27 154',
+      '--port-on-accent-2': '255 255 255',
       '--port-text': '14 56 36',
       '--port-text-muted': '76 110 86',
       '--port-control-text': '20 70 46',
@@ -473,6 +502,9 @@ export const THEMES = {
       '--port-on-success': '6 36 27',
       '--port-on-warning': '38 24 3',
       '--port-on-error': '52 8 8',
+      // Indigo — fits the schematic blueprint palette alongside the blue accent.
+      '--port-accent-2': '129 140 248',
+      '--port-on-accent-2': '17 19 46',
       '--port-text': '239 246 255',
       '--port-text-muted': '156 178 204',
       '--port-control-text': '224 236 251',
@@ -544,6 +576,9 @@ export const THEMES = {
       '--port-on-success': '255 255 255',
       '--port-on-warning': '255 255 255',
       '--port-on-error': '255 255 255',
+      // Indigo-700 — darkened for AA contrast on white drafting paper.
+      '--port-accent-2': '67 56 202',
+      '--port-on-accent-2': '255 255 255',
       '--port-text': '11 23 50',
       '--port-text-muted': '71 85 105',
       '--port-control-text': '23 37 84',

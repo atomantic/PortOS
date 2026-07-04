@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
-  PATHS: { meatspace: '/tmp/test-meatspace' },
+  // `data` is required because getTrainingStats now imports meatspacePost.js
+  // (for the shared unified streak), which transitively loads the drill cache —
+  // its module-load `join(PATHS.data, …)` needs a string.
+  PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn().mockResolvedValue({ entries: [] }),
 }));
@@ -41,6 +44,38 @@ describe('submitTrainingEntry', () => {
     expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(entry.timestamp).toBeTruthy();
     expect(atomicWrite).toHaveBeenCalledOnce();
+  });
+
+  it('persists a per-question breakdown when supplied (issue #2114)', async () => {
+    const questions = [
+      { prompt: 'news___', response: 'paper', responseMs: 4200, score: 85, feedback: 'Nice.', correct: true },
+      { items: ['firehouse'], responseMs: 5100, score: 40, feedback: 'Partial.', correct: false },
+    ];
+
+    const entry = await submitTrainingEntry({
+      module: 'llm-drills',
+      drillType: 'bridge-word',
+      questionCount: 2,
+      correctCount: 1,
+      totalMs: 9300,
+      questions,
+    });
+
+    expect(entry.questions).toEqual(questions);
+    const savedData = atomicWrite.mock.calls[0][1];
+    expect(savedData.entries[0].questions).toEqual(questions);
+  });
+
+  it('omits the questions field entirely when not supplied (back-compat)', async () => {
+    const entry = await submitTrainingEntry({
+      module: 'mental-math',
+      drillType: 'multiplication',
+      questionCount: 10,
+      correctCount: 7,
+      totalMs: 45000,
+    });
+
+    expect(entry).not.toHaveProperty('questions');
   });
 
   it('appends to existing entries', async () => {
@@ -112,6 +147,25 @@ describe('getTrainingStats', () => {
 
     const stats = await getTrainingStats(30);
     expect(stats.currentStreak).toBe(3);
+  });
+
+  it('aggregates wordplay drill entries the same generic way as any other drill (issue #2097)', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    readJSONFile.mockResolvedValue({
+      entries: [
+        { date: today, module: 'llm-drills', drillType: 'compound-chain', questionCount: 5, correctCount: 4, totalMs: 60000 },
+        { date: today, module: 'llm-drills', drillType: 'compound-chain', questionCount: 5, correctCount: 5, totalMs: 55000 },
+      ]
+    });
+
+    const stats = await getTrainingStats(30);
+    expect(stats.byDrill['llm-drills:compound-chain']).toMatchObject({
+      practiceCount: 2,
+      accuracy: 90, // (4+5)/(5+5) = 90%
+      totalMs: 115000,
+      daysActive: 1,
+    });
+    expect(stats.currentStreak).toBe(1);
   });
 
   it('filters by date range', async () => {

@@ -167,6 +167,16 @@ describe('segmentsToScoreDsl', () => {
     expect(sharp).toContain('A#4');
   });
 
+  it('spells accidentals with flats for a minor key (relative-major signature, not parallel major)', () => {
+    // D minor's relative major is F (1 flat) — it should spell the flat side
+    // (Bb) even though "D" alone (D major, 2 sharps) would spell the sharp
+    // side (A#) for the same pitch.
+    const hz = noteToFrequency({ letter: 'A', accidental: '#', octave: 4 });
+    const quantized = [{ rest: false, hz, code: 'q', dots: 0, beats: 1 }];
+    const minor = segmentsToScoreDsl(quantized, { keySig: keySignature('D minor'), beatsPerBar: 4 });
+    expect(minor).toContain('Bb4');
+  });
+
   it('renders an interior rest (and trims leading/trailing rests)', () => {
     const quantized = [
       { rest: true, code: 'q', dots: 0, beats: 1 }, // leading rest — trimmed

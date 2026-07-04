@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Play, Pause, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -33,6 +33,24 @@ export default function CreativeDirectorDetail() {
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeAgents, setActiveAgents] = useState([]);
+  // Extends polling past the terminal-status gate below for a bounded window
+  // after the Overview tab queues a first-pass portrait/music-bed render
+  // (#1818/#1928) — those attach asynchronously to a catalog ingredient or
+  // `project.musicBed` without changing the project's lifecycle status, so a
+  // still-'draft' project (no compose flip to escape TERMINAL_PROJECT_STATUSES)
+  // would otherwise never pick up the result without a manual Refresh.
+  const [pendingAsyncWork, setPendingAsyncWork] = useState(false);
+  const pendingAsyncWorkTimerRef = useRef(null);
+  const extendPollingForAsyncWork = useCallback(() => {
+    setPendingAsyncWork(true);
+    clearTimeout(pendingAsyncWorkTimerRef.current);
+    // 3 minutes covers a cold model load + render for the local image/audio
+    // gen backends in the common case; if it runs longer the user can still
+    // hit the manual Refresh button. Not tied to a job-completion signal —
+    // this component has no socket/SSE channel into the media job queue.
+    pendingAsyncWorkTimerRef.current = setTimeout(() => setPendingAsyncWork(false), 3 * 60 * 1000);
+  }, []);
+  useEffect(() => () => clearTimeout(pendingAsyncWorkTimerRef.current), []);
 
   const fetchProject = useCallback(async () => {
     const p = await getCreativeDirectorProject(id).catch(() => null);
@@ -53,8 +71,10 @@ export default function CreativeDirectorDetail() {
   }, [id]);
 
   // Only poll while the agent could still mutate the project. Once the
-  // status reaches a terminal state, the visibility-paused hook stops firing.
-  const pollEnabled = !project?.status || !TERMINAL_PROJECT_STATUSES.has(project.status);
+  // status reaches a terminal state, the visibility-paused hook stops firing
+  // — except during the bounded `pendingAsyncWork` window above, which
+  // overrides the terminal gate so a queued first-pass render still surfaces.
+  const pollEnabled = !project?.status || !TERMINAL_PROJECT_STATUSES.has(project.status) || pendingAsyncWork;
   const poll = useCallback(async () => {
     await Promise.all([fetchProject(), fetchAgents()]);
     return null;
@@ -71,6 +91,10 @@ export default function CreativeDirectorDetail() {
   useEffect(() => {
     setLoading(true);
     setProject(null);
+    // A pending-async-work window is per-project intent — don't carry it
+    // across a route swap (the new project has its own poll-gate state).
+    setPendingAsyncWork(false);
+    clearTimeout(pendingAsyncWorkTimerRef.current);
     refetchPoll();
   }, [id, refetchPoll]);
 
@@ -149,7 +173,13 @@ export default function CreativeDirectorDetail() {
 
       <div className="flex-1 overflow-auto p-6">
         <ActiveAgentsBanner agents={activeAgents} />
-        {activeTab === 'overview' && <OverviewTab project={project} onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)} />}
+        {activeTab === 'overview' && (
+          <OverviewTab
+            project={project}
+            onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)}
+            onAsyncWorkQueued={extendPollingForAsyncWork}
+          />
+        )}
         {activeTab === 'treatment' && <TreatmentTab project={project} />}
         {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} />}
         {activeTab === 'runs' && <RunsTab project={project} />}

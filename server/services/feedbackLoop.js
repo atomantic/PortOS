@@ -6,11 +6,11 @@
  * Tracks feedback patterns and adjusts document weights for confidence scoring.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { digitalTwinEvents } from './digital-twin.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -52,7 +52,7 @@ async function saveFeedback(data) {
     await ensureDir(DIGITAL_TWIN_DIR);
   }
   data.updatedAt = now();
-  await writeFile(FEEDBACK_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(FEEDBACK_FILE, data);
   feedbackCache = data;
 }
 

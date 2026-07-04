@@ -52,7 +52,7 @@ The CoS autonomous agent system reads these goals to guide its behavior and task
 When idle, generate tasks in this priority order:
 
 1. **Critical Fixes**: Security vulnerabilities, crashes, data loss risks
-2. **User Tasks**: Any pending tasks from TASKS.md
+2. **User Tasks**: Any pending user-submitted CoS tasks
 3. **Health Issues**: PM2 errors, failed processes, high memory
 4. **Self-Improvement**: UI bugs, mobile issues, code quality
 5. **Documentation**: Update docs, generate reports

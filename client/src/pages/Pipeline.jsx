@@ -8,9 +8,11 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
@@ -199,23 +201,18 @@ export default function Pipeline() {
     [form.universeId, form.name],
   );
 
-  // Two-click delete: first click "arms" the row, second click fires. Avoids
-  // window.confirm (banned per CLAUDE.md) without pulling in a modal for the
-  // skeleton. armedId resets on any other click.
-  const [armedId, setArmedId] = useState(null);
-  const handleDelete = async (s) => {
-    if (armedId !== s.id) {
-      setArmedId(s.id);
-      return;
-    }
-    setArmedId(null);
+  // Inline delete confirm: the trash button arms the row (one at a time) and an
+  // explicit Delete?/Cancel row fires it. Avoids window.confirm (banned per
+  // CLAUDE.md) and the non-discoverable two-click-arm pattern.
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const handleDelete = (s) => confirmDelete(() => {
     const prior = series;
     setSeries((prev) => prev.filter((x) => x.id !== s.id));
-    await deletePipelineSeries(s.id).catch((err) => {
+    return deletePipelineSeries(s.id).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setSeries(prior);
     });
-  };
+  });
 
   return (
     <div>
@@ -470,15 +467,24 @@ export default function Pipeline() {
               />
               <ShareToButton kind="series" ids={[s.id]} compact />
               <SyncToPeerButton recordKind="series" recordId={s.id} compact />
-              <button
-                type="button"
-                onClick={() => handleDelete(s)}
-                className={`p-2 ${armedId === s.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-                aria-label={armedId === s.id ? `Confirm delete series ${s.name}` : `Delete series ${s.name}`}
-                title={armedId === s.id ? 'Click again to confirm delete' : 'Delete series'}
-              >
-                <Trash2 size={16} />
-              </button>
+              {isConfirming(s.id) ? (
+                <ConfirmButtonPair
+                  prompt="Delete?"
+                  ariaLabel={`Confirm delete series ${s.name}`}
+                  onConfirm={() => handleDelete(s)}
+                  onCancel={cancelDelete}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => requestDelete(s.id)}
+                  className="p-2 text-gray-500 hover:text-port-error"
+                  aria-label={`Delete series ${s.name}`}
+                  title="Delete series"
+                >
+                  <Trash2 size={16} />
+                </button>
+              )}
             </li>
             );
           })}

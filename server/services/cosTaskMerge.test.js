@@ -34,6 +34,20 @@ describe('mergeTaskLists', () => {
     expect(merged.map((t) => t.id).sort()).toEqual(['task-a', 'task-b']);
   });
 
+  it('de-duplicates ids within each list — never emits a task id twice', () => {
+    // A hand-corrupted file (or any producer that leaks a duplicate id) must not
+    // round-trip into two task lines: the local loop skips an already-seen id and
+    // the remote-only loop records adopted ids so a repeated remote id is dropped.
+    const local = [task('dup-local'), task('dup-local', 'completed')];
+    const remote = [task('dup-remote'), task('dup-remote', 'in_progress')];
+    const merged = mergeTaskLists(local, remote, { now: NOW });
+    const ids = merged.map((t) => t.id);
+    expect(ids.filter((id) => id === 'dup-local')).toHaveLength(1);
+    expect(ids.filter((id) => id === 'dup-remote')).toHaveLength(1);
+    // First occurrence wins for the local duplicate (status stays 'pending').
+    expect(merged.find((t) => t.id === 'dup-local').status).toBe('pending');
+  });
+
   it('adopts a remote-only task and re-derives priorityValue from its priority', () => {
     const remote = [task('task-x', 'pending', { priority: 'CRITICAL', priorityValue: 999 })];
     const [merged] = mergeTaskLists([], remote, { now: NOW });

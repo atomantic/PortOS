@@ -4,6 +4,7 @@ import {Target, Plus, Trash2, Check, ChevronDown, ChevronUp,
   Clock, AlertTriangle, Activity, Milestone} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { FormField } from '../../ui/FormField';
 import * as api from '../../../services/api';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
@@ -27,9 +28,9 @@ const HORIZON_OPTIONS = [
 
 function urgencyColor(urgency) {
   if (urgency == null) return 'text-gray-500';
-  if (urgency >= 0.7) return 'text-red-400';
-  if (urgency >= 0.4) return 'text-yellow-400';
-  return 'text-green-400';
+  if (urgency >= 0.7) return 'text-port-error';
+  if (urgency >= 0.4) return 'text-port-warning';
+  return 'text-port-success';
 }
 
 function urgencyLabel(urgency) {
@@ -168,7 +169,7 @@ export default function GoalsTab({ onRefresh }) {
             />
             <button
               onClick={handleSetBirthDate}
-              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600"
+              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
             >
               Save
             </button>
@@ -189,12 +190,12 @@ export default function GoalsTab({ onRefresh }) {
               <div className="text-xs text-gray-600 mt-1">
                 Baseline: {longevity.lifeExpectancy.baseline}
                 {longevity.lifeExpectancy.longevityAdjustment !== 0 && (
-                  <span className={longevity.lifeExpectancy.longevityAdjustment > 0 ? 'text-green-500' : 'text-red-500'}>
+                  <span className={longevity.lifeExpectancy.longevityAdjustment > 0 ? 'text-port-success' : 'text-port-error'}>
                     {' '}{longevity.lifeExpectancy.longevityAdjustment > 0 ? '+' : ''}{longevity.lifeExpectancy.longevityAdjustment} longevity
                   </span>
                 )}
                 {longevity.lifeExpectancy.cardiovascularAdjustment !== 0 && (
-                  <span className={longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? 'text-green-500' : 'text-red-500'}>
+                  <span className={longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? 'text-port-success' : 'text-port-error'}>
                     {' '}{longevity.lifeExpectancy.cardiovascularAdjustment > 0 ? '+' : ''}{longevity.lifeExpectancy.cardiovascularAdjustment} cardio
                   </span>
                 )}
@@ -208,7 +209,7 @@ export default function GoalsTab({ onRefresh }) {
                   <div className="text-xs text-gray-500">Current Age</div>
                 </div>
                 <div className="bg-port-bg rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-green-400">{timeHorizons.yearsRemaining}</div>
+                  <div className="text-2xl font-bold text-port-success">{timeHorizons.yearsRemaining}</div>
                   <div className="text-xs text-gray-500">Years Remaining</div>
                   <div className="text-xs text-gray-600 mt-1">{timeHorizons.healthyYearsRemaining} healthy</div>
                 </div>
@@ -258,7 +259,7 @@ export default function GoalsTab({ onRefresh }) {
           </div>
           <button
             onClick={() => setShowNewGoal(!showNewGoal)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
           >
             <Plus className="w-4 h-4" />
             Add Goal
@@ -283,8 +284,7 @@ export default function GoalsTab({ onRefresh }) {
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
             />
             <div className="flex gap-3">
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">Horizon</label>
+              <FormField className="flex-1" label="Horizon" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.horizon}
                   onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
@@ -294,9 +294,8 @@ export default function GoalsTab({ onRefresh }) {
                     <option key={h.value} value={h.value}>{h.label}</option>
                   ))}
                 </select>
-              </div>
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">Category</label>
+              </FormField>
+              <FormField className="flex-1" label="Category" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.category}
                   onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
@@ -306,13 +305,13 @@ export default function GoalsTab({ onRefresh }) {
                     <option key={key} value={key}>{cfg.label}</option>
                   ))}
                 </select>
-              </div>
+              </FormField>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={handleCreateGoal}
                 disabled={!newGoal.title.trim()}
-                className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-blue-600 disabled:opacity-50"
+                className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
               >
                 Create
               </button>
@@ -411,7 +410,7 @@ export default function GoalsTab({ onRefresh }) {
                                   onClick={() => !ms.completedAt && handleCompleteMilestone(goal.id, ms.id)}
                                   className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                                     ms.completedAt
-                                      ? 'bg-green-500/20 border-green-500 text-green-400'
+                                      ? 'bg-port-success/20 border-port-success text-port-success'
                                       : 'border-gray-600 hover:border-port-accent'
                                   }`}
                                 >
@@ -462,14 +461,14 @@ export default function GoalsTab({ onRefresh }) {
                       <div className="flex gap-2 pt-1">
                         <button
                           onClick={() => handleUpdateGoalStatus(goal.id, 'completed')}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-green-500/20 text-green-400 hover:bg-green-500/30"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
                         >
                           <Check className="w-3 h-3" />
                           Complete
                         </button>
                         <button
                           onClick={() => requestDelete(goal.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete
@@ -498,7 +497,7 @@ export default function GoalsTab({ onRefresh }) {
       {completedGoals.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <h3 className="font-medium text-gray-400 mb-3 flex items-center gap-2">
-            <Check className="w-4 h-4 text-green-400" />
+            <Check className="w-4 h-4 text-port-success" />
             Completed ({completedGoals.length})
           </h3>
           <div className="space-y-1">
@@ -537,8 +536,8 @@ export default function GoalsTab({ onRefresh }) {
                         <span className="text-gray-500 ml-1">({marker.rsid})</span>
                       </div>
                       <span className={
-                        marker.status === 'beneficial' ? 'text-green-400' :
-                        marker.status === 'concern' ? 'text-red-400' : 'text-gray-400'
+                        marker.status === 'beneficial' ? 'text-port-success' :
+                        marker.status === 'concern' ? 'text-port-error' : 'text-gray-400'
                       }>
                         {marker.genotype} — {marker.status}
                       </span>
@@ -558,8 +557,8 @@ export default function GoalsTab({ onRefresh }) {
                         <span className="text-gray-500 ml-1">({marker.rsid})</span>
                       </div>
                       <span className={
-                        marker.status === 'beneficial' ? 'text-green-400' :
-                        marker.status === 'concern' || marker.status === 'major_concern' ? 'text-red-400' : 'text-gray-400'
+                        marker.status === 'beneficial' ? 'text-port-success' :
+                        marker.status === 'concern' || marker.status === 'major_concern' ? 'text-port-error' : 'text-gray-400'
                       }>
                         {marker.genotype} — {marker.status}
                       </span>

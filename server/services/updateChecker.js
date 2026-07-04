@@ -1,10 +1,12 @@
 import { join } from 'path';
+import { readFile, unlink } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getOriginInfo, UPSTREAM_OWNER, UPSTREAM_REPO, UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import { compareSemver } from '../lib/versionUtils.js';
+import { getInstallState } from './installState.js';
 import { execGh } from './github.js';
 
 // Re-exported for back-compat: callers/tests historically import compareSemver
@@ -240,6 +242,11 @@ export async function getUpdateStatus() {
     (Date.now() - new Date(lastSync.syncedAt).getTime()) < FORK_SYNC_FRESHNESS_MS
   );
 
+  // Install-sync state — "is the checked-out code ahead of what's running /
+  // installed?" (issue #1779). Best-effort: a git/fs hiccup here must never
+  // block the status response, so failures collapse to null.
+  const installState = await getInstallState().catch(() => null);
+
   return {
     currentVersion,
     ...state,
@@ -247,7 +254,8 @@ export async function getUpdateStatus() {
     remoteInfo,
     upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
     forkSyncFresh,
-    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS
+    forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS,
+    installState
   };
 }
 
@@ -304,6 +312,58 @@ export async function recordUpdateResult(result) {
     state.lastUpdateResult = result;
     await saveState(state);
   });
+}
+
+/**
+ * Process the update-completion marker an `update.sh` cycle leaves behind.
+ *
+ * After a self-update restarts the server, the previous process writes
+ * `data/update-complete.json` ({ version, completedAt }); on boot we read it,
+ * record success/failure against the now-running version, and remove the
+ * marker. Extracted from a bootstrap IIFE in `server/index.js` so the update
+ * lifecycle lives in one service (and can be unit-tested) rather than inline at
+ * the boot site. Best-effort and self-contained — never throws; every failure
+ * branch removes the marker so a corrupt/mismatched file can't wedge boot into
+ * re-processing it forever.
+ */
+export async function processUpdateMarker() {
+  const updateMarkerPath = join(PATHS.data, 'update-complete.json');
+  const removeMarker = () => unlink(updateMarkerPath).catch(e => {
+    if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
+  });
+
+  let raw;
+  try { raw = await readFile(updateMarkerPath, 'utf-8'); }
+  catch (err) {
+    if (err?.code === 'ENOENT') return; // No marker = no recent update
+    console.error(`❌ Failed to read update marker: ${err?.message ?? err}`);
+    return removeMarker();
+  }
+
+  let marker;
+  try { marker = JSON.parse(raw); }
+  catch (err) {
+    console.error(`❌ Corrupted update marker (invalid JSON): ${err?.message ?? err}`);
+    return removeMarker();
+  }
+
+  if (!marker.version || !marker.completedAt) {
+    console.error(`❌ Update marker missing required fields (version: ${marker.version}, completedAt: ${marker.completedAt})`);
+    return removeMarker();
+  }
+
+  const runningVersion = await getCurrentVersion();
+  if (marker.version !== runningVersion) {
+    console.error(`❌ Update marker version (${marker.version}) doesn't match running version (${runningVersion}) — recording as failed`);
+    await recordUpdateResult({ version: marker.version, success: false, completedAt: marker.completedAt, log: `Version mismatch: expected ${marker.version}, running ${runningVersion}` })
+      .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+    return removeMarker();
+  }
+
+  console.log(`✅ Update to v${marker.version} completed at ${marker.completedAt}`);
+  await recordUpdateResult({ version: marker.version, success: true, completedAt: marker.completedAt, log: '' })
+    .catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
+  return removeMarker();
 }
 
 const STALE_UPDATE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes

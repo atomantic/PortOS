@@ -11,7 +11,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { unlink, stat } from 'fs/promises';
+import { unlink, stat, copyFile } from 'fs/promises';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
@@ -35,13 +35,15 @@ import {
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { prepareGenerateParams } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import {
   resolveRegenBackend, getRegenAvailability, readImageDimensions, buildRegenParams,
   REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX,
-  resolveRegenStrengthDefault,
+  resolveRegenStrengthDefault, REGEN_ANNOTATED_STRENGTH_DEFAULT,
 } from '../services/imageGen/regen.js';
+import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
+import { itemKey } from '../lib/mediaItemKey.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import * as characterService from '../services/character.js';
@@ -149,6 +151,17 @@ const generateSchema = z.object({
     analysisId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
   }).optional(),
+  // Music Video scene reference-frame render (#1760 Phase 1b). When present, the
+  // mediaJobQueue completion hook (`musicVideoSceneImageHook`) files the finished
+  // render onto the project scene's `referenceImageId` — durably, even if the
+  // director board unmounted mid-render. Only the async local/Codex lanes ride
+  // the queue this hook listens to; the synchronous external SD-API lane returns
+  // the filename inline and the client PATCHes `referenceImageId` directly. Rides
+  // into job.params untouched via `...params` (like `writersRoom`). JSON-only.
+  musicVideo: z.object({
+    projectId: z.string().min(1).max(200),
+    sceneId: z.string().min(1).max(200),
+  }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
   // ingredient even if the page that started the render has since unmounted —
@@ -250,6 +263,11 @@ const regenerateSchema = z.object({
   // 'flux' (default) = GPU img2img round-trip; 'light' = CPU-only spatial pass
   // for installs without a FLUX runner (strength/steps/prompt ignored).
   method: z.enum(['flux', 'light']).optional(),
+  // Annotation re-render (issue #2036 phase 2): seed the img2img init image from
+  // the saved flattened sketch (source + drawn strokes) instead of the raw
+  // gallery file, so the marks reshape the render. GPU-only (light ignores the
+  // init image); defaults to a higher denoise so the strokes take effect.
+  annotated: z.boolean().optional(),
 });
 
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦.
@@ -285,8 +303,23 @@ router.get('/active', asyncHandler(async (_req, res) => {
 
 // SynthID-defeat regen availability (issue #912). Drives whether the lightbox
 // shows the "Regenerate" action — it's hardware-gated on a local FLUX runner.
-router.get('/regen/availability', asyncHandler(async (_req, res) => {
-  res.json(await getRegenAvailability());
+// Optional `?filename=` (issue #2036): when the caller names a source image, its
+// model is resolved from the sidecar and threaded into the backend pick so the
+// reported `modelId` matches the exact model a regen of THAT image would run —
+// the annotate re-render dialog must disclose the real model before the render.
+router.get('/regen/availability', asyncHandler(async (req, res) => {
+  const rawFilename = req.query.filename;
+  const galleryPath = typeof rawFilename === 'string' && rawFilename ? resolveGalleryImage(rawFilename) : null;
+  let sourceModelId;
+  if (galleryPath) {
+    // Read the sidecar by the RESOLVED gallery path's basename, never the raw
+    // query value: resolveGalleryImage only validated the basename, so a
+    // `../foo.png` input could otherwise traverse out of PATHS.images in the
+    // sidecar read. basename(galleryPath) is the sanitized filename.
+    const { metadata } = await local.readImageSidecar(basename(galleryPath));
+    sourceModelId = metadata?.modelId;
+  }
+  res.json(await getRegenAvailability({ sourceModelId }));
 }));
 
 // Shape returned for any image-gen job that goes through the mediaJobQueue
@@ -683,6 +716,27 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   if (!sourceAbsPath) {
     throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
   }
+
+  // Annotation re-render (issue #2036 phase 2): use the saved flattened sketch
+  // (source + strokes) as the img2img init image. It's a whole-image denoise, so
+  // the light spatial pass can't honor the marks — GPU only. Validate cheaply
+  // here (no disk writes) so a bad request 400s without leaving anything behind;
+  // the actual staging copy happens below, only once every gate has passed.
+  let annotatedSketchPath = null;
+  if (body.annotated) {
+    if (body.method === 'light') {
+      throw new ServerError('Annotation re-render needs the GPU img2img pass, not the light method.', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const key = itemKey({ kind: 'image', ref: filename });
+    if (!isValidSketchKey(key)) {
+      throw new ServerError('Image cannot be annotated', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    annotatedSketchPath = await getSketchPngPath(key);
+    if (!annotatedSketchPath) {
+      throw new ServerError('No saved annotation to re-render — draw over the image and save first.', { status: 400, code: 'NO_ANNOTATION' });
+    }
+  }
+
   // Sidecar (for prompt/model) and the on-disk dimension probe have no data
   // dependency — overlap the two reads.
   const [{ metadata: sourceMeta }, sourceDims] = await Promise.all([
@@ -702,10 +756,29 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     throw new ServerError(backend.reason, { status: 400, code: 'REGEN_BACKEND_UNAVAILABLE' });
   }
 
+  // Stage the flattened annotation ONLY now that every gate has passed and the
+  // job is about to enqueue — so a rejected request (unavailable backend, failed
+  // read) never leaves an orphaned snapshot behind. The local runner re-validates
+  // initImagePath against its approved image roots (gallery / image-refs /
+  // visual-templates) and silently drops anything outside them — `data/media-
+  // sketches/` is NOT one, so the sidecar is copied into the image-refs root the
+  // runner accepts. The copy also freezes the markup at enqueue time (a later
+  // re-save can't change what this queued job renders from), and the `init-<uuid>`
+  // name (it IS this job's init image) lets imageRefsGc.js sweep it once
+  // unreferenced.
+  let initImageAbsPath = null;
+  if (annotatedSketchPath) {
+    await ensureDir(PATHS.imageRefs);
+    initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
+    await copyFile(annotatedSketchPath, initImageAbsPath);
+  }
+
   // Provider-aware default (issue #912): SynthID-bearing sources keep the
-  // known-good 0.25; local FLUX sources use a lighter pass. The explicit
-  // `strength` override always wins.
-  const strength = body.strength ?? resolveRegenStrengthDefault(sourceMeta);
+  // known-good 0.25; local FLUX sources use a lighter pass. An annotation
+  // re-render instead defaults higher so the drawn marks reshape the render
+  // (issue #2036). The explicit `strength` override always wins.
+  const strength = body.strength
+    ?? (body.annotated ? REGEN_ANNOTATED_STRENGTH_DEFAULT : resolveRegenStrengthDefault(sourceMeta));
   const params = buildRegenParams({
     filename,
     sourceAbsPath,
@@ -716,9 +789,12 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
     strength,
     steps: body.steps,
     promptOverride: body.prompt,
+    initImageAbsPath,
+    annotated: !!body.annotated,
   });
   const queued = enqueueJob({ kind: 'image', params });
-  console.log(`♻️ Regenerating ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
+  const via = body.annotated ? 'annotation re-render' : 'Regenerating';
+  console.log(`♻️ ${via} ${filename} via ${backend.model.id} (strength=${strength}) → job ${queued.jobId.slice(0, 8)}`);
   return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.LOCAL, model: backend.model.id }));
 }));
 

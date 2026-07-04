@@ -11,6 +11,7 @@ import {
   unarchiveGitHubRepo
 } from '../services/api';
 import { timeAgo } from '../utils/formatters';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
 
@@ -157,11 +158,7 @@ export default function GitHub() {
   const secretEntries = Object.entries(secrets);
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading GitHub data...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-44" showAction={false} cards={3} />;
   }
 
   return (

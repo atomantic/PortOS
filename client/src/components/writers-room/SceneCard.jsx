@@ -70,6 +70,11 @@ const SceneCard = forwardRef(function SceneCard({
   const [progress, setProgress] = useState(null);
   const [showDebugMenu, setShowDebugMenu] = useState(false);
   const jobIdRef = useRef(null);
+  // The jobId a just-fired `onFailed` cleared, kept so a cancel that arrives
+  // immediately after (a running render canceled from the queue emits
+  // image-gen:failed THEN image-gen:canceled) can still reconcile to a clean
+  // cancel instead of leaving the card stuck in the error state (#1791/#1796).
+  const recentlyFailedRef = useRef(null);
   const debugMenuRef = useRef(null);
 
   // Sync local image state when parent reloads analyses (e.g. post-re-Adapt)
@@ -120,22 +125,46 @@ const SceneCard = forwardRef(function SceneCard({
     };
     const onFailed = (data) => {
       if (!jobIdRef.current || data.generationId !== jobIdRef.current) return;
+      // Remember the job so a cancel arriving right after (running-cancel) can
+      // override the error below; cleared on the next render start (see generate).
+      recentlyFailedRef.current = data.generationId;
       setError(data.error || data.message || 'Generation failed');
       setGenStatus('error');
       setProgress(null);
       jobIdRef.current = null;
     };
+    // A canceled render (dropped while queued, OR canceled while running — which
+    // reaches us as image-gen:failed first, then this) is not an error: roll back
+    // to idle / the prior image so the spinner clears and any error state shown by
+    // a preceding onFailed is retracted, instead of sticking until remount
+    // (#1791). The `*-gen:canceled` event is bridged from mediaJobEvents, keyed by
+    // the same generationId as completed/failed.
+    const onCanceled = (data) => {
+      const isActive = jobIdRef.current && data.generationId === jobIdRef.current;
+      const isJustFailed = data.generationId === recentlyFailedRef.current;
+      if (!isActive && !isJustFailed) return;
+      jobIdRef.current = null;
+      recentlyFailedRef.current = null;
+      setProgress(null);
+      setError(null);
+      setGenerated(initialImage
+        ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
+        : null);
+      setGenStatus(initialImage ? 'done' : 'idle');
+    };
     socket.on('image-gen:started', onStarted);
     socket.on('image-gen:progress', onProgress);
     socket.on('image-gen:completed', onCompleted);
     socket.on('image-gen:failed', onFailed);
+    socket.on('image-gen:canceled', onCanceled);
     return () => {
       socket.off('image-gen:started', onStarted);
       socket.off('image-gen:progress', onProgress);
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
+      socket.off('image-gen:canceled', onCanceled);
     };
-  }, [workId, analysisId, scene.id]);
+  }, [workId, analysisId, scene.id, initialImage]);
 
   const generate = async () => {
     if (genStatus === 'running') return;
@@ -147,6 +176,9 @@ const SceneCard = forwardRef(function SceneCard({
     setError(null);
     setProgress(null);
     setGenerated(null);
+    // A new render supersedes any prior failure — drop the stale correlation so a
+    // late cancel for the old job can't retract this render's state.
+    recentlyFailedRef.current = null;
     const prompt = buildScenePrompt(workTitle, scene, matchedCharacters, imageStyle?.prompt || '', matchedPlace);
     const res = await generateImage(buildSceneRenderPayload({
       prompt,

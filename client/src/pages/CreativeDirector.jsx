@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { Plus, Film, Trash2, Play, Pause, FlaskConical } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCreativeDirectorProjects,
@@ -10,6 +10,7 @@ import {
   startCreativeDirectorProject,
   pauseCreativeDirectorProject,
 } from '../services/apiCreativeDirector.js';
+import { listCatalogIngredientsByIds } from '../services/apiCatalog.js';
 import { listVideoModels } from '../services/apiImageVideo.js';
 import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
@@ -28,10 +29,18 @@ const STATUS_COLORS = {
 };
 
 export default function CreativeDirector() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [models, setModels] = useState([]);
+  // Catalog "Remix into… → Creative Director" handoff (#1808). The ingredient
+  // ids arrive in the generic `location.state.remix.ingredientIds`; we hydrate
+  // them for the chip list and forward the ids on create so the server folds
+  // them into the project cast + links catalog_ingredient_refs.
+  const [remixIds, setRemixIds] = useState([]);
+  const [remixIngredients, setRemixIngredients] = useState([]);
   const [form, setForm] = useState({
     name: '',
     aspectRatio: '16:9',
@@ -64,6 +73,27 @@ export default function CreativeDirector() {
     }).catch(() => {});
   }, [fetchProjects]);
 
+  // Consume the remix handoff once at mount, then clear the history state so a
+  // refresh doesn't re-seed (mirrors Story Builder's prefill-consume pattern).
+  // Auto-open the create form so the seeded ingredient chips are visible.
+  useEffect(() => {
+    const ids = location.state?.remix?.ingredientIds;
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const cleanIds = ids.filter(Boolean).slice(0, 50);
+    if (cleanIds.length === 0) return;
+    setRemixIds(cleanIds);
+    setShowForm(true);
+    listCatalogIngredientsByIds(cleanIds, { silent: true })
+      .then((res) => setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])))
+      .catch(() => {});
+    // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
+    navigate('.', { replace: true, state: {} });
+  }, []);
+
+  // Drop any pending remix handoff so abandoned ingredient ids can't leak into
+  // a later, unrelated project created from this list page (#1808 review).
+  const clearRemix = () => { setRemixIds([]); setRemixIngredients([]); };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.modelId) {
@@ -80,6 +110,9 @@ export default function CreativeDirector() {
       userStory: form.userStory || null,
       startingImageFile: form.startingImageFile || null,
       disableAudio: form.disableAudio,
+      // Catalog remix handoff (#1808): the server resolves these into the
+      // project cast + catalog_ingredient_refs.
+      ...(remixIds.length ? { catalogIngredientIds: remixIds } : {}),
     };
     try {
       const created = await createCreativeDirectorProject(payload);
@@ -87,6 +120,12 @@ export default function CreativeDirector() {
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', styleSpec: '', userStory: '', startingImageFile: '' }));
       toast.success(`Created "${created.name}"`);
+      // Land on the seeded project's overview when ingredients were remixed in
+      // so the user sees the cast immediately; otherwise stay on the list.
+      if (remixIds.length) {
+        clearRemix();
+        navigate(`/media/creative-director/${created.id}/overview`);
+      }
     } catch (err) {
       toast.error(err.message || 'Failed to create project');
     }
@@ -156,7 +195,7 @@ export default function CreativeDirector() {
               Run smoke test
             </button>
             <button
-              onClick={() => setShowForm((s) => !s)}
+              onClick={() => { setShowForm((s) => !s); clearRemix(); }}
               className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
             >
               <Plus className="w-4 h-4" />
@@ -168,6 +207,27 @@ export default function CreativeDirector() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="shrink-0 p-6 border-b border-port-border bg-port-card/40 space-y-3">
+          {remixIngredients.length > 0 && (
+            <div className="rounded border border-port-accent/40 bg-port-accent/10 px-3 py-2">
+              <div className="text-xs uppercase tracking-wide text-port-accent mb-1.5">
+                Casting from {remixIngredients.length} catalog ingredient{remixIngredients.length === 1 ? '' : 's'}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {remixIngredients.map((ing) => (
+                  <span
+                    key={ing.id}
+                    className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-port-bg border border-port-border text-gray-200"
+                  >
+                    <Sparkles className="w-3 h-3 text-port-accent" aria-hidden="true" />
+                    {ing.name || '(untitled)'}
+                  </span>
+                ))}
+              </div>
+              <p className="text-xs text-port-text-muted mt-1.5">
+                These become the project cast — the Creative Director grounds the treatment and per-scene casting on them.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="block text-sm">
               <span className="text-port-text-muted">Name</span>
@@ -264,7 +324,7 @@ export default function CreativeDirector() {
             <button type="submit" className="bg-port-accent hover:bg-port-accent/80 text-white px-3 py-1.5 rounded text-sm">
               Create
             </button>
-            <button type="button" onClick={() => setShowForm(false)} className="bg-port-card border border-port-border px-3 py-1.5 rounded text-sm">
+            <button type="button" onClick={() => { setShowForm(false); clearRemix(); }} className="bg-port-card border border-port-border px-3 py-1.5 rounded text-sm">
               Cancel
             </button>
           </div>

@@ -1,6 +1,6 @@
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
@@ -18,7 +18,125 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
 
+// Extensions Windows can launch directly, checked in cmd.exe's own resolution
+// preference. Deliberately excludes an extension-less match — npm ships a
+// POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
+// wrappers (for Git Bash/WSL); that stub is not natively launchable here, and
+// is exactly what `where` can return as its first match (see #1865 — the
+// issue's literal error text was produced by this function resolving that
+// stub as `commandPath`, not by a missing shell).
+const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+/**
+ * Resolve a bare command name to its full path WITH extension on Windows —
+ * mirrors `resolveWindowsExecutable` in `server/lib/bufferedSpawn.js`
+ * (duplicated here for this directory's self-containment; see ./CLAUDE.md).
+ * Filesystem-only (no subprocess), so it can't reorder/misselect the way a
+ * raw `where` first-line read can.
+ */
+function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32', searchEnv = process.env) {
+  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
+  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    for (const ext of WIN_EXECUTABLE_EXTS) {
+      const candidate = join(dir, `${command}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
+
+/**
+ * Return the `{ command, args }` pair that's actually safe to hand to
+ * `execFile()` under `shell:false` — mirrors `prepareWindowsSafeSpawn` in
+ * `server/lib/bufferedSpawn.js` (duplicated here for self-containment).
+ * `.bat`/`.cmd` files cannot be launched directly under `shell:false` even
+ * with the explicit extension (Node's CVE-2024-27980 patch makes
+ * spawn/execFile refuse them outright); the documented safe alternative is
+ * to invoke `cmd.exe /c <path> <args>` directly.
+ */
+function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
+  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
+    return {
+      command: 'cmd.exe',
+      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
+    };
+  }
+  return { command, args };
+}
+
+// cmd.exe metacharacters that act as command separators / redirection /
+// grouping on its raw command line.
+const CMD_METACHAR_RE = /[&|<>^()]/g;
+// Node's argv→command-line quoting wraps an argument in literal double
+// quotes only when it contains whitespace or a `"`; characters inside that
+// quoted span are not re-interpreted by cmd.exe.
+const NEEDS_NODE_QUOTING_RE = /[\s"]/;
+
+/**
+ * Caret-escape cmd.exe metacharacters, but ONLY when Node's own quoting
+ * would otherwise leave the argument unquoted on cmd.exe's raw command line.
+ * Mirrors server/lib/bufferedSpawn.js for self-containment.
+ */
+function escapeCmdMetacharsIfUnquoted(value) {
+  const str = String(value);
+  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
+  return str.replace(CMD_METACHAR_RE, '^$&');
+}
+
 const execFileAsync = promisify(execFile);
+
+// Tool-use (function-calling) capable model families. Inlined here because the
+// aiToolkit is self-contained (no imports out to server/lib). MIRROR of
+// TOOL_USE_RE in server/lib/localModelHeuristics.js and isToolUseModel in
+// client/src/utils/providers.js — keep all three in lockstep.
+const TOOL_USE_RE = new RegExp([
+  'qwen',
+  'llama-?3\\.[1-9]', 'llama-?4',
+  'mistral', 'mixtral', 'ministral', 'codestral', 'devstral', 'magistral',
+  'command-?r', 'command-?a',
+  'firefunction', 'functionary', 'watt-tool', 'hermes',
+  'glm-?4',
+  'granite-?3',
+  'gpt-oss',
+  'nemotron',
+  'smollm2',
+  'deepseek-v3', 'deepseek-r1',
+].join('|'), 'i');
+
+/**
+ * A `claude` CLI/TUI provider is "Ollama-backed" — the Claude Ollama
+ * pattern — when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL
+ * points at an Ollama daemon. Such a provider runs the full Claude Code harness
+ * but generates tokens from a local model, so its model list must come from
+ * Ollama (filtered to tool-use-capable models) rather than the static Anthropic list.
+ */
+function isOllamaBackedProvider(provider) {
+  if (provider?.ollamaBacked === true) return true;
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || '');
+  return /:11434\b/.test(base) || /ollama/i.test(base);
+}
+
+/** Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`). */
+function ollamaBaseFromProvider(provider) {
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
+  return base.replace(/\/+$/, '').replace(/\/v1$/, '');
+}
+
+/**
+ * Whether an Ollama model supports tool use. Prefers the authoritative `tools`
+ * capability from /api/show (a non-empty capabilities array without `tools` is
+ * an explicit negative); falls back to the id heuristic when capabilities are
+ * unavailable (daemon hiccup / older Ollama).
+ */
+function ollamaModelSupportsTools(id, capabilities) {
+  if (Array.isArray(capabilities) && capabilities.length > 0) {
+    return capabilities.some((c) => String(c).toLowerCase() === 'tools');
+  }
+  return TOOL_USE_RE.test(String(id || ''));
+}
 
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
@@ -324,6 +442,9 @@ export function createProviderService(config = {}) {
         contextWindow: providerData.contextWindow || null,
         timeout: providerData.timeout || 300000,
         enabled: providerData.enabled !== false,
+        // Claude Ollama marker — preserve so adopting the sample via POST drives
+        // ollama-backed model refresh (see isOllamaBackedProvider).
+        ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],
@@ -386,25 +507,80 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'cli' || provider.type === 'tui') {
+        // Read fresh per call (not hoisted to module scope) so tests can drive
+        // both branches by stubbing process.platform per test.
+        const isWin32 = process.platform === 'win32';
+
+        // Resolve the command on PATH. Windows has no `which` — it ships `where`
+        // instead — so a `which` lookup there always fails and falsely reports the
+        // command "not found in PATH" even when it resolves fine from a shell.
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
-        const { stdout } = await execFileAsync('which', [provider.command])
+        const lookup = isWin32 ? 'where' : 'which';
+        const { stdout } = await execFileAsync(lookup, [provider.command])
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
-        if (!stdout.trim()) {
+        // `where` lists every match (one per line); `which` prints one. Take the
+        // first non-empty line as the resolved absolute path.
+        const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+
+        if (!commandPath) {
           return { success: false, error: `Command '${provider.command}' not found in PATH` };
         }
 
+        // On Windows, `where` can return the wrong file: npm ships an
+        // extension-less POSIX shell-script stub (for Git Bash/WSL) alongside
+        // the real `.cmd`/`.bat`/`.ps1` wrappers, and `where`'s first-line
+        // match is not guaranteed to be a launchable one (this is exactly
+        // what produced the literal error text in #1865). Re-resolve via the
+        // same extension-aware filesystem search the agent runner uses
+        // (server/lib/bufferedSpawn.js's resolveWindowsExecutable), searched
+        // against the same provider-envVars-merged env the runner actually
+        // spawns under (so a configured PATH override is honored here too),
+        // and prefer it for both the actual invocation AND what we report
+        // back — falling back to the `where` result only when that search
+        // finds nothing.
+        const searchEnv = { ...process.env, ...provider.envVars };
+        const invokePath = (isWin32 && resolveWindowsExecutable(provider.command, isWin32, searchEnv)) || commandPath;
+
+        // Track whether the resolved path could actually be spawned. Without
+        // this, a non-spawnable shim falls through to `version: 'available'`
+        // and the Test button reports a provider the runner can never
+        // actually invoke as usable.
+        let everSpawned = false;
         const tryVersion = async (flag) => {
-          const out = await execFileAsync(provider.command, [flag]).catch(() => null);
-          return out?.stdout?.trim() || null;
+          // Invoke the resolved path so Windows runs the exact `.exe`/`.cmd`
+          // we found — execFile won't re-apply PATHEXT to a bare command
+          // name. A `.cmd`/`.bat` target still can't be launched directly
+          // under shell:false (Node refuses it outright, even with the
+          // explicit extension — see prepareWindowsSafeSpawn above), so wrap
+          // it through cmd.exe /c exactly like the runner does.
+          try {
+            const { command: execCommand, args: execArgs } = prepareWindowsSafeSpawn(invokePath, [flag]);
+            const out = await execFileAsync(execCommand, execArgs);
+            everSpawned = true;
+            return out?.stdout?.trim() || null;
+          } catch (err) {
+            // A numeric `code` is a non-zero EXIT — the process DID run (it just
+            // doesn't support this flag), so the path is spawnable. A string code
+            // (ENOENT/EACCES) or a spawn error means it could not be launched.
+            if (typeof err?.code === 'number') everSpawned = true;
+            return null;
+          }
         };
-        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v')) || 'available';
+        const versionOut = (await tryVersion('--version')) || (await tryVersion('-v'));
+
+        if (!everSpawned) {
+          return {
+            success: false,
+            error: `Resolved '${provider.command}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+          };
+        }
 
         return {
           success: true,
-          path: stdout.trim(),
-          version: versionOut
+          path: invokePath,
+          version: versionOut || 'available'
         };
       }
 
@@ -445,6 +621,11 @@ export function createProviderService(config = {}) {
           models = await this._refreshAPIProviderModels(provider);
         } else if (provider.type === 'cli') {
           models = await this._refreshCLIProviderModels(provider);
+        } else if (provider.type === 'tui' && isOllamaBackedProvider(provider)) {
+          // TUI providers normally don't refresh (their model is fixed by the
+          // CLI/config), but the Claude-Ollama TUI variant still needs its
+          // tool-use-capable Ollama model list pulled live, same as the CLI one.
+          models = await this._fetchOllamaToolCapableModels(provider);
         }
       } catch (error) {
         console.error(`Failed to refresh models for ${provider.name}:`, error.message);
@@ -507,6 +688,14 @@ export function createProviderService(config = {}) {
     async _refreshCLIProviderModels(provider) {
       const providerName = provider.name.toLowerCase();
 
+      // Claude Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
+      // installed Ollama models (filtered to tool-use-capable ones — the agent
+      // harness depends on reliable tool-calling) instead of the static Anthropic
+      // list. Checked BEFORE the generic claude branch below.
+      if (isOllamaBackedProvider(provider)) {
+        return await this._fetchOllamaToolCapableModels(provider);
+      }
+
       if (providerName.includes('claude') || provider.command === 'claude') {
         return await this._fetchAnthropicModels(provider);
       }
@@ -522,10 +711,38 @@ export function createProviderService(config = {}) {
       throw new Error('Model refresh not supported for this CLI provider');
     },
 
+    async _fetchOllamaToolCapableModels(provider) {
+      const base = ollamaBaseFromProvider(provider);
+      const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+      if (!res?.ok) {
+        throw new Error(`Ollama unreachable at ${base} (HTTP ${res?.status || 'error'})`);
+      }
+      const data = await res.json().catch(() => null);
+      const names = (data?.models || []).map(m => m.name || m.model).filter(Boolean);
+
+      // Query /api/show per model for the authoritative `tools` capability; fall
+      // back to the id heuristic when the daemon doesn't answer. Filter to
+      // tool-use-capable models only — a Claude harness on a non-tool model
+      // "runs" but silently fails to edit files.
+      const checked = await Promise.all(names.map(async (name) => {
+        const showRes = await fetch(`${base}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name, name }),
+          signal: AbortSignal.timeout(8000)
+        }).catch(() => null);
+        const showData = showRes?.ok ? await showRes.json().catch(() => null) : null;
+        const capabilities = Array.isArray(showData?.capabilities) ? showData.capabilities : null;
+        return ollamaModelSupportsTools(name, capabilities) ? name : null;
+      }));
+      return checked.filter(Boolean);
+    },
+
     async _fetchAnthropicModels(_provider) {
       return [
         'claude-opus-4-8',
         'claude-opus-4-7',
+        'claude-sonnet-5',
         'claude-sonnet-4-6',
         'claude-opus-4-5-20251101',
         'claude-sonnet-4-5-20250929',
@@ -548,7 +765,8 @@ export function createProviderService(config = {}) {
       }
 
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+        { signal: AbortSignal.timeout(8000) }
       ).catch(() => null);
 
       if (!response?.ok) {

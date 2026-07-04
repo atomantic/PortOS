@@ -365,6 +365,107 @@ describe('rounds service', () => {
     expect(song.references[1].id).toBe('ref-keep');
   });
 
+  it('reference audioFilename/segments round-trip; absent keys stay absent (#2106)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [
+        { url: 'https://example.com/plain' }, // legacy — no analysis fields
+        {
+          url: 'https://www.tiktok.com/@u/video/9',
+          audioFilename: '  abc123-ref.wav  ',
+          segments: [
+            { layerId: 'lead', startMs: 0, endMs: 14000 },
+            { layerId: 'bass', startMs: 14000.7, endMs: 29000.2 }, // rounded
+          ],
+        },
+      ],
+    });
+    // Legacy reference: the new keys must not appear at all.
+    expect('audioFilename' in song.references[0]).toBe(false);
+    expect('segments' in song.references[0]).toBe(false);
+    // Analysis reference: trimmed filename + clamped/rounded segments.
+    expect(song.references[1].audioFilename).toBe('abc123-ref.wav');
+    expect(song.references[1].segments).toEqual([
+      { layerId: 'lead', startMs: 0, endMs: 14000 },
+      { layerId: 'bass', startMs: 14001, endMs: 29000 },
+    ]);
+  });
+
+  it('persists a stacked-mix backing window only when valid; drops it otherwise (#2121)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: [
+          { layerId: 'lead', startMs: 8000, endMs: 16000, bgStartMs: 4000.6, bgEndMs: 8000.2 }, // valid (bgEnd rounds to startMs)
+          { layerId: 'bass', startMs: 20000, endMs: 24000, bgStartMs: 9000, bgEndMs: 9000 },     // zero-length bg → dropped
+          { layerId: 'alto', startMs: 30000, endMs: 34000, bgStartMs: 'x', bgEndMs: 29000 },     // non-finite bg → dropped
+          { layerId: 'tenor', startMs: 40000, endMs: 44000, bgStartMs: 38000, bgEndMs: 41000 },  // bgEnd > startMs (overlaps) → dropped
+        ],
+      }],
+    });
+    expect(song.references[0].segments).toEqual([
+      { layerId: 'lead', startMs: 8000, endMs: 16000, bgStartMs: 4001, bgEndMs: 8000 },
+      { layerId: 'bass', startMs: 20000, endMs: 24000 },
+      { layerId: 'alto', startMs: 30000, endMs: 34000 },
+      { layerId: 'tenor', startMs: 40000, endMs: 44000 },
+    ]);
+  });
+
+  it('drops malformed reference segments and bounds the list (#2106)', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: [
+          { layerId: 'a', startMs: 5000, endMs: 5000 },   // zero-length → dropped
+          { layerId: 'b', startMs: 9000, endMs: 1000 },   // inverted → dropped
+          { layerId: 'c', startMs: 'x', endMs: 2000 },    // non-finite → dropped
+          { layerId: 'd', startMs: -50, endMs: 2000 },    // clamped to 0
+          'not-an-object',                                 // shapeless → dropped
+        ],
+      }],
+    });
+    expect(song.references[0].segments).toEqual([
+      { layerId: 'd', startMs: 0, endMs: 2000 },
+    ]);
+    // An all-invalid list leaves the key absent (no empty-array husk).
+    const empty = svc.sanitizeRound({
+      id: 'y',
+      references: [{ url: 'https://example.com', audioFilename: 'ref.wav', segments: [{ startMs: 1, endMs: 1 }] }],
+    });
+    expect('segments' in empty.references[0]).toBe(false);
+    // Bound: more than REF_SEGMENTS_MAX spans are truncated.
+    const many = svc.sanitizeRound({
+      id: 'z',
+      references: [{
+        url: 'https://example.com',
+        audioFilename: 'ref.wav',
+        segments: Array.from({ length: svc.REF_SEGMENTS_MAX + 5 }, (_, i) => ({
+          layerId: `l${i}`, startMs: i * 1000, endMs: i * 1000 + 500,
+        })),
+      }],
+    });
+    expect(many.references[0].segments).toHaveLength(svc.REF_SEGMENTS_MAX);
+  });
+
+  it('drops reference segments when no audio is attached (#2106)', () => {
+    // Segments are offsets into the attached audio — without an audioFilename
+    // they are stale ranges from a removed recording and must not persist
+    // (removing the audio clears them structurally).
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [{
+        url: 'https://example.com',
+        segments: [{ layerId: 'bass', startMs: 0, endMs: 2000 }],
+      }],
+    });
+    expect('segments' in song.references[0]).toBe(false);
+    expect('audioFilename' in song.references[0]).toBe(false);
+  });
+
   it('refreshes a built-in from template, preserving recordings + learned', async () => {
     await svc.listRounds(); // seed
     const seedId = [...svc.BUILTIN_ROUND_IDS][0];
@@ -463,6 +564,60 @@ describe('rounds service', () => {
     for (const id of heyHo.partnerRoundIds) {
       const partner = songs.find((s) => s.id === id);
       expect(partner.partnerRoundIds).toContain('seed-hey-ho-nobody-home');
+    }
+  });
+
+  it('the corrected Hey Ho melody is D-centered with all naturals (no B, issue #2105)', async () => {
+    const songs = await svc.listRounds();
+    const heyHo = songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
+    const parsed = parseScore(heyHo.score);
+    expect(parsed.errors).toEqual([]);
+    const letters = parsed.measures.flatMap((m) => m.notes.filter((n) => !n.rest).map((n) => n.pitch.letter));
+    // The old mis-transcription centered on G and climbed to a B-natural major
+    // third; the fix removes every B and re-centers on D.
+    expect(letters).not.toContain('B');
+    expect(letters[0]).toBe('D');
+    // The pitch content is the D natural-minor pentachord D–E–F–G–A only.
+    expect([...new Set(letters)].sort()).toEqual(['A', 'D', 'E', 'F', 'G']);
+  });
+
+  it('the D-minor quodlibet trio has no {B,F} tritone at any aligned beat (issue #2105)', async () => {
+    const songs = await svc.listRounds();
+    const trio = ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-rose-rose-rose-red']
+      .map((id) => songs.find((s) => s.id === id));
+    trio.forEach((s, i) => expect(s, `missing quodlibet round ${i}`).toBeTruthy());
+
+    // Expand a score into an eighth-note grid of sounding pitch letters (one entry
+    // per 0.5-beat slot; null for a rest). Asserts a clean parse and full 4/4 bars
+    // along the way, so the trio's mechanical validity rides on this check too.
+    const GRID = 0.5;
+    const toGrid = (round) => {
+      const parsed = parseScore(round.score);
+      expect(parsed.errors, `${round.title}: ${parsed.errors.join('; ')}`).toEqual([]);
+      const grid = [];
+      for (const [i, m] of parsed.measures.entries()) {
+        expect(Math.abs(m.beats - 4) < 1e-9, `${round.title} bar ${i + 1} = ${m.beats} beats`).toBe(true);
+        for (const n of m.notes) {
+          const slots = Math.round(n.duration.beats / GRID);
+          for (let k = 0; k < slots; k += 1) grid.push(n.rest ? null : n.pitch.letter);
+        }
+      }
+      return grid;
+    };
+
+    const grids = trio.map(toGrid);
+    // Align the three looping rounds over the least common multiple of their
+    // lengths and assert no beat ever sounds a B and an F together (the tritone
+    // that the old G-centered Hey Ho produced against the partners' F naturals).
+    const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+    const lcmLen = grids.reduce((acc, g) => (acc * g.length) / gcd(acc, g.length), 1);
+    for (let i = 0; i < lcmLen; i += 1) {
+      const sounding = new Set();
+      for (const g of grids) { const p = g[i % g.length]; if (p) sounding.add(p); }
+      expect(
+        sounding.has('B') && sounding.has('F'),
+        `B-against-F tritone at slot ${i}: {${[...sounding].sort().join(',')}}`,
+      ).toBe(false);
     }
   });
 

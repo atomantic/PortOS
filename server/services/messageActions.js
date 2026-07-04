@@ -2,9 +2,8 @@ import { getAccount } from './messageAccounts.js';
 import { getMessage } from './messageSync.js';
 import { findOrOpenPage, getPages, isAuthPage, evaluateOnPage } from './messagePlaywrightSync.js';
 import { recordCorrection } from './messageTriageRules.js';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
 
@@ -24,7 +23,7 @@ async function loadCache(accountId) {
 async function saveCache(accountId, cache) {
   await ensureDir(CACHE_DIR);
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  await writeFile(filePath, JSON.stringify(cache, null, 2));
+  await atomicWrite(filePath, cache);
 }
 
 async function removeFromCache(accountId, messageId) {

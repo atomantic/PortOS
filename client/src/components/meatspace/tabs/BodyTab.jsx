@@ -104,7 +104,7 @@ export default function BodyTab() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Eye size={18} className="text-blue-400" />
+            <Eye size={18} className="text-port-accent" />
             <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
               Eye Prescriptions ({eyeLoading ? '...' : eyeExams.length})
             </h3>
@@ -112,7 +112,7 @@ export default function BodyTab() {
           {!showEyeForm && editingEyeIdx == null && (
             <button
               onClick={() => { setShowEyeForm(true); setEyeForm({ ...EMPTY_EYE_FORM, date: new Date().toISOString().split('T')[0] }); }}
-              className="flex items-center gap-1 text-xs text-port-accent hover:text-blue-300 transition-colors"
+              className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
             >
               <Plus size={14} /> Add Exam
             </button>

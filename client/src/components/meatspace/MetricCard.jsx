@@ -1,9 +1,11 @@
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import useChartColors from '../../hooks/useChartColors.js';
 
 export default function MetricCard({ data = [], loading = false, config, latestValue }) {
   const { label, unit, color, aggregation, formatValue } = config;
+  const chartColors = useChartColors();
   const isSumMetric = aggregation === 'sum';
 
   const summary = data.length > 0
@@ -50,17 +52,17 @@ export default function MetricCard({ data = [], loading = false, config, latestV
           </div>
           <ResponsiveContainer width="100%" height={150}>
             <LineChart data={chartData} margin={{ top: 2, right: 8, bottom: 2, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
-              <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} interval="preserveStartEnd" />
-              <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} width={55} domain={['auto', 'auto']}
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
+              <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
+              <YAxis tick={{ fill: chartColors.axis, fontSize: 11 }} width={55} domain={['auto', 'auto']}
                 tickFormatter={v => typeof v === 'number' && v >= 1000 ? v.toLocaleString() : v} />
               <Tooltip content={({ active, payload, label: tipLabel }) => {
                 if (!active || !payload?.length) return null;
                 const val = payload[0].value;
                 const formatted = formatValue ? formatValue(val) : (typeof val === 'number' && val >= 1000 ? val.toLocaleString() : Math.round(val * 100) / 100);
                 return (
-                  <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
-                    <p style={{ color: '#9ca3af', marginBottom: 2 }}>{tipLabel}</p>
+                  <div style={{ background: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, color: chartColors.text, padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
+                    <p style={{ color: chartColors.axis, marginBottom: 2 }}>{tipLabel}</p>
                     <p style={{ color, fontWeight: 600 }}>{formatted} {unit}</p>
                   </div>
                 );

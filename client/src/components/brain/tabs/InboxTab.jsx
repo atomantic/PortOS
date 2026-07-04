@@ -106,7 +106,7 @@ export default function InboxTab({ onRefresh, settings }) {
     setInputText('');
     setEntries(prev => [optimisticEntry, ...prev]);
 
-    const result = await api.captureBrainThought(text, undefined, undefined, { creative }).catch(err => {
+    const result = await api.captureBrainThought(text, undefined, undefined, { creative }, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
       setEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
@@ -121,7 +121,7 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleResolve = async (entryId, destination) => {
-    const result = await api.resolveBrainReview(entryId, destination).catch(err => {
+    const result = await api.resolveBrainReview(entryId, destination, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to resolve');
       return null;
     });
@@ -136,7 +136,7 @@ export default function InboxTab({ onRefresh, settings }) {
   const handleRetry = async (entryId) => {
     if (retryingId) return;
     setRetryingId(entryId);
-    const result = await api.retryBrainClassification(entryId).catch(err => {
+    const result = await api.retryBrainClassification(entryId, undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to retry');
       return null;
     });
@@ -155,7 +155,7 @@ export default function InboxTab({ onRefresh, settings }) {
       return;
     }
 
-    const result = await api.fixBrainClassification(entryId, fixDestination).catch(err => {
+    const result = await api.fixBrainClassification(entryId, fixDestination, undefined, undefined, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to fix');
       return null;
     });
@@ -180,7 +180,7 @@ export default function InboxTab({ onRefresh, settings }) {
       return;
     }
 
-    const result = await api.updateBrainInboxEntry(entryId, editText.trim()).catch(err => {
+    const result = await api.updateBrainInboxEntry(entryId, editText.trim(), { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to update');
       return null;
     });
@@ -201,7 +201,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
   const handleDelete = async (entryId) => {
     let failed = false;
-    await api.deleteBrainInboxEntry(entryId).catch(err => {
+    await api.deleteBrainInboxEntry(entryId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete');
       failed = true;
     });
@@ -214,7 +214,7 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleMarkDone = async (entryId) => {
-    const result = await api.markBrainInboxDone(entryId).catch(err => {
+    const result = await api.markBrainInboxDone(entryId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to mark done');
       return null;
     });
@@ -300,7 +300,7 @@ export default function InboxTab({ onRefresh, settings }) {
             aria-pressed={creative}
             aria-label="Toggle creative capture mode"
             className={`px-3 py-3 rounded-lg border transition-colors flex items-center gap-1.5 text-sm ${creative
-              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+              ? 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40'
               : 'bg-port-card text-gray-400 border-port-border hover:text-gray-200'}`}
             title="Creative mode: flag captures as creative ideas you can send to the Catalog"
           >
@@ -318,7 +318,7 @@ export default function InboxTab({ onRefresh, settings }) {
         </div>
         <p className="mt-2 text-xs text-gray-500">
           Capture a thought — type or use the mic. AI will classify and route it automatically.
-          {creative && <span className="text-purple-300"> Creative mode on — captures are flagged for the Catalog.</span>}
+          {creative && <span className="text-port-accent-2"> Creative mode on — captures are flagged for the Catalog.</span>}
           {settings?.confidenceThreshold && (
             <span> Confidence threshold: {Math.round(settings.confidenceThreshold * 100)}%</span>
           )}
@@ -328,15 +328,15 @@ export default function InboxTab({ onRefresh, settings }) {
       {/* Creative batch action — appears once any captured note is flagged
           creative. Sends them all into the catalog ingest review in one hop. */}
       {creativeEntries.length > 0 && (
-        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
-          <span className="text-sm text-purple-200 flex items-center gap-2">
+        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
+          <span className="text-sm text-port-accent-2 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             {creativeEntries.length} creative {creativeEntries.length === 1 ? 'note' : 'notes'} ready to become catalog ingredients
           </span>
           <button
             type="button"
             onClick={handleSendCreativeToCatalog}
-            className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
+            className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 border border-port-accent-2/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
           >
             <Library className="w-4 h-4" /> Send to Catalog
           </button>
@@ -347,7 +347,7 @@ export default function InboxTab({ onRefresh, settings }) {
           Capped to the viewport and given its own scroll on xl+ so a long
           Needs-Review queue stays reachable instead of growing past the fold
           (the very problem #1173 set out to fix). */}
-      <div className="flex flex-col gap-4 xl:col-start-2 xl:row-start-2 xl:sticky xl:top-0 xl:self-start xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
+      <div className="flex flex-col gap-4 xl:col-start-2 xl:row-start-2 xl:sticky xl:top-0 xl:self-start xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto">
         {/* Overview stats — desktop rail only (counts also live in the page header) */}
         <div className="hidden xl:block p-3 bg-port-card border border-port-border rounded-lg">
           <div className="flex items-center justify-between mb-3">
@@ -669,7 +669,7 @@ export default function InboxTab({ onRefresh, settings }) {
                       <div className="flex-1">
                         <p className="text-white">
                           {entry.creative && (
-                            <Sparkles className="inline w-3.5 h-3.5 text-purple-300 mr-1.5 -mt-0.5" aria-label="Creative note" />
+                            <Sparkles className="inline w-3.5 h-3.5 text-port-accent-2 mr-1.5 -mt-0.5" aria-label="Creative note" />
                           )}
                           {entry.capturedText}
                         </p>

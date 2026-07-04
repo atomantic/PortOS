@@ -269,3 +269,70 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 });
+
+function emitCriticalError(overrides = {}) {
+  errorEvents.emit('error', {
+    code: 'UNCAUGHT_EXCEPTION',
+    message: 'boom',
+    severity: 'critical',
+    canAutoFix: true,
+    timestamp: Date.now(),
+    ...overrides,
+  });
+}
+
+describe('autoFixer — generic critical-error auto-fix path', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    cos.addTask.mockClear();
+    cos.isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetAutoFixerForTests();
+  });
+
+  it('requires approval — a bare crash is too thin a signal for an unsupervised agent to patch code', async () => {
+    emitCriticalError({ message: 'Cannot read properties of undefined', stack: 'Error: boom\n    at foo (file.js:1:1)' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+      description: 'Fix critical error: Cannot read properties of undefined',
+      approvalRequired: true,
+    });
+  });
+
+  it('triggers on canAutoFix even when severity is not critical', async () => {
+    emitCriticalError({ code: 'SOME_ERROR', message: 'recoverable-ish failure', severity: 'error' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(cos.addTask.mock.calls[0][0]).toMatchObject({ approvalRequired: true });
+  });
+
+  it('does not fire for a non-critical error that is not marked auto-fixable', async () => {
+    emitCriticalError({ code: 'VALIDATION_ERROR', message: 'bad input', severity: 'error', canAutoFix: false });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('does not fire when CoS is not running', async () => {
+    cos.isRunning.mockReturnValue(false);
+    emitCriticalError();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cos.addTask).not.toHaveBeenCalled();
+  });
+
+  it('dedupes identical critical errors within the window', async () => {
+    emitCriticalError();
+    emitCriticalError();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+  });
+});

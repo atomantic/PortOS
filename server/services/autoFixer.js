@@ -385,12 +385,14 @@ async function createAutoFixTask(error) {
   // Build context for the agent
   const context = buildErrorContext(error);
 
-  // Create task in CoS system tasks
+  // Create task in CoS system tasks. Requires approval, matching every other
+  // error-driven task creator in this file — a crash alone isn't enough
+  // signal to let an agent edit code unsupervised.
   const taskData = {
     description: `Fix critical error: ${error.message}`,
     priority: 'HIGH',
     context,
-    approvalRequired: false // Auto-approve for auto-fix tasks
+    approvalRequired: true
   };
 
   const task = await addTask(taskData, 'internal');

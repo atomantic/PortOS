@@ -1,7 +1,6 @@
 import { spawn } from 'child_process';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings, updateSettings } from './settings.js';
 
@@ -31,7 +30,7 @@ async function load() {
 
 async function save(data) {
   await ensureDir(DATA_DIR);
-  await writeFile(REPOS_FILE, JSON.stringify(data, null, 2) + '\n');
+  await atomicWrite(REPOS_FILE, JSON.stringify(data, null, 2) + '\n');
   cache = data;
   cacheTimestamp = Date.now();
 }

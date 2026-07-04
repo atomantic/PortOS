@@ -24,7 +24,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
 
   const handleCreateTask = async (concernId) => {
     setCreating(concernId);
-    const result = await api.createGsdConcernTasks(appId, { concernIds: [concernId] }).catch(err => {
+    const result = await api.createGsdConcernTasks(appId, { concernIds: [concernId] }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -37,7 +37,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
 
   const handleCreateAll = async () => {
     setCreating('all');
-    const result = await api.createGsdConcernTasks(appId, { all: true }).catch(err => {
+    const result = await api.createGsdConcernTasks(appId, { all: true }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });

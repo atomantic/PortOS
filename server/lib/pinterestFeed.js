@@ -15,6 +15,7 @@
  */
 
 import { ServerError } from './errorHandler.js';
+import { decodeXmlEntities } from './xmlEntities.js';
 
 // Explicit allow-list of Pinterest's REGISTRABLE domains. A registrable-label
 // check ("second-to-last label is pinterest") is NOT enough: an attacker can
@@ -95,10 +96,10 @@ export function normalizePinterestFeedUrl(input) {
 
 // Minimal HTML-entity decode for URLs/titles pulled out of the feed (the
 // feed escapes `&` as `&amp;` inside attribute values, which would corrupt an
-// image URL's query string if left encoded).
+// image URL's query string if left encoded). Trims, like the rest of the feed
+// extractors. Numeric refs (`&#39;`, `&#039;`) are handled by the shared decoder.
 const decodeEntities = (s) => (typeof s === 'string'
-  ? s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").trim()
+  ? decodeXmlEntities(s).trim()
   : s);
 
 // Non-greedy single-tag text extractor (CDATA-aware). Mirrors feeds.js's
@@ -111,10 +112,7 @@ const extractTag = (xml, tag) => {
   return m ? m[1].trim() : '';
 };
 
-const stripHtml = (html) => html
-  .replace(/<[^>]+>/g, ' ')
-  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+const stripHtml = (html) => decodeXmlEntities(html.replace(/<[^>]+>/g, ' '))
   .replace(/\s+/g, ' ')
   .trim();
 

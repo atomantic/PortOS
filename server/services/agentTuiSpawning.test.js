@@ -103,7 +103,15 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m),
   // Bedrock map is a no-op off Bedrock — mirror that pass-through here (the
   // mapper itself is unit-tested in providerModels.test.js).
-  resolveBedrockCliModel: vi.fn((m) => m)
+  resolveBedrockCliModel: vi.fn((m) => m),
+  // Mirror the real opencode-command basename match (fully unit-tested in
+  // providerModels.test.js).
+  isOpencodeCommand: vi.fn((c) => typeof c === 'string' && c.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode'),
+  // Mirror the real ollama/ namespacing for opencode providers (fully unit-
+  // tested in providerModels.test.js).
+  prefixOpencodeModel: vi.fn((p, m) => (typeof p?.command === 'string' && p.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === 'opencode' && p?.ollamaBacked === true && m && !String(m).startsWith('ollama/')) ? `ollama/${m}` : m),
+  // Mirror hasModelFlag (real impl unit-tested in providerModels.test.js).
+  hasModelFlag: vi.fn((a) => Array.isArray(a) && a.some((x) => x === '--model' || x === '-m' || (typeof x === 'string' && (x.startsWith('--model=') || x.startsWith('-m=')))))
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
@@ -210,6 +218,22 @@ describe('agent TUI spawning', () => {
     expect(config.commandLine).toBe("claude --dangerously-skip-permissions --add-dir '/tmp/with space' --model claude-sonnet");
     expect(config.promptDelayMs).toBe(1000);
     expect(config.idleTimeoutMs).toBe(30000);
+  });
+
+  it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [], ollamaBacked: true,
+    }, 'qwen2.5:7b');
+    expect(config.command).toBe('opencode');
+    expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+  });
+
+  it('respects a user-baked --model pin on an OpenCode TUI and does not duplicate it', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'opencode-ollama-tui', type: 'tui', command: 'opencode',
+      args: ['--model', 'ollama/custom'], ollamaBacked: true,
+    }, 'qwen2.5:7b');
+    expect(config.args).toEqual(['--model', 'ollama/custom']);
   });
 
   it('falls back to the default command via id heuristic when command is omitted', () => {
@@ -975,5 +999,101 @@ describe('spawnTuiAgent runtime', () => {
       .join('');
     expect(outputTxtWrites).toContain('Implemented the fix.');
     expect(outputTxtWrites).toContain('https://example.com/pr/42');
+  });
+});
+
+// Issue #2074 — the idle reaper must extend its grace while a swarm orchestrator
+// is in its Phase C merge queue, and, if the EXTENDED window still blows, surface
+// a needs-manual-finish failure instead of a silent `status: completed`. This is
+// the exact decision the `idleTimer` interval makes; mirror it as a pure function
+// (the inline-copy pattern from subAgentSpawner.test.js) so the branch matrix is
+// tested without standing up the full fake-timer PTY harness. Generalized to
+// do:release/do:pr/do:rpr's multi-reviewer loop below (agent-61508f36, PR #2084).
+describe('agentTuiSpawning — idle reap decision (#2074)', () => {
+  const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
+  const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
+
+  // Faithful copy of the idleTimer body's finalize-selection logic.
+  function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, reviewLoopActive, workActive, rendersCounter }) {
+    const effectiveIdleTimeoutMs = mergeQueueActive
+      ? Math.max(baseIdleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
+      : reviewLoopActive
+        ? Math.max(baseIdleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : baseIdleTimeoutMs;
+    if (idle < effectiveIdleTimeoutMs) return { action: 'wait', effectiveIdleTimeoutMs };
+    if (mergeQueueActive) {
+      return { action: 'reap', success: false, reason: 'merge-queue-idle-timeout', effectiveIdleTimeoutMs };
+    }
+    if (reviewLoopActive) {
+      return { action: 'reap', success: false, reason: 'review-loop-idle-timeout', effectiveIdleTimeoutMs };
+    }
+    const noWorkButCounterExpected = !workActive && rendersCounter;
+    if (noWorkButCounterExpected) {
+      return { action: 'reap', success: false, reason: 'idle-no-activity', effectiveIdleTimeoutMs };
+    }
+    return { action: 'reap', success: true, reason: 'idle-complete', effectiveIdleTimeoutMs };
+  }
+
+  const BASE = 180000;
+
+  it('does NOT reap at the 3-min default while in a merge queue — grace extends to 15min', () => {
+    const r = decideIdleReap({ idle: BASE + 5000, baseIdleTimeoutMs: BASE, mergeQueueActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('wait');
+    expect(r.effectiveIdleTimeoutMs).toBe(MERGE_QUEUE_IDLE_TIMEOUT_MS);
+  });
+
+  it('reaps a merge-queue agent as needs-manual-finish once the EXTENDED window blows', () => {
+    const r = decideIdleReap({ idle: MERGE_QUEUE_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(false);
+    expect(r.reason).toBe('merge-queue-idle-timeout');
+  });
+
+  it('leaves the pre-#2074 idle-complete path untouched when NOT in a merge queue', () => {
+    const r = decideIdleReap({ idle: BASE + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: false, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(true);
+    expect(r.reason).toBe('idle-complete');
+  });
+
+  it('leaves the #1229 no-activity failure path untouched when NOT in a merge queue', () => {
+    const r = decideIdleReap({ idle: BASE + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: false, workActive: false, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(false);
+    expect(r.reason).toBe('idle-no-activity');
+  });
+
+  it('a merge-queue reap takes precedence over the no-activity downgrade', () => {
+    // Even with no work counter seen, a latched merge queue means real work was
+    // happening — surface it as needs-manual-finish, not a never-submitted prompt.
+    const r = decideIdleReap({ idle: MERGE_QUEUE_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, mergeQueueActive: true, workActive: false, rendersCounter: true });
+    expect(r.reason).toBe('merge-queue-idle-timeout');
+  });
+
+  // Generalizes the #2074 fix to do:release/do:pr/do:rpr's multi-reviewer loop —
+  // observed 2026-07-02 on agent-61508f36 (PR #2084): a slow codex review pass
+  // went silent past the 3-minute default and the still-waiting release agent
+  // was reaped as a false `idle-complete` success before it ever merged.
+  it('does NOT reap at the 3-min default while in a review loop — grace extends to 15min', () => {
+    const r = decideIdleReap({ idle: BASE + 5000, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('wait');
+    expect(r.effectiveIdleTimeoutMs).toBe(REVIEW_LOOP_IDLE_TIMEOUT_MS);
+  });
+
+  it('reaps a review-loop agent as needs-manual-finish once the EXTENDED window blows', () => {
+    const r = decideIdleReap({ idle: REVIEW_LOOP_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: true, rendersCounter: true });
+    expect(r.action).toBe('reap');
+    expect(r.success).toBe(false);
+    expect(r.reason).toBe('review-loop-idle-timeout');
+  });
+
+  it('a review-loop reap takes precedence over the no-activity downgrade', () => {
+    const r = decideIdleReap({ idle: REVIEW_LOOP_IDLE_TIMEOUT_MS + 1, baseIdleTimeoutMs: BASE, reviewLoopActive: true, workActive: false, rendersCounter: true });
+    expect(r.reason).toBe('review-loop-idle-timeout');
+  });
+
+  it('a merge-queue reap takes precedence over a review-loop reap when both are (implausibly) active', () => {
+    const r = decideIdleReap({ idle: 900001, baseIdleTimeoutMs: BASE, mergeQueueActive: true, reviewLoopActive: true, workActive: true, rendersCounter: true });
+    expect(r.reason).toBe('merge-queue-idle-timeout');
   });
 });

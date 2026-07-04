@@ -7,13 +7,14 @@ export const getAlertsSummary = (options) => request('/alerts/summary', options)
 export const getCharacter = (options) => request('/character', options);
 
 // Health
-export const checkHealth = () => request('/system/health');
+export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
 export const getCapabilities = (options) => request('/capabilities', options);
-export const updateHealthThresholds = (thresholds) => request('/system/health/thresholds', {
+export const updateHealthThresholds = (thresholds, options = {}) => request('/system/health/thresholds', {
   method: 'PUT',
-  body: JSON.stringify(thresholds)
+  body: JSON.stringify(thresholds),
+  ...options
 });
 
 // Update
@@ -97,7 +98,7 @@ export const resetUsage = () => request('/usage', { method: 'DELETE' });
 export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
-export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
+export const restoreBackup = (data, options = {}) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data), ...options });
 export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
 
 // Data Manager
@@ -147,26 +148,28 @@ export const reloadTelegramBridge = () => request('/telegram/bridge/reload', { m
 // Browser - CDP browser management
 export const getBrowserStatus = () => request('/browser');
 export const getBrowserConfig = () => request('/browser/config');
-export const updateBrowserConfig = (config) => request('/browser/config', {
+export const updateBrowserConfig = (config, options = {}) => request('/browser/config', {
   method: 'PUT',
-  body: JSON.stringify(config)
+  body: JSON.stringify(config),
+  ...options
 });
-export const launchBrowser = () => request('/browser/launch', { method: 'POST' });
-export const stopBrowser = () => request('/browser/stop', { method: 'POST' });
-export const restartBrowser = () => request('/browser/restart', { method: 'POST' });
+export const launchBrowser = (options = {}) => request('/browser/launch', { method: 'POST', ...options });
+export const stopBrowser = (options = {}) => request('/browser/stop', { method: 'POST', ...options });
+export const restartBrowser = (options = {}) => request('/browser/restart', { method: 'POST', ...options });
 export const getBrowserHealth = () => request('/browser/health');
 export const getBrowserProcess = () => request('/browser/process');
 export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
 export const getBrowserDownloads = () => request('/browser/downloads');
-export const deleteBrowserDownload = (name) =>
-  request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const deleteBrowserDownload = (name, options = {}) =>
+  request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE', ...options });
 export const browserDownloadUrl = (name) =>
   `/api/browser/downloads/${encodeURIComponent(name)}`;
-export const navigateBrowser = (url) => request('/browser/navigate', {
+export const navigateBrowser = (url, options = {}) => request('/browser/navigate', {
   method: 'POST',
-  body: JSON.stringify({ url })
+  body: JSON.stringify({ url }),
+  ...options
 });
 
 // Instances (Federation)
@@ -205,9 +208,10 @@ export const listImageStylePresets = () => {
   }
   return stylePresetsPromise;
 };
-export const generateAvatar = (data) => request('/image-gen/avatar', {
+export const generateAvatar = (data, options = {}) => request('/image-gen/avatar', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 // Save an uploaded image into the gallery (`/data/images/`) and get back its
 // `{ filename, path }`. Use this (not the generic `uploadFile`) when the stored

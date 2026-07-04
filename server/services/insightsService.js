@@ -11,9 +11,8 @@
  *   3. Cross-domain narrative (INS-04) — LLM generation with diff support
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
@@ -217,6 +216,28 @@ export async function callProviderAISimple(provider, model, prompt, { temperatur
 // =============================================================================
 // EXPORTED FUNCTIONS
 // =============================================================================
+//
+// LLM TRIGGER CONTRACT (no-cold-bootstrap policy — see CLAUDE.md "AI Provider
+// Usage Policy"). The insights source data (genome, blood tests, taste profile,
+// Apple Health) is sensitive, so provider calls must be *explicitly* user-driven:
+//
+//   - generateThemeAnalysis (INS-02) and refreshCrossDomainNarrative (INS-04)
+//     are the ONLY functions here that call an AI provider. Each is reached solely
+//     from an explicit POST (`/api/insights/themes/refresh`,
+//     `/api/insights/narrative/refresh`) that the user triggers by clicking
+//     "Refresh" in the Insights UI (CrossDomainTab / TasteIdentityTab handleRefresh).
+//   - The read paths getThemeAnalysis / getCrossDomainNarrative are disk-only
+//     (readJSONFile → cached JSON, never a provider call), mirroring the
+//     initDrillCache/requestCacheFill split in meatspacePostDrillCache.js. The
+//     Insights page mounts by calling ONLY these read paths.
+//   - getGenomeHealthCorrelations (INS-01) is pure rule-based (no LLM).
+//
+// Boot/init (server/index.js) mounts the router only — it must NEVER call a
+// generation function. No scheduler (taskSchedule / backupScheduler /
+// cosJobScheduler / automationScheduler) references insights. Do not add a
+// boot-time warm-up, a background refresh, or a page-mount auto-generate — any
+// new caller of the two generation functions must be a direct user action in the
+// same request (or an explicitly user-configured scheduled automation).
 
 /**
  * INS-01: Get genome-health correlations (pure rule-based, no LLM).
@@ -348,6 +369,10 @@ export async function getThemeAnalysis() {
  * INS-02: Generate taste-identity themes via LLM and persist to disk.
  * Reads taste profile sections, constructs prompt, parses JSON response.
  *
+ * LLM CALL — user-triggered only. See the trigger-contract note above. Reached
+ * solely from POST /api/insights/themes/refresh (a user "Refresh" click). Never
+ * call from boot, a warm-up, or a page-mount effect.
+ *
  * @param {string} [providerId] - Optional provider ID override
  * @param {string} [model] - Optional model override
  */
@@ -407,7 +432,7 @@ Example format:
     generatedAt: new Date().toISOString(),
     model: selectedModel
   };
-  await writeFile(THEMES_FILE, JSON.stringify(output, null, 2));
+  await atomicWrite(THEMES_FILE, output);
 
   console.log(`🧠 Taste-identity themes generated: ${themes.length} themes`);
 
@@ -430,6 +455,10 @@ export async function getCrossDomainNarrative() {
  * INS-04: Generate cross-domain narrative via LLM with diff support.
  * Gathers genome, taste-identity, and Apple Health context; writes narrative
  * to disk preserving previousText for client-side diff.
+ *
+ * LLM CALL — user-triggered only. See the trigger-contract note above. Reached
+ * solely from POST /api/insights/narrative/refresh (a user "Refresh" click).
+ * Never call from boot, a warm-up, or a page-mount effect.
  *
  * @param {string} [providerId] - Optional provider ID override
  * @param {string} [model] - Optional model override
@@ -512,7 +541,7 @@ Respond with only the narrative text, no JSON, no headings, no markdown.`;
     previousGeneratedAt: existingNarrative?.generatedAt ?? null,
     model: selectedModel
   };
-  await writeFile(NARRATIVE_FILE, JSON.stringify(output, null, 2));
+  await atomicWrite(NARRATIVE_FILE, output);
 
   console.log(`🔮 Cross-domain narrative generated (${newText.length} chars)`);
 

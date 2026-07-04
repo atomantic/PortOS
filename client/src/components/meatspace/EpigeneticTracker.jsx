@@ -14,9 +14,9 @@ const CATEGORY_ICONS = {
 };
 
 const EVIDENCE_COLORS = {
-  strong: 'bg-green-500/20 text-green-400 border-green-500/30',
-  moderate: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  emerging: 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+  strong: 'bg-port-success/20 text-port-success border-port-success/30',
+  moderate: 'bg-port-warning/20 text-port-warning border-port-warning/30',
+  emerging: 'bg-port-accent/20 text-port-accent border-port-accent/30'
 };
 
 export default function EpigeneticTracker({ markerCategories = [] }) {
@@ -213,8 +213,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                 <div className="flex-1 h-1.5 bg-port-bg rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      s.compliance >= 0.8 ? 'bg-green-500' :
-                      s.compliance >= 0.5 ? 'bg-yellow-500' : 'bg-red-500'
+                      s.compliance >= 0.8 ? 'bg-port-success' :
+                      s.compliance >= 0.5 ? 'bg-port-warning' : 'bg-port-error'
                     }`}
                     style={{ width: `${Math.round(s.compliance * 100)}%` }}
                   />
@@ -247,7 +247,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                   onClick={() => setExpandedTracked(prev => ({ ...prev, [key]: !prev[key] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >
-                  <Icon size={16} className={intervention.active ? 'text-green-400' : 'text-gray-600'} />
+                  <Icon size={16} className={intervention.active ? 'text-port-success' : 'text-gray-600'} />
                   <span className={`text-sm font-medium flex-1 ${intervention.active ? 'text-white' : 'text-gray-500'}`}>
                     {intervention.name}
                   </span>
@@ -276,7 +276,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                       <button
                         onClick={() => handleLog(key)}
                         disabled={loggingId === key}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 rounded text-sm hover:bg-green-500/30 disabled:opacity-50"
+                        className="flex items-center gap-1 px-3 py-1.5 bg-port-success/20 text-port-success border border-port-success/30 rounded text-sm hover:bg-port-success/30 disabled:opacity-50"
                       >
                         {loggingId === key ? <BrailleSpinner /> : <CheckCircle size={12} />}
                         Log Today
@@ -292,7 +292,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                             <div
                               key={log.id}
                               title={`${log.date}: ${log.amount} ${log.unit}`}
-                              className="w-6 h-6 rounded bg-green-500/20 border border-green-500/30 flex items-center justify-center text-[10px] text-green-400 font-mono"
+                              className="w-6 h-6 rounded bg-port-success/20 border border-port-success/30 flex items-center justify-center text-[10px] text-port-success font-mono"
                             >
                               {log.amount}
                             </div>
@@ -321,7 +321,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                       ) : (
                         <button
                           onClick={() => requestDelete(key)}
-                          className="px-2 py-1 bg-red-500/10 border border-red-500/20 rounded text-red-400 hover:bg-red-500/20"
+                          className="px-2 py-1 bg-port-error/10 border border-port-error/20 rounded text-port-error hover:bg-port-error/20"
                         >
                           <Trash2 size={12} />
                         </button>
@@ -354,7 +354,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                   onClick={() => setExpandedRecs(prev => ({ ...prev, [rec.id]: !prev[rec.id] }))}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-white/5 transition-colors"
                 >
-                  <Icon size={16} className="text-purple-400" />
+                  <Icon size={16} className="text-port-accent-2" />
                   <span className="text-sm font-medium text-white flex-1">{rec.name}</span>
                   <span className={`px-1.5 py-0.5 rounded text-xs border ${EVIDENCE_COLORS[rec.evidenceLevel] || EVIDENCE_COLORS.emerging}`}>
                     {rec.evidenceLevel}
@@ -377,7 +377,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
                       </div>
                       <div>
                         <span className="text-gray-500">Targets: </span>
-                        <span className="text-purple-400">{rec.targetMarkers.join(', ')}</span>
+                        <span className="text-port-accent-2">{rec.targetMarkers.join(', ')}</span>
                       </div>
                     </div>
 
@@ -391,7 +391,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
 
                     <button
                       onClick={() => handleAddCurated(rec)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded text-sm hover:bg-purple-500/30"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30 rounded text-sm hover:bg-port-accent-2/30"
                     >
                       <Plus size={14} />
                       Start Tracking

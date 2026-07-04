@@ -9,6 +9,7 @@ import { io } from 'socket.io-client';
 import { instanceEvents } from './instanceEvents.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch, peerSocketOptionsFor } from '../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
 
 // Map<peerId, { socket, agents: Map<agentId, agent>, peer }>
 const peerConnections = new Map();
@@ -102,11 +103,8 @@ export function connectToPeer(peer) {
 async function fetchPeerAgents(conn) {
   const { peer } = conn;
   const url = `${peerBaseUrl(peer)}/api/cos/agents`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CONNECT_TIMEOUT_MS);
-
-  try {
-    const res = await peerFetch(url, { signal: controller.signal }, peer);
+  await withAbortTimeout(CONNECT_TIMEOUT_MS, async (signal) => {
+    const res = await peerFetch(url, { signal }, peer);
     if (!res.ok) return;
     const data = await res.json();
     const agents = data.running || data.agents || [];
@@ -119,11 +117,9 @@ async function fetchPeerAgents(conn) {
       agents: Array.from(conn.agents.values())
     });
     console.log(`🔗 Peer ${peer.name}: ${agents.length} active agent(s)`);
-  } catch {
+  }).catch(() => {
     // Silent — agents will populate via socket events
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 /**

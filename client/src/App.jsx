@@ -22,6 +22,7 @@ const UsagePage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ d
 const ProcessesPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.ProcessesPage })));
 const AgentsPage = lazyWithReload(() => import('./pages/DevTools').then(m => ({ default: m.AgentsPage })));
 const DataDog = lazyWithReload(() => import('./pages/DataDog'));
+const FlowsDoc = lazyWithReload(() => import('./pages/FlowsDoc'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const CyberCity = lazyWithReload(() => import('./pages/CyberCity'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
@@ -34,12 +35,14 @@ const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
+const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
+const MediaAnnotate = lazyWithReload(() => import('./pages/MediaAnnotate'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
@@ -199,6 +202,7 @@ export default function App() {
           <Route path="apps" element={<Apps />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
+          <Route path="devtools/flows" element={<FlowsDoc />} />
           <Route path="devtools/github" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/image-clean" element={<ImageClean />} />
@@ -206,6 +210,7 @@ export default function App() {
           <Route path="devtools/runner" element={<RunnerPage />} />
           <Route path="devtools/submodules" element={<Submodules />} />
           <Route path="devtools/usage" element={<UsagePage />} />
+          <Route path="devtools/video-download" element={<VideoDownloaderPage />} />
           <Route path="devtools/processes" element={<ProcessesPage />} />
           <Route path="devtools/agents" element={<AgentsPage />} />
           <Route path="ai" element={<AIProviders />} />
@@ -269,6 +274,8 @@ export default function App() {
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<VideoGen />} />
             <Route path="history" element={<MediaHistory />} />
+            <Route path="annotate" element={<MediaAnnotate />} />
+            <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />
             <Route path="collections" element={<MediaCollections />} />
             <Route path="collections/:id" element={<MediaCollectionDetail />} />
             <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
@@ -276,6 +283,7 @@ export default function App() {
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
             <Route path="music-video" element={<MusicVideo />} />
+            <Route path="music-video/:projectId" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
@@ -323,14 +331,23 @@ export default function App() {
           <Route path="writers-room/guide" element={<WritersRoomGuide />} />
           <Route path="sharing" element={<Sharing />} />
           <Route path="sharing/:section" element={<Sharing />} />
+          <Route path="sharing/:section/:bucketId" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />
           <Route path="start-story" element={<StartStory />} />
           <Route path="story-builder" element={<StoryBuilder />} />
           <Route path="story-builder/:storyId" element={<Navigate to="idea" replace />} />
           <Route path="story-builder/:storyId/:step" element={<StoryBuilder />} />
+          {/* Authors is a single master-detail page: the index + editor share one
+              component, so selection rides `:authorId` (which also captures the
+              `new` create-mode sentinel — author ids are UUIDs, so it can't
+              collide). A bare `/authors` is the idle index. */}
           <Route path="authors" element={<Authors />} />
+          <Route path="authors/:authorId" element={<Authors />} />
+          {/* Music is tabbed (`:tab`); each tab's master-detail selection lives
+              at `/music/:tab/:id` (`new` = create sentinel). */}
           <Route path="music" element={<Music />} />
           <Route path="music/:tab" element={<Music />} />
+          <Route path="music/:tab/:id" element={<Music />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/editorial-checks" element={<PipelineEditorialChecks />} />
           <Route path="pipeline/findings/:commentId" element={<PipelineFindingRedirect />} />

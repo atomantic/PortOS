@@ -222,7 +222,12 @@ function StoryBuilderIndex() {
   }`;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    // Wide two-column shell above lg: create form left, "Continue a story" list
+    // right (mirrors the POST launcher redesign, #1986). Below lg the grid
+    // collapses to a single stacked column so mobile is unchanged. The 22rem
+    // sidebar track is reserved even with no sessions so the form keeps a
+    // comfortable ~48rem width instead of stretching the full shell.
+    <div className="max-w-6xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Sparkles className="w-6 h-6 text-port-accent" /> Story Builder
@@ -233,6 +238,7 @@ function StoryBuilderIndex() {
         </p>
       </header>
 
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
       <section className="bg-port-card border border-port-border rounded-lg">
         <div className="flex gap-1 border-b border-port-border px-2 pt-2">
           <button onClick={() => setMode('seed')} className={tabClass('seed')}>Start from an idea</button>
@@ -277,7 +283,7 @@ function StoryBuilderIndex() {
             </div>
             <button
               onClick={create} disabled={creating}
-              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded"
             >
               {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Create &amp; begin
@@ -294,14 +300,15 @@ function StoryBuilderIndex() {
           {sessions.map((s) => (
             <Link
               key={s.id} to={`/story-builder/${s.id}/${s.currentStep || 'idea'}`}
-              className="flex items-center justify-between bg-port-card border border-port-border rounded-lg px-4 py-3 hover:border-port-accent"
+              className="flex items-center justify-between gap-2 bg-port-card border border-port-border rounded-lg px-4 py-3 hover:border-port-accent"
             >
-              <span className="font-medium">{s.title}</span>
-              <span className="text-xs text-gray-500">at “{s.currentStep}” <ChevronRight className="w-4 h-4 inline" /></span>
+              <span className="font-medium truncate min-w-0">{s.title}</span>
+              <span className="text-xs text-gray-500 whitespace-nowrap">at “{s.currentStep}” <ChevronRight className="w-4 h-4 inline" /></span>
             </Link>
           ))}
         </section>
       )}
+      </div>
     </div>
   );
 }
@@ -460,7 +467,7 @@ function ImportPanel({ onCreated }) {
 
       {!preview ? (
         <button onClick={analyze} disabled={analyzing}
-          className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded">
+          className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded">
           {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           {analyzing ? 'Analyzing… (this can take a minute)' : 'Analyze'}
         </button>
@@ -488,7 +495,7 @@ function ImportPanel({ onCreated }) {
           )}
           <div className="flex items-center gap-2 pt-1">
             <button onClick={importAndBuild} disabled={committing || issueCount === 0}
-              className="inline-flex items-center gap-2 bg-port-success hover:bg-green-600 disabled:opacity-50 text-white px-4 py-2 rounded text-sm">
+              className="inline-flex items-center gap-2 bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm">
               {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               {committed ? 'Retry starting the builder' : arcAlreadyPersisted ? 'Retry issues & start building' : 'Import & start building'}
             </button>
@@ -771,7 +778,7 @@ function StepPanel({ session, universe, series, issues, stepId, locked, onChange
   const genButton = (label = 'Generate with AI', hasContent = false) => (
     <button
       onClick={runGenerate} disabled={busy || locked}
-      className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+      className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
     >
       {isRunning('generate') ? <Loader2 className="w-4 h-4 animate-spin" /> : (hasContent ? <RefreshCw className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />)}
       {isRunning('generate') ? (phase || 'Working…') : (hasContent ? 'Re-generate' : label)}
@@ -1069,7 +1076,7 @@ function IssuesPanel({ session, series, issues, onChanged }) {
             <button
               onClick={generateIssues} disabled={generating}
               title="Generate a per-episode breakdown for every season and create the issues here"
-              className="inline-flex items-center gap-2 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+              className="inline-flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
             >
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
               Generate issues from arc
@@ -1432,7 +1439,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
               <button
                 onClick={() => lock.toggle(stepState.locked)} disabled={lock.busy}
                 className={`inline-flex items-center gap-2 px-3 py-1.5 rounded text-sm disabled:opacity-50 ${
-                  stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-green-600 text-white'
+                  stepState.locked ? 'bg-port-card border border-port-success text-port-success' : 'bg-port-success hover:bg-port-success/80 text-white'
                 }`}
               >
                 {lock.busy ? <Loader2 className="w-4 h-4 animate-spin" /> : (stepState.locked ? <Unlock className="w-4 h-4" /> : <Check className="w-4 h-4" />)}
@@ -1449,7 +1456,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
                   <button
                     onClick={() => goToStep(stepIds[activeIdx + 1])}
                     disabled={!stepState.locked || isStale}
-                    className="inline-flex items-center gap-1 text-sm bg-port-accent hover:bg-blue-600 disabled:opacity-40 text-white px-3 py-1.5 rounded"
+                    className="inline-flex items-center gap-1 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 text-white px-3 py-1.5 rounded"
                   >
                     Next <ChevronRight className="w-4 h-4" />
                   </button>

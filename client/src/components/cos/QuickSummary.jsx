@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { timeUntil } from '../../utils/formatters';
 
 /**
  * QuickSummary - At-a-glance dashboard widget for CoS status
@@ -75,22 +76,6 @@ export default function QuickSummary() {
   };
 
   const velocityDisplay = getVelocityDisplay();
-
-  // Format time until next job
-  const formatTimeUntil = (isoDate) => {
-    if (!isoDate) return null;
-    const now = Date.now();
-    const due = new Date(isoDate).getTime();
-    const diffMs = due - now;
-
-    if (diffMs <= 0) return 'now';
-
-    const minutes = Math.floor(diffMs / 60000);
-    const hours = Math.floor(minutes / 60);
-
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    return `${minutes}m`;
-  };
 
   return (
     <div className="bg-gradient-to-r from-port-card to-port-bg border border-port-border rounded-lg p-3 mb-4">
@@ -231,9 +216,9 @@ export default function QuickSummary() {
         {/* Queue Estimate */}
         {queue.estimate?.taskCount > 0 && (
           <div className="flex items-center gap-1.5" title={`Based on ${queue.estimate.confidence}% historical data`}>
-            <Hourglass size={14} className="text-purple-400" />
+            <Hourglass size={14} className="text-port-accent-2" />
             <span className="text-gray-400">ETA:</span>
-            <span className="font-medium text-purple-300">
+            <span className="font-medium text-port-accent-2">
               {queue.estimate.formatted}
             </span>
             {queue.estimate.runningCount > 0 && (
@@ -253,7 +238,7 @@ export default function QuickSummary() {
               {nextJob.jobName?.replace(/^(self-improvement|app-improvement|task)-/, '').replace(/-/g, ' ')}
             </span>
             <span className="text-gray-500 text-xs">
-              {nextJob.isDue ? 'due' : formatTimeUntil(nextJob.nextDueAt)}
+              {nextJob.isDue ? 'due' : timeUntil(nextJob.nextDueAt)}
             </span>
           </div>
         )}

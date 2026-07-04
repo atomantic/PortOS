@@ -5,11 +5,11 @@
  * Falls back to pattern-based extraction if LLM is unavailable.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
-import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { getMemories } from './memoryBackend.js';
@@ -74,7 +74,7 @@ export async function updateConfig(updates) {
     await ensureDir(PATHS.data);
   }
 
-  await writeFile(MEMORY_CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+  await atomicWrite(MEMORY_CONFIG_FILE, newConfig);
   configCache = newConfig;
 
   return newConfig;
@@ -380,7 +380,7 @@ export async function classifyMemories(task, agentOutput) {
   const result = parseLLMResponse(llmResponse);
 
   if (result.parseError) {
-    console.log('⚠️ Failed to parse LLM response, raw:', llmResponse.substring(0, 200));
+    console.log(`⚠️ Failed to parse LLM response, raw: ${llmResponse.substring(0, 200)}`);
     return {
       memories: [],
       rejected: [],

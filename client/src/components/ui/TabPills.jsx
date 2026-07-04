@@ -35,31 +35,35 @@ export default function TabPills({
   const sz = SIZE[size] || SIZE.md;
   const visibleTabs = tabs.filter(Boolean);
 
+  // Mobile `<select>` collapse, shared by both variants so `mobileDropdown` works
+  // regardless of `variant` (the underline tab bar just overflow-scrolls without it).
+  const mobileSelect = mobileDropdown ? (
+    <div className="sm:hidden">
+      {mobileSelectId && <label htmlFor={mobileSelectId} className="sr-only">{ariaLabel || 'Section'}</label>}
+      <select
+        id={mobileSelectId}
+        value={activeTab}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={mobileSelectId ? undefined : (ariaLabel || 'Section')}
+        className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
+      >
+        {visibleTabs.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.label}{t.count != null && t.count > 0 ? ` (${t.count})` : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  ) : null;
+
   if (variant === 'pills') {
     return (
       <>
-        {mobileDropdown && (
-          <div className="sm:hidden">
-            {mobileSelectId && <label htmlFor={mobileSelectId} className="sr-only">{ariaLabel || 'Section'}</label>}
-            <select
-              id={mobileSelectId}
-              value={activeTab}
-              onChange={(e) => onChange(e.target.value)}
-              aria-label={mobileSelectId ? undefined : (ariaLabel || 'Section')}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
-            >
-              {visibleTabs.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}{t.count != null && t.count > 0 ? ` (${t.count})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {mobileSelect}
         <div
           ref={listRef}
           onScroll={onScroll}
-          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto touch-pan-x ${className}`}
+          className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} shrink-0 items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto scrollbar-hide touch-pan-x ${className}`}
           role="tablist"
           aria-label={ariaLabel}
         >
@@ -103,13 +107,15 @@ export default function TabPills({
 
   // underline variant
   return (
-    <div
-      ref={listRef}
-      onScroll={onScroll}
-      className={`flex border-b border-port-border ${stretch ? 'items-stretch bg-port-bg/40 shrink-0' : 'gap-1'} overflow-x-auto scrollbar-hide touch-pan-x ${className}`}
-      role="tablist"
-      aria-label={ariaLabel}
-    >
+    <>
+      {mobileSelect}
+      <div
+        ref={listRef}
+        onScroll={onScroll}
+        className={`${mobileDropdown ? 'hidden sm:flex' : 'flex'} shrink-0 border-b border-port-border ${stretch ? 'items-stretch bg-port-bg/40' : 'gap-1'} overflow-x-auto scrollbar-hide touch-pan-x ${className}`}
+        role="tablist"
+        aria-label={ariaLabel}
+      >
       {visibleTabs.map((t) => {
         const Icon = t.icon;
         const active = t.id === activeTab;
@@ -153,6 +159,7 @@ export default function TabPills({
           </button>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }

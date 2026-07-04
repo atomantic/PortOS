@@ -17,6 +17,7 @@ import { getGoals } from './identity.js';
 import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { getUsage } from './usage.js';
+import { getCareSummary } from './tribe.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 
 const STALL_THRESHOLD_DAYS = 14;
@@ -239,21 +240,42 @@ async function checkUsageSpikes() {
 }
 
 /**
+ * Detect Tribe relationships overdue for contact (or never contacted).
+ * Quiet when nobody is overdue. Reuses the server-side cadence source of truth.
+ */
+async function checkTribeCadence() {
+  const summary = await getCareSummary(3).catch(() => null);
+  if (!summary || summary.overdueCount === 0) return [];
+
+  const names = summary.overdue.map((p) => p.name).filter(Boolean).join(', ');
+  const overflow = summary.overdueCount > summary.overdue.length ? ', …' : '';
+  return [{
+    type: 'tribe_cadence',
+    severity: summary.overdueCount >= 3 ? 'high' : 'medium',
+    title: `${summary.overdueCount} ${summary.overdueCount === 1 ? 'person is' : 'people are'} overdue for contact`,
+    detail: names ? `Reach out to ${names}${overflow}` : 'Overdue check-ins in your Tribe',
+    link: '/tribe',
+    metadata: { overdueCount: summary.overdueCount, peopleCount: summary.peopleCount }
+  }];
+}
+
+/**
  * Generate all proactive alerts by running all checks.
  * Returns a sorted list with critical/high items first.
  */
 export async function generateAlerts() {
   const startMs = Date.now();
 
-  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts] = await Promise.all([
+  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts, tribeAlerts] = await Promise.all([
     checkGoalStalls(),
     checkSuccessRates(),
     checkSystemHealth(),
     checkLearningHealth(),
-    checkUsageSpikes()
+    checkUsageSpikes(),
+    checkTribeCadence()
   ]);
 
-  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts, ...usageAlerts];
+  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts, ...usageAlerts, ...tribeAlerts];
 
   // Sort by severity: critical > high > medium > low
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };

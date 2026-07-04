@@ -1,7 +1,6 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
@@ -200,7 +199,7 @@ async function loadData() {
 async function saveData(data) {
   await ensureDir(DATA_DIR);
   data.lastUpdated = new Date().toISOString();
-  await writeFile(EPIGENETIC_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(EPIGENETIC_FILE, data);
 }
 
 /**

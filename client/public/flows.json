@@ -1,0 +1,256 @@
+{
+  "version": 1,
+  "groups": [
+    { "id": "client-pages", "label": "Client Pages", "column": 0 },
+    { "id": "client-services", "label": "Client Services", "column": 1 },
+    { "id": "server-routes", "label": "Routes & Sockets", "column": 2 },
+    { "id": "server-services", "label": "Server Services", "column": 3 },
+    { "id": "server-lib", "label": "Server Lib", "column": 4 },
+    { "id": "data-stores", "label": "Data Stores", "column": 5 },
+    { "id": "external", "label": "External Systems", "column": 6 }
+  ],
+  "transports": [
+    { "id": "http", "label": "HTTP REST", "color": "#3b82f6" },
+    { "id": "sse", "label": "SSE stream", "color": "#f59e0b", "dash": "2 4" },
+    { "id": "socket", "label": "Socket.IO", "color": "#22c55e", "dash": "8 4" },
+    { "id": "call", "label": "Direct call", "color": "#9ca3af" },
+    { "id": "emitter", "label": "EventEmitter (in-process)", "color": "#a855f7", "dash": "10 3 2 3" },
+    { "id": "spawn", "label": "Process spawn", "color": "#ef4444", "dash": "14 4" },
+    { "id": "storage", "label": "File / DB I/O", "color": "#14b8a6", "dash": "1 3" }
+  ],
+  "nodes": [
+    { "id": "page.imageGen", "label": "ImageGen", "group": "client-pages", "file": "client/src/pages/ImageGen.jsx", "desc": "Image generation UI: prompt, model picker, init image, gallery." },
+    { "id": "page.startStory", "label": "Start a Story", "group": "client-pages", "file": "client/src/pages/StartStory.jsx", "desc": "Entry chooser: new story, import, or Story Builder." },
+    { "id": "page.storyBuilder", "label": "Story Builder", "group": "client-pages", "file": "client/src/pages/StoryBuilder.jsx", "desc": "Guided step-by-step story creation with AI-generated steps." },
+    { "id": "page.chiefOfStaff", "label": "Chief of Staff", "group": "client-pages", "file": "client/src/pages/ChiefOfStaff.jsx", "desc": "CoS tasks, agents, schedules, and autopilot controls." },
+    { "id": "page.apps", "label": "Apps", "group": "client-pages", "file": "client/src/pages/Apps.jsx", "desc": "Managed-app dashboard: start/stop/restart, status, deploys." },
+    { "id": "page.shell", "label": "Shell", "group": "client-pages", "file": "client/src/pages/Shell.jsx", "desc": "Browser terminal attached to server-side PTY sessions." },
+    { "id": "page.sharing", "label": "Sharing", "group": "client-pages", "file": "client/src/pages/Sharing.jsx", "desc": "Federation: peers, subscriptions, sync status." },
+    { "id": "page.settings", "label": "Settings", "group": "client-pages", "file": "client/src/pages/Settings.jsx", "desc": "System settings including the self-update panel." },
+    { "id": "page.backupWidget", "label": "Backup Widget", "group": "client-pages", "file": "client/src/components/BackupWidget.jsx", "desc": "Backup trigger + snapshot list (dashboard widget and Settings tab)." },
+
+    { "id": "svc.apiCore", "label": "apiCore (request)", "group": "client-services", "file": "client/src/services/apiCore.js", "desc": "Shared HTTP helper: JSON handling, error toasts, silent mode." },
+    { "id": "svc.apiStoryBuilder", "label": "apiStoryBuilder", "group": "client-services", "file": "client/src/services/apiStoryBuilder.js", "desc": "Story Builder session/step API wrappers." },
+    { "id": "svc.apiApps", "label": "apiApps", "group": "client-services", "file": "client/src/services/apiApps.js", "desc": "Managed-app lifecycle API wrappers." },
+    { "id": "svc.apiSystem", "label": "apiSystem", "group": "client-services", "file": "client/src/services/apiSystem.js", "desc": "System API wrappers: backup, update, health." },
+    { "id": "svc.apiPeerSync", "label": "apiPeerSync", "group": "client-services", "file": "client/src/services/apiPeerSync.js", "desc": "Peer-sync API wrappers: sync-now, subscriptions, pull-record." },
+    { "id": "svc.apiSchedules", "label": "apiSchedules", "group": "client-services", "file": "client/src/services/apiSchedules.js", "desc": "Automation-schedule API wrappers." },
+    { "id": "svc.socketClient", "label": "socket.js client", "group": "client-services", "file": "client/src/services/socket.js", "desc": "Single shared Socket.IO client connection for the whole app." },
+    { "id": "svc.voiceClient", "label": "voiceClient", "group": "client-services", "file": "client/src/services/voiceClient.js", "desc": "Mic capture, turn submission, and TTS playback for the voice agent." },
+
+    { "id": "route.imageGen", "label": "routes/imageGen", "group": "server-routes", "file": "server/routes/imageGen.js", "desc": "Image generation endpoints: generate, cancel, gallery, job events." },
+    { "id": "route.storyBuilder", "label": "routes/storyBuilder", "group": "server-routes", "file": "server/routes/storyBuilder.js", "desc": "Story Builder CRUD, step generation, SSE progress." },
+    { "id": "route.cos", "label": "routes/cos*", "group": "server-routes", "file": "server/routes/cosAgentRoutes.js", "desc": "CoS task/agent/job/schedule endpoints (cos*Routes family)." },
+    { "id": "route.apps", "label": "routes/apps", "group": "server-routes", "file": "server/routes/apps.js", "desc": "Managed-app endpoints: start/stop/restart, config, status." },
+    { "id": "route.backup", "label": "routes/backup", "group": "server-routes", "file": "server/routes/backup.js", "desc": "Backup endpoints: run, snapshots, restore, restore-db." },
+    { "id": "route.peerSync", "label": "routes/peerSync", "group": "server-routes", "file": "server/routes/peerSync.js", "desc": "Local sync commands + peer-facing push/manifest/record endpoints." },
+    { "id": "route.update", "label": "routes/update", "group": "server-routes", "file": "server/routes/update.js", "desc": "Self-update endpoints: check, sync-fork, execute." },
+    { "id": "route.schedules", "label": "routes/automationSchedules", "group": "server-routes", "file": "server/routes/automationSchedules.js", "desc": "Automation schedule CRUD endpoints." },
+    { "id": "sock.hub", "label": "Socket.IO hub", "group": "server-routes", "file": "server/services/socket.js", "desc": "initSocket(io): shell, logs, app-ops, and subscription handlers." },
+    { "id": "sock.voice", "label": "voice socket handlers", "group": "server-routes", "file": "server/sockets/voice.js", "desc": "registerVoiceHandlers: voice:turn / voice:text entry points." },
+
+    { "id": "svc.mediaJobQueue", "label": "mediaJobQueue", "group": "server-services", "file": "server/services/mediaJobQueue/index.js", "desc": "Unified job queue for image/video/training/audio; local vs codex lanes; SSE client attach." },
+    { "id": "svc.imageGen", "label": "imageGen service", "group": "server-services", "file": "server/services/imageGen/index.js", "desc": "Image generation backends: local (mflux), codex, external; param prep and variants." },
+    { "id": "svc.storyBuilderRunner", "label": "storyBuilderRunner", "group": "server-services", "file": "server/services/storyBuilderRunner.js", "desc": "Runs story steps: phase frames to SSE clients, persists results, promotes to pipeline." },
+    { "id": "svc.pipeline", "label": "pipeline", "group": "server-services", "file": "server/services/pipeline/autoRunner.js", "desc": "Comic/story pipeline: series/issues stores, text+visual stage auto-runner." },
+    { "id": "svc.voicePipeline", "label": "voice pipeline", "group": "server-services", "file": "server/services/voice/pipeline.js", "desc": "Voice turn orchestration: STT → LLM tool loop → TTS streaming." },
+    { "id": "svc.voiceTools", "label": "voice tools", "group": "server-services", "file": "server/services/voice/tools.js", "desc": "Voice agent tool schemas + dispatch: navigation, UI actions, timers, calendar." },
+    { "id": "svc.cos", "label": "cos", "group": "server-services", "file": "server/services/cos.js", "desc": "CoS task lifecycle: create/approve/queue; emits task:ready." },
+    { "id": "svc.subAgentSpawner", "label": "subAgentSpawner", "group": "server-services", "file": "server/services/subAgentSpawner.js", "desc": "Turns a ready task into a running agent: prompt build, model selection, worktree prep." },
+    { "id": "svc.cosRunnerClient", "label": "cosRunnerClient", "group": "server-services", "file": "server/services/cosRunnerClient.js", "desc": "Client for the standalone CoS Runner process (Socket.IO + HTTP health)." },
+    { "id": "svc.cosAgents", "label": "cosAgents", "group": "server-services", "file": "server/services/cosAgents.js", "desc": "Agent state index (date-bucketed JSON) + agent:* event fan-out to the UI." },
+    { "id": "svc.pm2", "label": "pm2 service", "group": "server-services", "file": "server/services/pm2.js", "desc": "PM2 wrapper: CLI spawn + programmatic connect, strict jlist status." },
+    { "id": "svc.shell", "label": "shell", "group": "server-services", "file": "server/services/shell.js", "desc": "PTY session manager: spawn, single-subscriber attach, safe env allowlist." },
+    { "id": "svc.backup", "label": "backup", "group": "server-services", "file": "server/services/backup.js", "desc": "rsync snapshots + pg_dump + manifest; effective-exclude computation." },
+    { "id": "svc.backupScheduler", "label": "backupScheduler", "group": "server-services", "file": "server/services/backupScheduler.js", "desc": "Registers the daily backup cron; re-reads settings every run." },
+    { "id": "svc.eventScheduler", "label": "eventScheduler", "group": "server-services", "file": "server/services/eventScheduler.js", "desc": "Generic cron engine: schedule/cancel named jobs." },
+    { "id": "svc.peerSync", "label": "sharing/peerSync", "group": "server-services", "file": "server/services/sharing/peerSync.js", "desc": "Federation orchestrator: push/receive, assets, subscriptions, integrity." },
+    { "id": "svc.updateChecker", "label": "updateChecker", "group": "server-services", "file": "server/services/updateChecker.js", "desc": "Upstream release poll, origin classification, fork-sync gate." },
+    { "id": "svc.updateExecutor", "label": "updateExecutor", "group": "server-services", "file": "server/services/updateExecutor.js", "desc": "Detached update.sh spawn that survives PM2 restarting PortOS itself." },
+    { "id": "svc.taskSchedule", "label": "taskSchedule", "group": "server-services", "file": "server/services/taskSchedule.js", "desc": "Unified v2 schedule store (interval/cron) with prompt versioning." },
+    { "id": "svc.cosJobScheduler", "label": "cosJobScheduler", "group": "server-services", "file": "server/services/cosJobScheduler.js", "desc": "Fires due scheduled jobs: inline script/shell or task:ready for AI agents." },
+
+    { "id": "lib.promptRunner", "label": "promptRunner", "group": "server-lib", "file": "server/lib/promptRunner.js", "desc": "Assembles prompts from templates + context and runs them through a provider." },
+    { "id": "lib.aiProvider", "label": "aiProvider + aiToolkit", "group": "server-lib", "file": "server/lib/aiProvider.js", "desc": "Provider registry/resolution: CLI providers, local backends, model selection." },
+    { "id": "lib.peerHttpClient", "label": "peerHttpClient", "group": "server-lib", "file": "server/lib/peerHttpClient.js", "desc": "peerFetch: authenticated HTTP to federated peer instances." },
+    { "id": "lib.navManifest", "label": "navManifest", "group": "server-lib", "file": "server/lib/navManifest.js", "desc": "NAV_COMMANDS + resolveNavCommand — shared by ⌘K palette and voice nav." },
+
+    { "id": "store.postgres", "label": "PostgreSQL", "group": "data-stores", "file": "server/lib/db.js", "desc": "Primary datastore (pg Pool via db.js with test-DB write guard): catalog, universes, pipeline, memory, story sessions." },
+    { "id": "store.jsonFiles", "label": "data/*.json", "group": "data-stores", "desc": "JSON file state: task-schedule.json, update.json, agent index buckets, settings, queue persistence." },
+    { "id": "store.diskAssets", "label": "data/ assets", "group": "data-stores", "desc": "Disk assets: image gallery, video history, uploads, LoRA datasets, backup snapshots." },
+
+    { "id": "ext.aiCli", "label": "AI CLI providers", "group": "external", "desc": "claude / codex CLIs spawned per run via aiToolkit CLI spawning." },
+    { "id": "ext.localLlm", "label": "Local LLM", "group": "external", "file": "server/services/lmStudioManager.js", "desc": "LM Studio / Ollama HTTP backends for local completions and embeddings." },
+    { "id": "ext.pm2", "label": "PM2 daemon", "group": "external", "desc": "Process manager for PortOS itself, managed apps, and the CoS Runner." },
+    { "id": "ext.cosRunner", "label": "CoS Runner (portos-cos)", "group": "external", "file": "server/cos-runner/index.js", "desc": "Standalone PM2 process that spawns and streams AI agent CLIs, isolated from the main server." },
+    { "id": "ext.pythonRunners", "label": "Python media runners", "group": "external", "desc": "mflux/diffusers image, video, and LoRA-training runner processes." },
+    { "id": "ext.whisper", "label": "Whisper (STT)", "group": "external", "desc": "Speech-to-text binary transcribing voice turns." },
+    { "id": "ext.tts", "label": "Piper / Kokoro (TTS)", "group": "external", "desc": "Text-to-speech binaries synthesizing reply audio sentence-by-sentence." },
+    { "id": "ext.pty", "label": "PTY (node-pty)", "group": "external", "desc": "Pseudo-terminal processes running the user's shell." },
+    { "id": "ext.peers", "label": "Federated peers", "group": "external", "desc": "Other PortOS installs reachable over the private network." },
+    { "id": "ext.updateSh", "label": "update.sh", "group": "external", "file": "update.sh", "desc": "Detached updater script: git pull --rebase --autostash + PM2 restart." },
+    { "id": "ext.rsync", "label": "rsync + pg_dump", "group": "external", "desc": "Snapshot copy and database dump tools invoked by the backup service." }
+  ],
+  "flows": [
+    {
+      "id": "create-image",
+      "label": "Create Image",
+      "category": "Media",
+      "description": "Generate an image through the unified media job queue, with live progress over SSE and the result saved to the gallery.",
+      "steps": [
+        { "from": "page.imageGen", "to": "route.imageGen", "transport": "http", "label": "POST /api/image-gen/generate", "payload": "multipart FormData: prompt, model, options, optional init image (direct fetch — multipart bypasses the JSON request() helper)" },
+        { "from": "route.imageGen", "to": "svc.mediaJobQueue", "transport": "call", "label": "enqueueJob()", "payload": "normalized job { id, kind: 'image', owner, params } after Zod validation" },
+        { "from": "svc.mediaJobQueue", "to": "svc.imageGen", "transport": "call", "label": "dispatch by lane", "payload": "job params routed to local (mflux) / codex / external backend" },
+        { "from": "svc.imageGen", "to": "ext.pythonRunners", "transport": "spawn", "label": "spawn runner CLI", "payload": "resolved CLI args: model path, prompt, steps, dimensions, seed" },
+        { "from": "ext.pythonRunners", "to": "svc.mediaJobQueue", "transport": "call", "label": "stdout progress", "payload": "STAGE: markers + per-step progress parsed from runner output" },
+        { "from": "svc.mediaJobQueue", "to": "page.imageGen", "transport": "sse", "label": "GET /api/image-gen/:jobId/events", "payload": "progress frames: stage, percent, preview; terminal completed/failed event" },
+        { "from": "svc.mediaJobQueue", "to": "store.diskAssets", "transport": "storage", "label": "persist result", "payload": "final image written to the gallery + job record; catalog attach hooks fire on completion" }
+      ]
+    },
+    {
+      "id": "start-story",
+      "label": "Start a Story",
+      "category": "Story",
+      "description": "Create a story through the guided Story Builder: each step is generated by an AI provider, streamed back over SSE, persisted to Postgres, and finally promoted into the comic pipeline.",
+      "steps": [
+        { "from": "page.startStory", "to": "page.storyBuilder", "transport": "call", "label": "react-router navigate", "payload": "chooser routes to Story Builder (or Importer / Universes)" },
+        { "from": "page.storyBuilder", "to": "svc.apiStoryBuilder", "transport": "call", "label": "createStorySession / generateStoryStep", "payload": "session id, step id, generation options" },
+        { "from": "svc.apiStoryBuilder", "to": "route.storyBuilder", "transport": "http", "label": "POST /api/story-builder/:id/steps/:stepId/generate", "payload": "JSON body validated by Zod schemas" },
+        { "from": "route.storyBuilder", "to": "svc.storyBuilderRunner", "transport": "call", "label": "startStepRun()", "payload": "session + step context; run registered for SSE attach" },
+        { "from": "svc.storyBuilderRunner", "to": "lib.promptRunner", "transport": "call", "label": "run step prompt", "payload": "assembled prompt: step template + story-so-far + canon context" },
+        { "from": "lib.promptRunner", "to": "lib.aiProvider", "transport": "call", "label": "resolve provider", "payload": "provider + model selection from settings" },
+        { "from": "lib.aiProvider", "to": "ext.aiCli", "transport": "spawn", "label": "provider run", "payload": "prompt executed via CLI provider (or local LLM backend)" },
+        { "from": "svc.storyBuilderRunner", "to": "page.storyBuilder", "transport": "sse", "label": "GET /:id/steps/:stepId/progress", "payload": "phase frames: { runId, phase, status, partial text }" },
+        { "from": "svc.storyBuilderRunner", "to": "store.postgres", "transport": "storage", "label": "persist step", "payload": "step result saved via storyBuilderStore (db.js)" },
+        { "from": "svc.storyBuilderRunner", "to": "svc.pipeline", "transport": "call", "label": "promote to pipeline", "payload": "finished story becomes pipeline series/issues; autoRunner chains idea → prose → scripts stages" }
+      ]
+    },
+    {
+      "id": "voice-command",
+      "label": "Voice Command",
+      "category": "Voice",
+      "description": "A spoken command round-trip: audio in over Socket.IO, whisper transcription, local-LLM tool loop (including UI navigation via the shared nav manifest), and synthesized speech streamed back.",
+      "steps": [
+        { "from": "svc.voiceClient", "to": "svc.socketClient", "transport": "call", "label": "emit voice:turn", "payload": "recorded audio buffer + mimeType" },
+        { "from": "svc.socketClient", "to": "sock.voice", "transport": "socket", "label": "voice:turn", "payload": "{ audio, mimeType } over the shared Socket.IO connection" },
+        { "from": "sock.voice", "to": "svc.voicePipeline", "transport": "call", "label": "run voice turn", "payload": "audio handed to the pipeline with socket for reply frames" },
+        { "from": "svc.voicePipeline", "to": "ext.whisper", "transport": "spawn", "label": "transcribe", "payload": "WAV audio → transcript text" },
+        { "from": "svc.voicePipeline", "to": "ext.localLlm", "transport": "http", "label": "streamChat", "payload": "transcript + intent-scoped tool specs; streamed completion" },
+        { "from": "svc.voicePipeline", "to": "svc.voiceTools", "transport": "call", "label": "dispatchTool", "payload": "tool calls { name, args } from the LLM loop" },
+        { "from": "svc.voiceTools", "to": "lib.navManifest", "transport": "call", "label": "resolveNavCommand", "payload": "spoken target fuzzy-matched against NAV_COMMANDS aliases (ui_navigate)" },
+        { "from": "svc.voiceTools", "to": "svc.voiceClient", "transport": "socket", "label": "UI action events", "payload": "navigation / UI action requests executed by the client" },
+        { "from": "svc.voicePipeline", "to": "ext.tts", "transport": "spawn", "label": "synthesize", "payload": "reply sentences → WAV audio via piper/kokoro" },
+        { "from": "svc.voicePipeline", "to": "svc.voiceClient", "transport": "socket", "label": "voice:tts:audio", "payload": "{ sentence, wav } frames played back as they arrive" }
+      ]
+    },
+    {
+      "id": "cos-agent-run",
+      "label": "CoS Agent Run",
+      "category": "Agents",
+      "description": "A Chief-of-Staff task becomes a running AI agent: task:ready fires the spawner, the standalone CoS Runner process executes the provider CLI, and output streams back to the UI.",
+      "steps": [
+        { "from": "page.chiefOfStaff", "to": "svc.apiCore", "transport": "call", "label": "create / approve task", "payload": "task fields via the shared request() helper" },
+        { "from": "svc.apiCore", "to": "route.cos", "transport": "http", "label": "POST /api/cos/...", "payload": "task CRUD JSON, Zod-validated" },
+        { "from": "route.cos", "to": "svc.cos", "transport": "call", "label": "task lifecycle", "payload": "task created/queued in CoS state" },
+        { "from": "svc.cos", "to": "svc.subAgentSpawner", "transport": "emitter", "label": "cosEvents 'task:ready'", "payload": "task { id, taskType, prompt, repoPath, metadata }" },
+        { "from": "svc.subAgentSpawner", "to": "svc.cosRunnerClient", "transport": "call", "label": "spawnViaRunner", "payload": "spawn config: provider, model, cwd/worktree, built prompt" },
+        { "from": "svc.cosRunnerClient", "to": "ext.cosRunner", "transport": "socket", "label": "spawn request", "payload": "Socket.IO + HTTP to portos-cos on PORTS.COS" },
+        { "from": "ext.cosRunner", "to": "ext.aiCli", "transport": "spawn", "label": "run agent CLI", "payload": "claude/codex spawned in the task's worktree with the prompt" },
+        { "from": "ext.cosRunner", "to": "svc.cosRunnerClient", "transport": "socket", "label": "output stream", "payload": "parsed agent output lines + completion status" },
+        { "from": "svc.cosRunnerClient", "to": "svc.cosAgents", "transport": "call", "label": "record output", "payload": "batched output lines + lifecycle updates" },
+        { "from": "svc.cosAgents", "to": "store.jsonFiles", "transport": "storage", "label": "persist agent index", "payload": "date-bucketed agent state JSON" },
+        { "from": "svc.cosAgents", "to": "page.chiefOfStaff", "transport": "socket", "label": "agent:output / agent:completed", "payload": "live output lines and final summary rendered in the UI" }
+      ]
+    },
+    {
+      "id": "scheduled-task",
+      "label": "Scheduled Task / Autopilot",
+      "category": "Agents",
+      "description": "A user-configured schedule fires on cron: inline script/shell jobs run directly; AI jobs emit task:ready and continue as a CoS Agent Run.",
+      "steps": [
+        { "from": "page.chiefOfStaff", "to": "svc.apiSchedules", "transport": "call", "label": "save schedule", "payload": "cron expression / interval + job config" },
+        { "from": "svc.apiSchedules", "to": "route.schedules", "transport": "http", "label": "POST /api/automation-schedules", "payload": "schedule JSON, Zod-validated" },
+        { "from": "route.schedules", "to": "svc.taskSchedule", "transport": "call", "label": "persist schedule", "payload": "unified v2 schedule entry (interval/cron, prompt version)" },
+        { "from": "svc.taskSchedule", "to": "store.jsonFiles", "transport": "storage", "label": "write data/task-schedule.json", "payload": "schedule state on disk — takes effect without restart" },
+        { "from": "svc.taskSchedule", "to": "svc.cosJobScheduler", "transport": "call", "label": "cron fire", "payload": "due job evaluated with spawn guard" },
+        { "from": "svc.cosJobScheduler", "to": "svc.subAgentSpawner", "transport": "emitter", "label": "cosEvents 'task:ready'", "payload": "AI jobs become tasks — continues as the CoS Agent Run flow" },
+        { "from": "svc.cosJobScheduler", "to": "page.chiefOfStaff", "transport": "socket", "label": "cos:tasks:cos:changed / cos:tasks:user:changed", "payload": "scheduled-job completion is reflected via task and agent state events forwarded by the Socket.IO hub" }
+      ]
+    },
+    {
+      "id": "start-app-pm2",
+      "label": "Start / Stop App (PM2)",
+      "category": "System",
+      "description": "Managed-app lifecycle: the Apps page drives PM2 through the pm2 service; status flows back via the HTTP response and apps:changed socket events.",
+      "steps": [
+        { "from": "page.apps", "to": "svc.apiApps", "transport": "call", "label": "startApp(id)", "payload": "app id" },
+        { "from": "svc.apiApps", "to": "route.apps", "transport": "http", "label": "POST /api/apps/:id/start", "payload": "app id in the path; no body" },
+        { "from": "route.apps", "to": "svc.pm2", "transport": "call", "label": "startApp", "payload": "process name + start options from the app's ecosystem config" },
+        { "from": "svc.pm2", "to": "ext.pm2", "transport": "spawn", "label": "pm2 CLI / connectAndRun", "payload": "pm2 start/stop/restart against the daemon" },
+        { "from": "ext.pm2", "to": "svc.pm2", "transport": "call", "label": "jlist status", "payload": "strict process list → per-app pm2Status/overallStatus" },
+        { "from": "svc.pm2", "to": "page.apps", "transport": "socket", "label": "apps:changed", "payload": "notifyAppsChanged broadcast; UI updates local state" }
+      ]
+    },
+    {
+      "id": "shell-session",
+      "label": "Shell Session",
+      "category": "System",
+      "description": "A browser terminal attached to a server-side PTY: keystrokes down and raw terminal output back, all over Socket.IO, with single-subscriber attach semantics.",
+      "steps": [
+        { "from": "page.shell", "to": "svc.socketClient", "transport": "call", "label": "emit shell:start / shell:attach", "payload": "{ sessionId, claim } — auto-pick paths claim, manual paths don't displace" },
+        { "from": "svc.socketClient", "to": "sock.hub", "transport": "socket", "label": "shell:* events", "payload": "start/attach/input/resize routed to shell handlers" },
+        { "from": "sock.hub", "to": "svc.shell", "transport": "call", "label": "session management", "payload": "single-subscriber attach; sessions persist across reconnects" },
+        { "from": "svc.shell", "to": "ext.pty", "transport": "spawn", "label": "pty.spawn", "payload": "user shell with buildSafeEnv allowlisted environment" },
+        { "from": "ext.pty", "to": "svc.shell", "transport": "call", "label": "PTY data", "payload": "raw terminal output bytes" },
+        { "from": "svc.shell", "to": "page.shell", "transport": "socket", "label": "shell:output / shell:exit", "payload": "terminal data rendered by xterm; exit code on close" }
+      ]
+    },
+    {
+      "id": "run-backup",
+      "label": "Run Backup",
+      "category": "System",
+      "description": "Snapshot backup: rsync with anchored excludes plus a Postgres dump and manifest, with progress broadcast over Socket.IO. The scheduled path re-reads settings on every cron run.",
+      "steps": [
+        { "from": "page.backupWidget", "to": "svc.apiSystem", "transport": "call", "label": "runBackup()", "payload": "no arguments — server reads saved backup settings" },
+        { "from": "svc.apiSystem", "to": "route.backup", "transport": "http", "label": "POST /api/backup/run", "payload": "empty body; settings are server-side" },
+        { "from": "route.backup", "to": "svc.backup", "transport": "call", "label": "runBackup", "payload": "destPath + computeEffectiveExcludes() result" },
+        { "from": "svc.backup", "to": "ext.rsync", "transport": "spawn", "label": "rsync + pg_dump", "payload": "anchored rsync filters; pg_dump of the portos database" },
+        { "from": "svc.backup", "to": "store.diskAssets", "transport": "storage", "label": "write snapshot", "payload": "snapshot dir + db.sql + manifest at the destination" },
+        { "from": "svc.backup", "to": "page.backupWidget", "transport": "socket", "label": "backup:started / backup:completed", "payload": "{ snapshotId, filesChanged, pgBackup } progress and result" },
+        { "from": "svc.backupScheduler", "to": "svc.eventScheduler", "transport": "call", "label": "register daily cron", "payload": "cron expression from settings.backup (scheduled path)" },
+        { "from": "svc.eventScheduler", "to": "svc.backup", "transport": "call", "label": "cron fire", "payload": "re-reads destPath/excludes/enabled fresh on every run" }
+      ]
+    },
+    {
+      "id": "peer-sync",
+      "label": "Peer Sync",
+      "category": "Sync",
+      "description": "Federation between PortOS installs: subscribed records push to peers over HTTP with LWW merge on receive; version gates keep newer peers from corrupting older ones.",
+      "steps": [
+        { "from": "page.sharing", "to": "svc.apiPeerSync", "transport": "call", "label": "syncNow()", "payload": "optional peer/subscription filter" },
+        { "from": "svc.apiPeerSync", "to": "route.peerSync", "transport": "http", "label": "POST /api/peer-sync/sync-now", "payload": "sync command JSON" },
+        { "from": "route.peerSync", "to": "svc.peerSync", "transport": "call", "label": "orchestrate push", "payload": "records gathered per subscription; schema-version gated" },
+        { "from": "svc.peerSync", "to": "lib.peerHttpClient", "transport": "call", "label": "peerFetch", "payload": "authenticated request built from peer URL + credentials" },
+        { "from": "lib.peerHttpClient", "to": "ext.peers", "transport": "http", "label": "POST peer /api/peer-sync/push", "payload": "push payload: record + sidecar + asset manifest (peerSyncPushSchema)" },
+        { "from": "ext.peers", "to": "route.peerSync", "transport": "http", "label": "inbound push (receiving side)", "payload": "the same endpoint on the receiving install accepts pushes from peers" },
+        { "from": "svc.peerSync", "to": "store.postgres", "transport": "storage", "label": "applyIncomingPush", "payload": "LWW-timestamp merge + integrity check; missing assets pulled back from the sender" },
+        { "from": "svc.peerSync", "to": "page.sharing", "transport": "socket", "label": "sharing:manifest-processed / sharing:inbox-updated", "payload": "sync results and inbox updates surface on the Sharing page (peer presence separately via instances:peers:updated)" }
+      ]
+    },
+    {
+      "id": "self-update",
+      "label": "Self-Update",
+      "category": "System",
+      "description": "PortOS updates itself: the fork-aware gate decides whether the pull is safe, then a double-forked update.sh survives PM2 killing its parent while it pulls and restarts.",
+      "steps": [
+        { "from": "page.settings", "to": "svc.apiSystem", "transport": "call", "label": "executeUpdate()", "payload": "{ acknowledgeFork? } from the Update tab buttons" },
+        { "from": "svc.apiSystem", "to": "route.update", "transport": "http", "label": "POST /api/update/execute", "payload": "fork acknowledgement flag; 412 FORK_SYNC_REQUIRED if a fork hasn't synced" },
+        { "from": "route.update", "to": "svc.updateChecker", "transport": "call", "label": "fork gate", "payload": "remoteInfo (isUpstream/isFork) vs lastForkSync freshness" },
+        { "from": "route.update", "to": "svc.updateExecutor", "transport": "call", "label": "executeUpdate", "payload": "target version + options" },
+        { "from": "svc.updateExecutor", "to": "ext.updateSh", "transport": "spawn", "label": "double-fork detached spawn", "payload": "update.sh detached so it survives PM2 tree-kill during its own pm2 restart" },
+        { "from": "ext.updateSh", "to": "ext.pm2", "transport": "spawn", "label": "git pull + pm2 restart", "payload": "git pull --rebase --autostash from origin, then PM2 restarts PortOS" },
+        { "from": "svc.updateExecutor", "to": "page.settings", "transport": "socket", "label": "portos:update:step", "payload": "{ step, status, message } progress frames until the restart" }
+      ]
+    }
+  ]
+}

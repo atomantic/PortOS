@@ -49,7 +49,7 @@ export default function LinkChip({ link, onRemove, draggable }) {
       {onRemove && (
         <button
           onClick={() => onRemove(link)}
-          className="shrink-0 p-0.5 text-gray-600 hover:text-port-error opacity-0 group-hover:opacity-100 transition-opacity"
+          className="shrink-0 p-0.5 text-gray-600 hover:text-port-error opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           title="Remove from bucket"
         >
           <X size={13} />

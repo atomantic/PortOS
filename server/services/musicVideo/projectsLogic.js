@@ -85,7 +85,30 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !MUSIC_VIDEO_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  return touch(project, patch);
+  // Changing the audio source invalidates the cached beat/tempo analysis —
+  // it was computed from the OLD track. AI Plan / Auto-arrange / BeatTimeline
+  // gate on `audioAnalysis` truthiness, and the render's beat-snap step reads
+  // its `beats` array; a stale analysis would silently apply the previous
+  // song's beat grid to the new audio (#1945 — both the manual "Change
+  // track" picker and the YouTube-import attach PATCH through here). Any
+  // scene already marked `beatAligned` also stops being true — its saved
+  // startSec/endSec were snapped to the OLD song's beat positions, and
+  // `beatSnapClips` honors a beat-aligned scene's saved bounds outright
+  // (skipping re-derivation against the new, absent beat grid), so leaving
+  // the flag set would render the old song's cut points against new audio.
+  const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
+    || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
+  if (!trackChanged) return touch(project, patch);
+  const scenes = (project.scenes || []).map((s) => (s.beatAligned ? { ...s, beatAligned: false } : s));
+  // Clearing audioAnalysis means the project must be re-analyzed before it can be
+  // planned/arranged/rendered, so a status that implies analysis existed
+  // (`analyzed`/`ready`/`rendering`/`complete`) is now stale. Regress it to `draft` —
+  // the inverse of setAudioAnalysis's draft→analyzed flip — unless the caller set an
+  // explicit status in this same patch. `draft`/`failed` already imply no usable
+  // analysis, so leave those untouched.
+  const regressStatus = !patch.status && !['draft', 'failed'].includes(project.status);
+  const statusPatch = regressStatus ? { status: 'draft' } : {};
+  return touch(project, { ...patch, ...statusPatch, audioAnalysis: null, scenes });
 }
 
 /**
@@ -119,14 +142,33 @@ function buildScene(input, { order }) {
 
 /**
  * Append a scene to the board. Validates the input, assigns a sceneId and the
- * next order index. Returns `{ project, scene }`.
+ * next order index. Returns `{ project, scene }`. A thin single-item wrapper
+ * over `addScenes` so the validate/build/order logic lives in exactly one
+ * place.
  */
 export function addScene(project, sceneInput) {
-  const data = parseSceneOrThrow(musicVideoSceneCreateSchema, sceneInput);
-  const scenes = project.scenes || [];
-  const scene = buildScene(data, { order: scenes.length });
-  const next = touch(project, { scenes: [...scenes, scene] });
-  return { project: next, scene };
+  const { project: next, scenes } = addScenes(project, [sceneInput]);
+  return { project: next, scene: scenes[0] };
+}
+
+/**
+ * Append several scenes to the board in one pass (the autonomous planner,
+ * #1855) — a single `touch`/persist instead of N sequential addScene calls, so
+ * a 10-section plan is one write (and one peer-sync emit) instead of ten.
+ * Returns `{ project, scenes }` (the newly-created scenes, in input order).
+ */
+export function addScenes(project, sceneInputs) {
+  const list = Array.isArray(sceneInputs) ? sceneInputs : [];
+  const existing = project.scenes || [];
+  const added = [];
+  let order = existing.length;
+  for (const input of list) {
+    const data = parseSceneOrThrow(musicVideoSceneCreateSchema, input);
+    added.push(buildScene(data, { order }));
+    order += 1;
+  }
+  const next = touch(project, { scenes: [...existing, ...added] });
+  return { project: next, scenes: added };
 }
 
 /**

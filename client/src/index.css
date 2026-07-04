@@ -5,12 +5,17 @@
   --color-port-card: rgb(var(--port-card));
   --color-port-border: rgb(var(--port-border));
   --color-port-accent: rgb(var(--port-accent));
+  /* Secondary accent — purple/violet semantic home for AI-generated,
+     recommendation, and other "secondary emphasis" content that previously
+     had no theme token (issue #1909). Tuned per-theme in portosThemes.js. */
+  --color-port-accent-2: rgb(var(--port-accent-2));
   --color-port-success: rgb(var(--port-success));
   --color-port-warning: rgb(var(--port-warning));
   --color-port-error: rgb(var(--port-error));
   --color-port-text: rgb(var(--port-text));
   --color-port-text-muted: rgb(var(--port-text-muted));
   --color-port-on-accent: rgb(var(--port-on-accent));
+  --color-port-on-accent-2: rgb(var(--port-on-accent-2));
   --color-port-on-success: rgb(var(--port-on-success));
   --color-port-on-warning: rgb(var(--port-on-warning));
   --color-port-on-error: rgb(var(--port-on-error));
@@ -24,10 +29,12 @@
   --port-card: 26 26 26;
   --port-border: 42 42 42;
   --port-accent: 59 130 246;
+  --port-accent-2: 168 85 247;
   --port-success: 34 197 94;
   --port-warning: 245 158 11;
   --port-error: 239 68 68;
   --port-on-accent: 255 255 255;
+  --port-on-accent-2: 255 255 255;
   --port-on-success: 5 46 22;
   --port-on-warning: 17 24 39;
   --port-on-error: 255 255 255;
@@ -39,6 +46,10 @@
      textarea, the AI panel's Evaluate/Format/Adapt result containers, and
      the per-scene cards. Centralized so the shade can be tweaked once. */
   --wr-reading-paper: #f5f1e8;
+  /* Ink color paired with the sepia reading paper above — dark text on light
+     paper, intentionally fixed (not app-theme-following) so it stays legible
+     regardless of the active theme. Centralized so the shade tweaks once. */
+  --wr-reading-ink: #1a1a1a;
   --port-bg-alpha: 1;
   --port-card-alpha: 1;
   --port-border-alpha: 1;
@@ -123,6 +134,20 @@ body {
 #root {
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+/* Tailwind v4 sorts generated utility classes into a canonical order (by
+   bucket, then alphabetically) rather than preserving JSX className source
+   order, so pairing `h-screen h-[100dvh]` on one element does NOT give
+   `h-[100dvh]` cascade priority as the "h-screen now, h-[100dvh] override"
+   naming suggests — `.h-screen` is emitted after `.h-[100dvh]` in the
+   compiled stylesheet and wins outright, silently defeating the dvh fix.
+   This plain-CSS class declares the same property twice in real source
+   order (mirrors the #root rule above) so the dvh value reliably overrides
+   the vh fallback in browsers that support it. */
+.h-dvh-screen {
+  height: 100vh;
+  height: 100dvh;
 }
 
 body::before {

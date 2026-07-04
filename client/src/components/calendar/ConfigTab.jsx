@@ -3,8 +3,10 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, RefreshCw, Globe, Calendar, Eye, EyeOff, ChevronDown, ChevronRight, Search, Key, ExternalLink, Wand2, Monitor } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import { formatDateTime } from '../../utils/formatters';
 import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
@@ -216,8 +218,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
         {showForm && (
           <div className="p-4 bg-port-card rounded-lg border border-port-border space-y-3 mb-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Name</label>
+            <FormField label="Name">
               <input
                 type="text"
                 value={form.name}
@@ -225,9 +226,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 placeholder="e.g. Work Calendar"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
               />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Type</label>
+            </FormField>
+            <FormField label="Type">
               <select
                 value={form.type}
                 onChange={(e) => setForm(f => ({ ...f, type: e.target.value }))}
@@ -236,9 +236,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 <option value="outlook-calendar">Outlook Calendar (API)</option>
                 <option value="google-calendar">Google Calendar (MCP Push)</option>
               </select>
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Email{form.type === 'google-calendar' ? ' (used as OAuth test user)' : ''}</label>
+            </FormField>
+            <FormField label={`Email${form.type === 'google-calendar' ? ' (used as OAuth test user)' : ''}`}>
               <input
                 type="email"
                 value={form.email}
@@ -246,7 +245,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 placeholder="user@example.com"
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
               />
-            </div>
+            </FormField>
             <div className="flex gap-2">
               <button
                 onClick={handleCreate}
@@ -299,7 +298,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       </div>
                       {account.lastSyncAt && (
                         <div className="text-xs text-gray-600">
-                          Last sync: {new Date(account.lastSyncAt).toLocaleString()} ({account.lastSyncStatus})
+                          Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
                         </div>
                       )}
                     </div>

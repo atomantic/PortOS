@@ -33,10 +33,27 @@ vi.mock('../lib/stageRunner.js', () => ({
 // real DB (#1761). listIngredients (the batch resolve) and linkIngredientsToSeries
 // (the batch link) are spies the tests program per case; the type→role vocabulary
 // itself is covered in catalogDB.test.js.
-const catalogMocks = vi.hoisted(() => ({
-  listIngredients: vi.fn(),
-  linkIngredientsToSeries: vi.fn(),
-}));
+const catalogMocks = vi.hoisted(() => {
+  const listIngredients = vi.fn();
+  return {
+    listIngredients,
+    linkIngredientsToSeries: vi.fn(),
+    // resolveIngredientsByIds is the shared resolver storyBuilder now delegates
+    // to (#1808). Mirror the real dedupe + pick-order logic but route the batch
+    // fetch through the mocked listIngredients so every existing per-case
+    // `listIngredients.mockResolvedValue(...)` + call-args assertion still drives
+    // it unchanged.
+    resolveIngredientsByIds: vi.fn(async (ids) => {
+      const list = [...new Set((Array.isArray(ids) ? ids : [])
+        .filter((id) => typeof id === 'string' && id.trim())
+        .map((id) => id.trim()))];
+      if (list.length === 0) return [];
+      const { items } = await listIngredients({ ids: list, limit: list.length });
+      const byId = new Map((items || []).map((ing) => [ing.id, ing]));
+      return list.map((id) => byId.get(id)).filter(Boolean);
+    }),
+  };
+});
 vi.mock('./catalogDB.js', () => catalogMocks);
 
 const sb = await import('./storyBuilder.js');
@@ -260,7 +277,8 @@ describe('storyBuilder — catalog ingredient linking (#1761)', () => {
     // Session was saved despite the link failure, and the shells exist.
     expect(s.id).toMatch(/^stb-/);
     expect((await sb.listStorySessions()).map((x) => x.id)).toContain(s.id);
-    expect(await seriesSvc.getSeries(s.seriesId)).toBeTruthy();
+    const persistedSeries = await seriesSvc.getSeries(s.seriesId);
+    expect(persistedSeries.id).toBe(s.seriesId);
     expect(catalogMocks.linkIngredientsToSeries).toHaveBeenCalledWith(s.seriesId, [ing]);
   });
 
@@ -282,7 +300,8 @@ describe('storyBuilder — lock state machine + gating', () => {
     const s = await sb.createStorySession({ title: 'X', seedIdea: 'seed' });
     const locked = await sb.lockStep(s.id, 'idea');
     expect(locked.steps.idea.locked).toBe(true);
-    expect(locked.steps.idea.lockedAt).toBeTruthy();
+    // lockedAt is a round-trippable ISO-8601 timestamp, not merely truthy.
+    expect(new Date(locked.steps.idea.lockedAt).toISOString()).toBe(locked.steps.idea.lockedAt);
     // Shape AND derivation: the stamped hash must be the SAME value the
     // integrity helper produces from the idea step's whitelisted upstream
     // inputs — not just any 64-char hex digest. Asserting against the real

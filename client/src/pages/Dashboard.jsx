@@ -19,6 +19,9 @@ export default function Dashboard() {
   const [apps, setApps] = useState([]);
   const [health, setHealth] = useState(null);
   const [usage, setUsage] = useState(null);
+  const [tribeCare, setTribeCare] = useState(null);
+  const [feeds, setFeeds] = useState(null);
+  const [meatspaceLogging, setMeatspaceLogging] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState(null);
   const [layoutsError, setLayoutsError] = useState(null);
@@ -58,14 +61,20 @@ export default function Dashboard() {
 
   const fetchData = useCallback(async () => {
     setDataError(null);
-    const [appsData, healthData, usageData] = await Promise.all([
+    const [appsData, healthData, usageData, tribeCareData, feedsData, meatspaceLoggingData] = await Promise.all([
       api.getApps().catch((err) => { setDataError(err.message); return []; }),
       api.checkHealth().catch(() => null),
       api.getUsage().catch(() => null),
+      api.getTribeCareSummary({ silent: true }).catch(() => null),
+      api.getFeedStats({ silent: true }).catch(() => null),
+      api.getMeatspaceLoggingStats({ silent: true }).catch(() => null),
     ]);
     setApps(appsData);
     setHealth(healthData);
     setUsage(usageData);
+    setTribeCare(tribeCareData);
+    setFeeds(feedsData);
+    setMeatspaceLogging(meatspaceLoggingData);
     setLoading(false);
   }, []);
 
@@ -162,8 +171,8 @@ export default function Dashboard() {
   }), [activeApps]);
 
   const dashboardState = useMemo(
-    () => ({ apps, sortedApps, activeApps, appStats, health, usage, refetch: fetchData }),
-    [apps, sortedApps, activeApps, appStats, health, usage, fetchData]
+    () => ({ apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, refetch: fetchData }),
+    [apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, fetchData]
   );
 
   // Falls back to a local minimal layout only AFTER the initial fetch has

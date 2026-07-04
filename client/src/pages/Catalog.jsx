@@ -51,6 +51,7 @@ const PAGE_SIZE = 60;
 // reads the same key. Each target's `to` is the route to navigate to.
 const REMIX_TARGETS = [
   { id: 'story-builder', label: 'Story Builder', to: '/story-builder' },
+  { id: 'creative-director', label: 'Creative Director', to: '/media/creative-director' },
 ];
 
 export default function Catalog() {

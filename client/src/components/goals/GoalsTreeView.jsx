@@ -225,7 +225,7 @@ function OrganizePanel({ suggestion, goals, onApply, onClose, applying }) {
         <button
           onClick={onApply}
           disabled={applying}
-          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-blue-600 disabled:opacity-50 min-h-[40px]"
+          className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded-lg bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]"
         >
           <Check className="w-4 h-4" />
           {applying ? 'Applying...' : 'Apply Changes'}

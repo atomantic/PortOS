@@ -102,8 +102,8 @@ claude --version
 - Verify model name matches provider's available models
 - Check provider documentation for correct model identifiers
 - Common models:
-  - Claude: `claude-sonnet-4-20250514`, `claude-opus-4-5-20251101`
-  - OpenAI: `gpt-4`, `gpt-4-turbo`
+  - Claude: `claude-sonnet-5`, `claude-opus-4-8`, `claude-haiku-4-5-20251001`
+  - OpenAI: `gpt-5`, `gpt-5-mini`
   - Ollama: Model must be pulled first (`ollama pull llama3`)
 
 ## Chief of Staff Issues
@@ -201,12 +201,34 @@ pm2 restart ecosystem.config.cjs
 
 ## Database/Data Issues
 
+### Server Won't Boot: Database Unreachable
+
+**Symptom**: Server fails fast at startup with a database health error.
+
+PostgreSQL is a **mandatory** dependency (see [STORAGE.md](./STORAGE.md)) — there is no silent file fallback.
+
+**Solution**:
+```bash
+# Re-run DB provisioning (system pg on :5432 or Docker on :5561)
+npm run setup:db
+
+# Docker mode: make sure the container is up
+docker compose up -d
+
+# Check what's answering
+pg_isready -h localhost -p 5432 || pg_isready -h localhost -p 5561
+```
+
+### Missing/Corrupted Relational Data
+
+Universes, series, catalog ingredients, memories, and other relational records live in PostgreSQL, not `data/` files. Inspect them via the Database settings tab or `psql`. To recover, restore a snapshot's `portos-db.sql` from the Backup tab (see [BACKUP.md](./BACKUP.md)).
+
 ### Lost App Registrations
 
 **Symptom**: Apps disappear after restart.
 
 **Causes**:
-- `data/apps.json` was deleted or corrupted
+- `data/apps.json` was deleted or corrupted (app registry is file-backed)
 - File permissions prevent writing
 
 **Solution**:

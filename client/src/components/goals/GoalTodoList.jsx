@@ -25,7 +25,7 @@ export default function GoalTodoList({
                 onClick={() => handleToggleTodo(todo)}
                 className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                   todo.status === 'done'
-                    ? 'bg-green-500/20 border-green-500 text-green-400'
+                    ? 'bg-port-success/20 border-port-success text-port-success'
                     : todo.status === 'in-progress'
                       ? 'bg-port-accent/20 border-port-accent text-port-accent'
                       : 'border-gray-600 hover:border-port-accent'
@@ -46,7 +46,7 @@ export default function GoalTodoList({
               )}
               <button
                 onClick={() => requestDelete(todo.id)}
-                className="p-0.5 text-gray-700 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
+                className="p-0.5 text-gray-700 hover:text-red-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 shrink-0"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />

@@ -21,10 +21,57 @@ import {
   editorialCustomCheckUpdateSchema,
   pipelineEditorialChecksSettingsSchema,
   storyboardShotSchema,
-  storyboardSceneSchema
+  storyboardSceneSchema,
+  restoreRequestSchema,
+  subdirFilterSchema,
+  isPaginationRequested,
+  paginateArray
 } from './validation.js';
 
 describe('validation.js', () => {
+  describe('isPaginationRequested', () => {
+    it('is false when neither limit nor offset is present', () => {
+      expect(isPaginationRequested({})).toBe(false);
+      expect(isPaginationRequested({ status: 'active' })).toBe(false);
+      expect(isPaginationRequested(undefined)).toBe(false);
+    });
+
+    it('is true when limit or offset is present (even at zero / empty string)', () => {
+      expect(isPaginationRequested({ limit: '10' })).toBe(true);
+      expect(isPaginationRequested({ offset: '0' })).toBe(true);
+      expect(isPaginationRequested({ limit: '0' })).toBe(true);
+      expect(isPaginationRequested({ offset: '' })).toBe(true);
+    });
+  });
+
+  describe('paginateArray', () => {
+    const items = [1, 2, 3, 4, 5];
+
+    it('windows the array and reports the full total', () => {
+      expect(paginateArray(items, { limit: '2', offset: '1' })).toEqual({
+        items: [2, 3],
+        total: 5,
+        limit: 2,
+        offset: 1
+      });
+    });
+
+    it('clamps limit to maxLimit and falls back to defaultLimit when invalid', () => {
+      expect(paginateArray(items, { limit: '999' }, { defaultLimit: 50, maxLimit: 3 })).toMatchObject({
+        items: [1, 2, 3],
+        limit: 3
+      });
+      expect(paginateArray(items, { limit: '-1' }, { defaultLimit: 4, maxLimit: 100 })).toMatchObject({
+        items: [1, 2, 3, 4],
+        limit: 4
+      });
+    });
+
+    it('tolerates a non-array input by treating it as empty', () => {
+      expect(paginateArray(null, { limit: '5' })).toEqual({ items: [], total: 0, limit: 5, offset: 0 });
+    });
+  });
+
   describe('featureProviderConfigSchema', () => {
     it('accepts a providerId + model', () => {
       const result = featureProviderConfigSchema.safeParse({ providerId: 'codex', model: 'gpt-5' });
@@ -581,13 +628,33 @@ describe('validation.js', () => {
     });
 
     it('should accept a valid issueAuthorFilter and drop invalid ones', () => {
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toEqual({ issueAuthorFilter: 'self' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'owner' })).toEqual({ issueAuthorFilter: 'owner' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any' })).toEqual({ issueAuthorFilter: 'any' });
-      // Arbitrary strings must not slip through (would silently read as "owner").
-      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toBeNull();
+      // Arbitrary strings must not slip through (would silently read as the default).
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'somebody-else' })).toBeNull();
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 42 })).toBeNull();
       expect(sanitizeTaskMetadata({ useWorktree: true, issueAuthorFilter: 'bogus' }))
         .toEqual({ useWorktree: true });
+    });
+
+    it('should accept swarmCount 0 + 2..6 and drop 1/out-of-range/non-integer', () => {
+      // 0 is an explicit "off" (kept so a per-app override can disable swarm).
+      expect(sanitizeTaskMetadata({ swarmCount: 0 })).toEqual({ swarmCount: 0 });
+      expect(sanitizeTaskMetadata({ swarmCount: 2 })).toEqual({ swarmCount: 2 });
+      expect(sanitizeTaskMetadata({ swarmCount: 6 })).toEqual({ swarmCount: 6 });
+      // 1 (a one-agent swarm is just the single-issue flow) and out-of-range are dropped.
+      expect(sanitizeTaskMetadata({ swarmCount: 1 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: 7 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: -1 })).toBeNull();
+      // Non-integers can't smuggle an unbounded swarm size.
+      expect(sanitizeTaskMetadata({ swarmCount: 3.5 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: '3' })).toBeNull();
+      // Drops the bad value but keeps a valid sibling key.
+      expect(sanitizeTaskMetadata({ useWorktree: true, swarmCount: 99 }))
+        .toEqual({ useWorktree: true });
+      expect(sanitizeTaskMetadata({ issueAuthorFilter: 'any', swarmCount: 3 }))
+        .toEqual({ issueAuthorFilter: 'any', swarmCount: 3 });
     });
 
     it('should accept an ordered reviewers list, dedupe, and drop unknowns', () => {
@@ -677,6 +744,25 @@ describe('validation.js', () => {
     it('rejects an unknown reviewer or stop-mode', () => {
       expect(createCosTaskSchema.safeParse({ description: 'x', reviewers: ['bogus'] }).success).toBe(false);
       expect(createCosTaskSchema.safeParse({ description: 'x', reviewStopMode: 'nope' }).success).toBe(false);
+    });
+
+    it('accepts multiple image screenshots and attachment objects', () => {
+      const parsed = createCosTaskSchema.safeParse({
+        description: 'do a thing',
+        screenshots: ['/data/screenshots/a.png', '/data/screenshots/b.png'],
+        attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/data/cos/attachments/a-123.png', size: 100, mimeType: 'image/png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/data/cos/attachments/b-456.png', size: 200, mimeType: 'image/png' },
+        ],
+      });
+      expect(parsed.success).toBe(true);
+      expect(parsed.data.screenshots).toHaveLength(2);
+      expect(parsed.data.attachments).toHaveLength(2);
+      expect(parsed.data.attachments[1].originalName).toBe('photo-two.png');
+    });
+
+    it('rejects a legacy attachments-as-strings shape', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'x', attachments: ['a.png'] }).success).toBe(false);
     });
 
     it('should reject prototype pollution keys', () => {
@@ -948,6 +1034,31 @@ describe('validation.js', () => {
       expect(r.data.sceneVideoJobId).toBe('v1');
       // A bad enum inside shots[] fails the whole scene.
       expect(storyboardSceneSchema.safeParse({ shots: [{ id: 's', shotType: 'nope' }] }).success).toBe(false);
+    });
+  });
+
+  describe('subdirFilter validation (#1822)', () => {
+    it('accepts a plain relative subdir', () => {
+      expect(subdirFilterSchema.safeParse('data').success).toBe(true);
+      expect(subdirFilterSchema.safeParse('brain/notes').success).toBe(true);
+      expect(subdirFilterSchema.safeParse('cos.worktrees').success).toBe(true);
+    });
+
+    it('rejects wildcard characters that would override the rsync filter chain', () => {
+      expect(subdirFilterSchema.safeParse('*').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('data/*').success).toBe(false);
+    });
+
+    it('rejects ".." traversal segments and absolute paths', () => {
+      expect(subdirFilterSchema.safeParse('../other-dir').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('data/../../etc').success).toBe(false);
+      expect(subdirFilterSchema.safeParse('/etc/passwd').success).toBe(false);
+    });
+
+    it('allows the field to be omitted or null on the restore request', () => {
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1' }).success).toBe(true);
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: null }).success).toBe(true);
+      expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: '*' }).success).toBe(false);
     });
   });
 });

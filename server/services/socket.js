@@ -20,9 +20,11 @@ import { sanitizePeerForClient } from './instances.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
+import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -175,82 +177,25 @@ export function initSocket(io) {
       }
     });
 
-    // Handle PM2 standardization
+    // Handle PM2 standardization — the multi-step analyze→backup→apply flow
+    // lives in pm2Standardizer.runStandardizeFlow (testable + HTTP-callable);
+    // the socket handler only wires progress callbacks to socket events.
     socket.on('standardize:start', async (rawData) => {
       try {
         const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
         if (!data) return;
-        const { repoPath, providerId } = data;
+        const { repoPath, providerId, overwriteEcosystem = false } = data;
         console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-        const emit = (step, status, data = {}) => {
-          socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
-        };
-
-        // Step 1: Analyze
-        emit('analyze', 'running', { message: 'Analyzing project configuration...' });
-
-        const analysis = await pm2Standardizer.analyzeApp(repoPath, providerId)
-          .catch(err => ({ success: false, error: err.message }));
-
-        if (!analysis.success) {
-          emit('analyze', 'error', { message: analysis.error });
-          socket.emit('standardize:complete', { success: false, error: analysis.error });
-          return;
-        }
-
-        emit('analyze', 'done', {
-          message: `Found ${analysis.proposedChanges.processes?.length || 0} processes`,
-          processes: analysis.proposedChanges.processes,
-          strayPorts: analysis.proposedChanges.strayPorts
+        const outcome = await pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+          overwriteEcosystem,
+          onStep: ({ step, status, data }) => {
+            socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
+          },
+          onAnalyzed: (payload) => socket.emit('standardize:analyzed', payload)
         });
 
-        socket.emit('standardize:analyzed', { plan: analysis });
-
-        // Step 2: Backup
-        emit('backup', 'running', { message: 'Creating git backup...' });
-
-        const backup = await pm2Standardizer.createGitBackup(repoPath)
-          .catch(err => ({ success: false, reason: err.message }));
-
-        if (backup.success) {
-          emit('backup', 'done', { message: `Backup branch: ${backup.branch}`, branch: backup.branch });
-        } else if (backup.code === 'DIRTY_WORKTREE') {
-          emit('backup', 'error', { message: backup.reason });
-          socket.emit('standardize:complete', { success: false, error: backup.reason });
-          return;
-        } else {
-          emit('backup', 'skipped', { message: backup.reason || 'No git repository' });
-        }
-
-        // Step 3: Apply changes
-        emit('apply', 'running', { message: 'Writing ecosystem.config.cjs...' });
-
-        const result = await pm2Standardizer.applyStandardization(repoPath, analysis, { skipBackup: true })
-          .catch(err => ({ success: false, errors: [err.message] }));
-
-        if (result.errors?.length > 0) {
-          emit('apply', 'error', { message: result.errors.join(', ') });
-          socket.emit('standardize:complete', { success: false, error: result.errors.join(', ') });
-          return;
-        }
-
-        emit('apply', 'done', {
-          message: `Modified ${result.filesModified.length} files`,
-          filesModified: result.filesModified
-        });
-
-        // Complete — use backup branch from step 2 since step 3 skips backup
-        socket.emit('standardize:complete', {
-          success: true,
-          result: {
-            backupBranch: backup.branch || null,
-            filesModified: result.filesModified,
-            processes: analysis.proposedChanges.processes
-          }
-        });
-
-        console.log(`✅ Standardization complete: ${result.filesModified.length} files modified`);
+        socket.emit('standardize:complete', outcome);
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [standardize:start]: ${message}`);
@@ -446,15 +391,19 @@ export function initSocket(io) {
 
         // Step 3: Apply
         emit('apply', 'running', 'Writing ecosystem.config.cjs...');
-        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
-          .catch(err => ({ success: false, errors: [err.message] }));
+        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis, {
+          overwriteEcosystem: data.overwriteEcosystem ?? false
+        }).catch(err => ({ success: false, errors: [err.message] }));
 
         if (result.errors?.length > 0) {
           emit('apply', 'error', result.errors.join(', '));
           socket.emit('app:standardize:error', { message: result.errors.join(', ') });
           return;
         }
-        emit('apply', 'done', `Modified ${result.filesModified.length} files`);
+        const preserved = result.filesPreserved || [];
+        emit('apply', 'done', preserved.length
+          ? `Modified ${result.filesModified.length} files, preserved ${preserved.length}`
+          : `Modified ${result.filesModified.length} files`);
 
         // Update app with new PM2 process names
         if (analysis.proposedChanges?.processes) {
@@ -467,6 +416,7 @@ export function initSocket(io) {
           result: {
             backupBranch: result.backupBranch,
             filesModified: result.filesModified,
+            filesPreserved: preserved,
             processes: analysis.proposedChanges.processes
           }
         });
@@ -478,31 +428,25 @@ export function initSocket(io) {
       }
     });
 
-    // App deploy handler — streams real-time output from deploy.sh
+    // App deploy handler — streams real-time output from deploy.sh. The
+    // app-lookup → deploy-script check → run orchestration lives in
+    // appDeployer.runDeployFlow (testable + HTTP-callable); the handler only
+    // forwards streamed frames and maps the terminal outcome to socket events.
     socket.on('app:deploy', async (rawData) => {
       try {
         const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
         if (!data) return;
 
-        const app = await appsService.getAppById(data.appId);
-        if (!app) {
-          socket.emit('app:deploy:error', { message: 'App not found' });
-          return;
-        }
-
-        if (!appDeployer.hasDeployScript(app)) {
-          socket.emit('app:deploy:error', { message: 'No deploy.sh found for this app' });
-          return;
-        }
-
-        console.log(`🚀 Deploy started for ${app.name} [${data.flags.join(', ') || 'default'}]`);
-        const emit = (type, payload) => {
+        const onOutput = (type, payload) => {
           socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
         };
 
-        const result = await appDeployer.deployApp(app, data.flags, emit);
-        socket.emit('app:deploy:complete', { success: result.success, code: result.code });
-        console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+        const outcome = await appDeployer.runDeployFlow(data.appId, data.flags, { onOutput });
+        if (!outcome.ok) {
+          socket.emit('app:deploy:error', { message: outcome.error });
+          return;
+        }
+        socket.emit('app:deploy:complete', { success: outcome.success, code: outcome.code });
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [app:deploy]: ${message}`);
@@ -646,6 +590,9 @@ export function initSocket(io) {
   // Set up Writers-Room scene-image forwarding (broadcast to all clients)
   setupWritersRoomEventForwarding();
 
+  // Set up Music Video scene reference-frame forwarding (broadcast to all clients)
+  setupMusicVideoEventForwarding();
+
   // Wire proactive voice (CoS speaks first on high-severity errors, new tasks,
   // and high-priority notifications — rate-limited per source).
   setupProactiveSpeechForwarding();
@@ -681,6 +628,24 @@ function setupWritersRoomEventForwarding() {
   // so the boards update reactively without a refetch (#1363).
   writersRoomEvents.on('scene-image', (data) => {
     if (ioInstance) ioInstance.emit('writers-room:scene-image', data);
+  });
+}
+
+let musicVideoForwardingSetup = false;
+function setupMusicVideoEventForwarding() {
+  if (musicVideoForwardingSetup) return;
+  musicVideoForwardingSetup = true;
+  // A scene reference-frame render filed durably by musicVideoSceneImageHook —
+  // bridge it so the director board updates reactively without a refetch
+  // (#1760 Phase 1b).
+  musicVideoEvents.on('scene-image', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-image', data);
+  });
+  // A scene i2v clip filed durably by musicVideoSceneVideoHook — bridge it so
+  // the board picks up the resulting `videoHistoryId` without a refetch
+  // (#1760 Phase 1).
+  musicVideoEvents.on('scene-video', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:scene-video', data);
   });
 }
 
@@ -974,5 +939,48 @@ function setupMediaGenEventForwarding() {
   });
   videoGenEvents.on('failed', (data) => {
     if (ioInstance) ioInstance.emit('video-gen:failed', data);
+  });
+
+  // Map a media-job kind to its gen-event namespace prefix. Only image/video
+  // jobs drive scene spinners and have `*-gen:*` consumers; the shared media
+  // queue also runs `training` (LoRA) jobs, which have their own UI and NO
+  // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
+  // (returning null skips them) rather than falling through to `image-gen:*`.
+  const genEvtPrefix = (kind) =>
+    kind === 'video' ? 'video-gen' : kind === 'image' ? 'image-gen' : null;
+
+  // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
+  // `generationId` (#1791). The internal gen modules emit started/progress/
+  // completed/failed but have NO 'canceled' — a job canceled *while queued*
+  // never starts a gen run, so it produces only `mediaJobEvents 'canceled'` and
+  // no socket frame at all, leaving per-scene render spinners stuck until the
+  // component remounts. Every client spinner already correlates by media-job id
+  // (`data.generationId === jobId`), so a single id-keyed event clears the right
+  // spinner across writers-room, music-video, and `useMediaJobProgress`
+  // consumers (catalog et al.) uniformly — no per-domain event needed. For a
+  // job canceled *while running* this fires alongside the gen module's `failed`;
+  // both clear the spinner and the handlers are idempotent.
+  mediaJobEvents.on('canceled', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:canceled`, { generationId: job.id });
+  });
+
+  // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
+  // `generationId` (#1799) — the failure-side analog of the canceled bridge
+  // above. A job that fails *before* the gen run starts (e.g. an unready BYOV
+  // runtime throws synchronously in the queue worker, or the watchdog times the
+  // job out) emits only `mediaJobEvents 'failed'` and never a `*-gen:failed`
+  // frame, so the scene button stays stuck on "Rendering…". Forward it with the
+  // same `{ generationId, error }` shape the gen modules use so the client's
+  // `onFailed` clears the spinner and can toast the reason. For a job that fails
+  // *while running* this fires alongside the gen module's own `failed`; both
+  // settle the spinner to 'failed' and the handler is idempotent.
+  mediaJobEvents.on('failed', (job) => {
+    if (!ioInstance || !job?.id) return;
+    const prefix = genEvtPrefix(job.kind);
+    if (!prefix) return;
+    ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }

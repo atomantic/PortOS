@@ -3,6 +3,7 @@ import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-r
 import { processScreenshotUploads } from '../../../utils/fileUpload';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
+import { FormField } from '../../ui/FormField';
 import { filterSelectableModels } from '../../../utils/providers';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
@@ -133,10 +134,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Refined Instructions */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">
-              Additional Instructions (optional)
-            </label>
+          <FormField label="Additional Instructions (optional)">
             <textarea
               value={formData.refinedInstructions}
               onChange={e => setFormData({ ...formData, refinedInstructions: e.target.value })}
@@ -145,7 +143,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden resize-none"
               autoFocus
             />
-          </div>
+          </FormField>
 
           {/* Screenshot Upload */}
           <div>
@@ -196,8 +194,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
           </div>
 
           {/* App Selection */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Target App</label>
+          <FormField label="Target App">
             <select
               value={formData.app}
               onChange={e => setFormData({ ...formData, app: e.target.value })}
@@ -208,12 +205,11 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                 <option key={app.id} value={app.id}>{app.name}</option>
               ))}
             </select>
-          </div>
+          </FormField>
 
           {/* Provider and Model */}
           <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-1">Provider</label>
+            <FormField label="Provider" className="flex-1">
               <select
                 value={formData.provider}
                 onChange={e => setFormData({ ...formData, provider: e.target.value, model: '' })}
@@ -224,9 +220,8 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
-            </div>
-            <div className="flex-1">
-              <label className="block text-sm text-gray-400 mb-1">Model</label>
+            </FormField>
+            <FormField label="Model" className="flex-1">
               <select
                 value={formData.model}
                 onChange={e => setFormData({ ...formData, model: e.target.value })}
@@ -238,7 +233,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                   <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
                 ))}
               </select>
-            </div>
+            </FormField>
           </div>
 
           {/* Context Preview (collapsed) */}

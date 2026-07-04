@@ -16,14 +16,15 @@ export const deleteAttachment = (filename) => request(`/attachments/${encodeURIC
 export const listAttachments = () => request('/attachments');
 
 // Uploads (general file storage)
-export const uploadFile = (base64Data, filename) => request('/uploads', {
+export const uploadFile = (base64Data, filename, options = {}) => request('/uploads', {
   method: 'POST',
-  body: JSON.stringify({ data: base64Data, filename })
+  body: JSON.stringify({ data: base64Data, filename }),
+  ...options
 });
-export const listUploads = () => request('/uploads');
+export const listUploads = (options = {}) => request('/uploads', options);
 export const getUploadUrl = (filename) => `/api/uploads/${encodeURIComponent(filename)}`;
-export const deleteUpload = (filename) => request(`/uploads/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-export const deleteAllUploads = () => request('/uploads?confirm=true', { method: 'DELETE' });
+export const deleteUpload = (filename, options = {}) => request(`/uploads/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
+export const deleteAllUploads = (options = {}) => request('/uploads?confirm=true', { method: 'DELETE', ...options });
 
 // Image Cleaner — composable opt-in pipeline (metadata strip and/or denoise).
 // Uploads the RAW image bytes (no base64 inflation) with the step selection in

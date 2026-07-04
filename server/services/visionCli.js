@@ -30,6 +30,7 @@ import { join } from 'path';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
+import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
@@ -114,10 +115,28 @@ export async function describeImageViaCli({
     await writeFile(join(dir, IMAGE_BASENAME), bytes);
     const { command, args, stdin, cwd } = buildCliVisionInvocation(provider, visionModel, dir, prompt);
 
+    const childEnv = { ...process.env, ...provider?.envVars };
+    delete childEnv.CLAUDECODE;
+
+    // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
+    // (cmd.exe /c) instead of enabling a shell. This matters even more here
+    // than at other call sites: the codex branch of buildCliVisionInvocation
+    // puts the free-text `prompt` directly into `args` (see above), and
+    // shell:true + an args array does NOT escape arguments (DEP0190) — any
+    // prompt containing a space would silently mis-split into extra shell
+    // tokens, corrupting or shell-injecting the invocation. The cmd.exe
+    // wrapper instead relies on Node's own correct non-shell argv escaping,
+    // which DOES preserve spaces within each arg as a single token. Resolved
+    // against `childEnv` so a provider-configured PATH override is honored.
+    // See resolveWindowsExecutable/prepareWindowsSafeSpawn in
+    // server/lib/bufferedSpawn.js.
+    const resolvedCommand = resolveWindowsExecutable(command, undefined, childEnv) || command;
+    const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+
     const text = await new Promise((resolve, reject) => {
-      const child = spawnImpl(command, args, {
+      const child = spawnImpl(spawnCommand, spawnArgs, {
         cwd,
-        env: (() => { const e = { ...process.env, ...provider?.envVars }; delete e.CLAUDECODE; return e; })(),
+        env: childEnv,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -129,7 +148,7 @@ export async function describeImageViaCli({
       // the promise would hang forever and the temp dir (cleaned in `finally`)
       // would leak. Escalate to SIGKILL on a short grace timer.
       const timer = timeout > 0 ? setTimeout(() => {
-        if (!child.killed) child.kill('SIGTERM');
+        if (!child.killed) killProcessTree(child);
         killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 5000);
         killTimer?.unref?.();
         reject(new Error(`${command} vision call timed out after ${timeout}ms`));

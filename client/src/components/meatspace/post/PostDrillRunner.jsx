@@ -81,7 +81,9 @@ export default function PostDrillRunner({ session }) {
   if (state !== 'drilling' || !currentDrill) return null;
 
   const question = currentDrill.questions?.[currentQuestionIndex];
-  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type) || currentDrill.type === 'memory-fill-blank';
+  // MEMORY_DRILL_TYPES now includes 'memory-fill-blank' (issue #2099/#2116),
+  // so the explicit extra check this used to need is gone.
+  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 
@@ -95,7 +97,7 @@ export default function PostDrillRunner({ session }) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
         <div className="flex items-center justify-between text-sm text-gray-400">
-          <span className="text-purple-400">{DRILL_LABELS[currentDrill.type] || currentDrill.type} — Training</span>
+          <span className="text-port-accent-2">{DRILL_LABELS[currentDrill.type] || currentDrill.type} — Training</span>
           <span>Drill {currentDrillIndex + 1} of {drillCount}</span>
         </div>
 
@@ -130,7 +132,7 @@ export default function PostDrillRunner({ session }) {
         <button
           onClick={acknowledgeAnswer}
           autoFocus
-          className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
         >
           Next
         </button>
@@ -141,7 +143,7 @@ export default function PostDrillRunner({ session }) {
             <span>{Math.round(progressPct)}%</span>
           </div>
           <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
-            <div className="h-full bg-purple-500/60 transition-all" style={{ width: `${progressPct}%` }} />
+            <div className="h-full bg-port-accent-2/60 transition-all" style={{ width: `${progressPct}%` }} />
           </div>
         </div>
       </div>
@@ -152,8 +154,13 @@ export default function PostDrillRunner({ session }) {
     <div className="max-w-lg mx-auto space-y-6">
       {/* Drill header */}
       <div className="flex items-center justify-between text-sm text-gray-400">
-        <span className={isTraining ? 'text-purple-400' : ''}>
+        <span className={isTraining ? 'text-port-accent-2' : ''}>
           {DRILL_LABELS[currentDrill.type] || currentDrill.type}
+          {currentDrill.progression && (
+            <span className="ml-2 text-xs text-port-accent">
+              Lvl {currentDrill.progression.level + 1} · {currentDrill.progression.label}
+            </span>
+          )}
           {isTraining && ' — Training'}
         </span>
         <span>Drill {currentDrillIndex + 1} of {drillCount}</span>
@@ -199,7 +206,7 @@ export default function PostDrillRunner({ session }) {
         <button
           type="submit"
           disabled={inputValue.trim() === ''}
-          className={`px-6 py-3 ${isTraining ? 'bg-purple-600 hover:bg-purple-500' : 'bg-port-accent hover:bg-port-accent/80'} disabled:opacity-50 text-white font-medium rounded-lg transition-colors`}
+          className={`px-6 py-3 ${isTraining ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2' : 'bg-port-accent hover:bg-port-accent/80 text-white'} disabled:opacity-50 font-medium rounded-lg transition-colors`}
         >
           Enter
         </button>
@@ -223,7 +230,7 @@ export default function PostDrillRunner({ session }) {
         </div>
         <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
           <div
-            className={`h-full ${isTraining ? 'bg-purple-500/60' : 'bg-port-accent/60'} transition-all`}
+            className={`h-full ${isTraining ? 'bg-port-accent-2/60' : 'bg-port-accent/60'} transition-all`}
             style={{ width: `${progressPct}%` }}
           />
         </div>

@@ -263,7 +263,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
                 className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                 title="Copy to clipboard"
               >
-                {copied ? <Check size={18} className="text-green-400" /> : <Copy size={18} />}
+                {copied ? <Check size={18} className="text-port-success" /> : <Copy size={18} />}
               </button>
               <button
                 onClick={downloadFile}

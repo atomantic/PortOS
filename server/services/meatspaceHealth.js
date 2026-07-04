@@ -6,9 +6,8 @@
  * to the shared MortalLoom.json; otherwise local PortOS data files are used.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -30,7 +29,7 @@ const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
 async function writeLocal(file, data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(file, JSON.stringify(data, null, 2));
+  await atomicWrite(file, data);
 }
 
 // === Blood Tests ===
@@ -79,7 +78,7 @@ export async function getBodyHistory() {
 }
 
 export async function addBodyEntry({ date, ...body }) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
 
   if (await isMortalLoomEnabled()) {
     const stored = await mlPush('bodyEntries', { date: targetDate, ...body });
@@ -192,7 +191,7 @@ export async function getWorkouts() {
 }
 
 export async function addWorkout({ date, type, durationMinutes, intensity, notes } = {}) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
   const trimmedType = typeof type === 'string' ? type.trim() : '';
   if (!trimmedType) throw new Error('workout type is required');
   const entry = {
@@ -230,7 +229,7 @@ export async function getBloodPressureHistory() {
 }
 
 export async function addBloodPressureReading({ date, systolic, diastolic }) {
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = date || getDateString(); // local calendar day (matches alcohol/nicotine + dashboard streak)
   const patch = { bloodPressureSystolic: systolic, bloodPressureDiastolic: diastolic };
 
   if (await isMortalLoomEnabled()) {

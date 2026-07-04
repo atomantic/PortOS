@@ -15,13 +15,19 @@ import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
+import { getTailscaleStatus } from '../lib/tailscale.js';
 import { autoSubscribePeerToAllRecords } from './sharing/recordEvents.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
+// While peer probing is deferred (Tailscale not connected at boot), re-check
+// Tailscale on this cadence and start polling the moment it comes up — so the
+// user just has to connect Tailscale, no manual "sync now" required.
+const TAILSCALE_RECHECK_MS = 60_000;
 
 // Sentinel returned by getInstanceId() and stamped onto sender/peer fields when
 // the local identity hasn't been initialized yet. Every consumer that fans
@@ -44,6 +50,16 @@ const BACKOFF_TIERS_MS = [
 
 const withLock = createMutex();
 let pollTimer = null;
+// Set while we're waiting for Tailscale to connect before starting the real
+// probe loop (see startPolling). Kept separate from pollTimer so stopPolling can
+// tear down either state, and so the boot gate is idempotent under double-start.
+let tailscaleWatchTimer = null;
+let pollingStartPending = false;
+// Bumped by stopPolling() to cancel any in-flight startPolling gate or deferred
+// watcher callback that is mid-await when the stop lands — without it, a stop
+// during the async window is a silent no-op and a timer gets created after stop
+// was requested.
+let pollingGeneration = 0;
 
 function classifyProbeError(err, peer) {
   const code = err?.code;
@@ -557,8 +573,6 @@ export function enqueueReciprocalSync(peerId) {
 
 export async function probePeer(peer) {
   const baseUrl = peerBaseUrl(peer);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
 
   const previousStatus = peer.status;
   let status, lastHealth, lastSeen, remoteInstanceId, remoteVersion, remoteApps, remoteSyncSeqs;
@@ -566,20 +580,23 @@ export async function probePeer(peer) {
   // opposed to an unreachable one. The Instances UI reads this to prompt for a
   // credential instead of showing a generic offline state.
   let authRequired = false;
-  // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
-  // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
-  // an unresolved/unknown id just omits the param and we get the inbound-only
-  // shape (push count renders "unknown" client-side, never a misleading 0).
-  const ourInstanceId = await getInstanceId().catch(() => null);
-  const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
-    ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
-    : '';
-  try {
+  // One shared abort signal spans the instanceId read, all three parallel
+  // fetches, AND their body reads, so a single PROBE_TIMEOUT_MS bounds the whole
+  // probe (the instanceId read is inside the budget, as it was before).
+  await withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
+    // Pass our own instanceId as `forPeer` so the peer also returns ITS cursor
+    // into our data (`cursorForYou`) — our push-frontier toward it. Best-effort:
+    // an unresolved/unknown id just omits the param and we get the inbound-only
+    // shape (push count renders "unknown" client-side, never a misleading 0).
+    const ourInstanceId = await getInstanceId().catch(() => null);
+    const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
+      ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
+      : '';
     // Fetch health details, apps, and sync status in parallel
     const [healthRes, appsRes, syncRes] = await Promise.all([
-      peerFetch(`${baseUrl}/api/system/health/details`, { signal: controller.signal }, peer),
-      peerFetch(`${baseUrl}/api/apps`, { signal: controller.signal }, peer).catch(() => null),
-      peerFetch(`${baseUrl}/api/instances/sync-status${forPeerQs}`, { signal: controller.signal }, peer).catch(() => null)
+      peerFetch(`${baseUrl}/api/system/health/details`, { signal }, peer),
+      peerFetch(`${baseUrl}/api/apps`, { signal }, peer).catch(() => null),
+      peerFetch(`${baseUrl}/api/instances/sync-status${forPeerQs}`, { signal }, peer).catch(() => null)
     ]);
     if (!healthRes.ok) {
       const err = new Error(`HTTP ${healthRes.status}`);
@@ -604,15 +621,13 @@ export async function probePeer(peer) {
     if (syncRes?.ok) {
       remoteSyncSeqs = await syncRes.json().catch(() => null);
     }
-  } catch (err) {
+  }).catch((err) => {
     console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(err, peer)}`);
     status = 'offline';
     authRequired = err?.httpStatus === 401 || err?.httpStatus === 403;
     lastHealth = peer.lastHealth; // preserve last known
     lastSeen = peer.lastSeen;
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 
   const stored = await withData(async (data) => {
     const entry = data.peers.find(p => p.id === peer.id);
@@ -695,18 +710,10 @@ export async function queryPeer(id, apiPath) {
   if (!peer) return { error: 'Peer not found' };
 
   const url = `${peerBaseUrl(peer)}${apiPath}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-
-  try {
-    const res = await peerFetch(url, { signal: controller.signal }, peer);
-    const json = await res.json();
-    return { success: true, data: json };
-  } catch (err) {
-    return { error: `Failed to query peer: ${err.message}` };
-  } finally {
-    clearTimeout(timeout);
-  }
+  return withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
+    const res = await peerFetch(url, { signal }, peer);
+    return { success: true, data: await res.json() };
+  }).catch((err) => ({ error: `Failed to query peer: ${err.message}` }));
 }
 
 // --- Announce (Bidirectional Registration) ---
@@ -798,9 +805,7 @@ async function announceSelf(peer) {
   const selfHost = getSelfHost();
   const url = `${peerBaseUrl(peer)}/api/instances/peers/announce`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  try {
+  await withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
     const res = await peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -810,7 +815,7 @@ async function announceSelf(peer) {
         name: data.self.name,
         host: selfHost
       }),
-      signal: controller.signal
+      signal
     }, peer);
     if (res.ok) {
       console.log(`🌐 Announced self to ${url}`);
@@ -818,11 +823,9 @@ async function announceSelf(peer) {
     } else {
       console.log(`🌐 Announce to ${url} failed: HTTP ${res.status}`);
     }
-  } catch (err) {
+  }).catch((err) => {
     console.log(`🌐 Announce to ${url} unreachable: ${err.message}`);
-  } finally {
-    clearTimeout(timeout);
-  }
+  });
 }
 
 export async function connectPeer(id) {
@@ -1013,9 +1016,7 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
   // caller didn't communicate a full-sync state at all (legacy direct callers).
   if (!sanitized && fullSync === undefined) return { ok: false, reason: 'no-categories' };
   const url = `${peerBaseUrl(peer)}/api/instances/peers/sync-categories`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  try {
+  return withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
     const res = await peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1025,7 +1026,7 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
       // the all-on syncCategories map we sent. syncCategories defaults to {} so
       // the receiver's required-object schema still parses a fullSync-only send.
       body: JSON.stringify({ instanceId: self.instanceId, syncCategories: sanitized || {}, fullSync: fullSync === true }),
-      signal: controller.signal
+      signal
     }, peer);
     if (res.ok) {
       const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
@@ -1034,11 +1035,7 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
     }
     // 404 = peer predates this endpoint; not an error worth surfacing loudly.
     return { ok: false, reason: `http-${res.status}` };
-  } catch (err) {
-    return { ok: false, reason: err.message };
-  } finally {
-    clearTimeout(timeout);
-  }
+  }).catch((err) => ({ ok: false, reason: err.message }));
 }
 
 async function markDirection(peerId, direction) {
@@ -1055,12 +1052,15 @@ async function markDirection(peerId, direction) {
 
 // --- Polling ---
 
-export function startPolling() {
+// Actually create the probe schedule (backoff clear + initial probe + interval).
+// Idempotent: a no-op if the loop is already running.
+function beginPolling() {
   if (pollTimer) return;
   console.log(`🌐 Instance polling started (${POLL_INTERVAL_MS / 1000}s interval)`);
 
   // Backoff is a rate limit on the polling loop, not a durable judgment about
-  // the peer — boot may itself be the deploy that fixes connectivity, so clear it.
+  // the peer — boot (or a fresh Tailscale connect) may itself be the event that
+  // fixes connectivity, so clear it.
   withData(async (data) => {
     let cleared = 0;
     for (const peer of data.peers) {
@@ -1079,7 +1079,88 @@ export function startPolling() {
   pollTimer = setInterval(() => probeAllPeers(), POLL_INTERVAL_MS);
 }
 
+// A peer we can only reach over the tailnet: its probe URL (see peerBaseUrl)
+// resolves to a MagicDNS name (*.ts.net) or a Tailscale CGNAT address
+// (100.64.0.0/10 for IPv4, fd7a:115c:a1e0::/48 for IPv6). A peer addressed by a
+// plain LAN/routable IP or a non-tailnet DNS host is reachable with Tailscale
+// down, so it must NOT be deferred by the gate below.
+function peerRequiresTailscale(peer) {
+  if (peer.host) return /\.ts\.net$/i.test(peer.host.trim());
+  const addr = (peer.address || '').trim();
+  const v4 = addr.match(/^100\.(\d{1,3})\./);
+  if (v4) {
+    const second = Number(v4[1]);
+    if (second >= 64 && second <= 127) return true;   // 100.64.0.0/10 CGNAT
+  }
+  if (/^fd7a:115c:a1e0:/i.test(addr)) return true;     // Tailscale IPv6 ULA
+  return false;
+}
+
+// Decide whether to start probing now or defer until Tailscale connects.
+// Probing a tailnet-only peer's MagicDNS hostname while Tailscale is down just
+// spams DNS-failure + backoff logs (a laptop booted off-tailnet). So we defer
+// ONLY when every enabled peer is tailnet-dependent; a LAN/IP-reachable peer is
+// probed immediately (it doesn't need Tailscale). While deferred, a slow watcher
+// starts polling automatically the moment Tailscale connects. `gen` is captured
+// at startPolling time so a stopPolling() during either await aborts cleanly.
+async function evaluatePollingGate(gen) {
+  if (pollTimer || tailscaleWatchTimer) return;
+
+  const data = await loadData();
+  if (gen !== pollingGeneration) return;   // stopPolling() landed during loadData
+  const enabledPeers = Array.isArray(data.peers) ? data.peers.filter(p => p.enabled) : [];
+
+  // No peers, or at least one peer reachable without Tailscale → run the loop
+  // now (silent no-op when there are no peers). Only an all-tailnet peer set
+  // gets deferred, so solo installs and LAN peers are unaffected.
+  const needsTailscale = enabledPeers.length > 0 && enabledPeers.every(peerRequiresTailscale);
+  if (!needsTailscale) {
+    beginPolling();
+    return;
+  }
+
+  const status = await getTailscaleStatus();
+  if (gen !== pollingGeneration) return;   // stopPolling() landed during status check
+  if (status.running) {
+    beginPolling();
+    return;
+  }
+
+  console.log(`🌐 Peer sync deferred — Tailscale not connected (${status.state || status.reason}); polling starts automatically once it's up`);
+  // Capture the handle locally so a stale in-flight callback can't clear/null a
+  // watcher installed by a later startPolling() (identity guard below).
+  const myTimer = setInterval(() => {
+    getTailscaleStatus().then((s) => {
+      if (!s.running || tailscaleWatchTimer !== myTimer) return;
+      clearInterval(myTimer);
+      tailscaleWatchTimer = null;
+      console.log('🌐 Tailscale connected — starting peer sync polling');
+      beginPolling();
+    }).catch(() => {});
+  }, TAILSCALE_RECHECK_MS);
+  tailscaleWatchTimer = myTimer;
+  // Don't let the recheck timer keep the process alive on its own.
+  if (typeof myTimer.unref === 'function') myTimer.unref();
+}
+
+export function startPolling() {
+  // pollingStartPending guards the async gap in evaluatePollingGate so two
+  // synchronous startPolling() calls can't each spin up a schedule/watcher.
+  if (pollTimer || tailscaleWatchTimer || pollingStartPending) return;
+  pollingStartPending = true;
+  const gen = pollingGeneration;
+  evaluatePollingGate(gen)
+    .catch(err => console.error(`❌ Failed to start peer polling: ${err.message}`))
+    .finally(() => { pollingStartPending = false; });
+}
+
 export function stopPolling() {
+  // Invalidate any in-flight startPolling gate / deferred watcher callback.
+  pollingGeneration++;
+  if (tailscaleWatchTimer) {
+    clearInterval(tailscaleWatchTimer);
+    tailscaleWatchTimer = null;
+  }
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;

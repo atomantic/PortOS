@@ -38,7 +38,7 @@ router.post('/analyze', asyncHandler(async (req, res) => {
 
 // POST /api/standardize/apply - Apply standardization changes
 router.post('/apply', asyncHandler(async (req, res) => {
-  const { repoPath, appId, plan } = req.body;
+  const { repoPath, appId, plan, overwriteEcosystem = false } = req.body;
 
   // Get path from appId if provided
   let path = repoPath;
@@ -60,7 +60,7 @@ router.post('/apply', asyncHandler(async (req, res) => {
 
   console.log(`🔧 Applying PM2 standardization to: ${path}`);
 
-  const result = await pm2Standardizer.applyStandardization(path, plan);
+  const result = await pm2Standardizer.applyStandardization(path, plan, { overwriteEcosystem });
 
   if (result.backupBranch) {
     console.log(`📦 Backup branch created: ${result.backupBranch}`);

@@ -19,9 +19,10 @@ export const createMemory = (data) => request('/memory', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateMemory = (id, data) => request(`/memory/${id}`, {
+export const updateMemory = (id, data, options = {}) => request(`/memory/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteMemory = (id, hard = false) => request(`/memory/${id}?hard=${hard}`, { method: 'DELETE' });
 export const searchMemories = (query, options = {}) => request('/memory/search', {
@@ -51,5 +52,5 @@ export const consolidateMemories = (options = {}) => request('/memory/consolidat
 });
 export const getEmbeddingStatus = () => request('/memory/embeddings/status');
 export const getMemoryBackendStatus = () => request('/memory/backend/status', { silent: true });
-export const approveMemory = (id) => request(`/memory/${id}/approve`, { method: 'POST' });
-export const rejectMemory = (id) => request(`/memory/${id}/reject`, { method: 'POST' });
+export const approveMemory = (id, options = {}) => request(`/memory/${id}/approve`, { method: 'POST', ...options });
+export const rejectMemory = (id, options = {}) => request(`/memory/${id}/reject`, { method: 'POST', ...options });

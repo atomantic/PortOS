@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -213,8 +213,9 @@ describe('claim-work single-source routing', () => {
     expect(fn).toMatch(/getTaskInterval\('claim-work'\)/);
     expect(fn).toMatch(/getAppTaskTypeOverrides\(app\.id\)/);
     expect(fn).toMatch(/stripManagedAgentOptionsFromOverride\(\s*'claim-work'/);
-    // issueAuthorFilter: explicit option > configured metadata > 'owner'.
-    expect(fn).toMatch(/issueAuthorFilter \?\? metadata\.issueAuthorFilter \?\? 'owner'/);
+    // issueAuthorFilter: explicit option > configured metadata > 'self'
+    // (the slashdo /do:next --self security boundary).
+    expect(fn).toMatch(/issueAuthorFilter \?\? metadata\.issueAuthorFilter \?\? 'self'/);
     // reviewers fall back to Code Review Defaults via normalizeReviewers, dropping local-LLM reviewers.
     expect(fn).toMatch(/normalizeReviewers\(metadata, codeReviewDefaults\?\.reviewers\)/);
     expect(fn).toMatch(/LOCAL_LLM_REVIEWERS\.includes/);
@@ -231,17 +232,70 @@ describe('resolveIssueAuthorFilterBlock', () => {
   it('returns the gh forge directive for the github claim body', () => {
     expect(resolveIssueAuthorFilterBlock('claim-issue', 'owner')).toContain('gh issue list');
     expect(resolveIssueAuthorFilterBlock('claim-issue', 'any')).toContain('regardless of who filed it');
+    // 'self' = the --self security boundary: --author "@me", refuse third-party issues.
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'self')).toContain('--author "@me"');
   });
 
   it('returns the glab forge directive for the gitlab claim body', () => {
     expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'owner')).toContain('glab issue list');
     expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'any')).toContain('regardless of who opened it');
+    // 'self' resolves the authenticated glab username (no @me token on GitLab).
+    expect(resolveIssueAuthorFilterBlock('claim-issue-gitlab', 'self')).toContain('glab api user');
   });
 
-  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to owner mode', () => {
+  it('defaults to the gh block (harmless no-op) for plan/jira bodies and to self mode', () => {
     expect(resolveIssueAuthorFilterBlock('plan-task')).toContain('gh issue list');
-    // Unknown mode collapses to owner, not any.
-    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('repository owner only');
+    // Default (no mode) is the --self security boundary.
+    expect(resolveIssueAuthorFilterBlock('claim-issue')).toContain('--author "@me"');
+    // Unknown mode collapses to self, not owner/any.
+    expect(resolveIssueAuthorFilterBlock('claim-issue', 'bogus')).toContain('--author "@me"');
+  });
+});
+
+// resolveSwarmBlock is prepended to the claim-issue prompt when swarmCount turns
+// on `/do:next --swarm` mode. Like the author filter, it's a standalone pure
+// helper shared by the scheduled router and the manual /do:next button.
+describe('resolveSwarmBlock', () => {
+  it('returns empty (off) below the swarm minimum', () => {
+    expect(resolveSwarmBlock('claim-issue', 0)).toBe('');
+    expect(resolveSwarmBlock('claim-issue', 1)).toBe('');
+    expect(resolveSwarmBlock('claim-issue', undefined)).toBe('');
+    expect(resolveSwarmBlock('claim-issue', 3.5)).toBe('');
+  });
+
+  it('returns a gh swarm directive for the github claim body', () => {
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('SWARM MODE');
+    expect(block).toContain('--swarm=3');
+    expect(block).toContain('3 independent issues');
+    expect(block).toContain('gh pr merge');
+    // Ends with a separator so the single-issue body reads as the per-agent flow.
+    expect(block.trimEnd().endsWith('---')).toBe(true);
+  });
+
+  it('returns a glab/MR swarm directive for the gitlab claim body', () => {
+    const block = resolveSwarmBlock('claim-issue-gitlab', 4);
+    expect(block).toContain('--swarm=4');
+    expect(block).toContain('glab mr merge');
+    expect(block).toContain('open the MR');
+  });
+
+  it('is a no-op for non-forge claim types (plan-task / jira have no swarm flow)', () => {
+    expect(resolveSwarmBlock('plan-task', 6)).toBe('');
+    expect(resolveSwarmBlock('claim-issue-jira', 6)).toBe('');
+  });
+});
+
+// Source-level guard: the swarm block must be PREPENDED at both render sites
+// (the scheduled dispatch and the manual buildClaimWorkTask), not gated behind
+// an in-template placeholder — that's what keeps it an opt-in wrapper with no
+// prompt-default version bump.
+describe('swarm block wiring', () => {
+  it('prepends resolveSwarmBlock(...) to the rendered prompt at both render sites', () => {
+    const occurrences = GEN_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount\)/g) || [];
+    expect(occurrences.length).toBe(2);
+    expect(GEN_SRC).toContain('`${swarmBlock}${template}`');
+    expect(GEN_SRC).toContain('`${swarmBlock}${promptTemplate}`');
   });
 });
 

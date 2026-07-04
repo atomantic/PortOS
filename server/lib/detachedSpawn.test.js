@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable } from './detachedSpawn.js';
+import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning } from './detachedSpawn.js';
 
 const execFileAsync = promisify(execFile);
 const dirs = [];
@@ -265,6 +265,34 @@ describe('isReattachable', () => {
     // and the supervisor never got to write `exit`. PID 2^31-1 is never live.
     await writeFile(join(controlDir, 'pid'), '2147483647');
     expect(await isReattachable(controlDir)).toBe(false);
+  });
+});
+
+describe('isDetachedRunning', () => {
+  it('is true while the recorded child is still alive with no exit sentinel', async () => {
+    const controlDir = await tmpControlDir();
+    const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
+    expect(await isDetachedRunning(controlDir)).toBe(true);
+    handle.kill('SIGKILL');
+    await onClose(handle);
+  });
+
+  it('is false once the job recorded its exit', async () => {
+    const controlDir = await tmpControlDir();
+    const handle = await spawnDetached('sh', ['-c', 'exit 0'], { controlDir, pollMs: 25 });
+    await onClose(handle);
+    expect(await isDetachedRunning(controlDir)).toBe(false);
+  });
+
+  it('is false when no pid was ever recorded', async () => {
+    const controlDir = await tmpControlDir();
+    expect(await isDetachedRunning(controlDir)).toBe(false);
+  });
+
+  it('is false for a dead pid with no exit sentinel', async () => {
+    const controlDir = await tmpControlDir();
+    await writeFile(join(controlDir, 'pid'), '2147483647');
+    expect(await isDetachedRunning(controlDir)).toBe(false);
   });
 });
 

@@ -89,6 +89,22 @@ export async function resolveAgentProviderAndModel(task) {
     }
   }
 
+  // Harness boundary guard. `api`-type providers (Ollama / LM Studio / kimi over
+  // HTTP) return plain text with NO filesystem tool harness — they can't
+  // Read/Write/Edit/Bash, so a CoS agent task resolved onto one would spawn a
+  // child process that writes nothing to disk. Fail clearly instead. This catches
+  // an api provider arriving via a task pin OR via the fallback chain (the default
+  // fallback priority includes lmstudio/ollama). The fix for users: add a CLI
+  // coding provider — e.g. the "Claude Ollama" sample (a `claude` CLI/TUI pointed at
+  // Ollama) gives the full file-writing harness on a local model.
+  if (provider.type === 'api') {
+    return {
+      ok: false,
+      error: `Provider "${provider.id}" is an HTTP API provider with no file-writing harness — CoS agent tasks need a CLI/TUI coding provider (claude, codex, or the "Claude Ollama" Claude-on-Ollama sample).`,
+      providerId: provider.id
+    };
+  }
+
   // Select optimal model for this task (async to allow learning-based suggestions)
   const modelSelection = await selectModelForTask(task, provider);
   let selectedModel = modelSelection.model;

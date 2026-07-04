@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
-import { timeAgo } from '../../../utils/formatters';
+import { FormField } from '../../ui/FormField';
+import { timeAgo, formatDateTime } from '../../../utils/formatters';
 
 export default function PublishedTab({ agentId }) {
   const [accounts, setAccounts] = useState([]);
@@ -49,8 +50,7 @@ export default function PublishedTab({ agentId }) {
     <div className="p-4">
       {/* Header */}
       <div className="flex flex-wrap items-end gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Account</label>
+        <FormField label="Account">
           <select
             value={selectedAccountId}
             onChange={(e) => setSelectedAccountId(e.target.value)}
@@ -63,7 +63,7 @@ export default function PublishedTab({ agentId }) {
               </option>
             ))}
           </select>
-        </div>
+        </FormField>
         <div className="flex items-center gap-2 ml-auto">
           <select
             value={publishedDays}
@@ -149,7 +149,7 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4 text-right text-gray-400">
                           {post.commentCount ?? '-'}
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(post.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(post.publishedAt)}>
                           {timeAgo(post.publishedAt)}
                         </td>
                         <td className="py-2">
@@ -200,13 +200,13 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4">
                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                             comment.isReply
-                              ? 'bg-purple-500/20 text-purple-400'
+                              ? 'bg-port-accent-2/20 text-port-accent-2'
                               : 'bg-port-accent/20 text-port-accent'
                           }`}>
                             {comment.isReply ? 'reply' : 'comment'}
                           </span>
                         </td>
-                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={new Date(comment.publishedAt).toLocaleString()}>
+                        <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(comment.publishedAt)}>
                           {timeAgo(comment.publishedAt)}
                         </td>
                         <td className="py-2">

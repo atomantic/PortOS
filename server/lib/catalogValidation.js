@@ -371,6 +371,28 @@ export const catalogMediaDetachSchema = z.object({
   kind: z.enum(MEDIA_KINDS),
 }).strict();
 
+// File-upload attach body: raw base64 bytes + the browser-reported MIME. The
+// server decides the media `kind` (image→reference, audio, video) from the MIME
+// and persists into the matching federating library dir before attaching — the
+// client never picks the storage kind. 32 MB base64 (~24 MB raw) upper-bounds a
+// runaway paste; per-category size is re-checked server-side.
+export const catalogMediaFileUploadSchema = z.object({
+  dataBase64: z.string().min(1).max(32 * 1024 * 1024),
+  mimeType: z.string().trim().min(1).max(128),
+  filename: z.string().trim().max(300).optional().nullable(),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Voice-memo body: a recorded WAV (16 kHz mono, base64) the server transcribes
+// via Whisper and attaches as a `kind:'audio'` media row with the transcript in
+// `caption`. 16 MB base64 (~12 MB raw) fits several minutes of 16 kHz mono WAV.
+export const catalogMediaVoiceMemoSchema = z.object({
+  audioBase64: z.string().min(1).max(16 * 1024 * 1024),
+  mimeType: z.string().trim().max(64).optional(),
+  role: z.string().trim().max(64).optional().nullable(),
+}).strict();
+
 export const catalogScrapCommitSchema = z.object({
   accepted: z.array(catalogIngredientCreateSchema.extend({
     // Optional source-span hint (server forwards as-is to linkIngredientToSource).

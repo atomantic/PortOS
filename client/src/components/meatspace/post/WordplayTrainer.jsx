@@ -1,7 +1,25 @@
-import { useState, useRef, useCallback } from 'react';
-import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight } from 'lucide-react';
-import { generatePostDrill, scorePostLlmDrill } from '../../../services/api';
-import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar } from './WordplayDrillUI';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight, Sparkles } from 'lucide-react';
+import {
+  generatePostDrill, getPostDrillCacheStatus, fillPostDrillCache, updatePostConfig, submitTrainingEntry,
+} from '../../../services/api';
+import { enabledApiProviderFilter } from '../../../utils/providers';
+import useProviderModels from '../../../hooks/useProviderModels';
+import ProviderModelSelector from '../../ProviderModelSelector';
+import Modal from '../../ui/Modal';
+import toast from '../../ui/Toast';
+import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar, scoreWordplayResponse } from './WordplayDrillUI';
+import { countLlmCorrect, LLM_TRAINING_CORRECT_THRESHOLD } from './constants';
+
+// Coarse module bucket for training-log entries — matches the module
+// PostLlmDrillRunner's in-session runner logs LLM/wordplay drills under
+// (see finishDrill in PostLlmDrillRunner.jsx), so standalone and in-session
+// wordplay practice aggregate under the same byDrill key in getTrainingStats.
+const TRAINING_MODULE = 'llm-drills';
+// Fallback timeout for the standalone trainer's per-response scoring call —
+// matches the request timeout used elsewhere for wordplay scoring; the
+// standalone tab has no session-configured timeLimitSec of its own.
+const SCORE_TIMEOUT_MS = 120000;
 
 const GAME_MODES = [
   {
@@ -42,8 +60,20 @@ const GAME_MODES = [
   },
 ];
 
-export default function WordplayTrainer({ onBack, config }) {
-  const [selectedMode, setSelectedMode] = useState(null);
+export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode = null, onSelectMode, onExitMode }) {
+  // Selected mode is driven by the `/post/wordplay/:mode` URL param (source of
+  // truth), not local state — deep-linkable and refresh-safe like MorseTrainer.
+  // An unknown segment degrades to the mode grid instead of a blank screen.
+  const selectedMode = GAME_MODES.some(m => m.id === mode) ? mode : null;
+  // Which mode we've already kicked off generation for, so the URL-driven
+  // effect below doesn't regenerate on every render.
+  const initiatedRef = useRef(null);
+  // Per-run generation token (CLAUDE.md's {target, generation} pattern). Every
+  // generation start bumps it; a completing runMode aborts unless its captured
+  // token is still current — so a superseded run (re-enter the same mode, or a
+  // direct mode→mode URL change mid-generation) can't land a stale drill or
+  // strand `loading`. Bumped on every clear too, to invalidate an in-flight run.
+  const genRef = useRef(0);
   const [drill, setDrill] = useState(null);
   const [loading, setLoading] = useState(false);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -53,16 +83,116 @@ export default function WordplayTrainer({ onBack, config }) {
   const [results, setResults] = useState([]);
   const inputRef = useRef(null);
   const questionStartRef = useRef(Date.now());
+  // Tracks when the current 5-question round started, so a completed round can
+  // log one training-log entry with the whole round's elapsed time (matches
+  // MorseTrainer's roundStartRef → totalMs contract).
+  const roundStartRef = useRef(Date.now());
+
+  // Cache-fill consent: PortOS never issues background LLM calls a user
+  // hasn't asked for. A mode whose drill cache is cold (0 cached) prompts
+  // for provider/model + explicit consent before any bulk generation runs.
+  // Modes primed this session (either filled or explicitly skipped) don't
+  // re-prompt even if the server-side count is still catching up.
+  const [cacheStatus, setCacheStatus] = useState(null);
+  const [primedModes, setPrimedModes] = useState(() => new Set());
+  const [pendingMode, setPendingMode] = useState(null);
+  const {
+    providers, selectedProviderId: fillProviderId, selectedModel: fillModel,
+    availableModels: fillModels, setSelectedProviderId: setFillProviderId, setSelectedModel: setFillModel,
+  } = useProviderModels({ filter: enabledApiProviderFilter, allowDefault: true, silent: true });
+
+  useEffect(() => {
+    getPostDrillCacheStatus().then(setCacheStatus).catch(() => setCacheStatus({}));
+  }, []);
+
+  // providers loads asynchronously (useProviderModels' mount-time fetch). If
+  // the user opens the consent modal before it resolves, startMode's one-shot
+  // seed below falls back to "System Default" even when the saved provider
+  // would have been selectable. Re-seed reactively once providers arrives
+  // while the modal is still open, so a fast click doesn't permanently miss
+  // pre-filling a valid saved default.
+  useEffect(() => {
+    if (!pendingMode || !providers.length) return;
+    const savedProviderId = config?.llmDrills?.providerId || '';
+    if (providers.some(p => p.id === savedProviderId)) {
+      setFillProviderId(savedProviderId);
+      setFillModel(config?.llmDrills?.model || '');
+    }
+  }, [providers, pendingMode]);
 
   const providerId = config?.llmDrills?.providerId || null;
   const model = config?.llmDrills?.model || null;
+
+  // Generate the drill for the mode named in the URL (fresh load / deep link /
+  // refresh). Warm cache → generate silently. Cold cache reached via a direct
+  // URL → bounce back to the grid so the consent modal (which names the
+  // provider before any LLM call) governs the first fill, per the
+  // no-surprise-LLM-calls rule. `initiatedRef` prevents re-generating on
+  // unrelated re-renders and after a consent-driven start.
+  useEffect(() => {
+    if (!selectedMode) {
+      // Left a mode — via the in-app Back button OR the browser Back button
+      // (this is now a URL-routed view). Drop ALL transient run state, crucially
+      // `loading`: a generation aborted by leaving mid-flight never clears it, and
+      // a stale `loading` would be misread as "the next mode is already
+      // generating" (the `drill || loading` guard below), wedging it on a
+      // permanent spinner. Guard against a re-run loop — only clear when dirty.
+      if (drill || loading || feedback || results.length || initiatedRef.current) {
+        genRef.current += 1; // invalidate any in-flight generation for the mode we left
+        setDrill(null); setLoading(false); setQuestionIndex(0);
+        setInputValue(''); setItems([]); setFeedback(null); setResults([]);
+        initiatedRef.current = null;
+      }
+      return;
+    }
+    // A drill left over from a PREVIOUS mode (e.g. browser-back to the grid, then
+    // pick a different mode — the URL changed without going through
+    // handleBackToModes) must be cleared first, and any in-flight generation for
+    // it invalidated, so this mode's UI never renders against the wrong drill.
+    if (drill && drill.type !== selectedMode) {
+      genRef.current += 1;
+      setDrill(null); setQuestionIndex(0); setInputValue(''); setItems([]);
+      setFeedback(null); setResults([]);
+      initiatedRef.current = null;
+      return; // re-runs with drill cleared, then generates below
+    }
+    if (initiatedRef.current === selectedMode) return;
+    // Short-circuit ONLY on an existing drill (which, past the clear above, must
+    // match this mode). Do NOT short-circuit on `loading`: if a run is loading it
+    // belongs to a DIFFERENT mode (initiatedRef !== selectedMode here), so fall
+    // through to generate this mode — the genRef token neutralizes the orphaned
+    // run's result instead of letting its stale `loading` wedge this one.
+    if (drill) { initiatedRef.current = selectedMode; return; }
+    // Wait for the cache-status fetch before deciding cold vs warm — null means
+    // "not loaded yet", which must NOT be treated as cold (would bounce a warm
+    // mode back to the grid on every fresh load).
+    if (cacheStatus == null) return;
+    const isCold = cacheStatus?.[selectedMode]?.cold ?? true;
+    if (isCold && !primedModes.has(selectedMode)) {
+      onExitMode?.();
+      return;
+    }
+    runMode(selectedMode, providerId, model);
+  }, [selectedMode, cacheStatus, primedModes, drill, loading]);
+
+  // The provider/model that generated the CURRENT drill — tracked separately
+  // from the config-derived providerId/model above. handleConfirmFill saves
+  // a newly-chosen provider to config asynchronously and doesn't await it
+  // before calling runMode; if the user answers before that save (and the
+  // resulting config prop update) lands, scoring must still use the provider
+  // that actually generated this drill, not whatever config currently holds.
+  const [activeProviderId, setActiveProviderId] = useState(null);
+  const [activeModel, setActiveModel] = useState(null);
 
   const prompts = getPrompts(drill);
   const totalPrompts = prompts.length;
   const currentPrompt = prompts[questionIndex];
 
-  async function startMode(modeId) {
-    setSelectedMode(modeId);
+  async function runMode(modeId, useProviderId, useModel) {
+    // Capture a fresh generation token synchronously (before any await), and mark
+    // this mode initiated so the URL effect doesn't fire a second generation.
+    const gen = ++genRef.current;
+    initiatedRef.current = modeId;
     setLoading(true);
     setDrill(null);
     setQuestionIndex(0);
@@ -70,59 +200,157 @@ export default function WordplayTrainer({ onBack, config }) {
     setItems([]);
     setFeedback(null);
     setResults([]);
+    setActiveProviderId(useProviderId);
+    setActiveModel(useModel);
 
-    const generated = await generatePostDrill(modeId, { count: 5 }, providerId, model).catch(() => null);
+    const generated = await generatePostDrill(modeId, { count: 5 }, useProviderId, useModel).catch(() => null);
+    // Abort if a newer generation superseded this one (re-enter same mode, a
+    // different mode, or a clear) — this stale drill must not land, and this run
+    // must not touch `loading` (which now belongs to the newer run).
+    if (gen !== genRef.current) return;
     setLoading(false);
     if (generated) {
       setDrill(generated);
       questionStartRef.current = Date.now();
+      roundStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }
 
+  // Grid click: a cold+unprimed mode opens the consent modal ON the grid
+  // (naming the provider) before navigating; a warm/primed mode navigates
+  // straight to its `/post/wordplay/:mode` URL, where the effect above
+  // generates. Play Again reuses runMode directly (already on the mode URL).
+  function handleModeSelect(modeId) {
+    const isCold = cacheStatus?.[modeId]?.cold ?? true;
+    if (isCold && !primedModes.has(modeId)) {
+      const savedProviderId = config?.llmDrills?.providerId || '';
+      const savedIsSelectable = providers.some(p => p.id === savedProviderId);
+      setFillProviderId(savedIsSelectable ? savedProviderId : '');
+      setFillModel(savedIsSelectable ? (config?.llmDrills?.model || '') : '');
+      setPendingMode(modeId);
+      return;
+    }
+    onSelectMode?.(modeId);
+  }
+
+  function startMode(modeId) {
+    // Default to cold when the status fetch hasn't resolved yet — never skip
+    // consent on an assumption the cache is already warm.
+    const isCold = cacheStatus?.[modeId]?.cold ?? true;
+    if (isCold && !primedModes.has(modeId)) {
+      // Only pre-select the saved default if it's actually one of the modal's
+      // options. The modal's provider list is API-only (enabledApiProviderFilter
+      // excludes slow TUI/CLI providers — the whole point of the consent step),
+      // so a saved default of e.g. "claude-code-tui" would otherwise leave the
+      // <select> holding a value with no matching <option> — appearing blank
+      // while silently carrying that provider through if the user just clicks
+      // "Fill Cache & Play" without noticing.
+      const savedProviderId = config?.llmDrills?.providerId || '';
+      const savedIsSelectable = providers.some(p => p.id === savedProviderId);
+      setFillProviderId(savedIsSelectable ? savedProviderId : '');
+      setFillModel(savedIsSelectable ? (config?.llmDrills?.model || '') : '');
+      setPendingMode(modeId);
+      return;
+    }
+    runMode(modeId, providerId, model);
+  }
+
+  // Both consent-modal resolutions dismiss the modal and mark the mode as
+  // primed (so it won't re-prompt this session) before diverging.
+  function closePendingMode() {
+    const modeId = pendingMode;
+    setPendingMode(null);
+    setPrimedModes(prev => new Set(prev).add(modeId));
+    return modeId;
+  }
+
+  function handleSkipFill() {
+    const modeId = closePendingMode();
+    // runMode sets initiatedRef synchronously, so navigating to the mode URL
+    // afterward won't trigger a second generation from the URL effect.
+    runMode(modeId, providerId, model);
+    onSelectMode?.(modeId);
+  }
+
+  async function handleConfirmFill() {
+    const modeId = closePendingMode();
+    const chosenProviderId = fillProviderId || null;
+    const chosenModel = fillModel || null;
+    if (chosenProviderId !== providerId || chosenModel !== model) {
+      // Persist as the new default for future modes/sessions, but don't gate
+      // the actions below on this round-trip — runMode and handleSubmit both
+      // use the explicit chosen/active provider for this drill regardless of
+      // whether this save has landed yet.
+      updatePostConfig({ llmDrills: { providerId: chosenProviderId, model: chosenModel } })
+        .then(updated => onConfigUpdate?.(updated))
+        .catch(() => {});
+    }
+    // Generate the user's immediate drill FIRST, then kick off the bulk
+    // background fill. Starting both at once would fire two concurrent
+    // generateLlmDrill calls against the same provider (the cold cache
+    // guarantees the drill request also misses and generates on demand) —
+    // exactly the concurrent-LLM-calls problem this consent flow exists to
+    // prevent, and especially bad for a single-session TUI provider.
+    const gen = runMode(modeId, chosenProviderId, chosenModel); // sync-sets initiatedRef
+    onSelectMode?.(modeId); // reflect the mode in the URL; effect won't double-generate
+    await gen;
+    const providerLabel = providers.find(p => p.id === chosenProviderId)?.name || 'the default provider';
+    toast(`Filling ${modeId.replace(/-/g, ' ')} cache in the background using ${providerLabel}`);
+    fillPostDrillCache([modeId], chosenProviderId, chosenModel).catch(() => {});
+  }
+
   function handleBackToModes() {
-    setSelectedMode(null);
     setDrill(null);
     setFeedback(null);
     setResults([]);
+    initiatedRef.current = null;
+    // URL is the source of truth — exit the mode by navigating back to the grid.
+    onExitMode?.();
   }
 
   const handleSubmit = useCallback(async (e) => {
     e?.preventDefault();
     const responseMs = Date.now() - questionStartRef.current;
 
+    // A human-readable label for the prompt this response answers, sourced
+    // from the current challenge/puzzle regardless of mode. Bridge Word has
+    // no single rootWord/word/idiom field — its prompt is the clue set the
+    // player was shown — so it needs its own fallback rather than falling
+    // through to '' (which left the persisted training-log breakdown unable
+    // to identify which bridge puzzle was missed).
+    const promptLabel = currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom
+      || (currentPrompt?.clues || []).join(' / ') || '';
+
     let responseObj;
     if (selectedMode === 'compound-chain') {
-      responseObj = { questionIndex, items, responseMs };
+      responseObj = { questionIndex, prompt: promptLabel, items, responseMs };
     } else {
       responseObj = {
         questionIndex,
-        prompt: currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
+        prompt: promptLabel,
         response: inputValue.trim(),
         responseMs,
       };
     }
 
-    // Score immediately
+    // Score immediately, with the provider/model that generated THIS drill
+    // (activeProviderId/activeModel) — not the config-derived providerId/model,
+    // which may still be lagging an in-flight config save from a just-confirmed
+    // provider switch (see handleConfirmFill). scoreWordplayResponse is the
+    // shared core also used by PostLlmDrillRunner's in-session training mode
+    // for these same four drill types (issue #2097) — one scoring path.
     setFeedback({ scoring: true });
-    const scored = await scorePostLlmDrill(
-      selectedMode, drill, [responseObj], 120000, providerId, model
-    ).catch(() => null);
-    const fb = scored?.evaluation?.scores?.[0] || {};
-    setFeedback({
-      scoring: false,
-      score: fb.score ?? scored?.score ?? 0,
-      feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
-      validCount: fb.validCount,
-      invalidItems: fb.invalidItems,
-      missedExamples: fb.missedExamples,
-    });
+    const result = await scoreWordplayResponse(
+      selectedMode, drill, responseObj, SCORE_TIMEOUT_MS, activeProviderId, activeModel
+    );
+    setFeedback({ scoring: false, ...result });
     setResults(prev => [...prev, {
       ...responseObj,
-      score: fb.score ?? scored?.score ?? 0,
-      feedback: fb.feedback || '',
+      score: result.score,
+      feedback: result.feedback || '',
     }]);
-  }, [inputValue, items, currentPrompt, selectedMode, drill, providerId, model, questionIndex]);
+  }, [inputValue, items, currentPrompt, selectedMode, drill, activeProviderId, activeModel, questionIndex]);
 
   const handleNext = useCallback(() => {
     setFeedback(null);
@@ -130,12 +358,37 @@ export default function WordplayTrainer({ onBack, config }) {
     setItems([]);
     if (questionIndex + 1 >= totalPrompts) {
       setFeedback({ complete: true });
+      // Persist the completed round to the training log — the standalone
+      // Wordplay tab previously scored every response but never recorded
+      // that practice happened anywhere (issue #2097). Fire-and-forget, same
+      // pattern as MorseTrainer's logTraining: a failed background write
+      // shouldn't interrupt the results screen the user is already seeing.
+      // `questions` carries the per-question breakdown already computed in
+      // `results` (issue #2114) — the drill cache means these prompts are
+      // reusable, so a future progress dashboard can trend which individual
+      // wordplay prompts get missed rather than only the round aggregate.
+      submitTrainingEntry({
+        module: TRAINING_MODULE,
+        drillType: selectedMode,
+        questionCount: results.length,
+        correctCount: countLlmCorrect(results),
+        totalMs: Date.now() - roundStartRef.current,
+        questions: results.map(r => ({
+          prompt: r.prompt,
+          response: r.response,
+          items: r.items,
+          responseMs: r.responseMs,
+          score: r.score,
+          feedback: r.feedback,
+          correct: (r.score ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD,
+        })),
+      }).catch(() => {});
     } else {
       setQuestionIndex(questionIndex + 1);
       questionStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [questionIndex, totalPrompts]);
+  }, [questionIndex, totalPrompts, results, selectedMode]);
 
   function handleAddItem(e) {
     e?.preventDefault();
@@ -170,7 +423,7 @@ export default function WordplayTrainer({ onBack, config }) {
             return (
               <button
                 key={mode.id}
-                onClick={() => startMode(mode.id)}
+                onClick={() => handleModeSelect(mode.id)}
                 className="bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent transition-colors group"
               >
                 <div className="flex items-center gap-3 mb-2">
@@ -186,14 +439,31 @@ export default function WordplayTrainer({ onBack, config }) {
             );
           })}
         </div>
+
+        <CacheFillConsentModal
+          pendingMode={pendingMode}
+          modeInfo={GAME_MODES.find(m => m.id === pendingMode)}
+          providers={providers}
+          fillProviderId={fillProviderId}
+          setFillProviderId={setFillProviderId}
+          fillModel={fillModel}
+          setFillModel={setFillModel}
+          fillModels={fillModels}
+          onCancel={() => setPendingMode(null)}
+          onSkip={handleSkipFill}
+          onConfirm={handleConfirmFill}
+        />
       </div>
     );
   }
 
   const modeInfo = GAME_MODES.find(m => m.id === selectedMode);
 
-  // Loading state
-  if (loading) {
+  // Loading state — either mid-generation (`loading`), or freshly deep-linked
+  // into a mode whose URL effect hasn't kicked off generation yet (cache status
+  // still resolving). Both show the loader rather than the "failed to generate"
+  // fallback below, which is reserved for a genuine generation failure.
+  if (loading || (selectedMode && initiatedRef.current !== selectedMode && !drill)) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
         <ModeHeader modeInfo={modeInfo} onBack={handleBackToModes} />
@@ -385,6 +655,58 @@ function ModeHeader({ modeInfo, onBack }) {
       </div>
       <span className="text-white font-medium">{modeInfo?.label || 'Wordplay'}</span>
     </div>
+  );
+}
+
+// Cache for this mode is cold (never filled). PortOS never runs background
+// LLM calls without asking first — this is the ask. The user can pick a
+// provider/model and warm the cache, or skip it and just generate one drill
+// on demand (no background batch).
+function CacheFillConsentModal({
+  pendingMode, modeInfo, providers, fillProviderId, setFillProviderId,
+  fillModel, setFillModel, fillModels, onCancel, onSkip, onConfirm,
+}) {
+  return (
+    <Modal open={!!pendingMode} onClose={onCancel} size="sm" ariaLabel="Fill drill cache">
+      <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Sparkles size={18} className="text-port-accent-2" />
+          <h3 className="text-white font-medium">Warm up {modeInfo?.label || 'this'} drills?</h3>
+        </div>
+        <p className="text-sm text-gray-400">
+          This is the first time you're playing {modeInfo?.label || 'this mode'}. PortOS can use an AI
+          provider to pre-generate a batch of drills so future rounds load instantly. Pick a provider
+          and model, or skip and generate just one drill for this round.
+        </p>
+
+        <ProviderModelSelector
+          providers={providers}
+          selectedProviderId={fillProviderId}
+          selectedModel={fillModel}
+          availableModels={fillModels}
+          onProviderChange={setFillProviderId}
+          onModelChange={setFillModel}
+          emptyProviderOption="System Default"
+          emptyModelOption="Provider Default"
+          alwaysShowModel
+        />
+
+        <div className="flex gap-3 pt-1">
+          <button
+            onClick={onSkip}
+            className="flex-1 px-4 py-2 bg-port-card border border-port-border hover:border-port-accent text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Just Play Once
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 px-4 py-2 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 text-sm font-medium rounded-lg transition-colors"
+          >
+            Fill Cache &amp; Play
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

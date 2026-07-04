@@ -24,6 +24,7 @@ import { MEDIA_TOOLS, MEDIA_INTENT_RE } from './tools/media.js';
 import { PIPELINE_TOOLS, PIPELINE_INTENT_RE } from './tools/pipeline.js';
 import { CODE_TOOLS, CODE_INTENT_RE } from './tools/code.js';
 import { CATALOG_TOOLS, CATALOG_INTENT_RE, catalogTypeEnum, matchesCustomCatalogNoun } from './tools/catalog.js';
+import { WORKSPACE_TOOLS, WORKSPACE_INTENT_RE } from './tools/workspace.js';
 import { UI_KINDS } from './tools/shared.js';
 
 // Re-exported for pipeline.js (UI_KINDS, UI_INTENT_RE) and the form-fill
@@ -48,6 +49,7 @@ const TOOLS = [
   ...PIPELINE_TOOLS,
   ...CODE_TOOLS,
   ...CATALOG_TOOLS,
+  ...WORKSPACE_TOOLS,
 ];
 
 // Per-turn tool filtering. Small models (qwen3-4b, granite, etc.) choke when
@@ -94,6 +96,7 @@ const TOOL_GROUPS = {
   dispatch_code_agent: 'code',
   code_agent_status: 'code',
   catalog_lookup: 'catalog',
+  workspace_switch: 'workspace',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -123,6 +126,7 @@ const GROUP_INTENT = {
   code: CODE_INTENT_RE,
   ui: UI_INTENT_RE,
   catalog: CATALOG_INTENT_RE,
+  workspace: WORKSPACE_INTENT_RE,
 };
 
 // Fail-fast at import time: any group referenced in TOOL_GROUPS that has no

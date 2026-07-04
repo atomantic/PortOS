@@ -148,7 +148,7 @@ export default function DigestTab() {
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-sm font-medium text-gray-400 flex items-center gap-2">
-              <BarChart2 size={14} className="text-cyan-400" />
+              <BarChart2 size={14} className="text-port-accent" />
               Live Week Progress
             </h4>
             <span className="text-xs text-gray-500">
@@ -171,11 +171,11 @@ export default function DigestTab() {
               <div className="text-xs text-gray-500">Success Rate</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-cyan-400">{weekProgress.current.totalWorkTime}</div>
+              <div className="text-2xl font-bold text-port-accent">{weekProgress.current.totalWorkTime}</div>
               <div className="text-xs text-gray-500">Work Time</div>
             </div>
             <div className="text-center">
-              <div className="text-2xl font-bold text-purple-400">{weekProgress.projected.tasks}</div>
+              <div className="text-2xl font-bold text-port-accent-2">{weekProgress.projected.tasks}</div>
               <div className="text-xs text-gray-500">Projected Total</div>
             </div>
           </div>
@@ -235,10 +235,10 @@ export default function DigestTab() {
 
             <div className="bg-port-card border border-port-border rounded-lg p-4">
               <div className="flex items-center gap-2 mb-1">
-                <Clock size={14} className="text-cyan-400" />
+                <Clock size={14} className="text-port-accent" />
                 <span className="text-xs text-gray-500">Work Time</span>
               </div>
-              <div className="text-2xl font-bold text-cyan-400">{currentDigest.summary.totalWorkTime}</div>
+              <div className="text-2xl font-bold text-port-accent">{currentDigest.summary.totalWorkTime}</div>
               {currentDigest.weekOverWeek?.workTimeChange !== null && (
                 <div className="mt-2 text-xs">
                   {formatChange(currentDigest.weekOverWeek.workTimeChange)}
@@ -329,7 +329,7 @@ export default function DigestTab() {
                 className="flex items-center gap-2 w-full text-left mb-3"
               >
                 {expandedSections.byTaskType ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                <BarChart2 size={16} className="text-purple-400" />
+                <BarChart2 size={16} className="text-port-accent-2" />
                 <span className="font-medium text-white">By Task Type</span>
                 <span className="text-xs text-gray-500">({currentDigest.byTaskType.length} types)</span>
               </button>

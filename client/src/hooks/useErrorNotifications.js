@@ -2,6 +2,10 @@ import { useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 
+// Render an error's context object as a single-line suffix (empty when absent)
+// so the console stays on one interpolated line instead of expanding a group.
+const formatContext = (context) => (context ? ` ${JSON.stringify(context)}` : '');
+
 /**
  * Hook that subscribes to server error events and shows toast notifications
  * Also provides a function to request auto-fix for errors
@@ -26,7 +30,7 @@ export function useErrorNotifications() {
       // blanket warning-drop below.
       if (error.code === 'BACKUP_DB_DUMP_FAILED') {
         toast.error(error.message, { duration: 8000, icon: '💾' });
-        console.warn(`[${error.code}] ${error.message}`, error.context);
+        console.warn(`[${error.code}] ${error.message}${formatContext(error.context)}`);
         return;
       }
 
@@ -36,7 +40,7 @@ export function useErrorNotifications() {
       // primary model balked. Handled before the warning-drop below.
       if (error.code === 'AI_PROVIDER_CONTENT_REFUSED') {
         toast(error.message, { duration: 7000, icon: '🛟' });
-        console.warn(`[${error.code}] ${error.message}`, error.context);
+        console.warn(`[${error.code}] ${error.message}${formatContext(error.context)}`);
         return;
       }
 
@@ -47,7 +51,7 @@ export function useErrorNotifications() {
 
       if (error.code === 'PLATFORM_UNAVAILABLE') {
         toast(error.message, { duration: 5000, icon: '⚠️' });
-        console.warn(`[${error.code}] ${error.message}`, error.context);
+        console.warn(`[${error.code}] ${error.message}${formatContext(error.context)}`);
         return;
       }
 
@@ -61,7 +65,7 @@ export function useErrorNotifications() {
         : error.message;
 
       toast.error(message, toastOptions);
-      console.error(`[${error.code}] ${error.message}`, error.context);
+      console.error(`[${error.code}] ${error.message}${formatContext(error.context)}`);
     };
 
     const handleCriticalError = (error) => {

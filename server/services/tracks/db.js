@@ -14,6 +14,7 @@ import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 import { sanitizeTrack, buildTrackRecord, applyTrackPatch, mergeTrackRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 // Re-sanitize the stored JSONB on read (mirrors the file backend's loadAll →
@@ -147,6 +148,9 @@ export async function pruneTombstonedTracks(olderThanMs) {
      RETURNING id`,
     [cutoffIso],
   );
-  for (const r of rows) await deleteSyncBaseHash('track', r.id);
+  // Coalesce the per-track base-hash evictions into ONE disk write.
+  await withBaseHashFlushBatch(async () => {
+    for (const r of rows) await deleteSyncBaseHash('track', r.id);
+  });
   return { pruned: rows.length };
 }

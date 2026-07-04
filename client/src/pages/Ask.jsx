@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink, ListTodo, CheckCircle2 } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 
 // Mirrors the server-side ID_RE in askConversations.js (9-char base36 ms +
 // 8-char hex suffix) so this regex stays in lockstep with the production
@@ -47,7 +49,7 @@ function SourceChip({ source, index }) {
   );
 }
 
-function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, streaming }) {
+function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, onRequestDelete, onConfirmDelete, onCancelDelete, loading, streaming }) {
   return (
     <aside className="w-full md:w-64 md:shrink-0 border-r border-port-border bg-port-card md:h-full md:overflow-y-auto">
       <div className="p-3 border-b border-port-border flex items-center gap-2">
@@ -90,15 +92,27 @@ function Sidebar({ conversations, activeId, onPick, onNew, onDelete, loading, st
                   {c.promoted && <Pin size={10} className="text-amber-400" />}
                 </div>
               </button>
-              <button
-                type="button"
-                onClick={() => onDelete(c.id)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity"
-                aria-label={`Delete conversation: ${c.title}`}
-                title="Delete conversation"
-              >
-                <Trash2 size={14} />
-              </button>
+              {isConfirmingDelete(c.id) ? (
+                <div className="absolute inset-y-0 right-0 flex items-center pr-2 bg-port-card/95 rounded">
+                  <ConfirmButtonPair
+                    prompt="Delete?"
+                    ariaLabel={`Confirm delete conversation: ${c.title}`}
+                    onConfirm={() => onConfirmDelete(c.id)}
+                    onCancel={onCancelDelete}
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={streaming && c.id === activeId}
+                  onClick={() => onRequestDelete(c.id)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 text-gray-500 hover:text-port-error transition-opacity disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-500"
+                  aria-label={`Delete conversation: ${c.title}`}
+                  title="Delete conversation"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
           );
         })}
@@ -406,18 +420,19 @@ export default function Ask() {
     setQuestion('');
   }, [navigate, streaming]);
 
-  // Two-step delete: first click arms the row (toast confirms), second click
-  // (within 4s) actually deletes. Per CLAUDE.md "no window.confirm".
-  const pendingDeleteRef = useRef({ id: null, expiresAt: 0 });
-  const handleDelete = useCallback(async (id) => {
+  // Inline delete confirm (no window.confirm, no two-click-arm) — the trash
+  // button arms the row and an explicit Delete?/Cancel row fires it.
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const handleRequestDelete = useCallback((id) => {
     if (streaming && id === activeConv?.id) return;
-    const pending = pendingDeleteRef.current;
-    if (pending.id !== id || Date.now() > pending.expiresAt) {
-      pendingDeleteRef.current = { id, expiresAt: Date.now() + 4000 };
-      toast('Click delete again to confirm', { icon: '⚠️' });
-      return;
-    }
-    pendingDeleteRef.current = { id: null, expiresAt: 0 };
+    requestDelete(id);
+  }, [activeConv?.id, requestDelete, streaming]);
+  const handleDelete = useCallback((id) => confirmDelete(async () => {
+    // Re-check the streaming guard at confirm time too: the row could have been
+    // armed while idle and then a stream started on this same conversation
+    // before the user clicked confirm — deleting the active stream mid-flight
+    // would race the assistant turn into a deleted record.
+    if (streaming && id === activeConv?.id) return;
     // Only mutate local state if the server confirms the delete — otherwise
     // a transient failure would hide a row that's still on disk and would
     // pop back on the next list refresh.
@@ -428,7 +443,7 @@ export default function Ask() {
     if (!ok) return;
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (id === conversationId) navigate('/ask');
-  }, [activeConv?.id, conversationId, navigate, streaming]);
+  }), [activeConv?.id, conversationId, confirmDelete, navigate, streaming]);
 
   const handlePromote = useCallback(async () => {
     if (!activeConv) return;
@@ -619,7 +634,10 @@ export default function Ask() {
         activeId={conversationId}
         onPick={(id) => navigate(`/ask/${id}`)}
         onNew={startNew}
-        onDelete={handleDelete}
+        isConfirmingDelete={isConfirmingDelete}
+        onRequestDelete={handleRequestDelete}
+        onConfirmDelete={handleDelete}
+        onCancelDelete={cancelDelete}
         loading={loadingList}
         streaming={streaming}
       />

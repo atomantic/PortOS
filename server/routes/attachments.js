@@ -5,12 +5,11 @@
 
 import { Router } from 'express';
 import { writeFile, unlink, readdir, stat } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  ensureDir, PATHS, RISKY_MIME_TYPES,
+  ensureDir, pathExists, PATHS, RISKY_MIME_TYPES,
   sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS,
 } from '../lib/fileUtils.js';
 
@@ -54,10 +53,9 @@ router.post('/', asyncHandler(async (req, res) => {
     throw new ServerError(`File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
   }
 
-  // Ensure attachments directory exists
-  if (!existsSync(ATTACHMENTS_DIR)) {
-    await ensureDir(ATTACHMENTS_DIR);
-  }
+  // Ensure attachments directory exists (ensureDir is idempotent — mkdir
+  // recursive — so no existence pre-check is needed on this upload path).
+  await ensureDir(ATTACHMENTS_DIR);
 
   const id = uuidv4();
   const safeName = sanitizeFilename(filename);
@@ -100,7 +98,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
-  if (!existsSync(filepath)) {
+  if (!(await pathExists(filepath))) {
     throw new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
   }
 
@@ -126,7 +124,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
-  if (!existsSync(filepath)) {
+  if (!(await pathExists(filepath))) {
     throw new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
   }
 
@@ -139,7 +137,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
 
 // GET /api/attachments - List all attachments (for debugging)
 router.get('/', asyncHandler(async (req, res) => {
-  if (!existsSync(ATTACHMENTS_DIR)) {
+  if (!(await pathExists(ATTACHMENTS_DIR))) {
     return res.json({ attachments: [] });
   }
 

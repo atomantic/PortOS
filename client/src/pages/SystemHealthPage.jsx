@@ -48,7 +48,7 @@ export default function SystemHealthPage() {
   const handleSaveThresholds = async () => {
     if (!draft) return;
     setSaving(true);
-    const result = await api.updateHealthThresholds(draft).catch(err => {
+    const result = await api.updateHealthThresholds(draft, { silent: true }).catch(err => {
       toast.error(err?.message || 'Failed to save thresholds');
       return null;
     });

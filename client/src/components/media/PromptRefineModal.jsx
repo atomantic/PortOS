@@ -3,6 +3,7 @@ import { ListPlus, Sparkles, Wand2, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
+import { FormField } from '../ui/FormField';
 import useProviderModels from '../../hooks/useProviderModels';
 import { generateImage, generateVideo, refineMediaPrompt } from '../../services/api';
 import { getRenderConfigForItem } from './normalize';
@@ -184,25 +185,23 @@ export default function PromptRefineModal({ item, open, onClose }) {
                 </p>
               )}
 
-              <div>
-                <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">New prompt</label>
+              <FormField label="New prompt" labelClassName="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
                 <textarea
                   value={refinedPrompt}
                   onChange={(e) => setRefinedPrompt(e.target.value)}
                   rows={6}
                   className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent resize-y"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">New negative prompt</label>
+              <FormField label="New negative prompt" labelClassName="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
                 <textarea
                   value={refinedNegative}
                   onChange={(e) => setRefinedNegative(e.target.value)}
                   rows={3}
                   className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white focus:outline-none focus:border-port-accent resize-y"
                 />
-              </div>
+              </FormField>
             </div>
           )}
         </div>

@@ -146,9 +146,9 @@ export default function InterviewTab({ onRefresh }) {
 
       {/* Section 2: Analysis Results */}
       {analysisResult && (
-        <div className="bg-port-card rounded-lg border border-green-500/30 p-6">
+        <div className="bg-port-card rounded-lg border border-port-success/30 p-6">
           <div className="flex items-center gap-3 mb-4">
-            <BarChart3 className="w-6 h-6 text-green-400" />
+            <BarChart3 className="w-6 h-6 text-port-success" />
             <h2 className="text-lg font-semibold text-white">Analysis Results</h2>
           </div>
 
@@ -192,8 +192,8 @@ export default function InterviewTab({ onRefresh }) {
                 <div className="h-1.5 bg-port-border rounded-full overflow-hidden mb-2">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      gap.confidence < 0.3 ? 'bg-red-500' :
-                      gap.confidence < 0.6 ? 'bg-yellow-500' : 'bg-green-500'
+                      gap.confidence < 0.3 ? 'bg-port-error' :
+                      gap.confidence < 0.6 ? 'bg-port-warning' : 'bg-port-success'
                     }`}
                     style={{ width: `${Math.round(gap.confidence * 100)}%` }}
                   />
@@ -232,20 +232,20 @@ export default function InterviewTab({ onRefresh }) {
                   key={key}
                   onClick={() => navigateToEnrich(key)}
                   className={`flex items-center gap-3 p-3 rounded-lg border transition-colors text-left hover:border-port-accent ${
-                    isComplete ? 'border-green-500/30 bg-green-500/5' : 'border-port-border bg-port-card'
+                    isComplete ? 'border-port-success/30 bg-port-success/5' : 'border-port-border bg-port-card'
                   }`}
                 >
-                  <Icon size={16} className={isComplete ? 'text-green-400' : 'text-gray-500'} />
+                  <Icon size={16} className={isComplete ? 'text-port-success' : 'text-gray-500'} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-white truncate">{config.label}</span>
-                      <span className={`text-xs ml-2 ${isComplete ? 'text-green-400' : 'text-gray-500'}`}>
+                      <span className={`text-xs ml-2 ${isComplete ? 'text-port-success' : 'text-gray-500'}`}>
                         {percentage}%
                       </span>
                     </div>
                     <div className="h-1 bg-port-border rounded-full mt-1 overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all ${isComplete ? 'bg-green-500' : 'bg-port-accent'}`}
+                        className={`h-full rounded-full transition-all ${isComplete ? 'bg-port-success' : 'bg-port-accent'}`}
                         style={{ width: `${percentage}%` }}
                       />
                     </div>

@@ -30,6 +30,27 @@ export const TABS = [
   { id: 'config', label: 'Config', icon: Settings }
 ];
 
+// Intentional category-color enum (#1909/#1924 caution), NOT off-token theme
+// inconsistency: 9 files (CoSCharacter, CyberCoSAvatar, EsotericCoSAvatar,
+// MiniCharacterCoSAvatar, MuseCoSAvatar, NexusCoSAvatar, SigilCoSAvatar,
+// StateLabel, TerminalCoSPanel) key their glow/fill/border color off `color`
+// so all 7 agent states stay visually distinguishable at a glance. The app
+// only has ~4-5 semantic tokens (accent/accent-2/success/warning/error) —
+// collapsing 7 states onto them would make at least 2-3 states render
+// identically, destroying the thing this enum exists for. Left as raw hex.
+//
+// Known issue (flagged on #1909 by codex review of PR #1935): `thinking`'s
+// amber (#f59e0b) has poor contrast (~2.1:1) against light day-theme surfaces
+// (e.g. Classic Noon) in the 2 consumers whose background is theme-aware
+// (StateLabel's border, TerminalCoSPanel's ASCII art over --port-terminal-bg);
+// against near-black surfaces (the default theme, and the fixed-dark 3D/SVG
+// canvases the other 7 consumers render on) it's ~9.8:1, so the bug is
+// day-theme-specific. A full per-theme-mode color swap was evaluated and
+// deferred: 6 of the 9 consumers feed this value straight into three.js
+// `<meshStandardMaterial color={...}>` props, which cannot resolve CSS custom
+// properties (`var(--port-mood-thinking)`) — parity would need a resolved-hex
+// lookup (via `getComputedStyle`) threaded through every 3D avatar, not just a
+// CSS variable swap. See the follow-up discussion on #1909 for the scoped fix.
 export const AGENT_STATES = {
   sleeping: { label: 'Sleeping', color: '#6366f1', icon: '💤' },
   thinking: { label: 'Thinking', color: '#f59e0b', icon: '🧠' },
@@ -87,9 +108,11 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
 ];
 
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
-// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'owner' = only claim issues
-// the repo owner filed (matches /claim --issues); 'any' = claim any open issue.
+// ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues
+// YOU filed (the slashdo /do:next --self security boundary; the default);
+// 'owner' = only claim issues the repo owner filed; 'any' = claim any open issue.
 export const ISSUE_AUTHOR_FILTER_OPTIONS = [
+  { value: 'self', label: 'Filed by me only', description: 'Only claim open issues you filed (the /do:next --self security boundary — avoids acting on work embedded in a third party\'s issue)' },
   { value: 'owner', label: 'Owner-filed only', description: 'Only claim open issues filed by the repository owner/creator' },
   { value: 'any', label: 'Any author', description: 'Claim the next eligible open issue regardless of who filed it' }
 ];
@@ -99,6 +122,21 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
 // (github/gitlab) at dispatch but configures the filter here too. Add any new
 // issue-claiming task type here rather than OR-ing literals across components.
 export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
+
+// Swarm fan-out (taskMetadata.swarmCount). Mirrors slashdo `/do:next --swarm=<N>`
+// (clamped 1..6; bare --swarm = 3). 0 = off (single issue per run, the default);
+// 2..6 = claim & ship that many independent issues in parallel. Server-side
+// SWARM_COUNT_MIN/MAX (cosValidation.js) enforce the same 2..6 range. Exposed on
+// the same forge-issue task types as the author filter.
+export const SWARM_TASK_TYPES = ISSUE_AUTHOR_FILTER_TASK_TYPES;
+export const SWARM_COUNT_OPTIONS = [
+  { value: 0, label: 'Off (one issue per run)', description: 'Claim and ship a single issue per scheduled run (default)' },
+  { value: 2, label: '2 in parallel', description: 'Claim and ship up to 2 independent issues per run, merges serialized' },
+  { value: 3, label: '3 in parallel', description: 'Claim and ship up to 3 independent issues per run, merges serialized' },
+  { value: 4, label: '4 in parallel', description: 'Claim and ship up to 4 independent issues per run, merges serialized' },
+  { value: 5, label: '5 in parallel', description: 'Claim and ship up to 5 independent issues per run, merges serialized' },
+  { value: 6, label: '6 in parallel', description: 'Claim and ship up to 6 independent issues per run, merges serialized' }
+];
 
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
@@ -182,6 +220,11 @@ export function toggleAppMetadataOverride(overrideMetadata, globalMetadata, fiel
 
 export const MEMORY_TYPES = ['fact', 'learning', 'observation', 'decision', 'preference', 'context'];
 
+// Intentional category-color enum (#1909/#1924 caution): a fixed 6-hue palette
+// so each memory type reads as a distinct badge at a glance (fact vs learning
+// vs observation etc.). Left as raw Tailwind hues rather than port-* tokens —
+// the app only has ~4-5 semantic tokens (accent/accent-2/success/warning/error),
+// which isn't enough to keep 6 categories visually distinct without collisions.
 export const MEMORY_TYPE_COLORS = {
   fact: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   learning: 'bg-green-500/20 text-green-400 border-green-500/30',
@@ -317,13 +360,6 @@ export const detectAutonomyLevel = (config) => {
     if (matches) return level.id;
   }
   return null; // Custom configuration
-};
-
-// Format milliseconds as human-readable interval
-export const formatInterval = (ms) => {
-  if (ms < 60000) return `${ms / 1000}s`;
-  if (ms < 3600000) return `${ms / 60000}min`;
-  return `${ms / 3600000}hr`;
 };
 
 // Avatar style labels for display

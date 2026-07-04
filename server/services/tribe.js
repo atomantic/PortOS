@@ -15,6 +15,8 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { cadenceStatus } from '../lib/tribeCadence.js';
+import { buildPersonMatchIndex, matchPeople, normalizeIdentifier } from '../lib/tribeMatch.js';
 import * as calendarSync from './calendarSync.js';
 
 // Default check-in cadence (days) per ring. Mirrored on the client in
@@ -51,6 +53,21 @@ export function normalizeTags(tags) {
   return String(tags).split(',').map((tag) => tag.trim()).filter(Boolean);
 }
 
+// Known emails/handles used to match a person to calendar attendees / message
+// counterparts. Lowercased + trimmed + de-duplicated so matching (which also
+// lowercases) is stable and the stored set has no near-duplicates.
+export function normalizeEmails(emails) {
+  const list = Array.isArray(emails)
+    ? emails
+    : (emails == null ? [] : String(emails).split(','));
+  const seen = new Set();
+  for (const raw of list) {
+    const key = normalizeIdentifier(raw);
+    if (key) seen.add(key);
+  }
+  return [...seen];
+}
+
 export function rowToPerson(row) {
   return {
     id: row.id,
@@ -63,6 +80,7 @@ export function rowToPerson(row) {
     channel: row.channel || '',
     energy: row.energy || 'steady',
     tags: row.tags || [],
+    emails: row.emails || [],
     nextMove: row.next_move || '',
     notes: row.notes || '',
     touchpointCount: Number(row.touchpoint_count || 0),
@@ -107,6 +125,52 @@ export function rowToMemoryLink(row) {
 
 async function ensureReady() {
   await ensureSchema();
+}
+
+// Cadence health for a person — the server-side entry point into the shared,
+// authoritative cadence rules in server/lib/tribeCadence.js (mirrored to the
+// client). Kept as a named re-export so existing callers/tests importing
+// `personCadenceStatus` from this service stay stable while the rules live in
+// exactly one place. See tribeCadence.js for the state semantics.
+export const personCadenceStatus = cadenceStatus;
+
+// Care summary for the dashboard widget + proactive alert: who in the active
+// tribe (external excluded) is overdue or has no touchpoint yet, most-overdue
+// first. `missing` (never contacted) sorts above any dated-overdue person.
+export async function getCareSummary(limit = 5) {
+  const people = await listPeople();
+  const tribe = people.filter((person) => person.ring !== 'external');
+  const overdue = [];
+  for (const person of tribe) {
+    const status = personCadenceStatus(person);
+    if (status.state === 'overdue' || status.state === 'missing') {
+      overdue.push({ person, status });
+    }
+  }
+  // missing (daysOverdue null) first, then by daysOverdue desc, then by name.
+  overdue.sort((a, b) => {
+    const aMissing = a.status.daysOverdue == null;
+    const bMissing = b.status.daysOverdue == null;
+    if (aMissing !== bMissing) return aMissing ? -1 : 1;
+    if (!aMissing && b.status.daysOverdue !== a.status.daysOverdue) {
+      return b.status.daysOverdue - a.status.daysOverdue;
+    }
+    return String(a.person.name).localeCompare(String(b.person.name));
+  });
+  return {
+    hasPeople: tribe.length > 0,
+    peopleCount: tribe.length,
+    overdueCount: overdue.length,
+    overdue: overdue.slice(0, Math.max(0, limit)).map(({ person, status }) => ({
+      id: person.id,
+      name: person.name,
+      ring: person.ring,
+      channel: person.channel,
+      lastContact: person.lastContact,
+      state: status.state,
+      daysOverdue: status.daysOverdue,
+    })),
+  };
 }
 
 export async function listPeople(options = {}) {
@@ -163,8 +227,8 @@ export async function createPerson(data) {
   const result = await query(
     `INSERT INTO tribe_people (
       id, name, relationship, ring, cadence_days, last_contact_on, channel,
-      energy, tags, next_move, notes, updated_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+      energy, tags, emails, next_move, notes, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
     RETURNING *, 0 AS touchpoint_count, 0 AS linked_memory_count`,
     [
       id,
@@ -176,6 +240,7 @@ export async function createPerson(data) {
       data.channel || '',
       data.energy || 'steady',
       normalizeTags(data.tags),
+      normalizeEmails(data.emails),
       data.nextMove || '',
       data.notes || '',
     ],
@@ -198,8 +263,9 @@ export async function updatePerson(id, updates) {
          channel = $7,
          energy = $8,
          tags = $9,
-         next_move = $10,
-         notes = $11,
+         emails = $10,
+         next_move = $11,
+         notes = $12,
          updated_at = NOW()
      WHERE id = $1 AND deleted = FALSE
      RETURNING *,
@@ -215,6 +281,7 @@ export async function updatePerson(id, updates) {
       next.channel || '',
       next.energy || 'steady',
       normalizeTags(next.tags),
+      normalizeEmails(next.emails),
       next.nextMove || '',
       next.notes || '',
     ],
@@ -305,6 +372,84 @@ export async function createCalendarTouchpoint(personId, { accountId, eventId, s
       subcalendarName: event.subcalendarName,
     },
   });
+}
+
+// Insert an auto-logged touchpoint for one person, idempotent on `dedupeKey`
+// (the partial unique index idx_tribe_touchpoints_dedupe). Returns the created
+// touchpoint, or `null` when this person+dedupeKey was already logged (re-sync).
+// Only advances last_contact_on when a row is actually inserted.
+async function autoCreateTouchpoint(personId, data) {
+  const happenedAt = data.happenedAt || new Date().toISOString();
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `INSERT INTO tribe_touchpoints (
+        id, person_id, happened_at, channel, summary, source,
+        calendar_account_id, calendar_event_id, dedupe_key, metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      ON CONFLICT (person_id, dedupe_key) WHERE dedupe_key IS NOT NULL
+      DO NOTHING
+      RETURNING *`,
+      [
+        uuidv4(),
+        personId,
+        happenedAt,
+        data.channel || '',
+        data.summary || '',
+        data.source || 'user',
+        data.calendarAccountId || null,
+        data.calendarEventId || null,
+        data.dedupeKey || null,
+        data.metadata || {},
+      ],
+    );
+    if (!result.rows[0]) return null; // duplicate — already logged for this key
+
+    // Advance last_contact_on only. Unlike a manual touchpoint, an auto-log must
+    // NOT overwrite the person's curated `channel` (their preferred way to
+    // connect): it fires silently on every sync and would otherwise churn the
+    // preference to the last meeting location / account type. The synced
+    // channel is still preserved on the touchpoint row itself.
+    await client.query(
+      `UPDATE tribe_people
+       SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
+           updated_at = NOW()
+       WHERE id = $1`,
+      [personId, happenedAt],
+    );
+    return rowToTouchpoint(result.rows[0]);
+  });
+}
+
+/**
+ * Auto-log touchpoints from a batch of sync candidates (calendar events /
+ * messages). Each candidate:
+ *   { identities: [{ email, name } | string], source, happenedAt, channel,
+ *     summary, dedupeKey, calendarAccountId?, calendarEventId?, metadata? }
+ *
+ * Identities are matched deterministically (email/handle, unique exact name) to
+ * tracked people via the shared matcher; one deduped touchpoint is inserted per
+ * matched person. `dedupeKey` MUST be set for idempotency across re-syncs.
+ * Returns `{ created, matched }`. No LLM calls.
+ */
+export async function autoLogTouchpoints(candidates = []) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return { created: 0, matched: 0 };
+  await ensureReady();
+  const people = await listPeople();
+  if (people.length === 0) return { created: 0, matched: 0 };
+
+  const index = buildPersonMatchIndex(people);
+  let created = 0;
+  let matched = 0;
+  for (const candidate of candidates) {
+    if (!candidate?.dedupeKey) continue; // no idempotency key → refuse to log
+    const personIds = matchPeople(candidate.identities, index);
+    for (const personId of personIds) {
+      matched++;
+      const touchpoint = await autoCreateTouchpoint(personId, candidate);
+      if (touchpoint) created++;
+    }
+  }
+  return { created, matched };
 }
 
 export async function listMemoryLinks(personId) {

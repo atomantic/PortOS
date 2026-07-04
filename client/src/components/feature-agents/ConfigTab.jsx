@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Save } from 'lucide-react';
 import toast from '../ui/Toast';
+import { FormField } from '../ui/FormField';
 import * as api from '../../services/api';
 
 function ArrayInput({ label, value, onChange, placeholder }) {
@@ -16,8 +17,7 @@ function ArrayInput({ label, value, onChange, placeholder }) {
   };
 
   return (
-    <div>
-      <label className="block text-sm text-gray-400 mb-1">{label}</label>
+    <FormField label={label}>
       <textarea
         value={text}
         onChange={e => setText(e.target.value)}
@@ -27,7 +27,7 @@ function ArrayInput({ label, value, onChange, placeholder }) {
         className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent resize-y"
       />
       <p className="text-xs text-gray-600 mt-0.5">One per line</p>
-    </div>
+    </FormField>
   );
 }
 
@@ -109,71 +109,62 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
       {/* Basic Info */}
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Basic Info</h3>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Name</label>
+        <FormField label="Name">
           <input value={form.name} onChange={e => set('name', e.target.value)} className={inputCls} placeholder="Audio Generator Guardian" required />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Description</label>
+        </FormField>
+        <FormField label="Description">
           <textarea value={form.description} onChange={e => set('description', e.target.value)} className={`${inputCls} resize-y`} rows={2} placeholder="What this agent owns and iterates on" required />
-        </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Persona (system prompt)</label>
+        </FormField>
+        <FormField label="Persona (system prompt)">
           <textarea value={form.persona} onChange={e => set('persona', e.target.value)} className={`${inputCls} resize-y`} rows={4} placeholder="You are a meticulous developer who..." />
-        </div>
+        </FormField>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">App</label>
+          <FormField label="App">
             <select value={form.appId} onChange={e => set('appId', e.target.value)} className={selectCls} required>
               <option value="">Select app...</option>
               {(apps || []).map(app => (
                 <option key={app.id} value={app.id}>{app.name}</option>
               ))}
             </select>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Priority</label>
+          </FormField>
+          <FormField label="Priority">
             <select value={form.priority} onChange={e => set('priority', e.target.value)} className={selectCls}>
               <option value="LOW">Low</option>
               <option value="MEDIUM">Medium</option>
               <option value="HIGH">High</option>
               <option value="CRITICAL">Critical</option>
             </select>
-          </div>
+          </FormField>
         </div>
-        <div>
-          <label className="block text-sm text-gray-400 mb-1">Autonomy Level</label>
+        <FormField label="Autonomy Level">
           <select value={form.autonomyLevel} onChange={e => set('autonomyLevel', e.target.value)} className={selectCls}>
             <option value="standby">Standby - Only when triggered</option>
             <option value="assistant">Assistant - Follows instructions closely</option>
             <option value="manager">Manager - Makes independent decisions</option>
             <option value="yolo">YOLO - Full autonomy</option>
           </select>
-        </div>
+        </FormField>
       </div>
 
       {/* Schedule */}
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Schedule</h3>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Mode</label>
+          <FormField label="Mode">
             <select value={form.schedule.mode} onChange={e => set('schedule', { ...form.schedule, mode: e.target.value })} className={selectCls}>
               <option value="continuous">Continuous</option>
               <option value="interval">Interval</option>
             </select>
-          </div>
+          </FormField>
           {form.schedule.mode === 'interval' && (
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Interval (minutes)</label>
+            <FormField label="Interval (minutes)">
               <input type="number" value={Math.round((form.schedule.intervalMs || 3600000) / 60000)} onChange={e => { const v = parseInt(e.target.value); if (!Number.isNaN(v) && v > 0) set('schedule', { ...form.schedule, intervalMs: v * 60000 }); }} className={inputCls} min={1} />
-            </div>
+            </FormField>
           )}
           {form.schedule.mode === 'continuous' && (
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Pause Between Runs (seconds)</label>
+            <FormField label="Pause Between Runs (seconds)">
               <input type="number" value={Math.round((form.schedule.pauseBetweenRunsMs || 60000) / 1000)} onChange={e => { const v = parseInt(e.target.value); if (!Number.isNaN(v) && v >= 0) set('schedule', { ...form.schedule, pauseBetweenRunsMs: v * 1000 }); }} className={inputCls} min={0} />
-            </div>
+            </FormField>
           )}
         </div>
       </div>
@@ -189,14 +180,12 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">AI Provider (optional override)</h3>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Provider ID</label>
+          <FormField label="Provider ID">
             <input value={form.providerId || ''} onChange={e => set('providerId', e.target.value)} className={inputCls} placeholder="Leave empty for default" />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Model</label>
+          </FormField>
+          <FormField label="Model">
             <input value={form.model || ''} onChange={e => set('model', e.target.value)} className={inputCls} placeholder="Leave empty for default" />
-          </div>
+          </FormField>
         </div>
       </div>
 

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import toast from '../components/ui/Toast';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import { FormField } from '../components/ui/FormField';
 import api from '../services/api';
 
 const TOKEN_LIFETIME_DAYS = 30;
@@ -176,11 +178,7 @@ export default function Jira() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading JIRA instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-52" cards={2} />;
   }
 
   return (
@@ -197,7 +195,7 @@ export default function Jira() {
           {!editingInstance && (
             <button
               onClick={handleCreate}
-              className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
+              className="w-full sm:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded"
             >
               + Add JIRA Instance
             </button>
@@ -222,7 +220,7 @@ export default function Jira() {
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="w-full sm:w-auto px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+                className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
               >
                 Delete
               </button>
@@ -239,17 +237,14 @@ export default function Jira() {
             </h2>
 
             {saveError && (
-              <div className="mb-4 p-3 bg-red-900 border border-red-700 rounded">
-                <p className="text-red-300 font-medium">Error saving JIRA instance</p>
-                <p className="text-red-400 text-sm mt-1">{saveError}</p>
+              <div className="mb-4 p-3 bg-port-error/20 border border-port-error/40 rounded">
+                <p className="text-port-error font-medium">Error saving JIRA instance</p>
+                <p className="text-port-error/80 text-sm mt-1">{saveError}</p>
               </div>
             )}
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Instance ID
-                </label>
+              <FormField label="Instance ID" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="id"
@@ -262,12 +257,9 @@ export default function Jira() {
                 <p className="text-xs text-gray-400 mt-1">
                   Unique identifier (cannot be changed after creation)
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Display Name
-                </label>
+              <FormField label="Display Name" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="name"
@@ -276,12 +268,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="e.g., Company JIRA"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Base URL
-                </label>
+              <FormField label="Base URL" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="url"
                   name="baseUrl"
@@ -290,12 +279,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="https://jira.example.com"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Email
-                </label>
+              <FormField label="Email" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="email"
                   name="email"
@@ -304,12 +290,9 @@ export default function Jira() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="your.email@example.com"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  API Token (Personal Access Token)
-                </label>
+              <FormField label="API Token (Personal Access Token)" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="apiToken"
@@ -321,13 +304,13 @@ export default function Jira() {
                 <p className="text-xs text-gray-400 mt-1">
                   Generate this from your JIRA profile → Personal Access Tokens
                 </p>
-              </div>
+              </FormField>
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={handleSave}
                   disabled={saving || !formData.name || !formData.baseUrl || !formData.email || !formData.apiToken}
-                  className="w-full sm:w-auto px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full sm:w-auto px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -365,17 +348,17 @@ export default function Jira() {
                     {instance.hasApiToken && (() => {
                       const expiry = getTokenExpiry(instance.tokenUpdatedAt);
                       if (!expiry) return (
-                        <p className="text-yellow-400 text-sm mt-1">
+                        <p className="text-port-warning text-sm mt-1">
                           Token age unknown — re-save to start tracking expiry
                         </p>
                       );
                       if (expiry.daysLeft <= 0) return (
-                        <p className="text-red-400 text-sm font-medium mt-1">
+                        <p className="text-port-error text-sm font-medium mt-1">
                           Token likely expired — regenerate your PAT
                         </p>
                       );
                       if (expiry.daysLeft <= TOKEN_WARN_DAYS) return (
-                        <p className="text-yellow-400 text-sm font-medium mt-1">
+                        <p className="text-port-warning text-sm font-medium mt-1">
                           Token expires in {expiry.daysLeft} day{expiry.daysLeft !== 1 ? 's' : ''} — regenerate soon
                         </p>
                       );
@@ -387,19 +370,19 @@ export default function Jira() {
                     <button
                       onClick={() => handleTest(instance.id)}
                       disabled={testingInstance === instance.id}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded disabled:opacity-50"
                     >
                       {testingInstance === instance.id ? 'Testing...' : 'Test'}
                     </button>
                     <button
                       onClick={() => handleEdit(instance)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-yellow-600 hover:bg-yellow-700 text-white text-sm rounded"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-warning hover:bg-port-warning/80 text-white text-sm rounded"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDeleteClick(instance.id)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-error hover:bg-port-error/80 text-white text-sm rounded"
                     >
                       Delete
                     </button>
@@ -410,21 +393,21 @@ export default function Jira() {
                   <div
                     className={`mt-4 p-3 rounded ${
                       testResult.success
-                        ? 'bg-green-900 border border-green-700'
-                        : 'bg-red-900 border border-red-700'
+                        ? 'bg-port-success/20 border border-port-success/40'
+                        : 'bg-port-error/20 border border-port-error/40'
                     }`}
                   >
                     {testResult.success ? (
                       <div>
-                        <p className="text-green-300 font-medium">✓ Connection successful</p>
-                        <p className="text-green-400 text-sm mt-1">
+                        <p className="text-port-success font-medium">✓ Connection successful</p>
+                        <p className="text-port-success/80 text-sm mt-1">
                           Authenticated as: {testResult.user} ({testResult.email})
                         </p>
                       </div>
                     ) : (
                       <div>
-                        <p className="text-red-300 font-medium">✗ Connection failed</p>
-                        <p className="text-red-400 text-sm mt-1">{testResult.error}</p>
+                        <p className="text-port-error font-medium">✗ Connection failed</p>
+                        <p className="text-port-error/80 text-sm mt-1">{testResult.error}</p>
                       </div>
                     )}
                   </div>

@@ -1,5 +1,9 @@
 # Unified Digital Twin Identity System (M42)
 
+> **Status:** design plan, since largely implemented (`server/services/identity.js`, `server/routes/identity.js`, `data/digital-twin/{identity,chronotype,goals}.json`). Kept here as the identity-architecture reference; phase/roadmap sections below are the original plan, and a few items (e.g. `aesthetics.json`) remain unbuilt. For current behavior, trust the code paths named in each section.
+>
+> Three docs cover the digital-twin subsystem from different angles: [Soul System](./soul-system.md) (the **document workflow**), [Digital Twin](./digital-twin.md) (the **quantitative modeling layer**), and this one (the **unified identity architecture**).
+
 Connects Genome (117 markers, 32 categories), Chronotype (5 sleep markers + behavioral), Aesthetic Taste (P2 complete, P2.5 adds twin-aware prompting), and Mortality-Aware Goals into a single coherent Identity architecture with cross-insights engine.
 
 ## Motivation

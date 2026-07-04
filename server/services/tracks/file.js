@@ -14,6 +14,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeTrack, buildTrackRecord, applyTrackPatch, mergeTrackRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const TRACKS_FILE = join(PATHS.data, 'tracks.json');
@@ -121,6 +122,9 @@ export async function pruneTombstonedTracks(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('track', id);
+  // Coalesce the per-track base-hash evictions into ONE disk write.
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('track', id);
+  });
   return { pruned: pruned.length };
 }

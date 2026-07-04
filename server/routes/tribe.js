@@ -21,6 +21,10 @@ const personSchema = z.object({
   channel: z.string().max(200).optional().default(''),
   energy: energySchema.optional().default('steady'),
   tags: z.array(z.string().max(80)).max(50).optional().default([]),
+  // Known emails/handles used to auto-match calendar attendees / message
+  // counterparts to this person (#2033). Service-side `normalizeEmails` lowercases
+  // and de-duplicates; the UI splits its single-line input to an array like tags.
+  emails: z.array(z.string().max(320)).max(100).optional().default([]),
   nextMove: z.string().max(2000).optional().default(''),
   notes: z.string().max(10000).optional().default(''),
 });
@@ -74,6 +78,14 @@ router.get('/people', asyncHandler(async (req, res) => {
     ring: ring || undefined,
   });
   res.json({ people });
+}));
+
+// Care summary — overdue-contact status computed server-side (single source of
+// truth) for the dashboard widget and proactive-alerts check.
+router.get('/care', asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50);
+  const summary = await tribe.getCareSummary(limit);
+  res.json(summary);
 }));
 
 router.post('/people', asyncHandler(async (req, res) => {

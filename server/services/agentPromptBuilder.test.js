@@ -55,7 +55,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
 
 function makeTask(overrides = {}) {
@@ -136,6 +136,18 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/tmp\/b\.png`/);
     });
 
+    it('lists multiple attached files (including images) so the agent can read them via its own tools', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/tmp/attachments/a-123.png' },
+          { filename: 'b-456.png', originalName: 'photo-two.png', path: '/tmp/attachments/b-456.png' },
+        ] } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).toMatch(/### Attachments/);
+      expect(prompt).toMatch(/`\/tmp\/attachments\/a-123\.png` \(photo-one\.png\)/);
+      expect(prompt).toMatch(/`\/tmp\/attachments\/b-456\.png` \(photo-two\.png\)/);
+    });
+
     it('renders the worktree block with branch + path when worktreeInfo is present', () => {
       const wt = {
         branchName: 'cos/test-1',
@@ -207,6 +219,81 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/do:pr`/);
       // /do:push doesn't open a PR — no merge step should be emitted.
       expect(prompt).not.toMatch(/gh pr merge/);
+    });
+
+    it('emits a slashdo-free, forge-aware Completion Workflow for an OpenCode TUI + openPR (opens PR, no auto-merge)', () => {
+      // OpenCode TUI doesn't load Claude Code slash commands, so /do:pr / /do:push
+      // would be uninvokable. The agent commits, pushes, opens the PR/MR for review,
+      // and writes the sentinel with plain git + the forge CLI. It must NOT auto-merge
+      // (it can't run the reviewer loop and PortOS runs no post-exit review for a TUI).
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true } }),
+        '/r',
+        { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      // No slashdo commands anywhere in the workflow.
+      expect(prompt).not.toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/`\/do:push`/);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      // /simplify is a Claude built-in — OpenCode gets the inline equivalent.
+      expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+      // Plain git commit → push → open PR. Base pinned to the worktree base branch.
+      expect(prompt).toMatch(/git commit -m/);
+      expect(prompt).toMatch(/git push -u origin claim\/issue-1/);
+      // Forge-aware: both GitHub (gh) and GitLab (glab) create commands, base-pinned.
+      expect(prompt).toMatch(/gh pr create --fill --base main/);
+      expect(prompt).toMatch(/glab mr create --fill --target-branch main/);
+      // Opens for review — never auto-merges.
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/glab mr merge/);
+      expect(prompt).toMatch(/do NOT merge it yourself/);
+      // Sentinel handshake still drives completion; never tell the agent to run /quit.
+      expect(prompt).toMatch(/\.agent-done/);
+      expect(prompt).toMatch(/NOT run `\/quit`/);
+      expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
+    });
+
+    it('OpenCode TUI without openPR pushes the branch but opens no PR', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false } }),
+        '/r',
+        { branchName: 'claim/issue-2', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).not.toMatch(/`\/do:push`/);
+      expect(prompt).toMatch(/git push -u origin claim\/issue-2/);
+      // No PR is opened, so no forge create/merge steps.
+      expect(prompt).not.toMatch(/gh pr create/);
+      expect(prompt).not.toMatch(/glab mr create/);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).toMatch(/\.agent-done/);
+    });
+
+    it('shell-quotes a branch ref containing shell metacharacters in the manual push command', () => {
+      // Git refs can legally contain `;` etc.; the emitted push command must quote it.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false } }),
+        '/r',
+        { branchName: 'weird;rm -rf', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'opencode-ollama-tui', providerCommand: 'opencode' });
+      expect(prompt).toMatch(/git push -u origin 'weird;rm -rf'/);
+      expect(prompt).not.toMatch(/git push -u origin weird;rm/);
+    });
+
+    it('a non-OpenCode TUI (claude-code-tui) keeps the slashdo /do:pr workflow', () => {
+      // providerCommand is the gate — a claude TUI must NOT fall into the manual path.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
+      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/gh pr create/);
     });
 
     it('emits a non-TUI "Completion" block (no slashdo) for non-Claude CLI agents', () => {
@@ -546,5 +633,50 @@ describe('buildAgentPrompt — provider type routing', () => {
     // Agent must verify the PR is actually merged before exiting.
     expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state -q \.state/);
     expect(prompt).toMatch(/MERGED/);
+  });
+});
+
+describe('buildCompletionGuidelineBullet', () => {
+  it('read-only short-circuits regardless of other flags', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: true, isTui: true, slashdoFree: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/read-only task/i);
+  });
+
+  it('slashdo TUI bullet references the slashdo command', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, slashdoFree: false,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/`\/do:pr`/);
+    expect(bullet).not.toMatch(/plain `git`\/`gh`/);
+    expect(bullet).toMatch(/do NOT run `\/quit`/);
+  });
+
+  it('slashdo-free TUI bullet points at the plain git/gh workflow, not a /do:* command', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, slashdoFree: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(bullet).toMatch(/plain `git`\/`gh`/);
+    expect(bullet).toMatch(/no slashdo commands/);
+    expect(bullet).not.toMatch(/`\/do:pr`/);
+    expect(bullet).toMatch(/do NOT run `\/quit`/);
+  });
+
+  it('non-TUI worktree+openPR bullet defers push/PR to the system, and read-only/null cases return null', () => {
+    const prBullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+    });
+    expect(prBullet).toMatch(/the system will push your branch and open a pull request/);
+    // No worktree, not TUI, not read-only → no bullet.
+    const none = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:push',
+      worktreeInfo: null, willOpenPR: false, willReviewLoop: false,
+    });
+    expect(none).toBeNull();
   });
 });

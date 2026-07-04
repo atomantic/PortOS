@@ -324,9 +324,13 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
     ...tasks[taskIndex].metadata,
     ...(updates.metadata || {})
   };
-  // Handle legacy fields that may be passed directly in updates
+  // Handle legacy fields that may be passed directly in updates. Use ?? not ||
+  // so an intentional clear to "" is preserved as "" rather than dropped: || maps
+  // every falsy value (incl. "") to undefined, which the cleanup pass below then
+  // deletes, conflating "cleared" with "absent" (absent-vs-cleared, CLAUDE.md).
+  // Only null becomes undefined (→ deleted); absent fields never enter this loop.
   for (const f of LEGACY_DIRECT_FIELDS) {
-    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] || undefined;
+    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] ?? undefined;
   }
 
   // Clear blocked/failure metadata when transitioning out of blocked status

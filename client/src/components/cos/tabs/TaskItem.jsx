@@ -21,8 +21,9 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import { formatDurationMin, formatBytes } from '../../../utils/formatters';
-import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import Modal from '../../ui/Modal';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -159,7 +160,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     if (newStatus === 'blocked' && blockedReasonText) {
       updates.blockedReason = blockedReasonText;
     }
-    const result = await api.updateCosTask(task.id, updates).catch(err => { toast.error(err.message); return null; });
+    const result = await api.updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success(`Task marked as ${newStatus}`);
     onRefresh();
@@ -177,7 +178,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleSave = async () => {
-    const result = await api.updateCosTask(task.id, editData).catch(err => {
+    const result = await api.updateCosTask(task.id, editData, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -189,14 +190,14 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
 
   const handleDelete = async () => {
     const taskType = isSystem ? 'internal' : 'user';
-    const result = await api.deleteCosTask(task.id, taskType).catch(err => { toast.error(err.message); return null; });
+    const result = await api.deleteCosTask(task.id, taskType, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Task deleted');
     onRefresh();
   };
 
   const handleApprove = async () => {
-    const result = await api.approveCosTask(task.id).catch(err => {
+    const result = await api.approveCosTask(task.id, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -206,7 +207,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   return (
-    <div className={`bg-port-card border rounded-lg p-4 group ${
+    <div className={`bg-port-card border rounded-lg p-4 ${
       awaitingApproval ? 'border-yellow-500/50' : 'border-port-border'
     }`}>
       <div className="flex items-start gap-3">
@@ -241,7 +242,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <span className="text-sm font-mono text-gray-500">{task.id}</span>
             {task.metadata?.app && apps?.find(a => a.id === task.metadata.app)?.name && (
-              <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded shrink-0" title={task.metadata.app}>
+              <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0" title={task.metadata.app}>
                 {apps.find(a => a.id === task.metadata.app).name}
               </span>
             )}
@@ -346,12 +347,12 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               {(task.metadata?.model || task.metadata?.provider) && (
                 <div className="flex items-center gap-2 mt-1">
                   {task.metadata?.model && (
-                    <span className="px-1.5 py-0.5 text-xs bg-purple-500/20 text-purple-400 rounded font-mono">
+                    <span className="px-1.5 py-0.5 text-xs bg-port-accent-2/20 text-port-accent-2 rounded font-mono">
                       {task.metadata.model}
                     </span>
                   )}
                   {task.metadata?.provider && (
-                    <span className="px-1.5 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded">
+                    <span className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded">
                       {task.metadata.provider}
                     </span>
                   )}
@@ -388,111 +389,108 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           )}
         </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+        {/* Action buttons. Keep the delete confirmation here, next to the trash
+            icon, rather than at the bottom of the card — a task with a lot of
+            context would otherwise push the confirm row far below the fold. */}
+        <div className="flex items-center gap-1">
           {!editing && (
-            <>
-              {task.status === 'pending' && !task.approvalRequired && (
+            isConfirming(task.id) ? (
+              <ConfirmButtonPair
+                prompt="Delete?"
+                confirmText="Delete"
+                ariaLabel="Confirm delete task"
+                onConfirm={() => confirmDelete(handleDelete)}
+                onCancel={cancelDelete}
+              />
+            ) : (
+              <>
+                {task.status === 'pending' && !task.approvalRequired && (
+                  <button
+                    onClick={async () => {
+                      const result = await api.forceSpawnTask(task.id, { silent: true }).catch(err => { toast.error(err.message); return null; });
+                      if (result?.success) toast.success(`Spawning ${task.id}`);
+                      if (onRefresh) onRefresh();
+                    }}
+                    className="p-1 text-gray-500 hover:text-port-success transition-colors"
+                    title="Process now"
+                    aria-label="Process task now"
+                  >
+                    <Play size={14} aria-hidden="true" />
+                  </button>
+                )}
+                {task.status !== 'blocked' && task.status !== 'completed' && (
+                  <button
+                    onClick={handleMarkBlocked}
+                    className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                    title="Mark as blocked"
+                    aria-label="Mark task as blocked"
+                  >
+                    <Ban size={14} aria-hidden="true" />
+                  </button>
+                )}
                 <button
-                  onClick={async () => {
-                    const result = await api.forceSpawnTask(task.id).catch(err => { toast.error(err.message); return null; });
-                    if (result?.success) toast.success(`Spawning ${task.id}`);
-                    if (onRefresh) onRefresh();
-                  }}
-                  className="p-1 text-gray-500 hover:text-port-success transition-colors"
-                  title="Process now"
-                  aria-label="Process task now"
+                  onClick={() => setEditing(true)}
+                  className="p-1 text-gray-500 hover:text-white transition-colors"
+                  title="Edit"
+                  aria-label="Edit task"
                 >
-                  <Play size={14} aria-hidden="true" />
+                  <Edit3 size={14} aria-hidden="true" />
                 </button>
-              )}
-              {task.status !== 'blocked' && task.status !== 'completed' && (
                 <button
-                  onClick={handleMarkBlocked}
+                  onClick={() => requestDelete(task.id)}
                   className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                  title="Mark as blocked"
-                  aria-label="Mark task as blocked"
+                  title="Delete"
+                  aria-label="Delete task"
                 >
-                  <Ban size={14} aria-hidden="true" />
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
-              )}
-              <button
-                onClick={() => setEditing(true)}
-                className="p-1 text-gray-500 hover:text-white transition-colors"
-                title="Edit"
-                aria-label="Edit task"
-              >
-                <Edit3 size={14} aria-hidden="true" />
-              </button>
-              <button
-                onClick={() => requestDelete(task.id)}
-                className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                title="Delete"
-                aria-label="Delete task"
-              >
-                <Trash2 size={14} aria-hidden="true" />
-              </button>
-            </>
+              </>
+            )
           )}
         </div>
       </div>
 
-      {isConfirming(task.id) && (
-        <InlineConfirmRow
-          className="mt-2"
-          question="Delete this task? This cannot be undone."
-          confirmTitle="Confirm delete"
-          cancelTitle="Cancel delete"
-          onConfirm={() => confirmDelete(handleDelete)}
-          onCancel={cancelDelete}
-        />
-      )}
-
       {/* Blocked Reason Modal */}
-      {showBlockedModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowBlockedModal(false)}>
-          <div
-            className="bg-port-card border border-port-border rounded-lg p-4 w-full max-w-md mx-4"
-            onClick={e => e.stopPropagation()}
-            role="dialog"
-            aria-labelledby="blocked-modal-title"
+      <Modal
+        open={showBlockedModal}
+        onClose={() => setShowBlockedModal(false)}
+        size="sm"
+        ariaLabelledBy="blocked-modal-title"
+        panelClassName="bg-port-card border border-port-border rounded-lg p-4"
+      >
+        <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
+          <Ban size={18} className="text-port-error" aria-hidden="true" />
+          Mark Task as Blocked
+        </h3>
+        <p className="text-sm text-gray-400 mb-3">
+          What&apos;s blocking this task? This helps track dependencies and unblock work.
+        </p>
+        <input
+          ref={blockedInputRef}
+          type="text"
+          value={blockedReason}
+          onChange={e => setBlockedReason(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleConfirmBlocked();
+          }}
+          placeholder="e.g., Waiting for API access, Needs design review..."
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => setShowBlockedModal(false)}
+            className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
           >
-            <h3 id="blocked-modal-title" className="text-white font-medium mb-3 flex items-center gap-2">
-              <Ban size={18} className="text-port-error" aria-hidden="true" />
-              Mark Task as Blocked
-            </h3>
-            <p className="text-sm text-gray-400 mb-3">
-              What&apos;s blocking this task? This helps track dependencies and unblock work.
-            </p>
-            <input
-              ref={blockedInputRef}
-              type="text"
-              value={blockedReason}
-              onChange={e => setBlockedReason(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleConfirmBlocked();
-                if (e.key === 'Escape') setShowBlockedModal(false);
-              }}
-              placeholder="e.g., Waiting for API access, Needs design review..."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowBlockedModal(false)}
-                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmBlocked}
-                className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
-              >
-                Mark Blocked
-              </button>
-            </div>
-          </div>
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirmBlocked}
+            className="px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error rounded-lg text-sm transition-colors min-h-[40px]"
+          >
+            Mark Blocked
+          </button>
         </div>
-      )}
+      </Modal>
     </div>
   );
 }

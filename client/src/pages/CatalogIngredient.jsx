@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown } from 'lucide-react';
+import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCatalogIngredientDetails,
@@ -22,10 +22,14 @@ import {
   attachCatalogIngredientMedia,
   setCatalogIngredientPortrait,
   detachCatalogIngredientMedia,
+  uploadCatalogIngredientMediaFile,
+  recordCatalogIngredientVoiceMemo,
 } from '../services/apiCatalog';
+import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
 import { listImageGallery } from '../services/apiImageVideo';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
 import IngredientPicker from '../components/IngredientPicker';
@@ -35,7 +39,7 @@ import TagPicker from '../components/TagPicker';
 import GenericIngredientFields from '../components/GenericIngredientFields';
 import { getCatalogType, CATALOG_BADGE_BY_ID, RELATION_KINDS, getRelationKind } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatDateTime } from '../utils/formatters';
 
 // Per-type editor field list + badge color now come from the shared registry
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
@@ -49,6 +53,7 @@ function refPath(refKind, refId) {
     case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
     case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
     case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
+    case 'creative-director': return `/media/creative-director/${encodeURIComponent(refId)}/overview`;
     case 'writers-room':
     case 'writersRoom':    return '/writers-room';
     default:               return null;
@@ -59,26 +64,48 @@ function REFKIND_LABEL(kind) {
   if (kind === 'universe')   return 'Universes';
   if (kind === 'series')     return 'Series';
   if (kind === 'issue')      return 'Issues';
+  if (kind === 'creative-director') return 'Creative Director';
   if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
   return kind;
 }
 
 // Build the image-generation prompt source from the (live, editable) payload:
 // the type's primary content field first, then a curated set of *visual*
-// description fields, so a character renders from physicalDescription and a
-// place/object/idea from description/summary. Intentionally narrower than the
-// type's full snippetFallbackKeys — keys like `role`/`notes`/`significance`
-// describe the entity but don't depict it, and would seed weak prompts.
-// Returns '' when nothing usable is present — the generate button gates on it.
-const GENERATION_DESCRIPTION_KEYS = ['physicalDescription', 'description', 'summary'];
-function deriveGenerationDescription(payload, typeDef) {
-  if (!payload || typeof payload !== 'object') return '';
-  const keys = [typeDef?.primaryContentKey, ...GENERATION_DESCRIPTION_KEYS].filter(Boolean);
-  for (const k of keys) {
-    const v = payload[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
+// description fields, so a character renders from its full appearance and a
+// place/object/idea from description/summary. The keys are the ones that DEPICT a
+// subject — `role`/`notes`/`significance` describe the entity but don't depict it
+// and would seed weak prompts, so they're excluded. Unlike the old single-field
+// derive, this folds EVERY populated visual field together (#1809) so a character
+// renders from physicalDescription PLUS visualNotes/visualIdentity/etc., and
+// appends the ingredient's tags as extra prompt tokens. Capped so a verbose canon
+// entry can't blow up the prompt. Returns '' when nothing usable is present (the
+// editor prefill falls back to the name alone). Exported for unit tests.
+export const GENERATION_VISUAL_KEYS = [
+  'physicalDescription', 'visualNotes', 'visualIdentity',
+  'silhouetteNotes', 'postureNotes', 'specialTraits',
+  'description', 'summary',
+];
+const GENERATION_SEED_MAX = 700;
+export function buildGenerationPromptSeed(payload, typeDef, tags = []) {
+  const parts = [];
+  if (payload && typeof payload === 'object') {
+    const keys = [typeDef?.primaryContentKey, ...GENERATION_VISUAL_KEYS].filter(Boolean);
+    const seen = new Set();
+    for (const k of keys) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const v = payload[k];
+      if (typeof v === 'string' && v.trim()) parts.push(v.trim());
+    }
   }
-  return '';
+  const tagList = Array.isArray(tags)
+    ? tags.filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim())
+    : [];
+  let seed = parts.join('. ');
+  if (tagList.length) seed = seed ? `${seed}. ${tagList.join(', ')}` : tagList.join(', ');
+  return seed.length > GENERATION_SEED_MAX
+    ? `${seed.slice(0, GENERATION_SEED_MAX - 1).trimEnd()}…`
+    : seed;
 }
 
 export default function CatalogIngredient() {
@@ -251,6 +278,36 @@ export default function CatalogIngredient() {
     toast.success(hasPortrait ? 'Generated image attached' : 'Generated portrait set');
   }, [record, media, refreshMedia]);
 
+  // Upload a dropped/picked file straight onto the ingredient. The server picks
+  // the media kind (image→reference, audio, video) from the MIME and stores the
+  // bytes in the matching federating library dir. Reconcile via refreshMedia.
+  const handleUploadFile = useCallback(async (file) => {
+    if (!record || !file) return;
+    const dataBase64 = arrayBufferToBase64(await file.arrayBuffer());
+    const ok = await uploadCatalogIngredientMediaFile(
+      record.id,
+      { dataBase64, mimeType: file.type || 'application/octet-stream', filename: file.name },
+      { silent: true },
+    ).then(() => true).catch((err) => { toast.error(err?.message || 'Upload failed'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('File attached');
+  }, [record, refreshMedia]);
+
+  // Attach a recorded voice memo — the server transcribes it via Whisper and
+  // stores the transcript in the audio row's caption.
+  const handleRecordVoiceMemo = useCallback(async (clip) => {
+    if (!record || !clip?.audioBase64) return;
+    const ok = await recordCatalogIngredientVoiceMemo(
+      record.id,
+      { audioBase64: clip.audioBase64, mimeType: clip.mimeType },
+      { silent: true },
+    ).then(() => true).catch((err) => { toast.error(err?.message || 'Voice memo failed'); return false; });
+    if (!ok) return;
+    refreshMedia();
+    toast.success('Voice memo attached');
+  }, [record, refreshMedia]);
+
   const handleSave = async () => {
     if (!record) return;
     const trimmedName = name.trim();
@@ -331,8 +388,10 @@ export default function CatalogIngredient() {
   const isUserType = typeDef.system === false;
   const badgeClass = CATALOG_BADGE_BY_ID[record.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
   // Prompt source for the Media panel's "Generate" affordance — derived from the
-  // currently-edited payload so tweaks to the description feed the next render.
-  const genDescription = deriveGenerationDescription(payload, typeDef);
+  // currently-edited payload + the live `tags` state (NOT record.tags) so unsaved
+  // tweaks to the description or tags feed the next render's default prompt. The
+  // user can still edit the composed prompt before generating (#1809).
+  const genDescription = buildGenerationPromptSeed(payload, typeDef, tags);
 
   // Group refs by kind for the "Appears in" panel. Tolerates either an array
   // of `{ refKind, refId, role }` or a server-grouped shape.
@@ -463,9 +522,12 @@ export default function CatalogIngredient() {
           onAttach={handleAttachMedia}
           onSetPortrait={handleSetPortrait}
           onDetach={handleDetachMedia}
+          onUploadFile={handleUploadFile}
+          onRecordVoice={handleRecordVoiceMemo}
           genIngredientId={record.id}
           genName={name}
           genDescription={genDescription}
+          genUniverseId={universeRef?.refId || null}
           onGenerated={handleGeneratedImage}
         />
 
@@ -842,33 +904,69 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
 // the panel scopes its picker to the existing gallery/history. The portrait
 // (one per ingredient) renders large at the head; other attachments tile below.
 // Drag-and-drop accepts an in-app gallery filename dragged as text (the
-// dashboard/gallery tiles set `dataTransfer.setData('text/plain', filename)`);
-// file-upload + voice-memo capture are intentionally out of scope here and
-// land via the separate `[catalog-source-kinds-url-file-voice]` item — the
-// `onAttach(mediaKey, kind)` seam is all those paths need to reuse.
+// dashboard/gallery tiles set `dataTransfer.setData('text/plain', filename)`) OR
+// a real file dropped from the OS. "Upload file" (image/audio/video) and "Record
+// memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
+// media-upload/voice routes into the federating library dirs, then attach via
+// the same media-refs seam gallery picks use.
 // "Generate" affordance for the Media panel — turns the ingredient's
 // description into an image via the same image-gen queue the Universe canon
 // renders use. The generated file lands in the media library as `<jobId>.png`;
 // `MediaJobThumb` surfaces the live diffusion preview and fires `onFilename`
 // once complete, which routes to `onComplete` to attach it onto the ingredient.
 // Disabled when the description is blank — there's nothing to render from.
-function GenerateImageControl({ ingredientId, name, description, onComplete }) {
+function GenerateImageControl({ ingredientId, name, description, universeId, onComplete }) {
   const mountedRef = useMounted();
   const [jobId, setJobId] = useState(null);
   const [starting, setStarting] = useState(false);
-  const canGenerate = !!(description && description.trim());
+  // Editable-prompt panel state (#1809): the user opens an inline editor,
+  // tweaks the auto-composed prompt, then renders — instead of firing a fixed
+  // prompt on the first click.
+  const [editing, setEditing] = useState(false);
+  const [prefilling, setPrefilling] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState('');
 
-  const handleGenerate = async () => {
-    if (!canGenerate) {
-      toast.error('Add a description before generating an image');
+  // Open the editor and prefill the prompt with the composed default: the
+  // ingredient's visual seed + tags, layered on the linked universe's style
+  // preset (fetched lazily — the page deliberately doesn't load the universe up
+  // front). A failed/missing universe just omits the preset; the seed still
+  // renders. Don't clobber a prompt the user already edited (re-open keeps it).
+  const openEditor = async () => {
+    setEditing(true);
+    if (prompt.trim()) return; // keep prior edits when re-opening
+    setPrefilling(true);
+    let universe = null;
+    if (universeId) {
+      universe = await getUniverse(universeId, { silent: true }).catch(() => null);
+    }
+    const styled = composeCanonStyledPrompt({
+      name: name || 'Subject',
+      description: description || '',
+      universe,
+    });
+    if (!mountedRef.current) return;
+    // The textarea is editable during the (awaited) universe fetch, so the user
+    // may have started typing before it resolved — apply the composed prefill
+    // only when the field is still empty, via a functional updater that reads
+    // the latest state (the closure's `prompt` is stale across the await).
+    // Trim a dangling "Name:" when the ingredient had no visual description yet.
+    setPrompt((cur) => (cur.trim() ? cur : (styled.prompt || name || '').replace(/:\s*$/, '')));
+    setNegativePrompt((cur) => (cur.trim() ? cur : (styled.negativePrompt || '')));
+    setPrefilling(false);
+  };
+
+  const handleRender = async () => {
+    const finalPrompt = prompt.trim();
+    if (!finalPrompt) {
+      toast.error('Enter a prompt before generating an image');
       return;
     }
     setStarting(true);
-    const styled = composeCanonStyledPrompt({ name: name || 'Subject', description, universe: null });
     const queued = await generateImage(
       {
-        prompt: styled.prompt,
-        negativePrompt: styled.negativePrompt || undefined,
+        prompt: finalPrompt,
+        negativePrompt: negativePrompt.trim() || undefined,
         // Durable attach (#1359): tag the queued job with the target ingredient
         // so the server-side completion hook files the render even if this page
         // unmounts before a long local/Codex render finishes. The onComplete
@@ -881,6 +979,7 @@ function GenerateImageControl({ ingredientId, name, description, onComplete }) {
     if (!mountedRef.current) return;
     setStarting(false);
     if (!queued) return;
+    setEditing(false);
     if (queued.jobId) {
       // Local/Codex modes enqueue a job — track it live via MediaJobThumb,
       // which fires onFilename on completion to attach the result optimistically.
@@ -917,35 +1016,91 @@ function GenerateImageControl({ ingredientId, name, description, onComplete }) {
   }, []);
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="relative inline-flex items-center gap-2">
       {jobId && (
         <MediaJobThumb jobId={jobId} label="Generated image" size="xs"
           onFilename={handleFilename} onStatus={handleStatus} />
       )}
-      <button
-        type="button"
-        onClick={handleGenerate}
-        disabled={!canGenerate || starting || !!jobId}
-        title={canGenerate
-          ? 'Generate an image from this item’s description'
-          : 'Add a description first to generate an image'}
-        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {starting || jobId
-          ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-          : <Sparkles size={12} aria-hidden="true" />}
-        {jobId ? 'Generating…' : 'Generate'}
-      </button>
+      {!editing && (
+        <button
+          type="button"
+          onClick={openEditor}
+          disabled={starting || !!jobId}
+          title="Compose a prompt and generate an image for this item"
+          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {jobId
+            ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+            : <Sparkles size={12} aria-hidden="true" />}
+          {jobId ? 'Generating…' : 'Generate'}
+        </button>
+      )}
+
+      {editing && (
+        <div className="absolute right-0 z-20 mt-2 w-80 max-w-[90vw] rounded-lg border border-port-border bg-port-card p-3 shadow-xl space-y-2"
+          style={{ top: '100%' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-white">Generate image</span>
+            {prefilling && <Loader2 size={12} className="animate-spin text-gray-400" aria-hidden="true" />}
+          </div>
+          <label className="block">
+            <span className="text-[11px] text-gray-400">Prompt</span>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={4}
+              placeholder="Describe the image to render…"
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-gray-400">Negative prompt (optional)</span>
+            <textarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={2}
+              className="mt-1 w-full text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 resize-y"
+            />
+          </label>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setEditing(false)}
+              className="text-xs px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white">
+              Cancel
+            </button>
+            <button type="button" onClick={handleRender} disabled={starting || prefilling || !prompt.trim()}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed">
+              {starting
+                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                : <Sparkles size={12} aria-hidden="true" />}
+              Render
+            </button>
+          </div>
+        </div>
+      )}
     </span>
   );
 }
 
-function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, genIngredientId, genName, genDescription, onGenerated }) {
+function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [busy, setBusy] = useState(false); // upload or transcription in flight
+  const [recording, setRecording] = useState(false);
+  const fileInputRef = useRef(null);
+  const recorderRef = useRef(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
   const others = list.filter((m) => m.kind !== 'portrait');
+
+  // Release the mic if the panel unmounts mid-recording (navigating away).
+  useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
+
+  const doUpload = async (file) => {
+    if (!file || busy) return;
+    setBusy(true);
+    await onUploadFile(file);
+    setBusy(false);
+  };
 
   const onDrop = (e) => {
     e.preventDefault();
@@ -953,7 +1108,41 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
     // In-app gallery DnD: the dragged tile carries its filename as text.
     const key = (e.dataTransfer.getData('text/plain') || '').trim();
     if (key) { onAttach(key, 'reference'); return; }
-    toast.error('Drop a gallery image, or use “Pick from gallery”. File upload coming soon.');
+    const file = e.dataTransfer.files?.[0];
+    if (file) { doUpload(file); return; }
+    toast.error('Drop a gallery image, a file, or use “Pick from gallery”.');
+  };
+
+  const onFilePicked = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (file) doUpload(file);
+  };
+
+  const startRecording = async () => {
+    const handle = await startMemoRecording().catch((err) => {
+      toast.error(err?.message || 'Microphone unavailable');
+      return null;
+    });
+    if (!handle) return;
+    recorderRef.current = handle;
+    setRecording(true);
+  };
+
+  const stopRecording = async () => {
+    const handle = recorderRef.current;
+    if (!handle) return;
+    recorderRef.current = null;
+    setRecording(false);
+    const clip = await handle.stop().catch((err) => { toast.error(err?.message || 'Recording failed'); return null; });
+    if (!clip?.audioBase64) return;
+    if (clip.peak !== undefined && clip.peak < 0.01) {
+      toast.error('That memo was silent — check your microphone and try again.');
+      return;
+    }
+    setBusy(true);
+    await onRecordVoice(clip);
+    setBusy(false);
   };
 
   return (
@@ -962,12 +1151,28 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
-        <div className="flex items-center gap-2">
-          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} onComplete={onGenerated} />
+        <div className="flex items-center gap-2 flex-wrap">
+          <GenerateImageControl ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery
           </button>
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={busy || recording}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-40">
+            <Upload size={12} aria-hidden="true" /> Upload file
+          </button>
+          {!recording ? (
+            <button type="button" onClick={startRecording} disabled={busy}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-40">
+              <Mic size={12} aria-hidden="true" /> Record memo
+            </button>
+          ) : (
+            <button type="button" onClick={stopRecording}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-error text-port-error hover:bg-port-error/10 animate-pulse">
+              <Square size={12} aria-hidden="true" /> Stop &amp; transcribe
+            </button>
+          )}
+          <input ref={fileInputRef} type="file" accept="image/*,audio/*,video/*" onChange={onFilePicked} className="hidden" />
         </div>
       </div>
 
@@ -977,7 +1182,9 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
         onDrop={onDrop}
         className={`mb-3 rounded-lg border border-dashed p-3 text-center text-xs transition-colors ${dragOver ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-500'}`}
       >
-        Drag a gallery image here to attach it as a reference.
+        {busy
+          ? (<span className="inline-flex items-center gap-1"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Working…</span>)
+          : 'Drag a gallery image or a file here to attach it (image, audio, or video).'}
       </div>
 
       {portrait && (
@@ -998,7 +1205,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
       )}
 
       {list.length === 0 && (
-        <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, or a recorded memo (memo capture coming soon).</p>
+        <p className="text-xs text-gray-500">No media yet. Attach a generated portrait, a mood/reference image, an uploaded file, or a recorded voice memo.</p>
       )}
 
       {pickerOpen && (
@@ -1017,15 +1224,32 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, ge
 
 // One media attachment tile. Images render via <MediaImage> (gracefully shows a
 // "syncing" placeholder when the asset hasn't arrived — the same surface the
-// `missing` integrity flag warns about). Non-image kinds render a labeled chip.
+// `missing` integrity flag warns about). Audio/video render inline players
+// (their bytes are served from /data/audio and /data/videos); a voice memo's
+// transcript rides in `caption`. Other kinds render a labeled chip.
 function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) {
   const isImage = m.kind === 'portrait' || m.kind === 'reference';
+  const isAudio = m.kind === 'audio';
+  const isVideo = m.kind === 'video';
   return (
     <div className="relative group rounded border border-port-border overflow-hidden bg-port-bg">
-      {isImage ? (
+      {isImage && (
         <MediaImage src={`/data/images/${m.mediaKey}`} alt={m.caption || m.kind}
           className={isPortrait ? 'w-full max-w-[180px] aspect-square object-cover' : 'w-full aspect-square object-cover'} />
-      ) : (
+      )}
+      {isAudio && (
+        <div className="p-2 flex flex-col gap-1">
+          <div className="text-[10px] uppercase tracking-wider text-gray-400 flex items-center gap-1">
+            <Mic size={10} aria-hidden="true" /> {m.role === 'voice-memo' ? 'voice memo' : 'audio'}
+          </div>
+          <audio controls preload="none" src={`/data/audio/${m.mediaKey}`} className="w-full" />
+          {m.caption && <p className="text-[11px] text-gray-300 whitespace-pre-wrap line-clamp-4">{m.caption}</p>}
+        </div>
+      )}
+      {isVideo && (
+        <video controls preload="none" src={`/data/videos/${m.mediaKey}`} className="w-full aspect-square object-cover bg-black" />
+      )}
+      {!isImage && !isAudio && !isVideo && (
         <div className="w-full aspect-square flex items-center justify-center text-[10px] uppercase tracking-wider text-gray-400 px-1 text-center">
           {m.kind}<br />{m.mediaKey}
         </div>
@@ -1036,15 +1260,15 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) 
           missing
         </span>
       )}
-      <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute top-1 right-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {!isPortrait && isImage && (
           <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait"
-            className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
+            className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
             <Star size={12} aria-hidden="true" />
           </button>
         )}
         <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach"
-          className="p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
+          className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
           <X size={12} aria-hidden="true" />
         </button>
       </div>
@@ -1083,11 +1307,11 @@ function GalleryPickerModal({ onClose, onPick }) {
                 <div key={it.filename} className="relative group rounded border border-port-border overflow-hidden">
                   <MediaImage src={it.path || `/data/images/${it.filename}`} alt={it.filename}
                     className="w-full aspect-square object-cover" />
-                  <div className="absolute inset-x-0 bottom-0 flex opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute inset-x-0 bottom-0 flex opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                     <button type="button" onClick={() => onPick(it.filename, false)}
-                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
+                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-white">Attach</button>
                     <button type="button" onClick={() => onPick(it.filename, true)}
-                      className="flex-1 text-[10px] py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
+                      className="flex-1 text-[10px] py-2.5 sm:py-1 bg-black/70 text-gray-200 hover:text-port-warning">Portrait</button>
                   </div>
                 </div>
               ))}
@@ -1111,7 +1335,7 @@ function SourcesPanel({ sources }) {
           {list.map((s, i) => (
             <li key={s.scrapId || i} className="text-xs text-gray-300 flex items-center justify-between gap-2">
               <span className="font-mono truncate" title={s.scrapId}>{s.scrapId}</span>
-              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{new Date(s.extractedAt).toLocaleString()}</span>}
+              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
             </li>
           ))}
         </ul>
@@ -1164,7 +1388,7 @@ function RefsPanel({ refsByKind }) {
 
 const SOURCE_BADGE = {
   user:    'bg-port-accent/20 text-port-accent border-port-accent/40',
-  extract: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+  extract: 'bg-port-accent-2/20 text-port-accent-2 border-port-accent-2/40',
   refine:  'bg-port-warning/20 text-port-warning border-port-warning/40',
   sync:    'bg-port-success/20 text-port-success border-port-success/40',
 };

@@ -5,9 +5,8 @@
  * Helps users quickly create tasks for frequently needed operations.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.cos;
 const TEMPLATES_FILE = join(DATA_DIR, 'task-templates.json');
@@ -112,7 +111,7 @@ async function saveState(state) {
   state.lastUpdated = new Date().toISOString();
 
   await ensureDir(DATA_DIR);
-  await writeFile(TEMPLATES_FILE, JSON.stringify(state, null, 2));
+  await atomicWrite(TEMPLATES_FILE, state);
 }
 
 /**

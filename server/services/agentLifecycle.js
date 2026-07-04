@@ -317,13 +317,26 @@ export async function spawnAgentForTask(task) {
     }
     const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
 
+    // Auto-snapshot the workspace context of the app CoS was last working in
+    // when this dispatch switches to a different app/repo (#2035). Snapshot-only
+    // — it never restores and never calls an LLM. Dynamic import avoids pulling
+    // the workspace-context graph into this hot module's load path; the call is
+    // defensive so a missing current context (or any failure) can't break the
+    // spawn.
+    await import('./workspaceContext.js')
+      .then((ws) => ws.snapshotOnRepoSwitch(task.metadata?.app || null))
+      .catch((err) => {
+        emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+      });
+
     const isTui = isTuiProvider(provider);
 
     // Build the agent prompt. `provider.type` drives the light-vs-full split
     // inside buildAgentPrompt — see its doc comment.
     const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
       providerType: provider.type,
-      providerId: provider.id
+      providerId: provider.id,
+      providerCommand: provider.command
     });
 
     // Create agent directory
@@ -909,7 +922,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
       const workspacePath = agent.workspacePath || ROOT_DIR;
-      const commitFound = checkForTaskCommit(task.id, workspacePath);
+      const commitFound = await checkForTaskCommit(task.id, workspacePath);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;

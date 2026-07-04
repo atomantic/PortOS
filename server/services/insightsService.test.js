@@ -10,7 +10,11 @@ vi.mock('../lib/fetchWithTimeout.js', () => ({
 
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js';
-import { callProviderAISimple } from './insightsService.js';
+import {
+  callProviderAISimple,
+  getThemeAnalysis,
+  getCrossDomainNarrative,
+} from './insightsService.js';
 
 const PROVIDER = { type: 'api', endpoint: 'http://localhost:1234/v1' };
 
@@ -56,5 +60,28 @@ describe('insightsService.callProviderAISimple — non-JSON-body guard', () => {
     fetchWithTimeout.mockResolvedValue(mockTextResponse('boom', { ok: false, status: 500 }));
     const result = await callProviderAISimple(PROVIDER, 'm', 'prompt');
     expect(result.error).toMatch(/Provider returned 500: boom/);
+  });
+});
+
+// Enforces the no-cold-bootstrap trigger contract documented at the generation
+// entry points: the cached-read paths the Insights page mounts with must be
+// disk-only and NEVER reach an AI provider. Only the user-triggered *refresh*
+// endpoints may generate. If a future edit makes a read path warm the cache via
+// the LLM, this fails.
+describe('insightsService read paths — disk-only, no provider call', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('getThemeAnalysis performs no provider call (returns not_generated when uncached)', async () => {
+    const result = await getThemeAnalysis();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+    expect(result.available === false || result.available === true).toBe(true);
+  });
+
+  it('getCrossDomainNarrative performs no provider call (returns not_generated when uncached)', async () => {
+    const result = await getCrossDomainNarrative();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+    expect(result.available === false || result.available === true).toBe(true);
   });
 });

@@ -67,6 +67,7 @@ export const setMeatspaceBirthDate = (birthDate) => request('/meatspace/birth-da
   body: JSON.stringify({ birthDate })
 });
 export const getDeathClock = () => request('/meatspace/death-clock');
+export const getMeatspaceLoggingStats = (options = {}) => request('/meatspace/logging-stats', options);
 export const getLEV = () => request('/meatspace/lev');
 export const getAlcoholSummary = () => request('/meatspace/alcohol');
 export const getDailyAlcohol = (from, to) => {
@@ -178,21 +179,49 @@ export const getPostSessions = (from, to) => {
   if (to) params.set('to', to);
   return request(`/meatspace/post/sessions?${params}`);
 };
-export const getPostSession = (id) => request(`/meatspace/post/sessions/${id}`);
-export const submitPostSession = (data) => request('/meatspace/post/sessions', {
+export const getPostSession = (id, options = {}) => request(`/meatspace/post/sessions/${id}`, options);
+export const submitPostSession = (data, options = {}) => request('/meatspace/post/sessions', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const getPostStats = (days) => request(`/meatspace/post/stats${days != null ? `?days=${days}` : ''}`);
-export const generatePostDrill = (type, config = {}, providerId, model) => request('/meatspace/post/drill', {
+export const getPostProgress = (days, options = {}) => request(
+  `/meatspace/post/progress${days != null ? `?days=${days}` : ''}`,
+  options
+);
+export const getPostAdaptivePreview = () => request('/meatspace/post/adaptive-preview');
+// Mastered-but-inactive skills due for a maintenance review (issue #2096). The
+// launcher mixes these into a Quick session as labeled review reps. Silent — the
+// caller degrades to a normal Quick session if this fails.
+export const getPostReviewReps = (limit, options = {}) => request(
+  `/meatspace/post/review/reps${limit != null ? `?limit=${limit}` : ''}`,
+  { silent: true, ...options }
+);
+// Ordered "what to practice next" recommendations (issue #2100). Silent — the
+// launcher/widget degrade gracefully (hide the panel) if this fails.
+export const getPostRecommendations = (limit, options = {}) => request(
+  `/meatspace/post/recommendations${limit != null ? `?limit=${limit}` : ''}`,
+  { silent: true, ...options }
+);
+export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
+export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');
+export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {
   method: 'POST',
-  body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) })
+  body: JSON.stringify({ type, config, ...(providerId && { providerId }), ...(model && { model }) }),
+  ...options
 });
-export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, providerId, model) =>
+export const scorePostLlmDrill = (type, drillData, responses, timeLimitMs, providerId, model, options = {}) =>
   request('/meatspace/post/score-llm', {
     method: 'POST',
-    body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) })
+    body: JSON.stringify({ type, drillData, responses, timeLimitMs, ...(providerId && { providerId }), ...(model && { model }) }),
+    ...options
   });
+export const getPostDrillCacheStatus = () => request('/meatspace/post/drill-cache/status');
+export const fillPostDrillCache = (types, providerId, model) => request('/meatspace/post/drill-cache/fill', {
+  method: 'POST',
+  body: JSON.stringify({ ...(types && { types }), ...(providerId && { providerId }), ...(model && { model }) })
+});
 
 // MeatSpace - POST Memory Builder
 export const getMemoryItems = () => request('/meatspace/post/memory-items');
@@ -226,6 +255,24 @@ export const submitTrainingEntry = (data) => request('/meatspace/post/training',
 });
 export const getTrainingStats = (days) => request(`/meatspace/post/training/stats${days != null ? `?days=${days}` : ''}`);
 export const getTrainingEntries = (limit) => request(`/meatspace/post/training/entries${limit ? `?limit=${limit}` : ''}`);
+
+// MeatSpace - POST Morse Trainer progress (server-side Koch level, round history,
+// accuracy/WPM trends, per-character confusion matrix). Callers own their error
+// UI (fire-and-forget from the trainer), so pass { silent: true }.
+export const submitMorseRound = (data, options = {}) => request('/meatspace/post/morse/rounds', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options
+});
+export const getMorseProgress = (days, options = {}) => request(
+  `/meatspace/post/morse/progress${days != null ? `?days=${days}` : ''}`,
+  options
+);
+export const updateMorseLevel = (data, options = {}) => request('/meatspace/post/morse/level', {
+  method: 'PUT',
+  body: JSON.stringify(data),
+  ...options
+});
 
 // Life Calendar
 export const getLifeCalendar = () => request('/meatspace/calendar');

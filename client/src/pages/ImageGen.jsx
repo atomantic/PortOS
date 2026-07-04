@@ -27,6 +27,7 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import ReferenceImagePicker from '../components/imageGen/ReferenceImagePicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import { FormField } from '../components/ui/FormField';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -1105,8 +1106,7 @@ export default function ImageGen() {
             disabled={statusLoading}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
+            <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -1115,9 +1115,8 @@ export default function ImageGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="Describe the image you want to generate..."
               />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Negative Prompt</label>
+            </FormField>
+            <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <textarea
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
@@ -1126,7 +1125,7 @@ export default function ImageGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y"
                 placeholder="What to avoid..."
               />
-            </div>
+            </FormField>
           </div>
 
           {flux2Issue === 'venv' && (
@@ -1492,7 +1491,7 @@ export default function ImageGen() {
         onSelect={handleGallerySelect}
       />
 
-      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">
+      <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">
         <ImageGenTab />
       </Drawer>
 

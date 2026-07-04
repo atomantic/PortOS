@@ -17,6 +17,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeAuthor, buildAuthorRecord, applyAuthorPatch, mergeAuthorRecord } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
+  withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 
 const AUTHORS_FILE = join(PATHS.data, 'authors.json');
@@ -134,6 +135,9 @@ export async function pruneTombstonedAuthors(olderThanMs) {
   }
   if (pruned.length === 0) return { pruned: 0 };
   await saveAll(survivors);
-  for (const id of pruned) await deleteSyncBaseHash('author', id);
+  // Coalesce the per-author base-hash evictions into ONE disk write.
+  await withBaseHashFlushBatch(async () => {
+    for (const id of pruned) await deleteSyncBaseHash('author', id);
+  });
   return { pruned: pruned.length };
 }

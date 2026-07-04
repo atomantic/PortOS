@@ -1,19 +1,35 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Brain, ArrowRight } from 'lucide-react';
+import { Brain, ArrowRight, Compass } from 'lucide-react';
 import * as api from '../services/api';
+import { streakGlyph } from '../lib/streakGlyph.js';
+import { computeGoalProgress } from './meatspace/post/constants';
 
 // Surfaces the daily POST cognitive self-test on the dashboard: today's
-// completion status, the current practice streak, and a one-click way into the
-// launcher. Self-fetches its stats (the dashboardState payload doesn't carry
-// POST data), mirroring DeathClockWidget.
+// completion status, the current practice streak, the top "what to practice
+// next" recommendation, and goal progress — plus a one-click way into the
+// launcher. Self-fetches (the dashboardState payload doesn't carry POST data),
+// mirroring DeathClockWidget.
 export default function DailyPostWidget() {
   const [stats, setStats] = useState(null);
+  const [statsWeek, setStatsWeek] = useState(null);
+  const [config, setConfig] = useState(null);
+  const [topRec, setTopRec] = useState(null);
   const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const data = await api.getPostStats().catch(() => null);
+    // Recommendations/config/week-stats are best-effort — a failure just hides
+    // the extra rows; the streak card still renders from `stats`.
+    const [data, week, cfg, recs] = await Promise.all([
+      api.getPostStats().catch(() => null),
+      api.getPostStats(7).catch(() => null),
+      api.getPostConfig().catch(() => null),
+      api.getPostRecommendations(1).catch(() => null),
+    ]);
     setStats(data);
+    setStatsWeek(week);
+    setConfig(cfg);
+    setTopRec(recs?.recommendations?.[0] || null);
     setLoaded(true);
   }, []);
 
@@ -27,7 +43,14 @@ export default function DailyPostWidget() {
   const longest = stats?.longestStreak ?? 0;
   const completedToday = !!stats?.completedToday;
   const todayScore = stats?.todayScore;
-  const streakGlyph = streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨';
+
+  // Widget goal metrics: streak + this week's sessions (no today-minutes /
+  // Morse-WPM fetch here — computeGoalProgress omits goals whose metric is
+  // unavailable, so those simply don't render on the compact widget).
+  const goalRows = computeGoalProgress(config?.goals, {
+    currentStreak: streak,
+    weekSessions: statsWeek?.sessionCount ?? 0,
+  }).slice(0, 2);
 
   return (
     <Link
@@ -49,7 +72,7 @@ export default function DailyPostWidget() {
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="text-2xl" aria-hidden="true">{streakGlyph}</div>
+        <div className="text-2xl" aria-hidden="true">{streakGlyph(streak)}</div>
         <div>
           <div className="text-xl font-bold text-white">
             {streak} day{streak !== 1 ? 's' : ''}
@@ -70,6 +93,28 @@ export default function DailyPostWidget() {
           </div>
         )}
       </div>
+
+      {/* Top "what to practice next" recommendation (issue #2100). */}
+      {topRec && (
+        <div className="mt-3 flex items-start gap-2 pt-3 border-t border-port-border">
+          <Compass size={14} className="text-port-accent mt-0.5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-gray-400">Up next</div>
+            <div className="text-sm text-white truncate">{topRec.title}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Goal progress chips (issue #2100) — only goals with a known metric. */}
+      {goalRows.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+          {goalRows.map(g => (
+            <span key={g.key} className={g.met ? 'text-port-success' : 'text-gray-400'}>
+              {g.label}: <span className="font-mono">{g.current}/{g.target}</span>
+            </span>
+          ))}
+        </div>
+      )}
     </Link>
   );
 }

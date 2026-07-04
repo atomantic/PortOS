@@ -12,6 +12,7 @@ const UpcomingTasksWidget   = lazyWithReload(() => import('../UpcomingTasksWidge
 const DecisionLogWidget     = lazyWithReload(() => import('../DecisionLogWidget'));
 const DeathClockWidget      = lazyWithReload(() => import('../DeathClockWidget'));
 const DailyPostWidget       = lazyWithReload(() => import('../DailyPostWidget'));
+const TribeCareWidget       = lazyWithReload(() => import('../TribeCareWidget'));
 const ProactiveAlertsWidget = lazyWithReload(() => import('../ProactiveAlertsWidget'));
 const QuickBrainCapture     = lazyWithReload(() => import('../QuickBrainCapture'));
 const QuickIdeaCapture      = lazyWithReload(() => import('../QuickIdeaCapture'));
@@ -23,6 +24,8 @@ const AppsGridWidget        = lazyWithReload(() => import('./builtins/AppsGridWi
 const QuickStatsWidget      = lazyWithReload(() => import('./builtins/QuickStatsWidget'));
 const ActivityStreakWidget  = lazyWithReload(() => import('./builtins/ActivityStreakWidget'));
 const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActivityWidget'));
+const FeedsWidget           = lazyWithReload(() => import('./builtins/FeedsWidget'));
+const MeatSpaceStreakWidget = lazyWithReload(() => import('./builtins/MeatSpaceStreakWidget'));
 
 // Each entry: { id, label, Component, width, defaultH?, gate?, module? }.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.
@@ -56,10 +59,13 @@ export const WIDGETS = [
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },
   { id: 'death-clock',       label: 'Death Clock',           Component: DeathClockWidget,       width: 'quarter', defaultH: 4 },
   { id: 'daily-post',        label: 'Daily POST',            Component: DailyPostWidget,        width: 'quarter', defaultH: 3 },
+  { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
   { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },
   { id: 'decision-log',      label: 'Decision Log',          Component: DecisionLogWidget,      width: 'quarter', defaultH: 4 },
   { id: 'activity-streak',   label: 'Activity Streak',       Component: ActivityStreakWidget,   width: 'third',   defaultH: 3, gate: (s) => s.usage?.currentStreak > 0 || s.usage?.longestStreak > 0, module: { id: '06', status: 'STREAK',  glyph: 'spark' } },
   { id: 'hourly-activity',   label: 'Activity by Hour',      Component: HourlyActivityWidget,   width: 'full',    defaultH: 4, gate: (s) => !!s.usage?.hourlyActivity && s.usage.hourlyActivity.some((v) => v > 0) },
+  { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
+  { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
 ];
 
 export const WIDGETS_BY_ID = Object.fromEntries(WIDGETS.map((w) => [w.id, w]));

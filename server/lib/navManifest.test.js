@@ -33,7 +33,11 @@ const TABBED_PAGES = [
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
-  { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab' },
+  // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) that
+  // aren't top-level switch cases — declare their source so the guard covers
+  // them in both directions (nav ↔ real mode). Adding a MODE flows automatically.
+  { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
+    nestedIdSources: [{ parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' }] },
 ];
 
 // Pull the inner text of `export const <constName> = [ … ];` (requiring `export`
@@ -67,11 +71,21 @@ function extractSwitchTabs(src, switchVar) {
   return [def[1], ...extractSwitchCases(src, switchVar)];
 }
 
-// The set of absolute tab paths a page serves under its own prefix.
-function extractTabPaths(filePath, { kind, constName, switchVar, prefix }) {
+// The `id:` values of an exported const array (`kind: 'ids'` shape), used to
+// pull routed sub-page ids (e.g. morse's copy/send MODES) out of another file.
+function extractConstIds(filePath, constName) {
   const src = fs.readFileSync(filePath, 'utf8');
+  const block = extractConstArrayBlock(src, constName);
+  return [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+}
+
+// The set of absolute tab paths a page serves under its own prefix.
+function extractTabPaths(filePath, { kind, constName, switchVar, prefix, nestedIdSources }) {
+  const src = fs.readFileSync(filePath, 'utf8');
+  const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
+    extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
   if (kind === 'switch') {
-    return extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`);
+    return [...extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`), ...nested];
   }
   const block = extractConstArrayBlock(src, constName);
   if (kind === 'ids') {

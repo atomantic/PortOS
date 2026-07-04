@@ -9,6 +9,8 @@
  * swallowed so the unhandledrejection handler can't recurse into itself.
  */
 
+import { evictOldest } from './boundedMap.js';
+
 const ENDPOINT = '/api/client-errors';
 const MIN_SEND_INTERVAL_MS = 1000;
 const DEDUP_WINDOW_MS = 60 * 1000;
@@ -37,10 +39,8 @@ function pruneRecent(now) {
   for (const [hash, sentAt] of recentHashes) {
     if (now - sentAt > DEDUP_WINDOW_MS) recentHashes.delete(hash);
   }
-  while (recentHashes.size > MAX_RECENT) {
-    const oldest = recentHashes.keys().next().value;
-    recentHashes.delete(oldest);
-  }
+  // After the TTL sweep, enforce the hard size cap by evicting oldest-first.
+  evictOldest(recentHashes, MAX_RECENT);
 }
 
 // Guarded stringify so a circular rejection reason or a value that throws

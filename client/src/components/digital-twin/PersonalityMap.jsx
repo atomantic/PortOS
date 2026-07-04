@@ -15,14 +15,14 @@ const BIG_FIVE_LABELS = {
 const TRAIT_ORDER = ['O', 'C', 'E', 'A', 'N'];
 
 function getConfidenceColor(confidence) {
-  if (confidence >= 0.8) return 'text-green-400';
-  if (confidence >= 0.6) return 'text-yellow-400';
+  if (confidence >= 0.8) return 'text-port-success';
+  if (confidence >= 0.6) return 'text-port-warning';
   return 'text-gray-400';
 }
 
 function getConfidenceBg(confidence) {
-  if (confidence >= 0.8) return 'bg-green-500';
-  if (confidence >= 0.6) return 'bg-yellow-500';
+  if (confidence >= 0.8) return 'bg-port-success';
+  if (confidence >= 0.6) return 'bg-port-warning';
   return 'bg-gray-500';
 }
 

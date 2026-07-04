@@ -150,21 +150,25 @@ export function isWatchdogSuccess({ completionWatchdogFired, signal, outputPath 
  * @param {string} ctx.filename
  * @param {object} ctx.meta - the history-entry metadata built up-front
  * @param {number} ctx.actualSeed
- * @param {() => Promise<Array>} ctx.loadHistory
- * @param {(h: Array) => Promise<void>} ctx.saveHistory
+ * @param {(mutator: (h: Array) => Array) => Promise<Array>} ctx.mutateHistory - serialized read-modify-write on the shared history file (mutateVideoHistory)
  */
-export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, loadHistory, saveHistory }) {
+export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory }) {
   job.status = 'complete';
   await optimizeForStreaming(outputPath);
   const thumbnail = await generateThumbnail(outputPath, jobId);
-  const history = await loadHistory();
+  // Serialized append through the shared history tail so a concurrent write
+  // path (a full-video download completing, another render finalizing) can't
+  // read the same stale array and clobber this record on save.
+  //
   // Persist the runtime fingerprint captured from the child's startup RUNTIME:
   // line (set on `job` by makeVideoGenLineHandler) so each history record
   // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
   // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
   // `mlx_video.generate_av` path we don't control.
-  history.unshift({ ...meta, thumbnail, ...(job.runtime ? { runtime: job.runtime } : {}) });
-  await saveHistory(history);
+  await mutateHistory((history) => {
+    history.unshift({ ...meta, thumbnail, ...(job.runtime ? { runtime: job.runtime } : {}) });
+    return history;
+  });
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
   broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
   videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });

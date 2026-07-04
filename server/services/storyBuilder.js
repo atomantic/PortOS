@@ -46,7 +46,7 @@ import {
 } from '../lib/storyBuilderSteps.js';
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
-import { listIngredients, linkIngredientsToSeries } from './catalogDB.js';
+import { linkIngredientsToSeries, resolveIngredientsByIds } from './catalogDB.js';
 import { getActiveCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
 import { createUniverse, deleteUniverse, getUniverse, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
@@ -117,21 +117,11 @@ function composeSeedFromIngredients(ingredients) {
   return `${composed.slice(0, SEED_MAX - 1)}…`;
 }
 
-// Resolve the selected catalog ingredient ids to live ingredient records in a
-// single batch query (`listIngredients({ ids })` already excludes soft-deleted
-// rows), then re-order to the caller's pick order so the composed seed reads in
-// the order the user selected. Missing/deleted ids are simply absent and skipped.
-async function resolveCatalogIngredients(ids) {
-  // De-dupe so a direct API caller passing the same id twice doesn't double the
-  // seed bullet (the UI selects via a Set, so this is only reachable off-UI).
-  const list = [...new Set((Array.isArray(ids) ? ids : [])
-    .filter((id) => isStr(id) && id.trim())
-    .map((id) => id.trim()))];
-  if (list.length === 0) return [];
-  const { items } = await listIngredients({ ids: list, limit: list.length });
-  const byId = new Map(items.map((ing) => [ing.id, ing]));
-  return list.map((id) => byId.get(id)).filter(Boolean);
-}
+// Resolve the selected catalog ingredient ids to live ingredient records
+// (de-duped, pick-order-preserving, soft-deleted excluded). Delegates to the
+// shared catalogDB resolver (#1808) so Story Builder and Creative Director share
+// one implementation instead of each carrying its own copy.
+const resolveCatalogIngredients = (ids) => resolveIngredientsByIds(ids);
 
 // Steps the importer actually pre-fills, so they open "ready" for review on an
 // import-mode session. `idea` (universe + series exist), `plotArc` (arc +

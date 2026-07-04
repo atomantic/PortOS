@@ -69,17 +69,20 @@ export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 
 export const buildApp = (id) => request(`/apps/${id}/build`, { method: 'POST' });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
-export const toggleAllAppTaskTypes = (id, enabled) => request(`/apps/${id}/task-types/all`, {
+export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/apps/${id}/task-types/all`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled })
+  body: JSON.stringify({ enabled }),
+  ...options
 });
-export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}) => request(`/apps/${id}/task-types/${taskType}`, {
+export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}, options = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled, interval, taskMetadata })
+  body: JSON.stringify({ enabled, interval, taskMetadata }),
+  ...options
 });
-export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }) => request(`/apps/bulk-task-type/${taskType}`, {
+export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }, options = {}) => request(`/apps/bulk-task-type/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled })
+  body: JSON.stringify({ enabled }),
+  ...options
 });
 export const detectAppIcons = () => request('/apps/detect-icons', { method: 'POST' });
 export const detectAppIcon = (id) => request(`/apps/${id}/detect-icon`, { method: 'POST' });

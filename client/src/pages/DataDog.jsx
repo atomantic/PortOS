@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import toast from '../components/ui/Toast';
+import { FormField } from '../components/ui/FormField';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import api from '../services/api';
 
 const SITE_OPTIONS = [
@@ -181,11 +183,7 @@ export default function DataDog() {
   };
 
   if (loading) {
-    return (
-      <div className="flex justify-center items-center h-screen">
-        <div className="text-gray-400">Loading DataDog instances...</div>
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-56" cards={2} />;
   }
 
   return (
@@ -195,7 +193,7 @@ export default function DataDog() {
         {!editingInstance && (
           <button
             onClick={handleCreate}
-            className="w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded"
+            className="w-full sm:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded"
           >
             + Add DataDog Instance
           </button>
@@ -219,7 +217,7 @@ export default function DataDog() {
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="w-full sm:w-auto px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
+                className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
               >
                 Delete
               </button>
@@ -236,17 +234,14 @@ export default function DataDog() {
             </h2>
 
             {saveError && (
-              <div className="mb-4 p-3 bg-red-900 border border-red-700 rounded">
-                <p className="text-red-300 font-medium">Error saving DataDog instance</p>
-                <p className="text-red-400 text-sm mt-1">{saveError}</p>
+              <div className="mb-4 p-3 bg-port-error/20 border border-port-error/40 rounded">
+                <p className="text-port-error font-medium">Error saving DataDog instance</p>
+                <p className="text-port-error/80 text-sm mt-1">{saveError}</p>
               </div>
             )}
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Instance ID
-                </label>
+              <FormField label="Instance ID" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="id"
@@ -259,12 +254,9 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Unique identifier (cannot be changed after creation)
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Display Name
-                </label>
+              <FormField label="Display Name" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="text"
                   name="name"
@@ -273,12 +265,9 @@ export default function DataDog() {
                   className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                   placeholder="e.g., Company DataDog"
                 />
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Site
-                </label>
+              <FormField label="Site" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <select
                   value={customSite ? 'custom' : formData.site}
                   onChange={handleSiteChange}
@@ -298,12 +287,9 @@ export default function DataDog() {
                     placeholder="e.g., api.custom-datadog.com"
                   />
                 )}
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  API Key
-                </label>
+              <FormField label="API Key" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="apiKey"
@@ -315,12 +301,9 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Found in DataDog Organization Settings &rarr; API Keys
                 </p>
-              </div>
+              </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Application Key
-                </label>
+              <FormField label="Application Key" labelClassName="block text-sm font-medium text-gray-300 mb-1">
                 <input
                   type="password"
                   name="appKey"
@@ -332,13 +315,13 @@ export default function DataDog() {
                 <p className="text-xs text-gray-400 mt-1">
                   Found in DataDog Organization Settings &rarr; Application Keys
                 </p>
-              </div>
+              </FormField>
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={handleSave}
                   disabled={saving || !formData.name || !formData.site || (editingInstance === 'new' && (!formData.apiKey || !formData.appKey))}
-                  className="w-full sm:w-auto px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full sm:w-auto px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
@@ -381,19 +364,19 @@ export default function DataDog() {
                     <button
                       onClick={() => handleTest(instance.id)}
                       disabled={testingInstance === instance.id}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded disabled:opacity-50"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded disabled:opacity-50"
                     >
                       {testingInstance === instance.id ? 'Testing...' : 'Test'}
                     </button>
                     <button
                       onClick={() => handleEdit(instance)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-yellow-600 hover:bg-yellow-700 text-white text-sm rounded"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-warning hover:bg-port-warning/80 text-white text-sm rounded"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDeleteClick(instance.id)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded"
+                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-error hover:bg-port-error/80 text-white text-sm rounded"
                     >
                       Delete
                     </button>
@@ -404,16 +387,16 @@ export default function DataDog() {
                   <div
                     className={`mt-4 p-3 rounded ${
                       testResults[instance.id].success
-                        ? 'bg-green-900 border border-green-700'
-                        : 'bg-red-900 border border-red-700'
+                        ? 'bg-port-success/20 border border-port-success/40'
+                        : 'bg-port-error/20 border border-port-error/40'
                     }`}
                   >
                     {testResults[instance.id].success ? (
-                      <p className="text-green-300 font-medium">API key validated</p>
+                      <p className="text-port-success font-medium">API key validated</p>
                     ) : (
                       <>
-                        <p className="text-red-300 font-medium">Connection failed</p>
-                        <p className="text-red-400 text-sm mt-1">{testResults[instance.id].error}</p>
+                        <p className="text-port-error font-medium">Connection failed</p>
+                        <p className="text-port-error/80 text-sm mt-1">{testResults[instance.id].error}</p>
                       </>
                     )}
                   </div>

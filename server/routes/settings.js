@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getSettings, updateSettings } from '../services/settings.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import {
   setCodexParallelLimit,
@@ -9,6 +9,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { isPlainObject } from '../lib/objects.js';
 import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
@@ -37,11 +38,62 @@ const decorateBounds = (settings) => ({
   },
 });
 
+// Third-party API tokens that live OUTSIDE the `secrets.*` hierarchy but must
+// never be echoed to the client (#1821). The Settings UI reads only their
+// *presence* from dedicated status routes (`GET /api/image-gen/setup/hf-token-
+// status`, `GET /api/loras/auth/civitai` → `hasKey`), never the raw value here,
+// so stripping them is non-breaking. Sibling fields under each parent are
+// preserved; arrays are left untouched (a legacy/malformed `civitai: ['x']`
+// must not be spread into `{ '0': 'x' }`).
+const redactExternalTokens = (settings) => {
+  const next = { ...settings };
+  if (isPlainObject(next.imageGen)) {
+    const { hfToken, ...rest } = next.imageGen;
+    next.imageGen = rest;
+  }
+  if (isPlainObject(next.civitai)) {
+    const { apiKey, ...rest } = next.civitai;
+    next.civitai = rest;
+  }
+  return next;
+};
+
+// Write-path counterpart to the redaction above. Because GET /api/settings no
+// longer returns these tokens, a client that GETs settings, rebuilds a full
+// top-level object and PUTs it back (e.g. `patchSettingsSlice('imageGen.local',
+// …)`) would otherwise drop the persisted token — `updateSettings` shallow-
+// merges top-level keys, so an incoming `imageGen`/`civitai` replaces the
+// stored object wholesale. PUT /api/settings is never the write path for these
+// tokens (the dedicated /setup/hf-token and /loras/auth/civitai routes are), so
+// re-inject the persisted value whenever an incoming parent object omits it.
+// A parent absent from the patch needs nothing — the top-level merge keeps the
+// stored object (token included) untouched.
+const preserveWriteOnlyTokens = (next, current) => {
+  const carryOver = (parentKey, tokenKey) => {
+    const incoming = next[parentKey];
+    const stored = current?.[parentKey]?.[tokenKey];
+    if (isPlainObject(incoming) && !(tokenKey in incoming) && stored !== undefined) {
+      next[parentKey] = { ...incoming, [tokenKey]: stored };
+    }
+  };
+  carryOver('imageGen', 'hfToken');
+  carryOver('civitai', 'apiKey');
+  return next;
+};
+
+// Single sanitizer every settings response (GET load + PUT save) runs through,
+// so a leak can't reappear on one path after being closed on the other: strip
+// the top-level `secrets` hierarchy, redact external tokens (#1821), then
+// decorate server-authoritative bounds.
+const sanitizeSettingsForResponse = (settings) => {
+  const { secrets, ...safe } = settings;
+  return decorateBounds(redactExternalTokens(safe));
+};
+
 // GET /api/settings
 router.get('/', asyncHandler(async (req, res) => {
   const settings = await getSettings();
-  const { secrets, ...safe } = settings;
-  res.json(decorateBounds(safe));
+  res.json(sanitizeSettingsForResponse(settings));
 }));
 
 // GET /api/settings/ai-assignments
@@ -127,13 +179,16 @@ router.put('/', asyncHandler(async (req, res) => {
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
   const { secrets: _ignoredSecrets, catalogUserTypes: _ignoredTypes, ...settingsPatch } = req.body || {};
-  const merged = await updateSettings(settingsPatch);
+  // updateSettingsWith (not updateSettings) so we can re-inject persisted
+  // write-only tokens the incoming patch omits, against the freshest snapshot
+  // inside the write queue (see preserveWriteOnlyTokens).
+  const merged = await updateSettingsWith((current) =>
+    preserveWriteOnlyTokens({ ...current, ...settingsPatch }, current));
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without
   // re-reading the file.
   setCodexParallelLimit(merged.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
-  const { secrets, ...safe } = merged;
-  res.json(decorateBounds(safe));
+  res.json(sanitizeSettingsForResponse(merged));
 }));
 
 export default router;

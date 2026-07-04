@@ -48,10 +48,10 @@ const LINK_TYPE_COLORS = {
 
 const CLONE_STATUS_STYLES = {
   none: '',
-  pending: 'text-yellow-400',
-  cloning: 'text-blue-400 animate-pulse',
-  cloned: 'text-green-400',
-  failed: 'text-red-400'
+  pending: 'text-port-warning',
+  cloning: 'text-port-accent animate-pulse',
+  cloned: 'text-port-success',
+  failed: 'text-port-error'
 };
 
 export default function LinksTab({ onRefresh }) {
@@ -270,7 +270,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleDelete = async (linkId) => {
-    const result = await api.deleteBrainLink(linkId).catch(err => {
+    const result = await api.deleteBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete');
       return null;
     });
@@ -283,7 +283,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleClone = async (linkId) => {
-    const result = await api.cloneBrainLink(linkId).catch(err => {
+    const result = await api.cloneBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to start clone');
       return null;
     });
@@ -295,7 +295,7 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handlePull = async (linkId) => {
-    const result = await api.pullBrainLink(linkId).catch(err => {
+    const result = await api.pullBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to pull');
       return null;
     });
@@ -306,14 +306,14 @@ export default function LinksTab({ onRefresh }) {
   };
 
   const handleOpenFolder = async (linkId) => {
-    await api.openBrainLinkFolder(linkId).catch(err => {
+    await api.openBrainLinkFolder(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to open folder');
     });
   };
 
   const handleScan = async (linkId) => {
     setScanningId(linkId);
-    const result = await api.scanBrainLink(linkId).catch(err => {
+    const result = await api.scanBrainLink(linkId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to start scan');
       return null;
     });

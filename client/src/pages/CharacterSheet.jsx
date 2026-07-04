@@ -38,7 +38,7 @@ const EVENT_COLORS = {
   damage: 'text-port-error',
   xp: 'text-port-warning',
   rest: 'text-port-accent',
-  level_up: 'text-purple-400',
+  level_up: 'text-port-accent-2',
   custom: 'text-gray-400',
   sync: 'text-port-accent'
 };
@@ -216,7 +216,7 @@ export default function CharacterSheet() {
     // The route persists `avatarPath` onto the character server-side
     // (persistToCharacter), so no follow-up charPut is needed — keep the
     // optimistic setChar for instant feedback.
-    generateAvatar({ name: char.name, characterClass: char.class, persistToCharacter: true })
+    generateAvatar({ name: char.name, characterClass: char.class, persistToCharacter: true }, { silent: true })
       .then(result => {
         setChar(prev => ({ ...prev, avatarPath: result.path }));
       })
@@ -303,7 +303,7 @@ export default function CharacterSheet() {
                 <button
                   onClick={handleGenerateAvatar}
                   disabled={generatingAvatar}
-                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-0"
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-0"
                   title="Generate avatar"
                   aria-label="Generate avatar"
                 >
@@ -461,8 +461,8 @@ export default function CharacterSheet() {
               onClick={() => toggleAction('event')}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeAction === 'event'
-                  ? 'bg-purple-500 text-white'
-                  : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
+                  ? 'bg-port-accent-2 text-port-on-accent-2'
+                  : 'bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30'
               }`}
             >
               <ScrollText className="w-4 h-4" /> Log Event
@@ -554,9 +554,9 @@ export default function CharacterSheet() {
           )}
 
           {activeAction === 'event' && (
-            <div className="mt-3 p-3 bg-port-bg rounded-lg border border-purple-500/30 space-y-2">
+            <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-accent-2/30 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-purple-400">Log Event</span>
+                <span className="text-sm font-medium text-port-accent-2">Log Event</span>
                 <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
@@ -587,7 +587,7 @@ export default function CharacterSheet() {
                   </div>
                   <button
                     onClick={handleLogEvent}
-                    className="px-4 py-1.5 bg-purple-500 text-white rounded text-sm font-medium hover:bg-purple-500/80 transition-colors"
+                    className="px-4 py-1.5 bg-port-accent-2 text-port-on-accent-2 rounded text-sm font-medium hover:bg-port-accent-2/80 transition-colors"
                   >
                     Log
                   </button>

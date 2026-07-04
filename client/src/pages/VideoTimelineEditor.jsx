@@ -86,7 +86,7 @@ function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSele
         type="button"
         onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-port-error rounded opacity-0 group-hover:opacity-100 transition-opacity text-white"
+        className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-port-error rounded opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white"
         title="Remove from timeline"
       >
         <X className="w-3 h-3" />
@@ -138,6 +138,11 @@ export default function VideoTimelineEditor() {
   // Local timeline (each clip gets a stable _key for dnd-kit identity)
   const [clips, setClips] = useState([]);
   const [selectedKey, setSelectedKey] = useState(null);
+  // Track the current selection by its STABLE identity (clipId + position) so a
+  // refresh — which regenerates every clip's random _key — can re-derive selectedKey
+  // instead of collapsing the inspector to "Select a clip". Read from a ref so refresh
+  // needn't depend on clips/selectedKey (which would re-trigger the load-on-mount loop).
+  const selectionRef = useRef({ clipId: null, index: -1 });
   const [pxPerSec, setPxPerSec] = useState(60);
   const [t, setT] = useState(0); // project-time in seconds
   const [playing, setPlaying] = useState(false);
@@ -171,12 +176,33 @@ export default function VideoTimelineEditor() {
       api.listVideoHistory().catch(() => []),
     ]);
     if (proj) {
+      const newClips = (proj.clips || []).map((c, idx) => ({ ...c, _key: `${c.clipId}-${idx}-${Math.random().toString(36).slice(2, 8)}` }));
       setProject(proj);
-      setClips((proj.clips || []).map((c, idx) => ({ ...c, _key: `${c.clipId}-${idx}-${Math.random().toString(36).slice(2, 8)}` })));
+      setClips(newClips);
+      // Re-derive selection from the stable clipId (+ prior position) so a refresh —
+      // e.g. a CONFLICT reload mid-edit — doesn't leave selectedKey pointing at a
+      // now-regenerated _key and collapse the inspector. Prefer the same index; fall
+      // back to the first clip with the same clipId; clear if the clip is gone.
+      const { clipId: selId, index: selIdx } = selectionRef.current;
+      if (selId != null) {
+        const match = newClips[selIdx]?.clipId === selId
+          ? newClips[selIdx]
+          : newClips.find((c) => c.clipId === selId);
+        setSelectedKey(match ? match._key : null);
+      }
     }
     setHistory(hist);
     setLoading(false);
   }, [projectId]);
+
+  // Keep the stable-identity mirror of the current selection current so refresh() can
+  // reattach selectedKey after it regenerates clip _keys.
+  useEffect(() => {
+    const idx = clips.findIndex((c) => c._key === selectedKey);
+    selectionRef.current = idx >= 0
+      ? { clipId: clips[idx].clipId, index: idx }
+      : { clipId: null, index: -1 };
+  }, [selectedKey, clips]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

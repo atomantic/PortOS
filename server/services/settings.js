@@ -78,6 +78,21 @@ const queueWrite = createFileWriteQueue();
 
 const save = async (settings) => {
   const cleaned = stripStoreKeys(settings);
+  // Stamp `timezoneUpdatedAt` whenever the effective `timezone` actually
+  // changes, so timezone-dependent schedulers can gate catch-up/re-evaluation
+  // logic on "when did the zone last change" (see meatspacePostReminder's
+  // missed-slot catch-up, #2040). Compare against the previous on-disk value so
+  // unrelated settings saves NEVER touch the field. The read runs inside the
+  // same queued write turn (every caller wraps save in queueWrite), so the
+  // comparison is against the freshest persisted snapshot, and any prior
+  // `timezoneUpdatedAt` on an unchanged-timezone save rides through untouched
+  // via the merged object.
+  if (isPlainObject(cleaned)) {
+    const prev = stripStoreKeys(await loadRaw());
+    if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
+      cleaned.timezoneUpdatedAt = Date.now();
+    }
+  }
   // atomicWrite (temp-file + rename) so a mid-write crash never truncates
   // settings.json. Pass a pre-stringified string to preserve the trailing
   // newline; atomicWrite's own JSON.stringify omits it.

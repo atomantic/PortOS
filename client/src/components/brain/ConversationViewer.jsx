@@ -4,6 +4,7 @@ import * as api from '../../services/api';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import MarkdownOutput from '../cos/MarkdownOutput';
+import Modal from '../ui/Modal';
 
 /**
  * Full-transcript viewer for an imported ChatGPT conversation. The Memory
@@ -25,47 +26,38 @@ export default function ConversationViewer({ record, onClose }) {
     return () => { active = false; };
   }, [record.sourceRef]);
 
-  // Close on Escape.
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-      onClick={onClose}
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      ariaLabel={record.title}
+      panelClassName="bg-port-card border border-port-border rounded-lg max-h-[85vh] flex flex-col"
     >
-      <div
-        className="bg-port-card border border-port-border rounded-lg w-full max-w-3xl max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <h3 className="font-medium text-white truncate pr-4">{record.title}</h3>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white flex-shrink-0"
-            aria-label="Close conversation viewer"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="overflow-y-auto p-4">
-          {loading && (
-            <div className="text-center py-12 text-gray-400">
-              <BrailleSpinner /> Loading conversation…
-            </div>
-          )}
-          {error && (
-            <Banner tone="error" size="sm">
-              Couldn't load the full transcript ({error}). Showing the preview instead.
-              <div className="mt-2 text-sm text-gray-300 whitespace-pre-wrap">{record.content}</div>
-            </Banner>
-          )}
-          {archive && <MarkdownOutput content={archive.transcript || record.content} />}
-        </div>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+        <h3 className="font-medium text-white truncate pr-4">{record.title}</h3>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-white flex-shrink-0"
+          aria-label="Close conversation viewer"
+        >
+          <X size={18} />
+        </button>
       </div>
-    </div>
+      <div className="overflow-y-auto p-4">
+        {loading && (
+          <div className="text-center py-12 text-gray-400">
+            <BrailleSpinner /> Loading conversation…
+          </div>
+        )}
+        {error && (
+          <Banner tone="error" size="sm">
+            Couldn't load the full transcript ({error}). Showing the preview instead.
+            <div className="mt-2 text-sm text-gray-300 whitespace-pre-wrap">{record.content}</div>
+          </Banner>
+        )}
+        {archive && <MarkdownOutput content={archive.transcript || record.content} />}
+      </div>
+    </Modal>
   );
 }

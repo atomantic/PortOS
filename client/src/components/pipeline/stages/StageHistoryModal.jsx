@@ -115,9 +115,9 @@ export default function StageHistoryModal({
                 <div className="text-xs text-gray-500 min-w-0">
                   {selected ? (
                     <>
-                      <span className="text-red-400">prior</span>
+                      <span className="text-port-error">prior</span>
                       {' → '}
-                      <span className="text-green-400">current{currentRunId ? ` (run ${currentRunId.slice(0, 8)})` : ''}</span>
+                      <span className="text-port-success">current{currentRunId ? ` (run ${currentRunId.slice(0, 8)})` : ''}</span>
                     </>
                   ) : 'Pick a version on the left to view the diff'}
                   {restoreBlockedReason ? (

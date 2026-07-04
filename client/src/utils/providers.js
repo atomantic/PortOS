@@ -20,6 +20,7 @@ const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
   [/claude[-_.:/]?fable[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
   [/claude[-_.:/]?mythos[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
   [/claude[-_.:/]?opus[-_.:/]?4[-_.:/]?8/i, 1_000_000],
+  [/claude[-_.:/]?sonnet[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
   [/claude[-_.:/]?sonnet[-_.:/]?4[-_.:/]?6(?:[-_.:/]|\b)/i, 1_000_000],
   [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
   [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
@@ -90,6 +91,36 @@ export const isVisionModel = (id) =>
   typeof id === 'string' && id.length > 0 &&
   // Mirror of VISION_RE in server/lib/localModelHeuristics.js — keep in lockstep.
   /(?:^|[-_/:])vision(?:[-_/:.]|$)|(?:^|[-_/:])vl(?:\d|[-_/:.]|$)|qwen[\d.]*-?vl|llava|bakllava|moondream|minicpm-?v|pixtral|gemma-?3|smolvlm|internvl|cogvlm|glm-?4v|phi-?3\.5?-vision|phi-?4-multimodal|got-ocr|idefics|fuyu|paligemma|kosmos|nanollava/i.test(id);
+
+/**
+ * Tool-use (function-calling) capable model detector — mirror of `isToolUseModel`
+ * in server/lib/localModelHeuristics.js (and the TOOL_USE_RE inlined in
+ * server/lib/aiToolkit/providers.js). Keep all three in lockstep (the server libs
+ * can't be imported here). Ollama's /api/show `tools` capability is authoritative
+ * when known; this id regex is the fallback for bare model-id strings. The CoS
+ * agent harness depends on reliable tool-calling, so only these families should
+ * be selectable for a local-model-backed coding provider.
+ * @param {string} id
+ * @returns {boolean}
+ */
+export const isToolUseModel = (id) =>
+  typeof id === 'string' && id.length > 0 &&
+  // Mirror of TOOL_USE_RE in server/lib/localModelHeuristics.js — keep in lockstep.
+  /qwen|llama-?3\.[1-9]|llama-?4|mistral|mixtral|ministral|codestral|devstral|magistral|command-?r|command-?a|firefunction|functionary|watt-tool|hermes|glm-?4|granite-?3|gpt-oss|nemotron|smollm2|deepseek-v3|deepseek-r1/i.test(id);
+
+/**
+ * Per-model filter for a CODING / tool-use picker: restrict LOCAL backends
+ * (Ollama / LM Studio) to tool-use-capable models by id, but leave cloud/API
+ * providers' lists untouched — `isToolUseModel` is a local-name heuristic and
+ * would wrongly hide capable cloud models whose ids don't encode their family.
+ * Mirrors `visionLocalModelFilter`. Pass as
+ * `useProviderModels({ modelFilter: toolUseLocalModelFilter })`.
+ * @param {string} id
+ * @param {{endpoint?:string,name?:string}} [provider]
+ * @returns {boolean}
+ */
+export const toolUseLocalModelFilter = (id, provider) =>
+  localBackendForProvider(provider) ? isToolUseModel(id) : true;
 
 /**
  * Selectable models for a generation/chat picker: drops internal sentinels AND
@@ -216,6 +247,21 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
+ * A `claude` CLI/TUI provider is "Ollama-backed" — the Claude Ollama pattern —
+ * when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL points at
+ * an Ollama daemon. Such a provider runs the Claude Code harness but generates
+ * tokens locally, so its model list is refreshed from Ollama (including the TUI
+ * variant, which the server refreshes via the `type==='tui' && ollamaBacked`
+ * branch). MIRROR of `isOllamaBackedProvider` in server/lib/aiToolkit/providers.js.
+ * @param {{ollamaBacked?:boolean,envVars?:Record<string,string>}} provider
+ */
+export const isOllamaBackedProvider = (provider) => {
+  if (provider?.ollamaBacked === true) return true;
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || '');
+  return /:11434\b/.test(base) || /ollama/i.test(base);
+};
+
+/**
  * Check if a provider is the headless Claude Code CLI (`claude --print`) whose
  * *provider-level config* points it at a Claude Code subscription plan — i.e. the
  * provider's own `envVars` do NOT route it through Bedrock or Vertex (those bill
@@ -235,6 +281,10 @@ export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiP
 export const isClaudeCodePlanCli = (provider) =>
   isCliProvider(provider) &&
   provider?.command === 'claude' &&
+  // Ollama-backed Claude (the "Claude Ollama" sample) routes generation to a
+  // local daemon via ANTHROPIC_BASE_URL — it's never plan/API-billed, so the
+  // billing warning would be misleading and discourage the shipped local setup.
+  !isOllamaBackedProvider(provider) &&
   !provider?.envVars?.CLAUDE_CODE_USE_BEDROCK &&
   !provider?.envVars?.CLAUDE_CODE_USE_VERTEX;
 

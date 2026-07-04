@@ -35,7 +35,8 @@ export const NOTIFICATION_TYPES = {
   AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt',
   PLAN_QUESTION: 'plan_question',
   AGENT_WARNING: 'agent_warning',
-  AUTOPILOT_PAUSED: 'autopilot_paused'
+  AUTOPILOT_PAUSED: 'autopilot_paused',
+  DAILY_POST_REMINDER: 'daily_post_reminder'
 };
 
 // Priority levels

@@ -187,6 +187,34 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['--print', '--dangerously-skip-permissions']);
   });
 
+  it('runs `opencode run -m ollama/<model>` for a headless OpenCode Ollama agent', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'opencode-ollama', command: 'opencode', args: ['run'], ollamaBacked: true },
+      'qwen2.5:7b',
+    );
+
+    expect(config.command).toBe('opencode');
+    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    expect(config.stdinMode).toBe('prompt');
+    // OpenCode emits plain text, so no stream-json format is requested.
+    expect(config.streamFormat).toBeUndefined();
+  });
+
+  it('prepends the run subcommand for OpenCode even if saved args dropped it', () => {
+    const config = buildCliSpawnConfig({ id: 'opencode-ollama', command: 'opencode', args: [], ollamaBacked: true }, 'qwen2.5:7b');
+
+    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+  });
+
+  it('respects a user-baked -m pin on an OpenCode provider and does not duplicate it', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'], ollamaBacked: true },
+      'qwen2.5:7b',
+    );
+
+    expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.

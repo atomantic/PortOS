@@ -9,7 +9,7 @@ import {
   getMortalLoomStatus,
   importMortalLoom
 } from '../../services/api';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatDateTime } from '../../utils/formatters';
 
 export function MortalLoomTab() {
   const icloudPathId = useId();
@@ -161,20 +161,20 @@ export function MortalLoomTab() {
         <div className="text-xs text-gray-400 space-y-1 font-mono">
           <div className="flex items-start gap-2">
             {status?.exists ? (
-              <CheckCircle2 size={14} className="text-green-400 mt-0.5 shrink-0" />
+              <CheckCircle2 size={14} className="text-port-success mt-0.5 shrink-0" />
             ) : (
-              <AlertCircle size={14} className="text-yellow-400 mt-0.5 shrink-0" />
+              <AlertCircle size={14} className="text-port-warning mt-0.5 shrink-0" />
             )}
             <span className="break-all">{effectivePath || '(no path)'}</span>
           </div>
           {status?.exists ? (
             <>
               <div>Size: {formatBytes(status.size)}</div>
-              <div>Modified: {status.mtime ? new Date(status.mtime).toLocaleString() : '—'}</div>
-              {lastImport && <div>Last import: {new Date(lastImport).toLocaleString()}</div>}
+              <div>Modified: {status.mtime ? formatDateTime(status.mtime) : '—'}</div>
+              {lastImport && <div>Last import: {formatDateTime(lastImport)}</div>}
             </>
           ) : (
-            <div className="text-yellow-400">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>
+            <div className="text-port-warning">File not found. Open MortalLoom on iPhone/Mac to create it, or verify the path.</div>
           )}
         </div>
         {status?.summary && (

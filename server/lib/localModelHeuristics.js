@@ -108,6 +108,55 @@ export function isVisionModel(model) {
   return typeof id === 'string' && VISION_RE.test(id);
 }
 
+// Tool-use (function-calling) capable model families. The CoS agent harness
+// (Read/Write/Edit/Bash + the agent loop) depends entirely on reliable
+// tool-calling, so a Claude-on-Ollama ("Claude Ollama") provider must only
+// surface models that can actually drive tools. Ollama's /api/show reports a
+// `tools` capability that is authoritative when present — this id regex is the
+// fallback for bare model-id strings (e.g. LM Studio, or a stored provider
+// `models` list). Matches the families with dependable function-calling support
+// (Qwen 2.5/3, Llama 3.1+, Mistral/Mixtral, Cohere Command, Hermes, GLM-4,
+// Granite 3, gpt-oss, Nemotron, function-calling-specialized models). Llama 3.0
+// is deliberately NOT matched (tool use landed in 3.1).
+//
+// MIRRORED in client/src/utils/providers.js (isToolUseModel) and inlined in
+// server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep all three in lockstep.
+const TOOL_USE_RE = new RegExp([
+  'qwen',
+  'llama-?3\\.[1-9]', 'llama-?4',
+  'mistral', 'mixtral', 'ministral', 'codestral', 'devstral', 'magistral',
+  'command-?r', 'command-?a',
+  'firefunction', 'functionary', 'watt-tool', 'hermes',
+  'glm-?4',
+  'granite-?3',
+  'gpt-oss',
+  'nemotron',
+  'smollm2',
+  'deepseek-v3', 'deepseek-r1',
+].join('|'), 'i');
+
+/**
+ * Detect a tool-use (function-calling) capable model from its id and/or backend
+ * capability metadata. Prefers explicit metadata: Ollama's /api/show reports a
+ * `tools` capability, which is authoritative in BOTH directions — a capabilities
+ * array that lists `tools` confirms support, and a non-empty array WITHOUT it is
+ * an explicit negative (don't regex-guess past it). Falls back to the id regex
+ * only when no capability metadata is available (bare id strings, LM Studio).
+ *
+ * @param {string|{id?:string,name?:string,capabilities?:string[]}} model
+ * @returns {boolean}
+ */
+export function isToolUseModel(model) {
+  if (!model) return false;
+  if (typeof model === 'string') return TOOL_USE_RE.test(model);
+  if (typeof model !== 'object') return false;
+  if (Array.isArray(model.capabilities) && model.capabilities.length > 0) {
+    return model.capabilities.some((c) => String(c).toLowerCase() === 'tools');
+  }
+  const id = model.id || model.name || '';
+  return typeof id === 'string' && TOOL_USE_RE.test(id);
+}
+
 // Families ranked for EDITORIAL FIX GENERATION, best-first. This task needs
 // tight instruction-following and clean, constrained output (rewrite a passage,
 // emit only the rewrite) — NOT chatty long-form generation. So instruction-tuned

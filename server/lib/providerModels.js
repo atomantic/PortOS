@@ -18,6 +18,48 @@ export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DE
 export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
 
 /**
+ * True when a provider command points at the OpenCode binary — matching the bare
+ * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,
+ * common when the service PATH can't resolve the CLI), with an optional Windows `.exe`
+ * suffix. The OpenCode arg-builder branches key on this rather than `command === 'opencode'`
+ * so a path-configured provider isn't misrouted into the Claude-style invocation. Only
+ * `.exe` is stripped (not `.cmd`/`.bat`), matching the runner allowlist and the
+ * `shell: false` spawn path — a batch shim isn't directly spawnable.
+ * @param {string|null|undefined} command
+ * @returns {boolean}
+ */
+export function isOpencodeCommand(command) {
+  if (typeof command !== 'string' || command === '') return false;
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+  return base === 'opencode';
+}
+
+/**
+ * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
+ * OpenCode Ollama provider declares its local daemon under the config-provider
+ * key `ollama` (via OPENCODE_CONFIG_CONTENT), so the bare Ollama model id stored
+ * in `defaultModel` must be namespaced with `ollama/` before it's passed to
+ * `opencode run -m` / `opencode --model`. Idempotent — an id that already starts
+ * with `ollama/` is returned untouched, and a `/`-bearing Ollama id
+ * (`hf.co/user/model:tag`) is namespaced as `ollama/hf.co/...` since OpenCode
+ * splits provider/model on the FIRST slash only.
+ *
+ * Gated on the `ollamaBacked` marker, NOT just `command === 'opencode'`: a
+ * user-configured OpenCode provider pointed at a different backend stores an
+ * already-qualified id (`openai/gpt-4o`, `anthropic/claude-sonnet`), and blindly
+ * prefixing `ollama/` would route it to the wrong backend. No-op for
+ * non-Ollama-backed / non-OpenCode providers and empty models.
+ * @param {{command?:string, ollamaBacked?:boolean}} provider
+ * @param {string|null|undefined} model
+ * @returns {string|null|undefined}
+ */
+export function prefixOpencodeModel(provider, model) {
+  if (!isOpencodeCommand(provider?.command) || provider?.ollamaBacked !== true || !model) return model;
+  const id = String(model);
+  return id.startsWith('ollama/') ? id : `ollama/${id}`;
+}
+
+/**
  * Claude Code on AWS Bedrock wants region-prefixed model ids
  * (`global.anthropic.claude-opus-4-8`, `us.anthropic.claude-opus-4-1-...-v1:0`).
  * When `CLAUDE_CODE_USE_BEDROCK` is set on the box, passing a bare

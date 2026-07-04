@@ -198,7 +198,7 @@ export default function GraphTab({ vaultId }) {
   }
 
   return (
-    <div className="relative -m-4" style={{ height: 'calc(100vh - 220px)' }}>
+    <div className="relative -m-4" style={{ height: 'calc(100dvh - 220px)' }}>
       {/* Controls */}
       <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
         <span className="text-xs text-gray-500">{graphData.totalNodes} nodes, {graphData.totalEdges} edges</span>

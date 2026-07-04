@@ -3,9 +3,9 @@
  * Generates weekly status reports from JIRA for JIRA-enabled projects
  */
 
-import { writeFile, readdir } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { getInstances, createJiraClient } from './jira.js';
 import { getActiveApps } from './apps.js';
 import { callProviderAISimple } from '../lib/aiProvider.js';
@@ -239,7 +239,7 @@ export async function generateReport(appId, app) {
 
   await ensureDir(REPORTS_DIR);
   const filename = `${appId}-${report.date}.json`;
-  await writeFile(join(REPORTS_DIR, filename), JSON.stringify(report, null, 2));
+  await atomicWrite(join(REPORTS_DIR, filename), report);
   console.log(`📊 JIRA status report generated for ${app.name} (${jiraConfig.projectKey})`);
 
   return report;

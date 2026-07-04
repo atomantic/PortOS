@@ -6,7 +6,9 @@ import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
+import { formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import useMounted from '../../../hooks/useMounted';
 
 const STEP_LABELS = {
   starting: 'Starting update',
@@ -42,6 +44,25 @@ export default function UpdateTab() {
   const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
+  // Mirrors `updating` for the socket 'disconnect' listener below, which is
+  // registered once on mount and would otherwise close over a stale `false`.
+  const updatingRef = useRef(false);
+  // Guards the disconnect-confirmation setTimeout below: without this, an
+  // unmount (e.g. the user navigates away) while the timer is pending lets
+  // the deferred callback still fire, pop an undismissable "PortOS is
+  // restarting..." toast (duration: Infinity), and set state on an unmounted
+  // component — nothing is left running to ever dismiss it.
+  const mountedRef = useMounted();
+  // Tracks whether the health endpoint went down during a restart poll. A
+  // reconcile (issue #1779) often lands the SAME version (new commits, no
+  // release bump), so version-change detection alone can't confirm completion —
+  // a down→up transition does.
+  const healthWentDownRef = useRef(false);
+  // Highest /system/health uptime seen so far. The server's uptime resets to
+  // ~0 on restart, so an uptime that drops well below the previous peak proves
+  // a restart happened — catching a same-version reconcile whose restart is too
+  // fast for the 2s poll to ever sample the down window.
+  const maxUptimeRef = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     const data = await api.getUpdateStatus().catch(() => null);
@@ -54,8 +75,26 @@ export default function UpdateTab() {
     fetchStatus();
   }, [fetchStatus]);
 
+  useEffect(() => {
+    updatingRef.current = updating;
+  }, [updating]);
+
   // Socket event listeners for update progress
   useEffect(() => {
+    // Shared by the 'restart' step, 'portos:update:complete', and the
+    // 'disconnect' fallback below — all three mean "the server is (or is
+    // about to be) restarting, stop trusting the socket and start polling."
+    // Sets `updatingRef` synchronously (not just via the syncing effect,
+    // which only runs after the next commit) so a 'disconnect' arriving in
+    // the same tick right after an error/complete can't read a stale `true`
+    // and spuriously re-arm polling for an update that already ended.
+    const armRestartPolling = () => {
+      updatingRef.current = false;
+      setUpdating(false);
+      setPolling(true);
+      toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+    };
+
     const handleStep = ({ step, status: stepStatus, message }) => {
       setSteps(prev => {
         const existing = prev.findIndex(s => s.step === step);
@@ -70,39 +109,67 @@ export default function UpdateTab() {
       // When the server signals it's restarting, begin health polling immediately.
       // The PM2 restart may kill the server before portos:update:complete fires.
       if ((step === 'restarting' || step === 'restart') && stepStatus !== 'error' && targetVersionRef.current) {
-        setUpdating(false);
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+        armRestartPolling();
       }
     };
 
     const handleComplete = ({ success, newVersion, versionKnown }) => {
-      setUpdating(false);
-      if (success) {
-        // Use server-reported actual version when available; fall back to target
-        if (versionKnown && newVersion) {
-          targetVersionRef.current = newVersion;
-        }
-        setPolling(true);
-        toast.loading('PortOS is restarting...', { id: 'portos-update-restart', duration: Infinity });
+      if (!success) {
+        updatingRef.current = false;
+        setUpdating(false);
+        return;
       }
+      // Use server-reported actual version when available; fall back to target
+      if (versionKnown && newVersion) {
+        targetVersionRef.current = newVersion;
+      }
+      armRestartPolling();
     };
 
     const handleError = ({ message }) => {
+      updatingRef.current = false;
       setUpdating(false);
       setPolling(false);
       toast.dismiss('portos-update-restart');
       setUpdateError(message);
     };
 
+    // `pm2 delete ecosystem.config.cjs` (the update's own "pm2-stop" step) kills
+    // this server process — and its socket — well before update.sh reaches its
+    // 'restart' step. That step event, and 'portos:update:complete', are then
+    // never emitted, and the UI hangs on "Reconciling..."/"Stopping apps"
+    // forever even though update.sh finishes fine in the background. A raw
+    // 'disconnect' isn't proof of that by itself, though — PortOS is commonly
+    // used remotely over Tailscale, and a transient network blip during the
+    // pre-pm2-stop steps (git-pull/submodules, while the server is still very
+    // much alive) would fire 'disconnect' too. Confirm the server is actually
+    // unreachable before treating this as "the update just tore the process
+    // down" — otherwise a blip prematurely arms polling, which can time out
+    // with a false "Restart timed out" error while the real update finishes
+    // fine in the background with nothing left watching it.
+    const handleDisconnect = () => {
+      if (!updatingRef.current) return;
+      setTimeout(async () => {
+        if (!updatingRef.current || !mountedRef.current) return;
+        // silent: true — a failed check here just means "confirmed, arm
+        // polling"; the generic "Server unreachable" toast would otherwise
+        // fire right alongside (and ahead of) the intended "restarting" toast
+        // on the exact real-disconnect case this confirmation exists for.
+        const ok = await api.checkHealth({ silent: true }).catch(() => null);
+        if (!ok && updatingRef.current && mountedRef.current) armRestartPolling();
+      }, 1500);
+    };
+
     socket.on('portos:update:step', handleStep);
     socket.on('portos:update:complete', handleComplete);
     socket.on('portos:update:error', handleError);
+    socket.on('disconnect', handleDisconnect);
 
     return () => {
       socket.off('portos:update:step', handleStep);
       socket.off('portos:update:complete', handleComplete);
       socket.off('portos:update:error', handleError);
+      socket.off('disconnect', handleDisconnect);
     };
   }, []);
 
@@ -110,18 +177,54 @@ export default function UpdateTab() {
   // `enabled: polling` gate handles teardown automatically when polling flips
   // off; attemptsRef resets on every fresh polling cycle.
   useEffect(() => {
-    if (polling) attemptsRef.current = 0;
+    if (polling) {
+      attemptsRef.current = 0;
+      healthWentDownRef.current = false;
+    }
   }, [polling]);
 
   const pollHealth = useCallback(async () => {
     attemptsRef.current += 1;
-    const ok = await api.checkHealth().catch(() => null);
+    // silent: true — the server being unreachable is the EXPECTED state for
+    // most of this restart poll (that's the down→up transition it's
+    // watching for), not an error; the generic toast would spam "Server
+    // unreachable" on every 2s tick throughout the "PortOS is restarting..."
+    // loading toast's own lifetime.
+    const ok = await api.checkHealth({ silent: true }).catch(() => null);
     const preUpdateVersion = preUpdateVersionRef.current;
-    if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
+    if (!ok) {
+      // Server is mid-restart (PM2 stopped it) — record the dip so a same-version
+      // recovery still counts as "restarted".
+      healthWentDownRef.current = true;
+    } else if (preUpdateVersion && ok.version && ok.version !== preUpdateVersion) {
+      // The running version differs from before the update — restart confirmed.
+      // (We don't gate on === targetVersion: that clause would fire on the FIRST
+      // healthy poll of a same-version reconcile, where target === preUpdate, and
+      // declare success before the server ever went down.)
       setPolling(false);
       toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
       setTimeout(() => window.location.reload(), 1000);
       return;
+    } else if (
+      ok.version &&
+      (healthWentDownRef.current ||
+        (typeof ok.uptime === 'number' && ok.uptime < maxUptimeRef.current - 5))
+    ) {
+      // Same version, but the restart is proven either by a down→up dip or by
+      // the server's uptime resetting below its pre-restart peak (the 5s slack
+      // absorbs clock jitter). Catches a reconcile whose restart was too fast
+      // for the 2s poll to ever sample the down window.
+      setPolling(false);
+      toast.success('Install reconciled — reloading', { id: 'portos-update-restart' });
+      setTimeout(() => window.location.reload(), 1000);
+      return;
+    }
+    // Track the running peak so a later uptime drop is detectable. Guard on
+    // `ok` — the !ok (server-down) branch falls through to here, and a null
+    // deref would throw before the attempts>=30 timeout check below, hanging the
+    // UI on a restart that never recovers.
+    if (ok && typeof ok.uptime === 'number' && ok.uptime > maxUptimeRef.current) {
+      maxUptimeRef.current = ok.uptime;
     }
     if (attemptsRef.current >= 30) {
       setPolling(false);
@@ -148,11 +251,17 @@ export default function UpdateTab() {
       targetVersionRef.current = s.latestRelease.version;
     }
     preUpdateVersionRef.current = s?.currentVersion || null;
+    // Seed the uptime peak with the still-running server's uptime, so even an
+    // instant restart (whose first post-restart poll already reports a small
+    // uptime) is detected as a drop below this pre-update value.
+    const preHealth = await api.checkHealth().catch(() => null);
+    maxUptimeRef.current = typeof preHealth?.uptime === 'number' ? preHealth.uptime : 0;
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
     const result = await api.executePortosUpdate(opts).catch(err => {
       setUpdateError(err.message);
+      updatingRef.current = false;
       setUpdating(false);
       return null;
     });
@@ -166,7 +275,16 @@ export default function UpdateTab() {
 
   const handleUpdateFromForkAsIs = () => runUpdate({ acknowledgeFork: true });
 
-  const handleSyncForkAndUpdate = async () => {
+  // Reconcile a half-updated install (issue #1779) — same machinery as a normal
+  // update, but `reconcile: true` lets the server run update.sh even with no
+  // newer release. Fork-aware variants mirror the release-update buttons.
+  const handleReconcile = () => runUpdate({ reconcile: true });
+
+  const handleReconcileFromForkAsIs = () => runUpdate({ acknowledgeFork: true, reconcile: true });
+
+  // Shared fork-sync-then-run: syncs the fork, then runs update/reconcile with
+  // the freshly fetched status. `extraOpts` distinguishes update vs reconcile.
+  const syncForkThenRun = async (extraOpts = {}) => {
     setSyncingFork(true);
     setForkSyncError(null);
     const synced = await api.syncPortosFork({}, { silent: true }).catch(err => {
@@ -181,8 +299,12 @@ export default function UpdateTab() {
       toast.success(`Synced ${synced.fullName} from ${synced.source}`);
     }
     const fresh = await fetchStatus();
-    await runUpdate({}, fresh);
+    await runUpdate(extraOpts, fresh);
   };
+
+  const handleSyncForkAndUpdate = () => syncForkThenRun({});
+
+  const handleSyncForkAndReconcile = () => syncForkThenRun({ reconcile: true });
 
   const handleSyncForkOnly = async () => {
     setSyncingFork(true);
@@ -232,6 +354,26 @@ export default function UpdateTab() {
   // Server is the source of truth for the freshness window — don't
   // re-implement the time math here.
   const forkSyncFresh = !!status?.forkSyncFresh;
+
+  // Install-sync state (issue #1779) — surfaces a half-updated install (bare
+  // `git pull`, no ./update.sh). Distinct from "a new release is available".
+  const installState = status?.installState;
+  const outOfSync = !!installState?.outOfSync;
+  const installIssues = [];
+  if (installState?.runningStaleCode) {
+    installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
+  }
+  if (installState?.staleDeps?.stale) {
+    const ws = (installState.staleDeps.workspaces || []).filter(w => w.stale).map(w => w.name);
+    installIssues.push(`Dependencies are out of date${ws.length ? ` (${ws.join(', ')})` : ''} — run update.sh to npm install.`);
+  }
+  if (installState?.staleBuild === true) {
+    installIssues.push('The served client build is older than the UI source — a rebuild is needed.');
+  }
+  if (installState?.pendingMigrations?.count > 0) {
+    const n = installState.pendingMigrations.count;
+    installIssues.push(`${n} pending data migration${n === 1 ? '' : 's'} not yet applied.`);
+  }
 
   return (
     <div className="space-y-6">
@@ -283,6 +425,62 @@ export default function UpdateTab() {
               {forkSyncError && (
                 <div className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Install out of sync (issue #1779) — distinct from "new release available" */}
+      {outOfSync && (
+        <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm text-white font-medium">Install out of sync</div>
+              <div className="text-xs text-gray-400 mt-1">
+                Your checked-out code is ahead of what’s running or installed — this happens after a
+                manual <span className="font-mono">git pull</span> without <span className="font-mono">./update.sh</span>.
+                Reconcile to finish the update (install dependencies, rebuild, run migrations, restart).
+              </div>
+              <ul className="text-xs text-gray-300 mt-2 space-y-1 list-disc list-inside">
+                {installIssues.map((msg, i) => (
+                  <li key={i}>{msg}</li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {isFork ? (
+                  <>
+                    <button
+                      onClick={handleSyncForkAndReconcile}
+                      disabled={updating || polling || syncingFork}
+                      className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                      title={`Fast-forwards ${remote?.fullName} main from ${upstreamName}, then runs update.sh to reconcile the install.`}
+                    >
+                      <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                      {syncingFork ? 'Syncing fork...' : updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Sync Fork & Reconcile'}
+                    </button>
+                    <button
+                      onClick={handleReconcileFromForkAsIs}
+                      disabled={updating || polling || syncingFork}
+                      className="px-4 py-2 bg-port-border text-gray-300 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                      title="Skip the fork sync and reconcile from your fork's origin as-is."
+                    >
+                      <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                      Reconcile from Fork As-Is
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleReconcile}
+                    disabled={updating || polling || syncingFork}
+                    className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm flex items-center gap-2 hover:bg-port-warning/80 disabled:opacity-50"
+                    title="Run update.sh to install dependencies, rebuild the client, run migrations, and restart."
+                  >
+                    <RefreshCw size={14} className={updating ? 'animate-spin' : ''} />
+                    {updating ? 'Reconciling...' : polling ? 'Restarting...' : 'Reconcile Now'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -385,7 +583,7 @@ export default function UpdateTab() {
       {/* Last Check */}
       {status?.lastCheck && (
         <div className="text-xs text-gray-500">
-          Last checked: {new Date(status.lastCheck).toLocaleString()}
+          Last checked: {formatDateTime(status.lastCheck)}
         </div>
       )}
 
@@ -429,7 +627,7 @@ export default function UpdateTab() {
               </span>
               {status.lastUpdateResult.completedAt && (
                 <span className="text-xs text-gray-500">
-                  {new Date(status.lastUpdateResult.completedAt).toLocaleString()}
+                  {formatDateTime(status.lastUpdateResult.completedAt)}
                 </span>
               )}
             </div>

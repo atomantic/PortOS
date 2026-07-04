@@ -51,13 +51,42 @@ export default function MemoryPractice({ item, onBack }) {
     if (mode === 'spaced') {
       getChunkMastery(item.id).then(data => {
         setChunkMastery(data || []);
-      }).catch(() => setChunkMastery([]));
+      }).catch(err => { console.warn('⚠️ Failed to load chunk mastery: ' + err.message); setChunkMastery([]); });
     }
   }, [mode, item.id]);
 
+  // Drive terminal transitions from an effect, never during render. The render
+  // fallbacks below (chunk exhausted, line exhausted, sequence exhausted) return null
+  // for a frame while this effect saves results, advances the chunk, or marks the
+  // session done — firing setState + an async submitMemoryPractice() POST inside the
+  // render body is fragile under StrictMode/concurrent rendering. Normal per-answer
+  // flow still runs through advanceSpaced / nextSequenceQuestion.
+  useEffect(() => {
+    if (done) return;
+    if (mode === 'spaced') {
+      if (!chunkMastery || chunkMastery.length === 0) return;
+      const currentChunk = chunkMastery[spacedChunkIdx];
+      if (!currentChunk) {
+        savePractice('spaced', results);
+        setDone(true);
+        return;
+      }
+      const [chunkStart, chunkEnd] = currentChunk.lineRange;
+      const chunkLines = lines.slice(chunkStart, chunkEnd + 1).filter(l => l.text.trim());
+      if (!chunkLines[spacedLineIdx]) {
+        setSpacedChunkIdx(prev => prev + 1);
+        setSpacedLineIdx(0);
+        setAnswer('');
+        setShowResult(null);
+      }
+    } else if (mode === 'sequence' && !lines[currentIdx + 1]) {
+      finishSequence();
+    }
+  }, [mode, chunkMastery, spacedChunkIdx, spacedLineIdx, currentIdx, done]);
+
   if (!mode) {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
@@ -67,7 +96,7 @@ export default function MemoryPractice({ item, onBack }) {
 
         <p className="text-gray-400 text-sm">Choose a practice mode:</p>
 
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {MODES.map(m => (
             <button
               key={m.id}
@@ -175,9 +204,7 @@ export default function MemoryPractice({ item, onBack }) {
 
     const currentChunk = chunkMastery[spacedChunkIdx];
     if (!currentChunk) {
-      // All chunks done
-      savePractice('spaced', results);
-      setDone(true);
+      // All chunks done — the terminal-transition effect saves results and sets done.
       return null;
     }
 
@@ -186,11 +213,7 @@ export default function MemoryPractice({ item, onBack }) {
     const currentLine = chunkLines[spacedLineIdx];
 
     if (!currentLine) {
-      // Move to next chunk
-      setSpacedChunkIdx(prev => prev + 1);
-      setSpacedLineIdx(0);
-      setAnswer('');
-      setShowResult(null);
+      // Move to next chunk — handled by the terminal-transition effect.
       return null;
     }
 
@@ -253,7 +276,7 @@ export default function MemoryPractice({ item, onBack }) {
               ref={inputRef}
               value={answer}
               onChange={e => setAnswer(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); checkSpacedAnswer(currentLine.text, currentChunk.id); } }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCheckSpacedAnswer(currentLine.text, currentChunk.id); } }}
               placeholder="Type the line..."
               className="w-full bg-port-bg border border-port-border rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none resize-none"
               rows={2}
@@ -272,7 +295,7 @@ export default function MemoryPractice({ item, onBack }) {
           ) : (
             <>
               <button
-                onClick={() => checkSpacedAnswer(currentLine.text, currentChunk.id)}
+                onClick={() => handleCheckSpacedAnswer(currentLine.text, currentChunk.id)}
                 disabled={!answer.trim()}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded-lg transition-colors"
               >
@@ -280,7 +303,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
-                onClick={() => { setAnswer(''); checkSpacedAnswer(currentLine.text, currentChunk.id, true); }}
+                onClick={() => { setAnswer(''); handleCheckSpacedAnswer(currentLine.text, currentChunk.id, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
@@ -292,10 +315,10 @@ export default function MemoryPractice({ item, onBack }) {
     );
   }
 
-  // LEARN mode — progressive reveal
+  // LEARN mode — progressive reveal (reading view, widened for desktop)
   if (mode === 'learn') {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
@@ -357,7 +380,7 @@ export default function MemoryPractice({ item, onBack }) {
     const expectedLine = lines[currentIdx + 1];
 
     if (!expectedLine) {
-      finishSequence();
+      // Saved + marked done by the terminal-transition effect.
       return null;
     }
 
@@ -394,7 +417,7 @@ export default function MemoryPractice({ item, onBack }) {
               ref={inputRef}
               value={answer}
               onChange={e => setAnswer(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); checkSequenceAnswer(expectedLine.text); } }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCheckSequenceAnswer(expectedLine.text); } }}
               placeholder="Type the next line..."
               className="w-full bg-port-bg border border-port-border rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none resize-none"
               rows={2}
@@ -413,7 +436,7 @@ export default function MemoryPractice({ item, onBack }) {
           ) : (
             <>
               <button
-                onClick={() => checkSequenceAnswer(expectedLine.text)}
+                onClick={() => handleCheckSequenceAnswer(expectedLine.text)}
                 disabled={!answer.trim()}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded-lg transition-colors"
               >
@@ -421,7 +444,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
-                onClick={() => { setAnswer(''); checkSequenceAnswer(expectedLine.text, true); }}
+                onClick={() => { setAnswer(''); handleCheckSequenceAnswer(expectedLine.text, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
@@ -470,7 +493,7 @@ export default function MemoryPractice({ item, onBack }) {
                 type="text"
                 value={answer}
                 onChange={e => setAnswer(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') checkFillBlank(blankWords); }}
+                onKeyDown={e => { if (e.key === 'Enter') handleCheckFillBlank(blankWords); }}
                 placeholder={`${blankWords.length} word${blankWords.length > 1 ? 's' : ''} missing...`}
                 className="w-full bg-port-bg border border-port-border rounded px-4 py-2.5 text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
               />
@@ -489,7 +512,7 @@ export default function MemoryPractice({ item, onBack }) {
           ) : (
             <>
               <button
-                onClick={() => checkFillBlank(blankWords)}
+                onClick={() => handleCheckFillBlank(blankWords)}
                 disabled={!answer.trim()}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded-lg transition-colors"
               >
@@ -497,7 +520,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
-                onClick={() => { setAnswer(''); checkFillBlank(blankWords, true); }}
+                onClick={() => { setAnswer(''); handleCheckFillBlank(blankWords, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
                 <SkipForward size={16} />
@@ -509,10 +532,10 @@ export default function MemoryPractice({ item, onBack }) {
     );
   }
 
-  // SPEED RUN mode — show all lines, check how many you can recite
+  // SPEED RUN mode — show all lines, check how many you can recite (reading view, widened)
   if (mode === 'speed-run') {
     return (
-      <div className="space-y-6 max-w-2xl">
+      <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
@@ -550,10 +573,10 @@ export default function MemoryPractice({ item, onBack }) {
 
   // --- Helpers ---
 
-  function checkSequenceAnswer(expected, skipped = false) {
-    const isCorrect = !skipped && fuzzyMatch(answer, expected);
-    setResults(prev => [...prev, { correct: isCorrect, expected, answered: skipped ? '' : answer, element: null }]);
-    setShowResult(isCorrect ? 'correct' : 'wrong');
+  function handleCheckSequenceAnswer(expected, skipped = false) {
+    const result = checkSequenceAnswer(answer, expected, skipped);
+    setResults(prev => [...prev, result]);
+    setShowResult(result.correct ? 'correct' : 'wrong');
   }
 
   function nextSequenceQuestion() {
@@ -571,17 +594,10 @@ export default function MemoryPractice({ item, onBack }) {
     setDone(true);
   }
 
-  function checkFillBlank(blankWords, skipped = false) {
-    const userWords = skipped ? [] : answer.split(',').map(w => w.trim().toLowerCase());
-    const correct = blankWords.every((bw, i) =>
-      userWords[i] && userWords[i] === bw.toLowerCase()
-    );
-    setResults(prev => [...prev, {
-      correct,
-      expected: blankWords.join(', '),
-      answered: skipped ? '' : answer,
-    }]);
-    setShowResult(correct ? 'correct' : 'wrong');
+  function handleCheckFillBlank(blankWords, skipped = false) {
+    const result = checkFillBlank(answer, blankWords, skipped);
+    setResults(prev => [...prev, result]);
+    setShowResult(result.correct ? 'correct' : 'wrong');
   }
 
   function nextFillBlank() {
@@ -595,10 +611,10 @@ export default function MemoryPractice({ item, onBack }) {
     }
   }
 
-  function checkSpacedAnswer(expected, chunkId, skipped = false) {
-    const isCorrect = !skipped && fuzzyMatch(answer, expected);
-    setResults(prev => [...prev, { correct: isCorrect, expected, answered: skipped ? '' : answer, chunkId }]);
-    setShowResult(isCorrect ? 'correct' : 'wrong');
+  function handleCheckSpacedAnswer(expected, chunkId, skipped = false) {
+    const result = checkSpacedAnswer(answer, expected, chunkId, skipped);
+    setResults(prev => [...prev, result]);
+    setShowResult(result.correct ? 'correct' : 'wrong');
   }
 
   function advanceSpaced() {
@@ -659,7 +675,7 @@ export default function MemoryPractice({ item, onBack }) {
  * hintLevel 2: show word count only
  * hintLevel 3: no hints
  */
-function generateHint(text, hintLevel) {
+export function generateHint(text, hintLevel) {
   if (hintLevel >= 3) return null;
 
   const words = text.split(/\s+/);
@@ -774,7 +790,7 @@ function ProgressBar({ current, total }) {
   );
 }
 
-function fuzzyMatch(input, expected) {
+export function fuzzyMatch(input, expected) {
   const normalize = s => s.toLowerCase().replace(/[,.\-!?'"]/g, '').replace(/\s+/g, ' ').trim();
   const a = normalize(input);
   const b = normalize(expected);
@@ -786,10 +802,42 @@ function fuzzyMatch(input, expected) {
   return matches / bWords.length >= 0.8;
 }
 
-function findChunkForLine(item, lineIndex) {
+export function findChunkForLine(item, lineIndex) {
   for (const chunk of item.content?.chunks || []) {
     const [start, end] = chunk.lineRange;
     if (lineIndex >= start && lineIndex <= end) return chunk.id;
   }
   return null;
+}
+
+// Pure comma-split answer checking for fill-blank mode: multiple acceptable
+// words for the blanks are typed comma-separated and compared in order,
+// case-insensitively. `answer` is passed explicitly (lifted from the
+// component's `answer` state) so this stays free of any React closure —
+// the component's handleCheckFillBlank wrapper is the only caller and owns
+// the setResults/setShowResult side effects.
+export function checkFillBlank(answer, blankWords, skipped = false) {
+  const userWords = skipped ? [] : answer.split(',').map(w => w.trim().toLowerCase());
+  const correct = blankWords.every((bw, i) => userWords[i] && userWords[i] === bw.toLowerCase());
+  return {
+    correct,
+    expected: blankWords.join(', '),
+    answered: skipped ? '' : answer,
+  };
+}
+
+// Pure sequence-recall answer checking: fuzzy-matches the typed answer
+// against the expected next line. `element` is always null here (kept for
+// shape parity with the results list consumed elsewhere).
+export function checkSequenceAnswer(answer, expected, skipped = false) {
+  const isCorrect = !skipped && fuzzyMatch(answer, expected);
+  return { correct: isCorrect, expected, answered: skipped ? '' : answer, element: null };
+}
+
+// Pure spaced-repetition answer checking: fuzzy-matches the typed answer
+// against the expected line, tagging the result with its owning chunk id so
+// per-chunk mastery can be recomputed on save.
+export function checkSpacedAnswer(answer, expected, chunkId, skipped = false) {
+  const isCorrect = !skipped && fuzzyMatch(answer, expected);
+  return { correct: isCorrect, expected, answered: skipped ? '' : answer, chunkId };
 }

@@ -1,15 +1,15 @@
 /**
  * Apple Health XML Import Service
  *
- * SAX streaming parser for Apple Health exports (500MB+).
+ * Dependency-free streaming parser for Apple Health exports (500MB+).
  * Normalizes HK identifiers to metric names matching JSON ingest format.
  * Emits WebSocket progress events every 10k records.
  */
 
-import sax from 'sax';
 import { createReadStream } from 'fs';
 import { unlink } from 'fs';
 import { extractDateStr, readDayFile, writeDayFile } from './appleHealthIngest.js';
+import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
 
 // === Mapping Tables ===
 
@@ -102,9 +102,9 @@ const SLEEP_STAGE_MAP = {
 
 /**
  * Normalize an XML Record node into a standard data point.
- * Uses lowercase attribute names (sax non-strict lowercase mode).
+ * Uses lowercase attribute names (matching the parser's lowercase-name mode).
  *
- * @param {Object} node - SAX opentag node with lowercase attributes
+ * @param {Object} node - Record node with lowercase attribute names
  * @returns {{ metricName: string, dateStr: string, dataPoint: Object }|null}
  */
 export function normalizeXmlRecord(node) {
@@ -248,8 +248,9 @@ async function flushDayBuckets(dayBuckets) {
 }
 
 /**
- * Stream-parse an Apple Health export.xml file using SAX.
- * Accumulates records in batches, flushing to disk periodically to avoid OOM.
+ * Stream-parse an Apple Health export.xml file with the dependency-free
+ * `<Record>` parser. Accumulates records in batches, flushing to disk
+ * periodically to avoid OOM.
  *
  * @param {string} filePath - Absolute path to the XML file (temp upload)
  * @param {Object|null} io - Socket.IO server instance for progress events
@@ -266,53 +267,47 @@ export async function importAppleHealthXml(filePath, io = null) {
   const inputStream = createReadStream(filePath);
 
   await new Promise((resolve, reject) => {
-    const saxStream = sax.createStream(false, { lowercase: true });
+    const parser = createAppleHealthRecordStream({
+      onRecord: (node) => {
+        const normalized = normalizeXmlRecord(node);
+        if (!normalized) return;
 
-    saxStream.on('opentag', (node) => {
-      if (node.name !== 'record') return;
+        const { metricName, dateStr, dataPoint } = normalized;
 
-      const normalized = normalizeXmlRecord(node);
-      if (!normalized) return;
+        if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
+        if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
+        dayBuckets[dateStr][metricName].push(dataPoint);
+        allDays.add(dateStr);
 
-      const { metricName, dateStr, dataPoint } = normalized;
+        processedRecords++;
 
-      if (!dayBuckets[dateStr]) dayBuckets[dateStr] = {};
-      if (!dayBuckets[dateStr][metricName]) dayBuckets[dateStr][metricName] = [];
-      dayBuckets[dateStr][metricName].push(dataPoint);
-      allDays.add(dateStr);
+        if (processedRecords % 10000 === 0) {
+          io?.emit('health:xml:progress', { processed: processedRecords });
+          console.log(`🍎 XML import progress: ${processedRecords} records`);
+        }
 
-      processedRecords++;
-
-      if (processedRecords % 10000 === 0) {
-        io?.emit('health:xml:progress', { processed: processedRecords });
-        console.log(`🍎 XML import progress: ${processedRecords} records`);
-      }
-
-      // Batch flush to prevent OOM — pause input stream, flush to disk, resume
-      if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
-        flushing = true;
-        lastFlush = processedRecords;
-        inputStream.pause();
-        flushDayBuckets(dayBuckets).then(() => {
-          console.log(`🍎 Flushed batch at ${processedRecords} records (${allDays.size} days total)`);
-          flushing = false;
-          inputStream.resume();
-        }).catch(reject);
-      }
+        // Batch flush to prevent OOM — pause input stream, flush to disk, resume
+        if (processedRecords - lastFlush >= FLUSH_INTERVAL && !flushing) {
+          flushing = true;
+          lastFlush = processedRecords;
+          inputStream.pause();
+          flushDayBuckets(dayBuckets).then(() => {
+            console.log(`🍎 Flushed batch at ${processedRecords} records (${allDays.size} days total)`);
+            flushing = false;
+            inputStream.resume();
+          }).catch(reject);
+        }
+      },
     });
 
-    saxStream.on('error', function (e) {
-      console.error(`❌ XML parse error at record ${processedRecords}: ${e.message}`);
-      // Clear error and resume — Apple Health XML can have minor malformations
-      this._parser.error = null;
-      this._parser.resume();
-    });
-
-    saxStream.on('end', resolve);
-    saxStream.on('close', resolve);
+    // Malformed records can't throw here — records missing required attributes
+    // are dropped by normalizeXmlRecord, so minor XML malformations are skipped
+    // rather than fatal (matching the prior sax error-skip behavior).
+    parser.on('finish', resolve);
+    parser.on('error', reject);
 
     inputStream.on('error', reject);
-    inputStream.pipe(saxStream);
+    inputStream.pipe(parser);
   });
 
   console.log(`🍎 XML parsing done: ${processedRecords} raw records across ${allDays.size} days — flushing remaining`);

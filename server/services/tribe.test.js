@@ -9,17 +9,28 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: vi.fn(),
 }));
 
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import {
   listPeople,
   createPerson,
   normalizeTags,
+  normalizeEmails,
   isoDate,
   isoDateTime,
   rowToPerson,
   rowToTouchpoint,
+  personCadenceStatus,
+  getCareSummary,
+  autoLogTouchpoints,
   DEFAULT_RING_CADENCE,
 } from './tribe.js';
+
+// ISO date (YYYY-MM-DD) `n` whole days before local today.
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 describe('tribe service — pure helpers', () => {
   describe('normalizeTags', () => {
@@ -156,6 +167,79 @@ describe('tribe service — listPeople query builder', () => {
   });
 });
 
+describe('tribe service — personCadenceStatus', () => {
+  it('external people are never overdue', () => {
+    expect(personCadenceStatus({ ring: 'external', lastContact: daysAgo(999), cadenceDays: 7 }))
+      .toMatchObject({ state: 'external', daysOverdue: 0 });
+  });
+
+  it('no touchpoint → missing with null daysOverdue', () => {
+    const s = personCadenceStatus({ ring: 'core', lastContact: null, cadenceDays: 21 });
+    expect(s.state).toBe('missing');
+    expect(s.daysOverdue).toBeNull();
+  });
+
+  it('elapsed beyond cadence → overdue with positive daysOverdue', () => {
+    const s = personCadenceStatus({ ring: 'support', lastContact: daysAgo(10), cadenceDays: 7 });
+    expect(s.state).toBe('overdue');
+    expect(s.daysOverdue).toBe(3);
+  });
+
+  it('within a week of cadence → soon', () => {
+    expect(personCadenceStatus({ ring: 'core', lastContact: daysAgo(18), cadenceDays: 21 }).state).toBe('soon');
+  });
+
+  it('comfortably inside cadence → steady', () => {
+    expect(personCadenceStatus({ ring: 'village', lastContact: daysAgo(2), cadenceDays: 90 }).state).toBe('steady');
+  });
+});
+
+describe('tribe service — getCareSummary', () => {
+  beforeEach(() => {
+    query.mockReset();
+  });
+
+  // listPeople maps DB rows via rowToPerson, so mock rows use snake_case columns.
+  const row = (over) => ({
+    id: over.id, name: over.name, ring: over.ring,
+    cadence_days: over.cadence_days, last_contact_on: over.last_contact_on ?? null,
+    channel: '', tags: [], touchpoint_count: '0', linked_memory_count: '0',
+  });
+
+  it('excludes external people and sorts missing first, then most-overdue', async () => {
+    query.mockResolvedValue({ rows: [
+      row({ id: 'a', name: 'Overdue Small', ring: 'support', cadence_days: 7, last_contact_on: daysAgo(10) }), // 3d overdue
+      row({ id: 'b', name: 'Never', ring: 'core', cadence_days: 21, last_contact_on: null }),                  // missing
+      row({ id: 'c', name: 'Overdue Big', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(60) }),     // 39d overdue
+      row({ id: 'd', name: 'Steady', ring: 'village', cadence_days: 90, last_contact_on: daysAgo(1) }),        // steady
+      row({ id: 'e', name: 'Nemesis', ring: 'external', cadence_days: 7, last_contact_on: daysAgo(999) }),     // excluded
+    ] });
+
+    const summary = await getCareSummary();
+    expect(summary.hasPeople).toBe(true);
+    expect(summary.peopleCount).toBe(4); // external excluded
+    expect(summary.overdueCount).toBe(3); // missing + 2 overdue
+    expect(summary.overdue.map((p) => p.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('respects the limit while still reporting the full overdueCount', async () => {
+    query.mockResolvedValue({ rows: [
+      row({ id: 'a', name: 'A', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(60) }),
+      row({ id: 'b', name: 'B', ring: 'core', cadence_days: 21, last_contact_on: daysAgo(50) }),
+    ] });
+    const summary = await getCareSummary(1);
+    expect(summary.overdueCount).toBe(2);
+    expect(summary.overdue).toHaveLength(1);
+  });
+
+  it('reports hasPeople false for an empty tribe', async () => {
+    query.mockResolvedValue({ rows: [] });
+    const summary = await getCareSummary();
+    expect(summary.hasPeople).toBe(false);
+    expect(summary.overdueCount).toBe(0);
+  });
+});
+
 describe('tribe service — createPerson', () => {
   beforeEach(() => {
     query.mockReset();
@@ -169,9 +253,103 @@ describe('tribe service — createPerson', () => {
 
     const [, params] = query.mock.calls[0];
     // INSERT param order: id,name,relationship,ring,cadence_days,last_contact,
-    // channel,energy,tags,next_move,notes
+    // channel,energy,tags,emails,next_move,notes
     expect(params[3]).toBe('core');
     expect(params[4]).toBe(DEFAULT_RING_CADENCE.core); // 21, not the flat SQL default
     expect(params[8]).toEqual(['a', 'b']);
+  });
+
+  it('normalizes emails to a lowercased de-duplicated array on insert', async () => {
+    query.mockResolvedValue({ rows: [{ id: 'p1', name: 'Ada', ring: 'tribe', cadence_days: 45 }] });
+    await createPerson({ name: 'Ada', emails: [' Ada@Work.com ', 'ada@work.com', 'GRACE@x.io'] });
+    const [, params] = query.mock.calls[0];
+    expect(params[9]).toEqual(['ada@work.com', 'grace@x.io']); // emails at $10
+  });
+});
+
+describe('tribe service — normalizeEmails', () => {
+  it('lowercases, trims, splits a comma string, and de-dupes', () => {
+    expect(normalizeEmails('A@x.com, a@x.com , ,B@Y.io')).toEqual(['a@x.com', 'b@y.io']);
+  });
+  it('handles an array and drops empties', () => {
+    expect(normalizeEmails([' A@x.com ', '', 'a@X.com'])).toEqual(['a@x.com']);
+  });
+  it('returns [] for nullish', () => {
+    expect(normalizeEmails(null)).toEqual([]);
+    expect(normalizeEmails(undefined)).toEqual([]);
+  });
+});
+
+describe('tribe service — rowToPerson emails', () => {
+  it('maps the emails array and defaults to []', () => {
+    expect(rowToPerson({ id: 'p', name: 'N', ring: 'tribe', cadence_days: 45, emails: ['a@x.com'] }).emails)
+      .toEqual(['a@x.com']);
+    expect(rowToPerson({ id: 'p', name: 'N', ring: 'tribe', cadence_days: 45 }).emails).toEqual([]);
+  });
+});
+
+describe('tribe service — autoLogTouchpoints', () => {
+  beforeEach(() => {
+    query.mockReset();
+    withTransaction.mockReset();
+  });
+
+  // One tracked person "Ada" with a known email; listPeople() is the first query.
+  function mockPeople() {
+    query.mockResolvedValue({ rows: [
+      { id: 'ada', name: 'Ada', ring: 'tribe', cadence_days: 45, emails: ['ada@work.com'] },
+    ] });
+  }
+
+  it('matches identities and inserts one deduped touchpoint per matched person', async () => {
+    mockPeople();
+    // INSERT returns a row (new); UPDATE returns nothing.
+    withTransaction.mockImplementation(async (fn) => fn({
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: 't1', person_id: 'ada', source: 'calendar' }] })
+        .mockResolvedValueOnce({ rows: [] }),
+    }));
+
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], source: 'calendar', dedupeKey: 'cal:a:e1', happenedAt: '2026-06-01T10:00:00Z' },
+      { identities: [{ email: 'nobody@x.com' }], source: 'calendar', dedupeKey: 'cal:a:e2' },
+    ]);
+
+    expect(result).toEqual({ created: 1, matched: 1 });
+  });
+
+  it('counts a matched-but-duplicate insert (ON CONFLICT no row) as matched, not created', async () => {
+    mockPeople();
+    // INSERT returns no row → duplicate; UPDATE must not run.
+    const clientQuery = vi.fn().mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], source: 'message', dedupeKey: 'msg:a:t:2026-06-01' },
+    ]);
+
+    expect(result).toEqual({ created: 0, matched: 1 });
+    expect(clientQuery).toHaveBeenCalledTimes(1); // no last_contact_on UPDATE on a dup
+  });
+
+  it('skips candidates without a dedupeKey (idempotency required)', async () => {
+    mockPeople();
+    const result = await autoLogTouchpoints([{ identities: [{ email: 'ada@work.com' }], source: 'calendar' }]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+    expect(withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when nothing is tracked', async () => {
+    query.mockResolvedValue({ rows: [] });
+    const result = await autoLogTouchpoints([
+      { identities: [{ email: 'ada@work.com' }], dedupeKey: 'cal:a:e1' },
+    ]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+  });
+
+  it('returns zeros for an empty batch without touching the DB', async () => {
+    const result = await autoLogTouchpoints([]);
+    expect(result).toEqual({ created: 0, matched: 0 });
+    expect(query).not.toHaveBeenCalled();
   });
 });

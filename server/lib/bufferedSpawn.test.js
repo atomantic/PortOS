@@ -1,10 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { ChildProcess } from 'child_process';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Mock child_process.spawn so we can drive the buffered-spawn machinery without
-// launching real processes.
+// launching real processes. Pass the real module through (importOriginal) and
+// override only `spawn` — killProcessTree's `instanceof ChildProcess` guard
+// needs the real `ChildProcess` export; a from-scratch replacement object
+// (no `ChildProcess` key) would make that check throw on an actual win32 run.
 const spawnMock = vi.fn();
-vi.mock('child_process', () => ({ spawn: (...a) => spawnMock(...a) }));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: (...a) => spawnMock(...a) };
+});
 
 // Re-imported after the mock is registered.
 const {
@@ -12,14 +22,23 @@ const {
   bufferedSpawnOrThrow,
   killProcessTree,
   needsShell,
+  resolveWindowsExecutable,
+  prepareWindowsSafeSpawn,
   IS_WIN32,
   WIN_CMD_SHIMS,
   MAX_OUTPUT_BYTES,
 } = await import('./bufferedSpawn.js');
 
-/** Build a fake child process with stdout/stderr emitters and a kill spy. */
+/**
+ * Build a fake child process with stdout/stderr emitters and a kill spy.
+ * Its prototype is swapped to ChildProcess.prototype so it passes
+ * killProcessTree's `instanceof ChildProcess` guard exactly like a real
+ * spawn() result would — without this, the "spawns taskkill" test below
+ * would silently take the SIGTERM fallback branch on an actual win32 run.
+ */
 function makeFakeChild({ pid = 1234 } = {}) {
   const child = new EventEmitter();
+  Object.setPrototypeOf(child, ChildProcess.prototype);
   child.pid = pid;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -66,7 +85,7 @@ describe('killProcessTree', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it('on Windows spawns taskkill /T /F against the pid', () => {
+  it('on Windows spawns taskkill /T /F against the pid and marks the child killed', () => {
     if (!IS_WIN32) return; // can't simulate platform branch from outside
     const child = makeFakeChild({ pid: 999 });
     const tk = makeFakeChild();
@@ -77,6 +96,161 @@ describe('killProcessTree', () => {
       'taskkill', ['/T', '/F', '/PID', '999'],
       expect.objectContaining({ stdio: 'ignore', windowsHide: true })
     );
+    // taskkill runs in a detached process that never touches `child` itself —
+    // .killed must be set synchronously here so re-entrant kill/abort guards
+    // elsewhere (gated on `!child.killed`) actually engage on Windows.
+    expect(child.killed).toBe(true);
+  });
+
+  it('on Windows still uses .kill() (not taskkill) for a non-ChildProcess killable, e.g. a node-pty session', () => {
+    if (!IS_WIN32) return; // can't simulate platform branch from outside
+    // A killable that exposes .kill()/.pid like a ChildProcess but isn't one
+    // (e.g. node-pty's IPty, registered via registerExternalRun for TUI
+    // runs) — taskkill against its pid would bypass its own native teardown
+    // (releasing a Windows ConPTY handle) and leak it.
+    const ptyLike = { pid: 4321, kill: vi.fn() };
+    killProcessTree(ptyLike);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(ptyLike.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+});
+
+describe('resolveWindowsExecutable', () => {
+  // isWin32 is passed explicitly so these tests are deterministic regardless
+  // of the host platform actually running them.
+  let fakePathDir;
+  let originalPath;
+
+  beforeEach(async () => {
+    fakePathDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-'));
+    originalPath = process.env.PATH;
+    process.env.PATH = fakePathDir;
+  });
+
+  afterEach(async () => {
+    process.env.PATH = originalPath;
+    await rm(fakePathDir, { recursive: true, force: true });
+  });
+
+  it('returns null when isWin32 is false, regardless of what is on PATH', async () => {
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    expect(resolveWindowsExecutable('opencode', false)).toBeNull();
+  });
+
+  it('resolves a bare command to its .cmd shim on PATH', async () => {
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    expect(resolveWindowsExecutable('opencode', true)).toBe(join(fakePathDir, 'opencode.cmd'));
+  });
+
+  it('prefers a real .exe over a .cmd shim when both exist', async () => {
+    await writeFile(join(fakePathDir, 'tool.cmd'), '@echo off\n');
+    await writeFile(join(fakePathDir, 'tool.exe'), '');
+    expect(resolveWindowsExecutable('tool', true)).toBe(join(fakePathDir, 'tool.exe'));
+  });
+
+  it('never matches an extension-less POSIX shim stub (the actual #1865 root cause)', async () => {
+    // npm ships a bare POSIX shell-script stub alongside the .cmd/.bat/.ps1
+    // Windows wrappers for Git Bash/WSL — it is not natively launchable.
+    await writeFile(join(fakePathDir, 'opencode'), '#!/bin/sh\n');
+    expect(resolveWindowsExecutable('opencode', true)).toBeNull();
+  });
+
+  it('returns null when nothing matches on PATH', () => {
+    expect(resolveWindowsExecutable('does-not-exist', true)).toBeNull();
+  });
+
+  it('returns null for an already-absolute path (nothing to resolve)', () => {
+    expect(resolveWindowsExecutable('C:\\tools\\opencode.cmd', true)).toBeNull();
+  });
+
+  it('returns null for a relative path containing a separator', () => {
+    expect(resolveWindowsExecutable('./bin/opencode', true)).toBeNull();
+  });
+
+  it('searches the given searchEnv.PATH, not bare process.env, honoring a provider-configured PATH override', async () => {
+    // A provider's envVars can override PATH for the child process — the CLI
+    // may live somewhere the PARENT process.env.PATH never points to.
+    const customDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-custom-'));
+    try {
+      await writeFile(join(customDir, 'opencode.cmd'), '@echo off\n');
+      // process.env.PATH (set in beforeEach) does NOT include customDir.
+      expect(resolveWindowsExecutable('opencode', true)).toBeNull();
+      expect(resolveWindowsExecutable('opencode', true, { PATH: customDir })).toBe(join(customDir, 'opencode.cmd'));
+    } finally {
+      await rm(customDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to searchEnv.Path (capital-P-lowercase, the Windows convention) when PATH is absent', async () => {
+    const customDir = await mkdtemp(join(tmpdir(), 'resolve-win-exe-capital-'));
+    try {
+      await writeFile(join(customDir, 'opencode.cmd'), '@echo off\n');
+      expect(resolveWindowsExecutable('opencode', true, { Path: customDir })).toBe(join(customDir, 'opencode.cmd'));
+    } finally {
+      await rm(customDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('prepareWindowsSafeSpawn', () => {
+  // isWin32 is passed explicitly so these tests are deterministic regardless
+  // of the host platform actually running them.
+  it('wraps a .cmd target in cmd.exe /c on Windows (the actual #1865 fix)', () => {
+    const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['exec', '-'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\npm\\opencode.cmd', 'exec', '-'] });
+  });
+
+  it('wraps a .bat target in cmd.exe /c on Windows, case-insensitively', () => {
+    const result = prepareWindowsSafeSpawn('C:\\tools\\thing.BAT', ['x'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\tools\\thing.BAT', 'x'] });
+  });
+
+  it('leaves a resolved .exe target unwrapped on Windows — directly launchable, no batch interpreter needed', () => {
+    const result = prepareWindowsSafeSpawn('C:\\tools\\claude.exe', ['-p', '-'], true);
+    expect(result).toEqual({ command: 'C:\\tools\\claude.exe', args: ['-p', '-'] });
+  });
+
+  it('never wraps off Windows, even for a .cmd-looking path', () => {
+    const result = prepareWindowsSafeSpawn('/usr/local/bin/opencode.cmd', ['exec', '-'], false);
+    expect(result).toEqual({ command: '/usr/local/bin/opencode.cmd', args: ['exec', '-'] });
+  });
+
+  it('passes through a bare unresolved command unchanged (resolution-failure fallback)', () => {
+    const result = prepareWindowsSafeSpawn('opencode', ['exec', '-'], true);
+    expect(result).toEqual({ command: 'opencode', args: ['exec', '-'] });
+  });
+
+  it('caret-escapes a cmd.exe metacharacter in an arg with NO whitespace (Node would leave it unquoted)', () => {
+    // foo&calc has no whitespace, so Node's own argv quoting would NOT wrap
+    // it in literal quotes — the bare `&` would reach cmd.exe's raw command
+    // line and be interpreted as a command separator without this.
+    const result = prepareWindowsSafeSpawn('C:\\npm\\opencode.cmd', ['foo&calc'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\opencode.cmd', 'foo^&calc']);
+  });
+
+  it('does NOT escape metacharacters in an arg that already contains whitespace (Node will quote it)', () => {
+    // An arg with a space is already wrapped in literal double quotes by
+    // Node's own argv escaping — caret-escaping it too would inject literal
+    // `^` characters into the value the target program receives.
+    const result = prepareWindowsSafeSpawn('C:\\npm\\codex.cmd', ['describe this & list colors'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\codex.cmd', 'describe this & list colors']);
+  });
+
+  it('escapes multiple metacharacters in an unquoted arg', () => {
+    const result = prepareWindowsSafeSpawn('C:\\npm\\tool.cmd', ['a|b>c<d'], true);
+    expect(result.args).toEqual(['/c', 'C:\\npm\\tool.cmd', 'a^|b^>c^<d']);
+  });
+
+  it('never escapes off Windows, even for an unquoted metacharacter arg', () => {
+    const result = prepareWindowsSafeSpawn('/usr/local/bin/tool.cmd', ['foo&bar'], false);
+    expect(result.args).toEqual(['foo&bar']);
+  });
+
+  it('also caret-escapes a metacharacter in the resolved command path itself (e.g. a custom install dir)', () => {
+    // A custom npm prefix directory containing a metacharacter, with no
+    // whitespace, would reach cmd.exe unquoted just like an unquoted arg.
+    const result = prepareWindowsSafeSpawn('C:\\Tools&CLIs\\npm\\codex.cmd', ['exec'], true);
+    expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\Tools^&CLIs\\npm\\codex.cmd', 'exec'] });
   });
 });
 

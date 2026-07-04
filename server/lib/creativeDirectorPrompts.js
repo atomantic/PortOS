@@ -44,6 +44,10 @@ function buildProjectView(project) {
     startingImageFile: project.startingImageFile || '',
     styleSpec: project.styleSpec || '',
     userStory: project.userStory || '',
+    // Catalog cast seeded via "Remix into → Creative Director" (#1808). Each
+    // member: { ingredientId, name, type, role, summary? }. Empty array for a
+    // bare project so the template's `{{#project.cast}}` section stays hidden.
+    cast: Array.isArray(project.cast) ? project.cast : [],
   };
 }
 
@@ -56,12 +60,17 @@ function buildTreatmentView(project) {
   const startingImageFileLiteral = project.startingImageFile
     ? `"${project.startingImageFile}"`
     : 'null';
+  // Header-once flag for the template's `## Cast` block — the `{{#project.cast}}`
+  // section iterates the members, so a separate boolean renders the heading +
+  // intro exactly once (and hides them entirely for a bare project).
+  const hasCast = Array.isArray(project.cast) && project.cast.length > 0;
   return {
     project: buildProjectView(project),
     aspect,
     quality,
     apiUrl: PORTOS_API_URL,
     startingImageFileLiteral,
+    hasCast,
   };
 }
 

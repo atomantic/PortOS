@@ -24,6 +24,7 @@ import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { chunkRawText } from '../lib/catalogChunking.js';
 import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../lib/storyBible.js';
 import { getInstanceId } from './instances.js';
+import { resolveRefs } from './catalogRefResolver.js';
 
 // Story-bible sanitizers keyed by catalog type, for the registry
 // `extractionShape: 'bible'` types ONLY (character/place/object). The catalog
@@ -700,22 +701,38 @@ const THUMBNAIL_KEY_SUBQUERY = `(
      LIMIT 1
   ) AS thumbnail_key`;
 
-// SQL predicate matching ingredients that have at least one LIVE universe/series
-// ref (target row still resolves). Hardcodes the universe/series live clauses —
-// both are `deleted = FALSE` in REF_TARGET_TABLES (catalogRefResolver.js); kept
-// inline rather than imported because each kind probes a different target table.
-const HAS_LIVE_UNIVERSE_SERIES_REF = `EXISTS (
-    SELECT 1 FROM catalog_ingredient_refs r
-     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
-       AND ((r.ref_kind = 'universe' AND EXISTS (SELECT 1 FROM universes u WHERE u.id = r.ref_id AND u.deleted = false))
-         OR (r.ref_kind = 'series'   AND EXISTS (SELECT 1 FROM pipeline_series s WHERE s.id = r.ref_id AND s.deleted = false))))`;
+// Ref kinds that "home" an ingredient — i.e. drive the linked / unlinked (Raw) /
+// orphaned bucket classification + the Orphaned album. universe/series define
+// album membership; creative-director joined this set in #1812 so a CD project's
+// soft-delete surfaces its ex-cast as orphaned (recoverable) rather than leaving
+// dangling chips. issue/work refs CONSUME ingredients but don't home them, so
+// they stay out. Each kind soft-deletes its target (`deleted = FALSE` =
+// live in REF_TARGET_TABLES, catalogRefResolver.js).
+const HOMING_REF_KINDS = ['universe', 'series', 'creative-director'];
+const HOMING_REF_KINDS_SQL = HOMING_REF_KINDS.map((k) => `'${k}'`).join(', ');
 
-// At least one universe/series ref row exists (live OR dangling) — distinguishes
-// "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
-const HAS_ANY_UNIVERSE_SERIES_REF = `EXISTS (
+// EXISTS predicate (over the `r` alias) that the named ref points at a LIVE
+// target of its kind. One source of truth for both HAS_LIVE_HOMING_REF and the
+// facets bucket's live_count FILTER — keep the two call sites in sync by reusing
+// this rather than re-inlining the per-kind clauses.
+const liveHomingTargetSql = (r) => `(
+       (${r}.ref_kind = 'universe'          AND EXISTS (SELECT 1 FROM universes u                  WHERE u.id = ${r}.ref_id AND u.deleted = false))
+    OR (${r}.ref_kind = 'series'            AND EXISTS (SELECT 1 FROM pipeline_series s            WHERE s.id = ${r}.ref_id AND s.deleted = false))
+    OR (${r}.ref_kind = 'creative-director' AND EXISTS (SELECT 1 FROM creative_director_projects p WHERE p.id = ${r}.ref_id AND p.deleted = false)))`;
+
+// SQL predicate matching ingredients that have at least one LIVE homing ref
+// (target row still resolves).
+const HAS_LIVE_HOMING_REF = `EXISTS (
     SELECT 1 FROM catalog_ingredient_refs r
      WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
-       AND r.ref_kind IN ('universe', 'series'))`;
+       AND ${liveHomingTargetSql('r')})`;
+
+// At least one homing ref row exists (live OR dangling) — distinguishes
+// "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
+const HAS_ANY_HOMING_REF = `EXISTS (
+    SELECT 1 FROM catalog_ingredient_refs r
+     WHERE r.ingredient_id = catalog_ingredients.id AND r.deleted = false
+       AND r.ref_kind IN (${HOMING_REF_KINDS_SQL}))`;
 
 export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
@@ -767,11 +784,11 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
       params.push(refKind, refId);
     } else if (unlinked) {
       // "Unsorted / Raw": no universe/series ref at all.
-      conditions.push(`NOT ${HAS_ANY_UNIVERSE_SERIES_REF}`);
+      conditions.push(`NOT ${HAS_ANY_HOMING_REF}`);
     } else if (orphaned) {
       // "Orphaned": has a universe/series ref, but none resolve to a live target.
-      conditions.push(HAS_ANY_UNIVERSE_SERIES_REF);
-      conditions.push(`NOT ${HAS_LIVE_UNIVERSE_SERIES_REF}`);
+      conditions.push(HAS_ANY_HOMING_REF);
+      conditions.push(`NOT ${HAS_LIVE_HOMING_REF}`);
     }
   }
   if (embeddingMissing) {
@@ -977,6 +994,33 @@ export async function linkIngredientsToSeries(seriesId, ingredients = []) {
   return list;
 }
 
+// Catalog ingredient `type` → Creative Director ref role (#1808). CD projects
+// reuse the same convergence data model (catalog_ingredient_refs) as series; the
+// role vocabulary is CD-flavored (location/prop) so the Catalog "Appears in"
+// panel and any future casting UI can label a CD link meaningfully. Anything
+// outside this map (idea/concept/user-defined types) links as a generic
+// 'reference'. Lives next to seriesRefRoleForType so every remix target shares
+// one role-vocabulary home.
+const CD_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'cast',
+  place: 'location',
+  object: 'prop',
+  scene: 'scene',
+});
+export const cdRefRoleForType = (type) => CD_REF_ROLE_BY_TYPE[type] || 'reference';
+
+// Link a batch of already-resolved catalog ingredients to a Creative Director
+// project via catalog_ingredient_refs with ref_kind='creative-director' (#1808)
+// — the reserved-but-previously-unwritten ref kind. Mirrors
+// linkIngredientsToSeries; the inserts are independent so they fan out. Returns
+// the ingredients actually linked (those with an id).
+export async function linkIngredientsToCreativeDirector(projectId, ingredients = []) {
+  const list = Array.isArray(ingredients) ? ingredients.filter((ing) => ing && ing.id) : [];
+  if (list.length === 0) return [];
+  await Promise.all(list.map((ing) => linkIngredientToRef(ing.id, 'creative-director', projectId, cdRefRoleForType(ing.type))));
+  return list;
+}
+
 export async function unlinkIngredientFromRef(ingredientId, refKind, refId, role) {
   // Soft-delete via UPDATE so the row stays around as a tombstone and the
   // trg_catalog_ref_sync_seq trigger bumps sync_sequence — peers pick the
@@ -1002,6 +1046,21 @@ export async function listRefsForIngredient(ingredientId) {
   return result.rows.map(rowToRef);
 }
 
+// Like listRefsForIngredient, but drops refs whose TARGET no longer resolves to
+// a live record (#1812). A ref row stays live (`deleted = false`) when its
+// universe/series/creative-director/issue/work target is soft-deleted — that's
+// intentional (the orphan is recoverable via the Orphaned album) — but the
+// detail page's "Appears in" panel must not render a chip that deep-links to a
+// 404'd target. Resolution goes through the shared resolver (REF_TARGET_TABLES),
+// so every ref kind is filtered uniformly. resolveRefs preserves input order and
+// de-dupes its target probes, so the filter is a positional zip.
+export async function listLiveRefsForIngredient(ingredientId) {
+  const refs = await listRefsForIngredient(ingredientId);
+  if (refs.length === 0) return refs;
+  const resolved = await resolveRefs(refs);
+  return refs.filter((_, i) => resolved[i]?.resolved === true);
+}
+
 export async function listIngredientsForRef(refKind, refId) {
   const result = await query(
     `SELECT i.*, r.role, r.created_at AS ref_created_at
@@ -1012,6 +1071,22 @@ export async function listIngredientsForRef(refKind, refId) {
     [refKind, refId],
   );
   return result.rows.map((row) => ({ ingredient: rowToIngredient(row), role: row.role }));
+}
+
+// Resolve a list of ingredient ids to live ingredient records in a single batch
+// query (listIngredients already excludes soft-deleted rows), de-duped and
+// re-ordered to the caller's pick order so a composed seed/cast reads in the
+// order the user selected. Missing/deleted ids are simply absent and skipped.
+// Shared by every remix target (#1761 Story Builder seed, #1808 Creative
+// Director cast) so the resolve logic lives in one place next to the data layer.
+export async function resolveIngredientsByIds(ids) {
+  const list = [...new Set((Array.isArray(ids) ? ids : [])
+    .filter((id) => typeof id === 'string' && id.trim())
+    .map((id) => id.trim()))];
+  if (list.length === 0) return [];
+  const { items } = await listIngredients({ ids: list, limit: list.length });
+  const byId = new Map(items.map((ing) => [ing.id, ing]));
+  return list.map((id) => byId.get(id)).filter(Boolean);
 }
 
 
@@ -1785,9 +1860,12 @@ export async function getCatalogFacets() {
     query(`SELECT tag, COUNT(*)::int AS count
              FROM (SELECT unnest(tags) AS tag FROM catalog_ingredients WHERE deleted = false) t
             GROUP BY tag ORDER BY count DESC, tag`),
-    // Per-ingredient bucket classification. ref_count = live universe/series ref
-    // ROWS; live_count = those whose target still resolves. unlinked = ref_count 0;
-    // orphaned = ref_count > 0 but live_count 0; linked = live_count > 0.
+    // Per-ingredient bucket classification. ref_count = live homing ref ROWS
+    // (universe/series/creative-director); live_count = those whose target still
+    // resolves. unlinked = ref_count 0; orphaned = ref_count > 0 but live_count 0;
+    // linked = live_count > 0. Same homing-ref set + live predicate as the
+    // listIngredients orphaned/unlinked filters, so the bucket counts and the
+    // album listings can't drift.
     query(`SELECT
               COUNT(*) FILTER (WHERE ref_count = 0)::int AS unlinked,
               COUNT(*) FILTER (WHERE ref_count > 0 AND live_count = 0)::int AS orphaned,
@@ -1795,13 +1873,10 @@ export async function getCatalogFacets() {
             FROM (
               SELECT i.id,
                 COUNT(r.ref_id) AS ref_count,
-                COUNT(r.ref_id) FILTER (WHERE
-                  (r.ref_kind = 'universe' AND EXISTS (SELECT 1 FROM universes u WHERE u.id = r.ref_id AND u.deleted = false))
-                  OR (r.ref_kind = 'series' AND EXISTS (SELECT 1 FROM pipeline_series s WHERE s.id = r.ref_id AND s.deleted = false))
-                ) AS live_count
+                COUNT(r.ref_id) FILTER (WHERE ${liveHomingTargetSql('r')}) AS live_count
               FROM catalog_ingredients i
               LEFT JOIN catalog_ingredient_refs r
-                ON r.ingredient_id = i.id AND r.deleted = false AND r.ref_kind IN ('universe', 'series')
+                ON r.ingredient_id = i.id AND r.deleted = false AND r.ref_kind IN (${HOMING_REF_KINDS_SQL})
               WHERE i.deleted = false
               GROUP BY i.id
             ) sub`),

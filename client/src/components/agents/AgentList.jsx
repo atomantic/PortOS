@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import { FormField } from '../ui/FormField';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
 import { filterSelectableModels } from '../../utils/providers';
@@ -216,8 +217,7 @@ export default function AgentList() {
                 <span className="text-sm font-medium text-white">Generate with AI</span>
               </div>
               <div className="flex items-end gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                <FormField label="Provider" className="flex-1" labelClassName="block text-xs text-gray-400 mb-1">
                   <select
                     value={selectedProviderId}
                     onChange={(e) => { setSelectedProviderId(e.target.value); setSelectedModel(''); }}
@@ -229,9 +229,8 @@ export default function AgentList() {
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs text-gray-400 mb-1">Model</label>
+                </FormField>
+                <FormField label="Model" className="flex-1" labelClassName="block text-xs text-gray-400 mb-1">
                   <select
                     value={selectedModel}
                     onChange={(e) => setSelectedModel(e.target.value)}
@@ -243,7 +242,7 @@ export default function AgentList() {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
-                </div>
+                </FormField>
                 <button
                   type="button"
                   onClick={handleGenerate}
@@ -263,8 +262,7 @@ export default function AgentList() {
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Name</label>
+              <FormField label="Name">
                 <input
                   type="text"
                   value={formData.name}
@@ -272,9 +270,8 @@ export default function AgentList() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                   required
                 />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Style</label>
+              </FormField>
+              <FormField label="Style">
                 <select
                   value={formData.personality.style}
                   onChange={(e) => updatePersonality('style', e.target.value)}
@@ -284,21 +281,19 @@ export default function AgentList() {
                     <option key={style.value} value={style.value}>{style.label}</option>
                   ))}
                 </select>
-              </div>
+              </FormField>
             </div>
 
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Description</label>
+            <FormField label="Description" className="mb-4">
               <textarea
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white h-20"
                 placeholder="Brief description of this agent's purpose..."
               />
-            </div>
+            </FormField>
 
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Tone</label>
+            <FormField label="Tone" className="mb-4">
               <input
                 type="text"
                 value={formData.personality.tone}
@@ -306,10 +301,9 @@ export default function AgentList() {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 placeholder="e.g., friendly but informative"
               />
-            </div>
+            </FormField>
 
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Topics (comma-separated)</label>
+            <FormField label="Topics (comma-separated)" className="mb-4">
               <input
                 type="text"
                 value={topicsText}
@@ -318,10 +312,9 @@ export default function AgentList() {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 placeholder="e.g., technology, AI, philosophy"
               />
-            </div>
+            </FormField>
 
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Quirks (comma-separated)</label>
+            <FormField label="Quirks (comma-separated)" className="mb-4">
               <input
                 type="text"
                 value={quirksText}
@@ -330,17 +323,16 @@ export default function AgentList() {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                 placeholder="e.g., uses metaphors, asks follow-up questions"
               />
-            </div>
+            </FormField>
 
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Prompt Prefix</label>
+            <FormField label="Prompt Prefix" className="mb-4">
               <textarea
                 value={formData.personality.promptPrefix}
                 onChange={(e) => updatePersonality('promptPrefix', e.target.value)}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white h-24 font-mono text-sm"
                 placeholder="Custom instructions injected into AI prompts..."
               />
-            </div>
+            </FormField>
 
             <div className="flex items-center gap-4 mb-4">
               <label className="block text-sm text-gray-400">Avatar Emoji</label>

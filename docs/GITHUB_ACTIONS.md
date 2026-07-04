@@ -15,14 +15,17 @@ Triggers on PRs to `main`/`release` and pushes to `main`. Runs two parallel jobs
 
 ### Test Job
 
+- Starts a PostgreSQL service container (`pgvector/pgvector:pg17`) and provisions the test database (`npm run setup:db:test`)
 - Installs root, server, and client dependencies
-- Runs server tests (`npm test --prefix server`)
-- Builds client (`npm run build --prefix client`)
+- Runs server tests (`npm run test:ci --prefix server`) and DB-backed tests (`npm run test:db:ci --prefix server`)
+- Runs client tests (`npm test --prefix client`)
+- Builds client (`npm run build --prefix client`) and smoke-boots the server (`npm run smoke`)
 - Skips on `[skip ci]` commits (push events only; PR CI always runs)
 
 ### Lint Job
 
 - Checks server entry point for syntax errors (`node --check server/index.js`)
+- Runs client lint (`npm run lint --prefix client`)
 
 ## Release Workflow (`release.yml`)
 

@@ -22,10 +22,9 @@
  * — that would bypass the sync log and silently diverge peers again.
  */
 
-import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import * as brainStorage from './brainStorage.js';
 import { brainEvents, now } from './brainStorage.js';
@@ -61,7 +60,7 @@ export async function getSettings() {
 export async function updateSettings(partial) {
   const current = await getSettings();
   const next = { ...current, ...partial };
-  await writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2));
+  await atomicWrite(SETTINGS_FILE, next);
   return next;
 }
 
@@ -101,7 +100,7 @@ async function saveObsidianLocation(date, { obsidianPath, obsidianVaultId }) {
   } else {
     map[date] = { obsidianPath: obsidianPath ?? null, obsidianVaultId: obsidianVaultId ?? null };
   }
-  await writeFile(OBSIDIAN_LOCATIONS_FILE, JSON.stringify(map, null, 2));
+  await atomicWrite(OBSIDIAN_LOCATIONS_FILE, map);
 }
 
 // ── Synced journal entry store ───────────────────────────────────────────────

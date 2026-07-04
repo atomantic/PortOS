@@ -1,6 +1,5 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.data;
 const USAGE_FILE = join(DATA_DIR, 'usage.json');
@@ -48,7 +47,7 @@ export async function loadUsage() {
  */
 async function saveUsage() {
   usageData.lastUpdated = new Date().toISOString();
-  await writeFile(USAGE_FILE, JSON.stringify(usageData, null, 2));
+  await atomicWrite(USAGE_FILE, usageData);
 }
 
 /**

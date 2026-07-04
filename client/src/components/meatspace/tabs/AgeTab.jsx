@@ -141,7 +141,7 @@ export default function AgeTab() {
       {latestEpigenetic ? (
         <div className="bg-port-card border border-port-border rounded-xl p-6">
           <div className="flex items-center gap-2 mb-4">
-            <Dna size={18} className="text-purple-400" />
+            <Dna size={18} className="text-port-accent-2" />
             <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Epigenetic Age</h3>
             <ProvenanceChip
               level="experimental"

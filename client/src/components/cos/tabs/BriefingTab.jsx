@@ -144,7 +144,7 @@ const renderInlineFormatting = (text) => {
     const codeParts = part.split(/(`[^`]+`)/g);
     return codeParts.map((cp, j) => {
       if (cp.startsWith('`') && cp.endsWith('`')) {
-        return <code key={`${i}-${j}`} className="text-xs bg-port-bg px-1 py-0.5 rounded text-cyan-400 font-mono">{cp.slice(1, -1)}</code>;
+        return <code key={`${i}-${j}`} className="text-xs bg-port-bg px-1 py-0.5 rounded text-port-accent font-mono">{cp.slice(1, -1)}</code>;
       }
       return cp;
     });

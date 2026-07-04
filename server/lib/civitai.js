@@ -200,12 +200,12 @@ export const buildAuthHeaders = (apiKey) => {
 // Fetch model metadata. `fetchImpl` is injectable for tests — defaults to
 // global fetch which is available in Node 18+. Returns the parsed JSON
 // body; throws ServerError on HTTP failures with a helpful message.
-export const fetchCivitaiModel = async (modelId, { apiKey, fetchImpl = fetch } = {}) => {
+export const fetchCivitaiModel = async (modelId, { apiKey, fetchImpl = fetch, signal = AbortSignal.timeout(10000) } = {}) => {
   if (!/^\d+$/.test(String(modelId))) {
     throw new ServerError(`Invalid Civitai model id: ${modelId}`, { status: 400, code: 'CIVITAI_BAD_URL' });
   }
   const url = `${CIVITAI_API}/models/${modelId}`;
-  const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildAuthHeaders(apiKey) } });
+  const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildAuthHeaders(apiKey) }, signal });
   if (!res.ok) {
     if (res.status === 404) {
       throw new ServerError(`Civitai model ${modelId} not found`, { status: 404, code: 'CIVITAI_NOT_FOUND' });
@@ -337,7 +337,7 @@ const RUNNER_TO_BASE_MODELS = {
 // suggestion service shape them); `nextCursor` is Civitai's cursor token for
 // the next page (null when exhausted). Pass `query` to filter by keyword and
 // `cursor` to page forward. fetchImpl is injectable for tests.
-export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Most Downloaded', nsfw = false, query, cursor, apiKey, fetchImpl = fetch } = {}) => {
+export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Most Downloaded', nsfw = false, query, cursor, apiKey, fetchImpl = fetch, signal = AbortSignal.timeout(10000) } = {}) => {
   const baseModels = RUNNER_TO_BASE_MODELS[runnerFamily];
   if (!baseModels) {
     throw new ServerError(`Unknown runner family for Civitai search: ${runnerFamily}`, { status: 400, code: 'CIVITAI_BAD_RUNNER' });
@@ -358,7 +358,7 @@ export const searchCivitaiLoras = async ({ runnerFamily, limit = 12, sort = 'Mos
   // back here to fetch the next page. Cursor is opaque (string or number).
   if (cursor != null && cursor !== '') params.set('cursor', String(cursor));
   const url = `${CIVITAI_API}/models?${params.toString()}`;
-  const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildAuthHeaders(apiKey) } });
+  const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildAuthHeaders(apiKey) }, signal });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
       throw new ServerError(

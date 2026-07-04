@@ -17,7 +17,11 @@ const syncForkSchema = z.object({
 });
 
 const executeSchema = z.object({
-  acknowledgeFork: z.boolean().optional()
+  acknowledgeFork: z.boolean().optional(),
+  // Reconcile a half-updated install (issue #1779): run update.sh to pull +
+  // install + build + restart even when there's no NEWER GitHub release — the
+  // user did a bare `git pull` and just needs the rest of the update steps.
+  reconcile: z.boolean().optional()
 });
 
 // GET /api/update/status — returns update state (also clears stale locks)
@@ -104,12 +108,34 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
   const status = await updateChecker.getUpdateStatus();
-  if (!status.latestRelease?.tag) {
-    throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
+
+  // Two distinct entry points:
+  //   - Normal update: requires a known, newer release tag to update TO.
+  //   - Reconcile (issue #1779): finishes a bare `git pull` by running update.sh
+  //     even with no newer release. It must be gated on the install ACTUALLY
+  //     being out of sync — branch on `reconcile` first so a cached release tag
+  //     can't let `reconcile: true` force update.sh on an in-sync install (or
+  //     target a stale release). update.sh pulls main regardless of the tag, so
+  //     the tag here is purely for logging; prefer the current version.
+  let tag;
+  if (reconcile) {
+    if (!status.installState) {
+      // installState is best-effort (.catch(() => null) in getUpdateStatus); a
+      // transient git/fs hiccup shouldn't read as "already in sync".
+      throw new ServerError('Could not determine install state — try again', { status: 503, code: 'INSTALL_STATE_UNAVAILABLE' });
+    }
+    if (!status.installState.outOfSync) {
+      throw new ServerError('Install is already in sync — nothing to reconcile', { status: 400, code: 'ALREADY_IN_SYNC' });
+    }
+    tag = `v${status.currentVersion}`;
+  } else {
+    if (!status.latestRelease?.tag) {
+      throw new ServerError('No release available to update to', { status: 400, code: 'NO_RELEASE' });
+    }
+    tag = status.latestRelease.tag;
   }
-  const tag = status.latestRelease.tag;
 
   // Validate tag is a well-formed semver release (e.g. "v1.27.0" or "v1.27.0-rc.1") to prevent option injection
   if (!/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/.test(tag)) {
@@ -153,7 +179,17 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // so the actual post-update version may differ from `tag` if new commits
   // landed after the release. The script writes the true version to
   // data/update-complete.json, which the server reads on boot.
-  executeUpdate(tag, emit).then(result => {
+  //
+  // For a reconcile, hand the updater the workspaces whose installed deps are
+  // stale (per installState's receipt check) so it force-reinstalls exactly
+  // those — a bare `git pull` (possibly already restarted) leaves the scripts'
+  // commit-diff dependency detection empty. 'root' maps to update.sh's '.' token.
+  const forceCleanWorkspaces = reconcile
+    ? (status.installState.staleDeps?.workspaces || [])
+        .filter(w => w.stale)
+        .map(w => (w.name === 'root' ? '.' : w.name))
+    : undefined;
+  executeUpdate(tag, emit, { forceCleanWorkspaces }).then(result => {
     // Note: this .then() may never fire if the update script's PM2 restart
     // kills this server process first. The client handles this by polling
     // /api/system/health after receiving the 'restart' step.

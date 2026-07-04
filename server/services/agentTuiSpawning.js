@@ -17,18 +17,23 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { resolveCliModel, resolveBedrockCliModel } from '../lib/providerModels.js';
+import { shellQuote } from '../lib/shellQuote.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
+  MERGE_QUEUE_IDLE_TIMEOUT_MS,
+  REVIEW_LOOP_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createWorkActivityTracker,
+  createMergeQueueTracker,
+  createReviewLoopTracker,
   createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
@@ -109,12 +114,6 @@ const OUTPUT_FLUSH_INTERVAL_MS = 250;
 const DONE_SENTINEL_NAME = '.agent-done';
 const DONE_POLL_INTERVAL_MS = 2000;
 
-function shellQuote(value) {
-  const text = String(value ?? '');
-  if (/^[A-Za-z0-9_./:=+-]+$/.test(text)) return text;
-  return `'${text.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * Thin wrapper around `shellService.createShellSession` for the agent TUI
  * path. Centralizes the agent-side defaults (kind, label, initialCommand)
@@ -181,6 +180,14 @@ function appendModelArgs(args, model, command, provider) {
   if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
   if (!effectiveModel) return args;
+  // OpenCode TUI launches with `opencode --model ollama/<id>` (the top-level
+  // flag preselects the model). Namespace the bare Ollama id; no Bedrock mapping.
+  // Respect a user-baked --model/-m pin (mirrors buildTuiInvocation/buildCliArgs)
+  // rather than appending a second flag that overrides it.
+  if (isOpencodeCommand(command)) {
+    if (hasModelFlag(args)) return args;
+    return [...args, '--model', prefixOpencodeModel(provider, effectiveModel)];
+  }
   // Bedrock box: map a bare Claude id to its region-prefixed form just-in-time
   // (no-op off Bedrock / for non-Claude ids).
   const injectedModel = resolveBedrockCliModel(effectiveModel, {
@@ -273,6 +280,19 @@ export async function spawnTuiAgent({
   // fallback idle-complete path from finalizing a never-submitted prompt as
   // success (issue #1229).
   const workActivity = createWorkActivityTracker();
+  // Latches once the agent enters a `/do:next --swarm` Phase C serialized merge
+  // queue, whose per-PR CI re-runs produce minutes of silent output. While
+  // latched, the idle reaper uses the extended MERGE_QUEUE_IDLE_TIMEOUT_MS so a
+  // still-working orchestrator isn't reaped mid-merge (issue #2074).
+  const mergeQueue = createMergeQueueTracker();
+  // Latches once the agent enters a do:release/do:pr/do:rpr multi-reviewer
+  // loop, whose external reviewer passes (codex reading a large diff, a
+  // Copilot cloud review, a human @<login> review) can go silent in the TUI
+  // for well over the default idle window. While latched, the idle reaper
+  // uses the extended REVIEW_LOOP_IDLE_TIMEOUT_MS so a still-waiting release
+  // isn't reaped as a false `idle-complete` success before it reaches the
+  // merge gate (issue observed on agent-61508f36, PR #2084).
+  const reviewLoop = createReviewLoopTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
@@ -622,6 +642,20 @@ export async function spawnTuiAgent({
       // across wall-clock time confirms real work (a static echo's counters all
       // arrive together and fail the time-span). Gates idle-complete (#1229).
       if (promptSubmittedAt && stripped && !workActivity.active) workActivity.observe(stripped, now);
+      // Detect entry into the swarm Phase C merge queue so the idle reaper can
+      // extend its grace window across the silent per-PR CI waits (issue #2074).
+      // Latches once — observe only until active, then announce the transition.
+      if (promptSubmittedAt && stripped && !mergeQueue.active && mergeQueue.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} entered merge queue — idle reaper extended to ${Math.round(MERGE_QUEUE_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'merge-queue' });
+        await updateAgent(agentId, { metadata: { phase: 'merge-queue' } });
+      }
+      // Detect entry into a do:release/do:pr/do:rpr multi-reviewer loop so the
+      // idle reaper can extend its grace across a slow reviewer's silent
+      // working stretch (see reviewLoop declaration above for the incident).
+      if (promptSubmittedAt && stripped && !reviewLoop.active && reviewLoop.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} entered review loop — idle reaper extended to ${Math.round(REVIEW_LOOP_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'review-loop' });
+        await updateAgent(agentId, { metadata: { phase: 'review-loop' } });
+      }
       lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
@@ -878,7 +912,47 @@ export async function spawnTuiAgent({
     // counts because per-line PTY capture is intentionally disabled for TUI
     // agents — see handleData.
     if (lastOutputAt <= promptSentAt) return;
-    if (idle >= tuiConfig.idleTimeoutMs) {
+    // While the agent is in a swarm Phase C serialized merge queue, per-PR CI
+    // re-runs go silent for minutes at a time; extend the idle grace so a
+    // still-working orchestrator isn't reaped mid-merge (issue #2074). The
+    // extended window still bounds a genuinely-dead orchestrator's reap.
+    const effectiveIdleTimeoutMs = mergeQueue.active
+      ? Math.max(tuiConfig.idleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
+      : reviewLoop.active
+        ? Math.max(tuiConfig.idleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : tuiConfig.idleTimeoutMs;
+    if (idle >= effectiveIdleTimeoutMs) {
+      // Reaped AFTER the extended merge-queue grace elapsed: the orchestrator
+      // almost certainly died mid-merge with PRs opened/merged-but-uncleaned.
+      // Surface it as a needs-manual-finish FAILURE rather than the silent
+      // `status: completed` that hid the half-done merge queue (issue #2074).
+      if (mergeQueue.active) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min in the merge queue — it likely died mid-merge; check for open or merged-but-uncleaned PRs and finish them manually.`,
+          reason: 'merge-queue-idle-timeout',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+        return;
+      }
+      // Reaped AFTER the extended review-loop grace elapsed: a reviewer
+      // (copilot/codex/agy/claude/ollama/@<login>) likely hung, or the wait
+      // simply exceeded budget. Surface it as a needs-manual-finish FAILURE
+      // rather than the silent `status: completed` that let PR #2084 sit
+      // open+unmerged for hours while agent-61508f36 looked "done".
+      if (reviewLoop.active) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min waiting inside the multi-reviewer loop — a reviewer may have hung or the wait exceeded budget; check the PR's review/merge state and finish manually.`,
+          reason: 'review-loop-idle-timeout',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+        return;
+      }
       // Distinguish a real (sentinel-less) completion from a never-submitted
       // prompt that just idled out. `lastOutputAt > promptSentAt` only proves
       // the TUI repainted SOMETHING — banner/status chrome churns even with the

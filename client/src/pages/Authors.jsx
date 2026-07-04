@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
@@ -61,10 +62,13 @@ function Field({ label, hint, children }) {
 }
 
 export default function Authors() {
+  const navigate = useNavigate();
+  // Selection lives in the URL (`/authors/:authorId`, `/authors/new`) so it's
+  // deep-linkable, reload-safe, and reachable from ⌘K/voice. `authorId === 'new'`
+  // is create mode; a real id is edit mode; absent is idle.
+  const { authorId } = useParams();
   const [authors, setAuthors] = useState([]);
   const [loading, setLoading] = useState(true);
-  // selectedId === 'new' is create mode; a real id is edit mode; null is idle.
-  const [selectedId, setSelectedId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -184,27 +188,37 @@ export default function Authors() {
       .finally(() => setLoading(false));
   }, []);
 
-  const isCreate = selectedId === 'new';
+  const isCreate = authorId === 'new';
   const selected = useMemo(
-    () => (isCreate || !selectedId ? null : authors.find((a) => a.id === selectedId) || null),
-    [authors, selectedId, isCreate],
+    () => (isCreate || !authorId ? null : authors.find((a) => a.id === authorId) || null),
+    [authors, authorId, isCreate],
   );
+  // A real id that isn't in the loaded list (deleted / bad deep link) → not-found.
+  const notFound = !isCreate && !!authorId && !loading && !selected;
   // A headshot render needs at least a subject or an art-direction prompt.
   const canGenerate = !!(form.physicalDescription.trim() || form.headshotStyle.trim());
 
-  const selectAuthor = (a) => {
-    setSelectedId(a.id);
-    setForm(formFromAuthor(a));
-    setConfirmDelete(false);
-    clearGeneration();
-  };
+  const selectAuthor = (a) => navigate(`/authors/${encodeURIComponent(a.id)}`);
+  const startCreate = () => navigate('/authors/new');
 
-  const startCreate = () => {
-    setSelectedId('new');
-    setForm(emptyForm());
+  // Hydrate the editor form from the URL-selected author. Keyed on the id so a
+  // list refresh (create/update/delete mutating `authors`) doesn't clobber the
+  // open form; `hydratedRef` tracks which selection is already loaded. Resets
+  // (confirm-delete + any in-flight generation) run for EVERY selection change —
+  // including navigating to the idle index or a stale id — so a stray render
+  // can't land on the previous author after you've moved on.
+  const hydratedRef = useRef(null);
+  const selectionKey = authorId ?? null;
+  useEffect(() => {
+    if (loading) return;
+    if (hydratedRef.current === selectionKey) return;
+    hydratedRef.current = selectionKey;
     setConfirmDelete(false);
     clearGeneration();
-  };
+    if (isCreate) setForm(emptyForm());
+    else if (selected) setForm(formFromAuthor(selected));
+    // else: idle / not-found — leave the form; the fallback UI handles it.
+  }, [selectionKey, isCreate, selected, loading]);
 
   const handleSave = async () => {
     const name = form.name.trim();
@@ -219,10 +233,10 @@ export default function Authors() {
       setSaving(false);
       if (!created) return;
       setAuthors((prev) => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
-      setSelectedId(created.id);
+      navigate(`/authors/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.name}"`);
     } else {
-      const updated = await updateAuthor(selectedId, payload).catch((err) => {
+      const updated = await updateAuthor(authorId, payload).catch((err) => {
         toast.error(err.message || 'Failed to save author');
         return null;
       });
@@ -239,8 +253,8 @@ export default function Authors() {
     if (!selected) return;
     const prior = authors;
     setAuthors((prev) => prev.filter((a) => a.id !== selected.id));
-    setSelectedId(null);
     setConfirmDelete(false);
+    navigate('/authors');
     await deleteAuthor(selected.id).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setAuthors(prior);
@@ -284,7 +298,7 @@ export default function Authors() {
                     type="button"
                     onClick={() => selectAuthor(a)}
                     className={`w-full text-left px-3 py-2 rounded text-sm truncate ${
-                      a.id === selectedId ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
+                      a.id === authorId ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'
                     }`}
                   >
                     {a.name}
@@ -296,7 +310,14 @@ export default function Authors() {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-lg p-4">
-          {!isCreate && !selected ? (
+          {notFound ? (
+            <div className="text-gray-500 text-sm">
+              That author could not be found — it may have been deleted.{' '}
+              <button type="button" onClick={() => navigate('/authors')} className="text-port-accent hover:underline">
+                Back to authors
+              </button>
+            </div>
+          ) : !isCreate && !selected ? (
             <div className="text-gray-500 text-sm">Select an author to edit, or create a new one.</div>
           ) : (
             <div className="space-y-3">

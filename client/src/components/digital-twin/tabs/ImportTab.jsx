@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { FormField } from '../../ui/FormField';
 import { formatBytes } from '../../../utils/formatters';
 
 const SOURCE_ICONS = {
@@ -130,7 +131,7 @@ export default function ImportTab() {
       {/* Header */}
       <div className="bg-port-card rounded-lg border border-port-border p-6">
         <div className="flex items-center gap-3 mb-4">
-          <Upload className="w-6 h-6 text-purple-400" />
+          <Upload className="w-6 h-6 text-port-accent-2" />
           <h2 className="text-xl font-semibold text-white">Import External Data</h2>
         </div>
         <p className="text-gray-400">
@@ -227,7 +228,7 @@ export default function ImportTab() {
               </label>
             </div>
             {fileContent && (
-              <div className="mt-2 flex items-center gap-2 text-sm text-green-400">
+              <div className="mt-2 flex items-center gap-2 text-sm text-port-success">
                 <Check className="w-4 h-4" />
                 File loaded ({formatBytes(fileContent.length, 0)})
               </div>
@@ -235,10 +236,7 @@ export default function ImportTab() {
           </div>
 
           {/* Provider Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Analysis Provider
-            </label>
+          <FormField className="mb-6" label="Analysis Provider" labelClassName="block text-sm font-medium text-gray-400 mb-2">
             <select
               value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
               onChange={(e) => {
@@ -255,7 +253,7 @@ export default function ImportTab() {
                 ))
               ))}
             </select>
-          </div>
+          </FormField>
 
           {/* Analyze Button */}
           <button
@@ -285,7 +283,7 @@ export default function ImportTab() {
           <div className="bg-port-card rounded-lg border border-port-border p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                <Check className="w-5 h-5 text-green-400" />
+                <Check className="w-5 h-5 text-port-success" />
                 Analysis Complete
               </h3>
               <button
@@ -371,7 +369,7 @@ export default function ImportTab() {
                       {analysisResult.insights.personalityInferences.values.map((value, i) => (
                         <span
                           key={i}
-                          className="px-2 py-1 bg-purple-500/20 text-purple-400 rounded-lg text-sm"
+                          className="px-2 py-1 bg-port-accent-2/20 text-port-accent-2 rounded-lg text-sm"
                         >
                           {value}
                         </span>
@@ -386,7 +384,7 @@ export default function ImportTab() {
                       {analysisResult.insights.personalityInferences.interests.map((interest, i) => (
                         <span
                           key={i}
-                          className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded-lg text-sm"
+                          className="px-2 py-1 bg-port-accent/20 text-port-accent rounded-lg text-sm"
                         >
                           {interest}
                         </span>
@@ -422,7 +420,7 @@ export default function ImportTab() {
                     <ul className="space-y-2">
                       {analysisResult.insights.preferences.map((pref, i) => (
                         <li key={i} className="text-sm text-gray-300 flex items-start gap-2">
-                          <ChevronRight className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
+                          <ChevronRight className="w-4 h-4 text-port-success shrink-0 mt-0.5" />
                           {pref}
                         </li>
                       ))}

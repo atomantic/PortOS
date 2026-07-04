@@ -17,6 +17,7 @@ import {
   ThumbsDown,
   MessageSquare,
   ExternalLink,
+  Terminal,
   Send,
   GitBranch,
   GitPullRequest,
@@ -30,7 +31,7 @@ import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
-import { formatDurationMs } from '../../../utils/formatters';
+import { formatDurationMs, formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -150,7 +151,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     const result = await api.submitCosAgentFeedback(agent.id, {
       rating,
       comment: feedbackComment || undefined
-    }).catch(err => {
+    }, { silent: true }).catch(err => {
       toast.error(`Failed to submit feedback: ${err.message}`);
       return null;
     });
@@ -191,7 +192,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (sendingBtw || !btwInput.trim()) return;
     setSendingBtw(true);
 
-    const result = await api.sendCosAgentBtw(agent.id, btwInput.trim()).catch(err => {
+    const result = await api.sendCosAgentBtw(agent.id, btwInput.trim(), { silent: true }).catch(err => {
       toast.error(`Failed to send: ${err.message}`);
       return null;
     });
@@ -536,7 +537,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           {completed && agent.completedAt && (
             <>
               <span className="text-gray-600">|</span>
-              <span className="text-gray-500 whitespace-nowrap" title={new Date(agent.completedAt).toLocaleString()}>
+              <span className="text-gray-500 whitespace-nowrap" title={formatDateTime(agent.completedAt)}>
                 {new Date(agent.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}{' '}
                 {new Date(agent.completedAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
               </span>
@@ -557,11 +558,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           {!inactive && agent.metadata?.tuiSessionId && (
             <Link
               to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
-              title="Open TUI shell session"
+              className="flex items-center gap-1.5 px-3 py-1 rounded font-semibold bg-emerald-500 text-black hover:bg-emerald-400 shadow-sm ring-1 ring-emerald-400/50 whitespace-nowrap transition-colors"
+              title="Open the live TUI shell to inspect and interact with this agent"
             >
-              <ExternalLink size={10} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">shell {agent.metadata.tuiSessionId.slice(0, 6)}</span>
+              <Terminal size={14} aria-hidden="true" className="shrink-0" />
+              <span>Open Shell</span>
+              <span className="font-mono text-[10px] text-black/60">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
             </Link>
           )}
           {!remote && (
@@ -589,7 +591,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (
           <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-0.5 text-xs bg-blue-500/20 text-blue-400 rounded font-mono">
+            <span className="px-2 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded font-mono">
               {agent.metadata.jiraTicketId}
             </span>
             {agent.metadata?.jiraTicketUrl && (
@@ -597,7 +599,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 href={agent.metadata.jiraTicketUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                className="flex items-center gap-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
                 title="Open JIRA ticket in new tab"
               >
                 View ticket
@@ -774,7 +776,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <div className={`text-sm flex items-center gap-1 ${
                 agent.memoryExtraction?.created > 0 ? 'text-purple-400' :
                 agent.memoryExtraction?.pendingApproval > 0 ? 'text-yellow-400' : 'text-gray-500'
-              }`} title={agent.memoryExtraction?.extractedAt ? `Extracted at ${new Date(agent.memoryExtraction.extractedAt).toLocaleString()}` : 'No memories extracted'}>
+              }`} title={agent.memoryExtraction?.extractedAt ? `Extracted at ${formatDateTime(agent.memoryExtraction.extractedAt)}` : 'No memories extracted'}>
                 <Brain size={14} aria-hidden="true" />
                 {agent.memoryExtraction?.created > 0 ? (
                   <span>{agent.memoryExtraction.created} memor{agent.memoryExtraction.created === 1 ? 'y' : 'ies'}</span>
