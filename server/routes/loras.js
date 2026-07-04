@@ -142,20 +142,23 @@ router.post('/install/huggingface', asyncHandler(async (req, res) => {
 }));
 
 // Streaming variant of the HF install for the manager UI. Same install, but
-// emits byte-level download `progress` frames over SSE so the form can show a
-// percentage instead of a static "Downloading…" (matching the image/video
-// model download badge UX). EventSource is GET-only, so url/family ride in the
-// query string; the HF token always comes from settings/env (never the query,
-// to keep it out of URLs and access logs). Terminal frames:
+// streams byte-level download `progress` frames (SSE-encoded) so the form can
+// show a percentage instead of a static "Downloading…" (matching the image/video
+// model download badge UX). POST, not GET: this endpoint mutates state (downloads
+// + writes a LoRA), and the client reads the stream body with fetch() (not
+// EventSource), so url/family ride in the JSON body — a state-changing GET would
+// be reachable by a top-level cross-origin navigation carrying a SameSite=Lax
+// session cookie (CSRF), which authGate's Origin check can't see. The HF token
+// always comes from settings/env, never the request. Terminal frames:
 // `{type:'complete', sidecar}` or `{type:'error', message, code}` — the client
 // re-uses `code` (e.g. HF_UNKNOWN_FAMILY) to drive the inline family-confirm
-// retry, exactly as the POST path's thrown error does.
+// retry, exactly as the plain POST path's thrown error does.
 const hfInstallStreamSchema = z.object({
   url: z.string().min(1).max(1024),
   family: z.enum(Object.values(VIDEO_LORA_FAMILIES)).optional(),
 });
-router.get('/install/huggingface/stream', asyncHandler(async (req, res) => {
-  const data = validateRequest(hfInstallStreamSchema, req.query);
+router.post('/install/huggingface/stream', asyncHandler(async (req, res) => {
+  const data = validateRequest(hfInstallStreamSchema, req.body);
   const { send, safeEnd } = openSseStream(res);
   // Headers are already flushed once the stream is open, so an install failure
   // must NOT bubble to the error middleware (it would try to re-set status on a
@@ -164,10 +167,17 @@ router.get('/install/huggingface/stream', asyncHandler(async (req, res) => {
   // On client disconnect (tab close, navigation, dropped connection) actually
   // ABORT the download via the controller — not just suppress frames — so a
   // multi-GB LoRA transfer doesn't keep running unwatched and a retry can't race
-  // a still-in-flight install.
+  // a still-in-flight install. Listen on RES, not REQ: this is a POST, and the
+  // request stream emits 'close' the instant its body is fully read (Node
+  // auto-destroys the consumed readable) — that is NOT a disconnect and would
+  // wrongly abort every install. `res` 'close' while the response is not yet
+  // finished is the true "client went away" signal; after a normal safeEnd()
+  // it fires with writableEnded already true and is a harmless no-op.
   const controller = new AbortController();
   let aborted = false;
-  req.on('close', () => { aborted = true; controller.abort(); });
+  res.on('close', () => {
+    if (!res.writableEnded) { aborted = true; controller.abort(); }
+  });
   await installFromHuggingface(data, {
     signal: controller.signal,
     onProgress: ({ received, total }) => {

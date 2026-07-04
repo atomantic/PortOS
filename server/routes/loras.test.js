@@ -56,20 +56,21 @@ const makeApp = () => {
   return app;
 };
 
-describe('GET /api/loras/install/huggingface/stream', () => {
+describe('POST /api/loras/install/huggingface/stream', () => {
   it('streams byte-progress frames then a complete frame carrying the sidecar', async () => {
     const res = await request(makeApp())
-      .get('/api/loras/install/huggingface/stream?url=fal/ltx2.3-audio-reactive-lora');
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'fal/ltx2.3-audio-reactive-lora' });
     expect(res.status).toBe(200);
     const frames = parseSseFrames(res.text);
     // The service double emitted 4/8 then 8/8 → progress 0.5 then 1.
     expect(frames.filter((f) => f.type === 'progress').map((f) => f.progress)).toEqual([0.5, 1]);
     const complete = frames.find((f) => f.type === 'complete');
     expect(complete?.sidecar?.runnerFamily).toBe('ltx-video');
-    // Family override rides the query string through to the service.
+    // The body carries through to the service, with an AbortSignal + progress cb.
     expect(installFromHuggingface).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'fal/ltx2.3-audio-reactive-lora' }),
-      expect.objectContaining({ onProgress: expect.any(Function) }),
+      expect.objectContaining({ onProgress: expect.any(Function), signal: expect.any(Object) }),
     );
   });
 
@@ -78,7 +79,8 @@ describe('GET /api/loras/install/huggingface/stream', () => {
       Object.assign(new Error('could not classify'), { code: 'HF_UNKNOWN_FAMILY' }),
     );
     const res = await request(makeApp())
-      .get('/api/loras/install/huggingface/stream?url=someone/mystery');
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'someone/mystery' });
     expect(res.status).toBe(200); // headers already flushed — error is a frame, not a status
     const err = parseSseFrames(res.text).find((f) => f.type === 'error');
     expect(err.code).toBe('HF_UNKNOWN_FAMILY');
@@ -87,7 +89,8 @@ describe('GET /api/loras/install/huggingface/stream', () => {
 
   it('rejects an invalid family override before opening the stream', async () => {
     const res = await request(makeApp())
-      .get('/api/loras/install/huggingface/stream?url=x/y&family=bogus');
+      .post('/api/loras/install/huggingface/stream')
+      .send({ url: 'x/y', family: 'bogus' });
     expect(res.status).toBe(400);
   });
 });
