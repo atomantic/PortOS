@@ -306,6 +306,46 @@ export const memoryDrillRequestSchema = z.object({
   count: z.number().int().min(1).max(30).optional().default(5),
 });
 
+// =============================================================================
+// MORSE TRAINER PROGRESS VALIDATION
+// =============================================================================
+
+// Server-side ceiling for a Koch level — KOCH_ORDER in MorseTrainer.jsx has 41
+// entries. Mirrors MAX_KOCH_LEVEL in meatspacePostMorse.js.
+const MORSE_MAX_KOCH_LEVEL = 41;
+
+// One recorded prompt→guess character within a Morse round. `guessed` is
+// nullable ('' or null = a miss, distinct from a wrong character); the server
+// recomputes accuracy from these so `correct` is advisory.
+const morseRoundItemSchema = z.object({
+  sent: z.string().min(1).max(8),
+  guessed: z.string().max(16).nullable().optional(),
+  correct: z.boolean().optional(),
+  responseMs: z.number().min(0).optional().default(0),
+});
+
+// A completed copy/head-copy/send round the client submits on finish.
+export const morseRoundSchema = z.object({
+  mode: z.enum(['copy', 'head-copy', 'send']),
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL).optional(),
+  wpm: z.number().min(1).max(100).optional(),
+  farnsworthWpm: z.number().min(1).max(100).optional(),
+  items: z.array(morseRoundItemSchema).min(1),
+  durationMs: z.number().min(0).optional().default(0),
+});
+
+// Explicit Koch level change (advance/reset) or a one-time localStorage adoption
+// (`adopt: true` — server only applies it when it has never had a level).
+export const morseLevelUpdateSchema = z.object({
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL),
+  adopt: z.boolean().optional().default(false),
+  settings: z.object({
+    wpm: z.number().min(1).max(100).optional(),
+    farnsworthWpm: z.number().min(1).max(100).optional(),
+    toneHz: z.number().min(100).max(2000).optional(),
+  }).optional(),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
