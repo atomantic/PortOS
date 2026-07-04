@@ -166,14 +166,30 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
 
     await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument());
 
-    const input = screen.getByPlaceholderText(/bridge word is/i);
-    fireEvent.change(input, { target: { value: 'wrongword' } });
+    // Answer the FIRST of two puzzles.
+    fireEvent.change(screen.getByPlaceholderText(/bridge word is/i), { target: { value: 'wrongword' } });
     fireEvent.click(screen.getByText('Submit'));
 
-    // First of two puzzles — advancing shows "Next", not "See Results", and
-    // no training entry has been logged yet (only the final round does).
-    await screen.findByText('Next');
+    // Non-final question → the feedback panel's advance button reads "Next"
+    // (not "See Results"). Instead of a bare synchronous "not called yet"
+    // check at one incidental instant (which CI's variable scheduling could
+    // trip), gate the negative assertion on an explicit, settled observable
+    // transition: advancing to the SECOND puzzle. If any premature-submit
+    // regression fired a training entry mid-round, it would have happened by
+    // the time puzzle two has rendered.
+    fireEvent.click(await screen.findByText('Next'));
+    await waitFor(() => expect(screen.getByText('sun___')).toBeInTheDocument());
     expect(submitTrainingEntry).not.toHaveBeenCalled();
+
+    // Positive anchor (deterministic): only completing the FINAL puzzle logs
+    // the entry — and exactly once. This pins the round-completion boundary so
+    // the mid-round negative above can't pass vacuously.
+    fireEvent.change(screen.getByPlaceholderText(/bridge word is/i), { target: { value: 'wrongagain' } });
+    fireEvent.click(screen.getByText('Submit'));
+    const seeResults = await screen.findByText('See Results');
+    expect(submitTrainingEntry).not.toHaveBeenCalled(); // still mid-flow until clicked
+    fireEvent.click(seeResults);
+    await waitFor(() => expect(submitTrainingEntry).toHaveBeenCalledTimes(1));
   });
 
   it('persists a Bridge Word breakdown with a readable prompt built from the clue set (issue #2114)', async () => {
