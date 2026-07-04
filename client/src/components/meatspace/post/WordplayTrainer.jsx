@@ -1,14 +1,25 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { ArrowLeft, Link, Puzzle, BookOpen, Shuffle, CheckCircle, XCircle, ChevronRight, Sparkles } from 'lucide-react';
 import {
-  generatePostDrill, scorePostLlmDrill, getPostDrillCacheStatus, fillPostDrillCache, updatePostConfig,
+  generatePostDrill, getPostDrillCacheStatus, fillPostDrillCache, updatePostConfig, submitTrainingEntry,
 } from '../../../services/api';
 import { enabledApiProviderFilter } from '../../../utils/providers';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
-import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar } from './WordplayDrillUI';
+import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, ProgressBar, scoreWordplayResponse } from './WordplayDrillUI';
+import { countLlmCorrect } from './constants';
+
+// Coarse module bucket for training-log entries — matches the module
+// PostLlmDrillRunner's in-session runner logs LLM/wordplay drills under
+// (see finishDrill in PostLlmDrillRunner.jsx), so standalone and in-session
+// wordplay practice aggregate under the same byDrill key in getTrainingStats.
+const TRAINING_MODULE = 'llm-drills';
+// Fallback timeout for the standalone trainer's per-response scoring call —
+// matches the request timeout used elsewhere for wordplay scoring; the
+// standalone tab has no session-configured timeLimitSec of its own.
+const SCORE_TIMEOUT_MS = 120000;
 
 const GAME_MODES = [
   {
@@ -60,6 +71,10 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
   const [results, setResults] = useState([]);
   const inputRef = useRef(null);
   const questionStartRef = useRef(Date.now());
+  // Tracks when the current 5-question round started, so a completed round can
+  // log one training-log entry with the whole round's elapsed time (matches
+  // MorseTrainer's roundStartRef → totalMs contract).
+  const roundStartRef = useRef(Date.now());
 
   // Cache-fill consent: PortOS never issues background LLM calls a user
   // hasn't asked for. A mode whose drill cache is cold (0 cached) prompts
@@ -126,6 +141,7 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     if (generated) {
       setDrill(generated);
       questionStartRef.current = Date.now();
+      roundStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }
@@ -216,24 +232,18 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     // Score immediately, with the provider/model that generated THIS drill
     // (activeProviderId/activeModel) — not the config-derived providerId/model,
     // which may still be lagging an in-flight config save from a just-confirmed
-    // provider switch (see handleConfirmFill).
+    // provider switch (see handleConfirmFill). scoreWordplayResponse is the
+    // shared core also used by PostLlmDrillRunner's in-session training mode
+    // for these same four drill types (issue #2097) — one scoring path.
     setFeedback({ scoring: true });
-    const scored = await scorePostLlmDrill(
-      selectedMode, drill, [responseObj], 120000, activeProviderId, activeModel
-    ).catch(() => null);
-    const fb = scored?.evaluation?.scores?.[0] || {};
-    setFeedback({
-      scoring: false,
-      score: fb.score ?? scored?.score ?? 0,
-      feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
-      validCount: fb.validCount,
-      invalidItems: fb.invalidItems,
-      missedExamples: fb.missedExamples,
-    });
+    const result = await scoreWordplayResponse(
+      selectedMode, drill, responseObj, SCORE_TIMEOUT_MS, activeProviderId, activeModel
+    );
+    setFeedback({ scoring: false, ...result });
     setResults(prev => [...prev, {
       ...responseObj,
-      score: fb.score ?? scored?.score ?? 0,
-      feedback: fb.feedback || '',
+      score: result.score,
+      feedback: result.feedback || '',
     }]);
   }, [inputValue, items, currentPrompt, selectedMode, drill, activeProviderId, activeModel, questionIndex]);
 
@@ -243,12 +253,24 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate }) {
     setItems([]);
     if (questionIndex + 1 >= totalPrompts) {
       setFeedback({ complete: true });
+      // Persist the completed round to the training log — the standalone
+      // Wordplay tab previously scored every response but never recorded
+      // that practice happened anywhere (issue #2097). Fire-and-forget, same
+      // pattern as MorseTrainer's logTraining: a failed background write
+      // shouldn't interrupt the results screen the user is already seeing.
+      submitTrainingEntry({
+        module: TRAINING_MODULE,
+        drillType: selectedMode,
+        questionCount: results.length,
+        correctCount: countLlmCorrect(results),
+        totalMs: Date.now() - roundStartRef.current,
+      }).catch(() => {});
     } else {
       setQuestionIndex(questionIndex + 1);
       questionStartRef.current = Date.now();
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [questionIndex, totalPrompts]);
+  }, [questionIndex, totalPrompts, results, selectedMode]);
 
   function handleAddItem(e) {
     e?.preventDefault();

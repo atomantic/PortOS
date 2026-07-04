@@ -8,6 +8,24 @@ export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte
 // These use answers[] arrays instead of expected and need dedicated runners.
 export const POST_UNSUPPORTED_DRILL_TYPES = ['memory-fill-blank'];
 
+// The four wordplay drill types with a dedicated standalone trainer
+// (WordplayTrainer.jsx) that shares its render+scoring core (WordplayDrillUI.jsx)
+// with the in-session runner (PostLlmDrillRunner.jsx) — see issue #2097.
+export const WORDPLAY_LLM_DRILL_TYPES = ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'];
+
+// Score (0-100) at or above which an LLM-scored response counts as "correct"
+// for training-log purposes. Matches the >=70 "success" color threshold
+// already used across POST training UI (WordplayTrainer, PostLlmDrillRunner).
+export const LLM_TRAINING_CORRECT_THRESHOLD = 70;
+
+// Count how many scored LLM responses clear the correct threshold. Accepts
+// either a `score` field (WordplayTrainer's per-response results array) or an
+// `llmScore` field (scoreLlmDrill's server-returned `questions[]`) — the two
+// entry points name the scored field differently.
+export function countLlmCorrect(scoredResponses = []) {
+  return scoredResponses.filter(r => (r?.llmScore ?? r?.score ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD).length;
+}
+
 // Domain definitions for 5-minute balanced sessions
 export const DOMAINS = {
   math: {

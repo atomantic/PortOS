@@ -1,6 +1,25 @@
 import { useState, useEffect } from 'react';
 import { Loader } from 'lucide-react';
+import { scorePostLlmDrill } from '../../../services/api';
 import { getDifficultyColor } from './constants';
+
+// Shared scoring core for the four wordplay drill types (compound-chain,
+// bridge-word, double-meaning, idiom-twist) — used by BOTH the standalone
+// WordplayTrainer.jsx and the in-session PostLlmDrillRunner.jsx so the two
+// entry points score/feed back identically instead of maintaining two
+// slightly-drifted copies of the same score?.evaluation?.scores?.[0]
+// unwrapping logic (see issue #2097).
+export async function scoreWordplayResponse(type, drill, responseObj, timeLimitMs, providerId, model) {
+  const scored = await scorePostLlmDrill(type, drill, [responseObj], timeLimitMs, providerId, model).catch(() => null);
+  const fb = scored?.evaluation?.scores?.[0] || {};
+  return {
+    score: fb.score ?? scored?.score ?? 0,
+    feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
+    validCount: fb.validCount,
+    invalidItems: fb.invalidItems,
+    missedExamples: fb.missedExamples,
+  };
+}
 
 const LOADING_MESSAGES = [
   'Crafting challenges...',
