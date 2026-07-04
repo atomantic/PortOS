@@ -6,7 +6,10 @@
 import { getAllProviders } from '../services/providers.js';
 import { startAIOp } from '../services/aiStatusEvents.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
-import { healMissingLocalModel, isModelNotFoundError } from '../services/localModelHealing.js';
+// localModelHealing is lazy-imported at its (rare, error-recovery) call site
+// below — a static import here pulls its notifications/providers deps (which
+// eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
+// graph, breaking suites that partial-mock fileUtils without PATHS.
 import { readResponseJson } from './readResponseJson.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
@@ -270,6 +273,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // provider, tell the user, and retry once — instead of surfacing a dead-end
   // "model not found". Only fires for Ollama / LM Studio providers; healing is
   // a no-op (returns null) for remote/CLI providers, leaving the error as-is.
+  const { healMissingLocalModel, isModelNotFoundError } = await import('../services/localModelHealing.js');
   if (isModelNotFoundError(first.body || first.error)) {
     const healed = await healMissingLocalModel({ provider, requestedModel: model }).catch(() => null);
     if (healed) {
