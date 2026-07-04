@@ -124,7 +124,20 @@ export default function WordplayTrainer({ onBack, config, onConfigUpdate, mode =
   // no-surprise-LLM-calls rule. `initiatedRef` prevents re-generating on
   // unrelated re-renders and after a consent-driven start.
   useEffect(() => {
-    if (!selectedMode) return;
+    if (!selectedMode) {
+      // Left a mode — via the in-app Back button OR the browser Back button
+      // (this is now a URL-routed view). Drop ALL transient run state, crucially
+      // `loading`: a generation aborted by leaving mid-flight never clears it, and
+      // a stale `loading` would be misread as "the next mode is already
+      // generating" (the `drill || loading` guard below), wedging it on a
+      // permanent spinner. Guard against a re-run loop — only clear when dirty.
+      if (drill || loading || feedback || results.length || initiatedRef.current) {
+        setDrill(null); setLoading(false); setQuestionIndex(0);
+        setInputValue(''); setItems([]); setFeedback(null); setResults([]);
+        initiatedRef.current = null;
+      }
+      return;
+    }
     // A drill left over from a PREVIOUS mode (e.g. browser-back to the grid, then
     // pick a different mode — the URL changed without going through
     // handleBackToModes) must be cleared first. Otherwise the `drill || loading`

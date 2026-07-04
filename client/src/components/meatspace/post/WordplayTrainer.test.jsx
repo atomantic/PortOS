@@ -87,6 +87,29 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     expect(entry.totalMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('does not wedge on a permanent spinner after leaving a mode mid-generation then picking another (issue #2098)', async () => {
+    generatePostDrill
+      .mockImplementationOnce(() => new Promise(() => {})) // mode A generation hangs
+      .mockResolvedValueOnce({
+        type: 'bridge-word',
+        puzzles: [{ clues: ['news___', '___back'], answer: 'paper' }],
+      });
+
+    render(<TrainerHarness onBack={() => {}} config={{}} onConfigUpdate={() => {}} />);
+
+    fireEvent.click(await screen.findByText('Compound Chain')); // enter mode A → loading (hangs)
+    await waitFor(() => expect(screen.getByText(/Generating/i)).toBeInTheDocument());
+
+    // Leave mid-generation via the header Back (mirrors browser-back off the URL).
+    // The stale `loading` from the aborted generation must be cleared, or the
+    // next mode would be stuck on a permanent spinner.
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    await screen.findByText('Bridge Word'); // back on the mode grid
+
+    fireEvent.click(screen.getByText('Bridge Word')); // enter mode B
+    await waitFor(() => expect(screen.getByText('news___')).toBeInTheDocument()); // B generated, not wedged
+  });
+
   it('does not submit a training entry before the round completes', async () => {
     generatePostDrill.mockResolvedValue({
       type: 'bridge-word',
