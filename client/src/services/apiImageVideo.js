@@ -290,16 +290,21 @@ export const installLoraFromHuggingface = ({ url, family, silent = false } = {})
 // — `progress` is 0..1, or null when the server had no Content-Length to divide.
 //
 // Uses fetch() + a stream reader rather than EventSource, mirroring
-// streamLocalLlmTest: (1) EventSource auto-reconnects on any transport drop,
-// which for this NON-idempotent install would silently start a second multi-GB
-// download; a single fetch never retries. (2) it honors session expiry — a 401
-// AUTH_REQUIRED bounces to /login via maybeRedirectToLogin exactly like
-// request(), instead of dead-ending on a generic stream error. The frames are
+// streamLocalLlmTest: (1) a POST (not an EventSource GET) — this install mutates
+// state, and a state-changing GET would be CSRF-reachable via a top-level
+// cross-origin navigation; (2) EventSource auto-reconnects on any transport
+// drop, which for this NON-idempotent install would silently start a second
+// multi-GB download — a single fetch never retries; (3) it honors session expiry
+// — a 401 AUTH_REQUIRED bounces to /login via maybeRedirectToLogin exactly like
+// request(), instead of dead-ending on a generic stream error. Frames are
 // SSE-encoded (`data: {json}\n\n`).
 export async function installLoraFromHuggingfaceStream({ url, family, onProgress, signal } = {}) {
-  const params = new URLSearchParams({ url });
-  if (family) params.set('family', family);
-  const response = await fetch(`${API_BASE}/loras/install/huggingface/stream?${params.toString()}`, { signal });
+  const response = await fetch(`${API_BASE}/loras/install/huggingface/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(family ? { url, family } : { url }),
+    signal,
+  });
   if (!response.ok || !response.body?.getReader) {
     const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
     maybeRedirectToLogin(response, err);
