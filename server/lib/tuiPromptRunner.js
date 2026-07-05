@@ -57,6 +57,7 @@ import {
   buildTuiInvocation,
   detectMissingTuiBinary,
 } from './tuiHandshake.js';
+import { buildOpencodeEnvVars } from './opencodeConfig.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -161,7 +162,10 @@ ${prompt}`;
   // through to a spawned Claude Code TUI would make the child think it's
   // nested. Other AI spawn paths (runner.js, agentCliSpawning.js) strip it
   // for the same reason.
-  const childEnv = { ...process.env, ...(provider.envVars || {}), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
+  // the models map so --model is accepted (the static env var lacked this).
+  const opencodeEnv = buildOpencodeEnvVars(provider, provider.defaultModel);
+  const childEnv = { ...process.env, ...(provider.envVars || {}), ...opencodeEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   delete childEnv.CLAUDECODE;
 
   let ptyProcess;

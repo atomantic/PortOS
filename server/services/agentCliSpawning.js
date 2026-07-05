@@ -28,6 +28,7 @@ import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDet
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -416,6 +417,10 @@ export async function spawnDirectly({
     ? await getClaudeSettingsEnv()
     : {};
 
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
+  // the models map so --model is accepted (the static env var lacked this).
+  const opencodeEnv = buildOpencodeEnvVars(provider, model);
+
   const claudeProcess = spawn(cliConfig.command, cliConfig.args, {
     cwd,
     shell: false,
@@ -423,8 +428,9 @@ export async function spawnDirectly({
     windowsHide: true,
     // The pm2 shim must be prepended onto the FINAL PATH (after any
     // provider.envVars override) so a `--dangerously-skip-permissions` agent
-    // can't `pm2 kill` the shared daemon.
-    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
+    // can't `pm2 kill` the shared daemon. opencodeEnv comes LAST to override
+    // the static OPENCODE_CONFIG_CONTENT in provider.envVars.
+    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {
