@@ -12,6 +12,25 @@ vi.mock('../voice/tools.js', () => ({
           parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
         }
       : null),
+  // Resolved specs carry the spec-build-time widening (custom catalog types in
+  // the `type` enum) that the static metadata above lacks — hydration reads this.
+  getToolSpecs: vi.fn(() => [
+    {
+      type: 'function',
+      function: {
+        name: 'catalog_lookup',
+        description: 'VOICE catalog search description',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            type: { type: 'string', enum: ['character', 'wardrobe', 'faction'] },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  ]),
   dispatchTool: vi.fn(async () => ({ summary: 'voice catalog result', results: [] })),
 }));
 
@@ -100,10 +119,13 @@ describe('registry shape', () => {
     }
   });
 
-  it('hydrates catalog.searchIngredients description + parameters from the voice tool', () => {
+  it('hydrates catalog_searchIngredients from the voice tool\'s RESOLVED spec (custom types survive)', () => {
     const meta = getCreativeToolMetadata('catalog_searchIngredients');
     expect(meta.description).toBe('VOICE catalog search description');
     expect(meta.parameters.required).toEqual(['query']);
+    // The widened enum (custom catalog types) from the resolved spec must survive,
+    // not the static built-in-only metadata.
+    expect(meta.parameters.properties.type.enum).toEqual(['character', 'wardrobe', 'faction']);
   });
 });
 

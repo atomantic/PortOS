@@ -19,7 +19,7 @@
 // Writers-Room live mode self-gate today).
 
 import { getCreativeAutonomyMode } from '../../lib/domainAutonomy.js';
-import { getToolMetadata } from '../voice/tools.js';
+import { getToolMetadata, getToolSpecs as getVoiceToolSpecs } from '../voice/tools.js';
 import { loadState } from '../cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { appendCreativeLedgerEntry, argsDigest } from './creativeRunLedger.js';
@@ -99,12 +99,17 @@ assertCreativeToolIntegrity(CREATIVE_TOOLS);
 const byName = new Map(CREATIVE_TOOLS.map((t) => [t.name, t]));
 
 // Resolve a tool's advertised description + parameters. When a tool declares
-// `hydrateFrom`, pull them from the voice tool of that name (single source of
-// schemas — the palette pattern) instead of the tool's own authored fallback.
+// `hydrateFrom`, pull them from the voice tool's fully-RESOLVED spec of that name
+// (single source of schemas — the palette pattern) instead of the tool's own
+// authored fallback. It reads the resolved `getToolSpecs()` output rather than
+// the static `getToolMetadata()` so any spec-build-time widening survives — e.g.
+// `catalog_lookup` widens its `type` enum to the user's active custom catalog
+// types, which the static metadata doesn't carry; hydrating from the metadata
+// would advertise only the built-in types to the orchestrator.
 function resolveDisplay(t) {
   if (t.hydrateFrom) {
-    const meta = getToolMetadata(t.hydrateFrom);
-    if (meta) return { description: meta.description, parameters: meta.parameters };
+    const spec = getVoiceToolSpecs().find((s) => s.function?.name === t.hydrateFrom);
+    if (spec) return { description: spec.function.description, parameters: spec.function.parameters };
   }
   return { description: t.description, parameters: t.parameters };
 }
