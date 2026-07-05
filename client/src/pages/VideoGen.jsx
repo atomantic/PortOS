@@ -914,6 +914,17 @@ export default function VideoGen() {
     const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
     if (r) { setWidth(r.w); setHeight(r.h); sizeManuallySetRef.current = true; }
   };
+  // Free-form custom W×H entry for power users who want an exact I2V size the
+  // preset list doesn't cover. Marks the size as manually set so aspect-snap on
+  // image upload stops overriding it (same flag the preset/remix paths set).
+  // Empty/invalid input is left untouched — width/height are numeric state the
+  // preview + FFLF-budget math read, so we never let them go 0/NaN. The server
+  // still floors both dims to a multiple of 64 and enforces the per-tier pixel
+  // budget (local.js#buildLtx2Args), so free entry stays safe.
+  const handleDimensionChange = (setter) => (e) => {
+    const v = Number(e.target.value);
+    if (Number.isFinite(v) && v > 0) { setter(v); sizeManuallySetRef.current = true; }
+  };
   const handleRandomSeed = () => setSeed(randomSeed());
 
   const clearSourceImage = () => {
@@ -1713,6 +1724,30 @@ export default function VideoGen() {
                 )}
                 {VIDEO_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
               </select>
+            </FormField>
+
+            {/* Free-form W×H for exact I2V sizing beyond the preset list. Drives
+                the same width/height state as the preset select; the "(custom)"
+                option above reflects any off-preset value. The server rounds to
+                the 64-grid, so an odd size here renders at the nearest valid box. */}
+            <FormField label="Width" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+              <input
+                type="number" min={64} step={64}
+                value={width}
+                onChange={handleDimensionChange(setWidth)}
+                title="Custom width in px — the server rounds down to the nearest multiple of 64."
+                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+              />
+            </FormField>
+
+            <FormField label="Height" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+              <input
+                type="number" min={64} step={64}
+                value={height}
+                onChange={handleDimensionChange(setHeight)}
+                title="Custom height in px — the server rounds down to the nearest multiple of 64."
+                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+              />
             </FormField>
 
             <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
