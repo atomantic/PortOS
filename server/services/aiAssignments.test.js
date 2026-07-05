@@ -109,6 +109,7 @@ describe('getAiAssignments', () => {
     expect(ids).toContain('provider.active');
     expect(ids).toContain('settings.embeddings');
     expect(ids).toContain('settings.voice.vision');
+    expect(ids).toContain('settings.creativeDirector.evaluation');
     expect(ids).toContain('cos.task.morning-brief');
   });
 });
@@ -127,6 +128,11 @@ describe('updateAiAssignment routing', () => {
   it('settings.autofixer writes the {providerId, model} shape the feature reads', async () => {
     await updateAiAssignment('settings.autofixer', { providerId: 'claude', model: 'opus' });
     expect(mocks.updateSettings).toHaveBeenCalledWith({ autofixer: { providerId: 'claude', model: 'opus' } });
+  });
+
+  it('settings.creativeDirector.evaluation writes the vision provider/model under creativeDirector', async () => {
+    await updateAiAssignment('settings.creativeDirector.evaluation', { providerId: 'ollama', model: 'qwen2.5-vl' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { evaluation: { providerId: 'ollama', model: 'qwen2.5-vl' } } });
   });
 
   it('cos.task.<existing> updates the schedule interval', async () => {

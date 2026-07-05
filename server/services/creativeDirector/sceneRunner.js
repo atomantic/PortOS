@@ -32,13 +32,15 @@ import { join } from 'path';
 import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
+import { CD_MAX_SCENE_RETRIES } from '../../lib/creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
-import { enqueueEvaluateTask } from './agentBridge.js';
+import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 
-const MAX_SCENE_RETRIES = 3;
+// Max render+eval attempts per scene (shared with the evaluator so render-retry
+// and eval-retry caps can't silently diverge — both bump the same scene.retryCount).
 
 // Default image strength when an i2v continuation scene has no explicit
 // per-scene `imageStrength`. Anchors the next clip to the prior last-frame
@@ -59,7 +61,7 @@ export function resolveImageStrength({ explicit, isContinuation }) {
  * the evaluate task or schedule a retry.
  */
 export async function runSceneRender(project, scene) {
-  console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${MAX_SCENE_RETRIES + 1})`);
+  console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${CD_MAX_SCENE_RETRIES + 1})`);
 
   await updateScene(project.id, scene.sceneId, {
     status: 'rendering',
@@ -70,7 +72,7 @@ export async function runSceneRender(project, scene) {
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   // Fail fast when local video gen isn't configured. Without this guard the
   // job would be enqueued, fail inside `generateVideo`, retry up to
-  // MAX_SCENE_RETRIES, and pollute the persisted queue with N doomed entries
+  // CD_MAX_SCENE_RETRIES, and pollute the persisted queue with N doomed entries
   // — none of which can ever succeed without operator intervention. Mark
   // the scene failed and let advanceAfterSceneSettled flag the project so
   // the user can configure pythonPath and Resume from the UI.
@@ -211,7 +213,7 @@ export async function runSceneRender(project, scene) {
     cleanup();
     // Treat user-initiated cancel as a terminal stop for this scene — do
     // NOT route through handleRenderFailed (which would retry up to
-    // MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
+    // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
     await handleRenderCanceled(project.id, scene.sceneId);
@@ -246,7 +248,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     // regression this fixture is supposed to catch.
     //
     // Bypass handleRenderFailed: that function retries up to
-    // MAX_SCENE_RETRIES, and a broken last-frame extraction will fail the
+    // CD_MAX_SCENE_RETRIES, and a broken last-frame extraction will fail the
     // same way every retry — burning three more full renders before
     // surfacing the regression. Mark terminal directly and let the
     // completion hook decide what to do next.
@@ -362,7 +364,10 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     console.log(`⏸️  CD project ${projectId} is ${postUpdate.status} — paused during updateScene; renderedJobId persisted on scene ${sceneId}, deferring evaluator to resume.`);
     return;
   }
-  await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
+  // Settle the render: evaluate on a local vision model server-side when one is
+  // configured, otherwise fall back to the Opus CoS agent. dispatchSceneEvaluation
+  // never throws (runs outside the request lifecycle).
+  await dispatchSceneEvaluation(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
 async function handleRenderCanceled(projectId, sceneId) {
@@ -385,8 +390,8 @@ async function handleRenderFailed(projectId, sceneId, errorMsg) {
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (nextRetry <= MAX_SCENE_RETRIES) {
-    console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${MAX_SCENE_RETRIES}`);
+  if (nextRetry <= CD_MAX_SCENE_RETRIES) {
+    console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${CD_MAX_SCENE_RETRIES}`);
     await updateScene(projectId, sceneId, { status: 'pending', retryCount: nextRetry });
     const updated = { ...scene, retryCount: nextRetry };
     await runSceneRender(fresh, updated);

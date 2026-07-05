@@ -82,6 +82,30 @@ const COMPLETION_WATCHDOG_GRACE_MS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 40000;
 })();
 
+// Pre-output idle-stall deadline (defense against a render that wedges BEFORE
+// emitting anything).
+//
+// The completion watchdog above only arms once a completion marker/result JSON
+// reaches stdout — it guards a post-completion teardown hang, NOT a render that
+// stalls before producing any output (a known MLX/Metal failure mode where a
+// job never exits and never prints). Left alone, that pins the serialized GPU
+// lane (mediaJobQueue) until a manual cancel. This idle timer is armed at spawn
+// and RESET on every child output line; if it fires it SIGKILLs the child, and
+// the 'close' handler surfaces the timeout as a FAILED job so the lane frees for
+// the next queued render. A manual cancel still works and always wins.
+//
+// The window is deliberately generous — a big model's first-token render can
+// spend minutes loading weights + compiling Metal kernels before its first
+// progress line, and we must never kill a legitimately-slow render. Sentinel +
+// validate: a missing/non-numeric/non-positive VIDEOGEN_IDLE_STALL_MS falls back
+// to the default (10 min) instead of collapsing to 0/NaN. Set it to 0 or a
+// negative value only by editing the code path — the env knob can only raise or
+// lower a positive window, never disable the guard silently.
+const IDLE_STALL_DEADLINE_MS = (() => {
+  const raw = parseInt(process.env.VIDEOGEN_IDLE_STALL_MS || '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600000; // 10 minutes of no output
+})();
+
 // Upstream prints this when the final decode+mux finishes, just before it should
 // exit. Matching it (case-insensitive) lets us arm the watchdog even for
 // runtimes that don't emit the result JSON on stdout.
@@ -865,7 +889,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // would crash the Node process, so guard the whole body.
       try {
         completionWatchdog = null;
-        if (activeProcess !== proc || proc.exitCode !== null || proc.signalCode !== null) return;
+        // proc.killed covers a manual-cancel SIGTERM that hasn't reached close
+        // yet (killWithEscalation sets it before exitCode/signalCode populate).
+        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
         console.log(`⚠️ video child reported completion but never exited — SIGKILL [${jobId.slice(0, 8)}]`);
         completionWatchdogFired = true;
         proc.kill('SIGKILL');
@@ -876,6 +902,55 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // Don't let the watchdog timer keep the event loop alive on its own.
     if (typeof completionWatchdog.unref === 'function') completionWatchdog.unref();
   };
+
+  // Pre-output idle-stall deadline. Armed at spawn and reset on every child
+  // output line (stdout OR stderr — a render loading weights logs to stderr via
+  // loguru/tqdm well before any stdout progress). If it fires, the render has
+  // produced NO output for the whole generous window — treat it as wedged,
+  // SIGKILL it, and let the 'close' handler surface a failed job so the
+  // serialized GPU lane frees. Cleared in every terminal path alongside the
+  // completion watchdog so it can't fire against a recycled PID.
+  let idleStallTimer = null;
+  // Set when THIS timer fires the SIGKILL so the 'close' handler reports a
+  // clear "stalled — no output" reason instead of the generic "killed, likely
+  // OOM" message a bare SIGKILL would otherwise produce.
+  let idleStallFired = false;
+  const clearIdleStallTimer = () => {
+    if (idleStallTimer) {
+      clearTimeout(idleStallTimer);
+      idleStallTimer = null;
+    }
+  };
+  const armIdleStallTimer = () => {
+    idleStallTimer = setTimeout(() => {
+      // Outside the Express request lifecycle — guard so an uncaught throw
+      // can't crash the Node process.
+      try {
+        idleStallTimer = null;
+        // Also bail if the child is already being torn down by a manual
+        // cancel: killWithEscalation() sends SIGTERM and sets `proc.killed`
+        // BEFORE exitCode/signalCode populate on close. Without this check the
+        // idle timer could still fire, set idleStallFired, and SIGKILL — and
+        // the close handler would then finalize a user-canceled render (whose
+        // partial .mp4 is on disk) as a SUCCESS instead of canceled/failed.
+        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
+        console.log(`⚠️ video child produced no output for ${IDLE_STALL_DEADLINE_MS}ms — stalled, SIGKILL [${jobId.slice(0, 8)}]`);
+        idleStallFired = true;
+        proc.kill('SIGKILL');
+      } catch (err) {
+        console.error(`❌ idle-stall watchdog failed [${jobId.slice(0, 8)}]: ${err.message}`);
+      }
+    }, IDLE_STALL_DEADLINE_MS);
+    if (typeof idleStallTimer.unref === 'function') idleStallTimer.unref();
+  };
+  // Every output line means the render is alive — restart the countdown.
+  const resetIdleStallTimer = () => {
+    clearIdleStallTimer();
+    armIdleStallTimer();
+  };
+  // Arm immediately: the highest-risk stall is a job that never emits its FIRST
+  // line (weights load / kernel compile hangs), so the clock starts at spawn.
+  armIdleStallTimer();
 
   // Hold a sleep-prevention lock for the lifetime of the python child, so a
   // 90s+ render doesn't get aborted by sleep on a laptop. `-s` blocks system
@@ -891,6 +966,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // crash the server with an unhandled error event.
   proc.on('error', (err) => {
     clearCompletionWatchdog();
+    clearIdleStallTimer();
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
@@ -924,6 +1000,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
 
   proc.stdout.on('data', (chunk) => {
+    // Any output proves the render is progressing — restart the idle-stall
+    // countdown before parsing so a slow-but-alive render is never killed.
+    resetIdleStallTimer();
     outputBuf += chunk.toString();
     const lines = outputBuf.split('\n');
     outputBuf = lines.pop();
@@ -950,6 +1029,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   });
 
   proc.stderr.on('data', (chunk) => {
+    // Weight-load / kernel-compile progress often streams to stderr (loguru,
+    // tqdm) long before the first stdout line — count it as liveness too.
+    resetIdleStallTimer();
     for (const raw of chunk.toString().split(/[\n\r]+/)) {
       // Record the root-cause module only — downstream imports in the same
       // traceback raise the same error against later names.
@@ -963,6 +1045,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   proc.on('close', async (code, signal) => {
     clearCompletionWatchdog();
+    clearIdleStallTimer();
     activeProcess = null;
     // Wrap the whole teardown so a throw from finalizeGeneratedVideo (history
     // save, thumbnail, file move) can't leak as an unhandled rejection — on
@@ -987,12 +1070,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         await unlink(audioFilePath).catch(() => {});
       }
 
-      // A watchdog-triggered SIGKILL means the render already emitted its
-      // completion marker and only the python teardown hung — the output file is
-      // on disk, so treat it as success (not the generic "killed, likely OOM"
-      // failure). Guard on the file actually existing + being non-empty so a
-      // marker without a real output (a malformed runtime) still fails loudly.
-      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+      // A PortOS-fired SIGKILL (completion-teardown watchdog OR idle-stall
+      // deadline) is a SUCCESS when the output file is already on disk and
+      // non-empty — e.g. a runtime that wrote its .mp4 but never printed a
+      // recognized completion marker, then hung: the idle timer kills it, but
+      // the finished video must be kept, not discarded as "no output". A kill
+      // with no output on disk (a genuine pre-output stall, or a marker from a
+      // malformed runtime that wrote nothing) still fails loudly below.
+      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, idleStallFired, signal, outputPath });
 
       if (code !== 0 && !watchdogSuccess) {
         job.status = 'error';
@@ -1008,6 +1093,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
           } else {
             reason = `Python module '${missingPyModule}' is missing. Install it into the configured Python environment and retry.`;
           }
+        } else if (idleStallFired) {
+          // Distinguish a stall-kill from a real OOM kill — both arrive as
+          // SIGKILL, but this one means the render produced NO output for the
+          // whole idle window and we terminated it to free the GPU lane.
+          reason = `Render stalled — no output for ${Math.round(IDLE_STALL_DEADLINE_MS / 1000)}s; terminated to free the GPU queue (raise VIDEOGEN_IDLE_STALL_MS if this was a legitimately slow render)`;
         } else if (signal === 'SIGKILL') {
           reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
         } else if (signal) {
@@ -1020,7 +1110,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         videoGenEvents.emit('failed', { generationId: jobId, error: reason });
       } else {
         if (watchdogSuccess) {
-          console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
+          const killCause = idleStallFired ? 'idle-stall deadline' : 'completion teardown hang';
+          console.log(`⚠️ video child force-killed (${killCause}) — output is intact [${jobId.slice(0, 8)}]`);
         }
         await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
       }

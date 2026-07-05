@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -132,6 +132,11 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.codeReview !== undefined) {
     validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
+  }
+  // Creative Director scene-evaluation provider/model pin — validate the slice
+  // when present so a malformed picker save can't write a bad provider config.
+  if (req.body?.creativeDirector !== undefined) {
+    validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
   }
   // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
   // already makes both fields optional + nullable (clearing falls back to the

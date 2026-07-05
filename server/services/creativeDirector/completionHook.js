@@ -25,7 +25,8 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
-import { enqueueTreatmentTask, enqueueEvaluateTask } from './agentBridge.js';
+import { enqueueTreatmentTask } from './agentBridge.js';
+import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
@@ -279,7 +280,7 @@ export async function advanceAfterSceneSettled(projectId) {
       console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
       const sceneRefreshed = recheck?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
       if (recheck && sceneRefreshed) {
-        await enqueueEvaluateTask(recheck, { ...sceneRefreshed, evaluationFrames: frames });
+        await dispatchSceneEvaluation(recheck, { ...sceneRefreshed, evaluationFrames: frames });
       }
       return;
     } finally {
