@@ -85,13 +85,20 @@ function queueWorktreeCreate(repo, fn) {
 }
 
 /**
- * A git error saying the branch or worktree path already exists — a permanent
- * precondition failure meaning the ref/dir PRE-DATED this add (git created
- * nothing), NOT an orphan this add left behind. cleanupOrphanBranch keys off
- * this to avoid `git branch -D`-ing a branch it didn't create (#2193).
+ * A git error saying the target BRANCH already exists (`fatal: a branch named
+ * 'X' already exists`) — a permanent precondition failure meaning the ref
+ * PRE-DATED this add and git created nothing, so it is NOT an orphan this add
+ * left behind. cleanupOrphanBranch keys off this to avoid `git branch -D`-ing
+ * a branch it didn't create (#2193).
+ *
+ * Deliberately NARROW: it must NOT match `'<path>' already exists` (the
+ * worktree DIRECTORY was occupied), because in that case `git worktree add -b`
+ * has ALREADY created the branch before failing on the path — so that branch
+ * IS an orphan and must be cleaned up. Only the branch-named wording is safe
+ * to skip on.
  */
 export function isPreexistingRefError(message) {
-  return /already exists/i.test(message || '');
+  return /branch (?:named )?['`]?[^'`\n]*['`]? ?already exists/i.test(message || '');
 }
 
 /**
