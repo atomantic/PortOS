@@ -7,6 +7,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
@@ -204,7 +205,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
 
   // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
   // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
-  const childEnv = { ...process.env, ...provider.envVars };
+  // buildOpencodeEnvVars rebuilds OPENCODE_CONFIG_CONTENT with a declared models
+  // map for OpenCode Ollama providers (empty/no-op otherwise) so the injected
+  // `--model ollama/<id>` isn't rejected as "not valid" — see issue-2190.
+  const childEnv = { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(provider, provider.defaultModel) };
   delete childEnv.CLAUDECODE;
   Object.assign(childEnv, agentGuardEnv(childEnv));
 
