@@ -56,32 +56,52 @@ export function toBareModelIds(models) {
 /**
  * Build an OpenCode config object declaring the given models under the Ollama
  * provider. Accepts a single id or a list (bare or `ollama/`-prefixed — both are
- * normalized to bare keys). Returns the base config with no `models` key when no
- * usable id is provided (identical to the shipped base — no regression).
+ * normalized to bare keys) and, optionally, a `base` config to merge into
+ * (typically the provider's already-stored `OPENCODE_CONFIG_CONTENT`, parsed).
+ *
+ * The base is PRESERVED, not replaced: a custom `permission`, a custom Ollama
+ * `baseURL`, extra provider keys, and any hand-maintained
+ * `provider.ollama.models` entries all survive — this call only unions the given
+ * models into `provider.ollama.models`. When no usable id is provided the base
+ * is returned unchanged (no `models` key is invented), identical to the shipped
+ * base — no regression. When `base` is absent/unusable, the canonical
+ * localhost-Ollama default is used.
  *
  * @param {string|string[]|null|undefined} models
+ * @param {object|null} [base] - existing config to merge into (a fresh clone is made)
  * @returns {object} OpenCode config object
  */
-export function buildOpencodeConfig(models) {
+export function buildOpencodeConfig(models, base = null) {
   const bareIds = toBareModelIds(models);
-  const ollama = { ...OPENCODE_OLLAMA_BASE_PROVIDER };
-  if (bareIds.length > 0) {
-    ollama.models = Object.fromEntries(
-      bareIds.map((id) => [id, { name: id, tool_call: true }]),
-    );
+  const config = (base && typeof base === 'object')
+    ? structuredClone(base)
+    : { permission: 'allow', provider: {} };
+  if (!config.provider || typeof config.provider !== 'object') config.provider = {};
+  if (!config.provider.ollama || typeof config.provider.ollama !== 'object') {
+    config.provider.ollama = { ...OPENCODE_OLLAMA_BASE_PROVIDER };
   }
-  return { permission: 'allow', provider: { ollama } };
+  if (bareIds.length > 0) {
+    const existing = (config.provider.ollama.models && typeof config.provider.ollama.models === 'object')
+      ? config.provider.ollama.models
+      : {};
+    config.provider.ollama.models = {
+      ...existing,
+      ...Object.fromEntries(bareIds.map((id) => [id, { name: id, tool_call: true }])),
+    };
+  }
+  return config;
 }
 
 /**
  * Build the `OPENCODE_CONFIG_CONTENT` env var value (JSON string) declaring the
- * given models under the Ollama provider.
+ * given models under the Ollama provider, merging into `base` when provided.
  *
  * @param {string|string[]|null|undefined} models
+ * @param {object|null} [base] - existing config to merge into
  * @returns {string} JSON string for OPENCODE_CONFIG_CONTENT
  */
-export function buildOpencodeConfigContent(models) {
-  return JSON.stringify(buildOpencodeConfig(models));
+export function buildOpencodeConfigContent(models, base = null) {
+  return JSON.stringify(buildOpencodeConfig(models, base));
 }
 
 /**
@@ -89,11 +109,14 @@ export function buildOpencodeConfigContent(models) {
  * object with `OPENCODE_CONFIG_CONTENT` (models map declared) for Ollama-backed
  * OpenCode providers, otherwise an empty object (caller keeps existing env).
  *
- * The declared models are the union of the provider's configured models, its
- * default model, and the model being run this invocation — so whichever
+ * The provider's already-stored `OPENCODE_CONFIG_CONTENT` is used as the base and
+ * PRESERVED — a customized `baseURL`, `permission`, or hand-maintained models
+ * survive; this only unions the runtime models into `provider.ollama.models`. The
+ * declared models are the union of the provider's configured models, its default
+ * model, and the model being run this invocation — so whichever
  * `--model ollama/<id>` the spawner passes is always accepted.
  *
- * @param {{command?:string, ollamaBacked?:boolean, models?:string[], defaultModel?:string|null}} provider
+ * @param {{command?:string, ollamaBacked?:boolean, models?:string[], defaultModel?:string|null, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
@@ -101,12 +124,24 @@ export function buildOpencodeEnvVars(provider, model) {
   if (!isOpencodeCommand(provider?.command) || provider?.ollamaBacked !== true) {
     return {};
   }
+  // Parse the provider's stored config as the base so any user customization
+  // (custom baseURL, permission, hand-maintained models) is preserved rather
+  // than clobbered by the hardcoded localhost default.
+  const stored = provider?.envVars?.OPENCODE_CONFIG_CONTENT;
+  let base = null;
+  if (typeof stored === 'string' && stored.length > 0) {
+    try {
+      base = JSON.parse(stored);
+    } catch {
+      base = null; // unparseable stored config → fall back to the canonical default
+    }
+  }
   const ids = [
     ...(Array.isArray(provider?.models) ? provider.models : []),
     provider?.defaultModel,
     model,
   ];
   return {
-    OPENCODE_CONFIG_CONTENT: buildOpencodeConfigContent(ids),
+    OPENCODE_CONFIG_CONTENT: buildOpencodeConfigContent(ids, base),
   };
 }

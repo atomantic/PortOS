@@ -53,6 +53,28 @@ describe('buildOpencodeConfig', () => {
     const cfg = buildOpencodeConfig('ollama/hf.co/user/model:tag');
     expect(cfg.provider.ollama.models['hf.co/user/model:tag']).toBeDefined();
   });
+
+  it('preserves a custom base config (baseURL, permission, extra keys) and unions its existing models', () => {
+    const base = {
+      permission: 'ask',
+      provider: {
+        ollama: {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'Remote Ollama',
+          options: { baseURL: 'http://gpu-box:11434/v1' },
+          models: { 'kept:70b': { name: 'kept:70b', tool_call: true } },
+        },
+      },
+    };
+    const cfg = buildOpencodeConfig('qwen2.5:7b', base);
+    expect(cfg.permission).toBe('ask');
+    expect(cfg.provider.ollama.options.baseURL).toBe('http://gpu-box:11434/v1');
+    // hand-maintained model kept, runtime model added
+    expect(cfg.provider.ollama.models['kept:70b']).toBeDefined();
+    expect(cfg.provider.ollama.models['qwen2.5:7b']).toEqual({ name: 'qwen2.5:7b', tool_call: true });
+    // does not mutate the caller's base object
+    expect(base.provider.ollama.models['qwen2.5:7b']).toBeUndefined();
+  });
 });
 
 describe('buildOpencodeConfigContent', () => {
@@ -117,6 +139,31 @@ describe('buildOpencodeEnvVars', () => {
   it('falls back to defaultModel when no run model is passed', () => {
     const result = buildOpencodeEnvVars({ command: 'opencode', ollamaBacked: true, models: [], defaultModel: 'qwen2.5:7b' }, null);
     const cfg = JSON.parse(result.OPENCODE_CONFIG_CONTENT);
+    expect(cfg.provider.ollama.models['qwen2.5:7b']).toBeDefined();
+  });
+
+  it('preserves a provider-customized stored baseURL instead of replacing it with localhost', () => {
+    const provider = {
+      command: 'opencode', ollamaBacked: true, models: ['qwen2.5:7b'],
+      envVars: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          permission: 'allow',
+          provider: { ollama: { npm: '@ai-sdk/openai-compatible', options: { baseURL: 'http://gpu-box:11434/v1' } } },
+        }),
+      },
+    };
+    const cfg = JSON.parse(buildOpencodeEnvVars(provider, 'qwen2.5:7b').OPENCODE_CONFIG_CONTENT);
+    expect(cfg.provider.ollama.options.baseURL).toBe('http://gpu-box:11434/v1');
+    expect(cfg.provider.ollama.models['qwen2.5:7b']).toBeDefined();
+  });
+
+  it('falls back to the canonical default when the stored config is unparseable', () => {
+    const provider = {
+      command: 'opencode', ollamaBacked: true, models: ['qwen2.5:7b'],
+      envVars: { OPENCODE_CONFIG_CONTENT: 'not json' },
+    };
+    const cfg = JSON.parse(buildOpencodeEnvVars(provider, null).OPENCODE_CONFIG_CONTENT);
+    expect(cfg.provider.ollama.options.baseURL).toBe('http://localhost:11434/v1');
     expect(cfg.provider.ollama.models['qwen2.5:7b']).toBeDefined();
   });
 });
