@@ -1,6 +1,8 @@
 // Editorial checks — proseStyle group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
 import {
+  ADVERSARIAL_CUTS_STAGE,
+  CUT_TYPES,
   DEAD_METAPHOR_STAGE,
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
   INFO_DUMPING_STAGE,
@@ -1129,6 +1131,138 @@ export const proseStyleChecks = [
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
     }),
+  },
+  {
+    id: 'prose.adversarial-cuts',
+    sources: ['manuscript'],
+    label: 'Adversarial cuts (prose tightening)',
+    description:
+      'Asks a ruthless literary editor persona to cut 8–12% of the text, classifying each cut as FAT, REDUNDANT, OVER-EXPLAIN, GENERIC, TELL, or STRUCTURAL. Returns fat_percentage, tightest_passage (protected), loosest_passage, and typed cut findings. Safe types (OVER-EXPLAIN, REDUNDANT) can be batch-applied mechanically via the Manuscript Editor.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'prose',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Target percentage of text to cut (the prompt asks for this much).
+      cutTargetPercent: z.number().int().min(5).max(20).default(10),
+      // Minimum cuts per run.
+      minCuts: z.number().int().min(5).max(30).default(10),
+      // Maximum cuts per run.
+      maxCuts: z.number().int().min(10).max(50).default(20),
+      // Cap findings so a long manuscript can not flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      {
+        key: 'cutTargetPercent',
+        label: 'Cut target (%)',
+        type: 'number',
+        min: 5,
+        max: 20,
+        step: 1,
+        help: 'Target percentage of the manuscript to cut. 8–12% is typical for tightening passes.',
+      },
+      {
+        key: 'minCuts',
+        label: 'Min cuts',
+        type: 'number',
+        min: 5,
+        max: 30,
+        step: 1,
+        help: 'Minimum number of cut passages to identify.',
+      },
+      {
+        key: 'maxCuts',
+        label: 'Max cuts',
+        type: 'number',
+        min: 10,
+        max: 50,
+        step: 1,
+        help: 'Maximum number of cut passages to identify.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: async (ctx) => {
+      const cfg = ctx.config || {};
+      const cutTargetPercent = cfg.cutTargetPercent ?? 10;
+      const minCuts = cfg.minCuts ?? 10;
+      const maxCuts = cfg.maxCuts ?? 20;
+      const max = cfg.maxFindings ?? 20;
+      const chunks = await ctx.planManuscriptChunks(ADVERSARIAL_CUTS_STAGE, {
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      });
+      // Run the check with the cut parameters injected into the prompt.
+      const runChunk = async (manuscript) => {
+        const vars = { manuscript, cutTargetPercent, minCuts, maxCuts };
+        const { content } = await ctx.callStagedLLM(ADVERSARIAL_CUTS_STAGE, vars, {
+          returnsJson: true,
+          source: ADVERSARIAL_CUTS_STAGE,
+        });
+        return content;
+      };
+      // Merge findings across chunks, deduping by anchorQuote.
+      const seenQuotes = new Set();
+      const findings = [];
+      let fatPercentage = null;
+      let tightestPassage = null;
+      let loosestPassage = null;
+      let verdict = null;
+      for (const chunk of chunks?.sections || [chunks]) {
+        const manuscript = typeof chunk === 'string' ? chunk : chunk?.sections?.[0]?.text || ctx.manuscript;
+        const result = await runChunk(manuscript);
+        // Capture meta fields from the first chunk.
+        if (fatPercentage == null && typeof result?.fat_percentage === 'number') {
+          fatPercentage = result.fat_percentage;
+        }
+        if (!tightestPassage && typeof result?.tightest_passage === 'string') {
+          tightestPassage = result.tightest_passage;
+        }
+        if (!loosestPassage && typeof result?.loosest_passage === 'string') {
+          loosestPassage = result.loosest_passage;
+        }
+        if (!verdict && typeof result?.one_sentence_verdict === 'string') {
+          verdict = result.one_sentence_verdict;
+        }
+        const raw = Array.isArray(result?.findings) ? result.findings : [];
+        for (const f of raw) {
+          if (findings.length >= max) break;
+          const anchorQuote = typeof f?.anchorQuote === 'string' ? f.anchorQuote : '';
+          if (!anchorQuote || anchorQuote.length < 10) continue;
+          const key = anchorQuote.toLowerCase().trim();
+          if (seenQuotes.has(key)) continue;
+          seenQuotes.add(key);
+          const cutType = CUT_TYPES.includes(f?.cutType) ? f.cutType : null;
+          findings.push({
+            severity: ['high', 'medium', 'low'].includes(f?.severity) ? f.severity : ctx.severityDefault,
+            category: 'prose',
+            location: typeof f?.location === 'string' ? f.location : '',
+            problem: typeof f?.problem === 'string' ? f.problem : '',
+            suggestion: typeof f?.suggestion === 'string' ? f.suggestion : 'Cut this passage entirely.',
+            anchorQuote,
+            issueNumber: Number.isInteger(f?.issueNumber) ? f.issueNumber : null,
+            // Carry the cut type as a subtype for filtering in the applier.
+            subtype: cutType,
+          });
+        }
+        if (findings.length >= max) break;
+      }
+      // Log summary for debugging.
+      if (fatPercentage != null) {
+        console.log(`✂️ adversarial-cuts: fat=${fatPercentage}% tightest="${(tightestPassage || '').slice(0, 40)}..." verdict="${verdict || ''}"`);
+      }
+      return findings;
+    },
   },
   {
     id: 'prose.italic-thoughts',

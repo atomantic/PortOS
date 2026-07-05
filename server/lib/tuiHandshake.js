@@ -47,9 +47,62 @@ export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 // marker "never appeared" only because the matcher ran against the raw stream;
 // the fast path was effectively dead and every run fell back to the blind timer.
 export const PASTE_MARKER_POLL_MS = 150;
+
+// Paste verification: after paste-commit (marker or fallback), verify the prompt
+// text actually rendered in the buffer before submitting. If verification fails,
+// retry the paste with backoff. This catches TUIs that were still initializing
+// when the paste was sent and silently swallowed it (issue #2192).
+export const PASTE_VERIFY_POLL_MS = 200;
+export const PASTE_VERIFY_WINDOW_MS = 2000; // max time to wait for verification after paste-commit
+export const PASTE_RETRY_MAX_ATTEMPTS = 3;
+export const PASTE_RETRY_BASE_DELAY_MS = 800;
+// Minimum prefix length for verification (shorter prompts verify whole-text)
+const MIN_VERIFIABLE_PREFIX_LEN = 15;
 export const PASTE_MARKER_PATTERN = /\[Pasted\s*text\s*#\d+/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
+
+/**
+ * Extract a verifiable prefix from a prompt for paste verification. The prefix
+ * is a unique-enough substring from the prompt's first "content" line (skipping
+ * leading whitespace/common prefixes) that's unlikely to appear in TUI chrome.
+ * Used to verify the paste actually rendered rather than being silently swallowed.
+ *
+ * @param {string} prompt — the full prompt text being pasted.
+ * @returns {string|null} a verifiable prefix, or null if the prompt is too short.
+ */
+export function extractVerifiablePromptPrefix(prompt) {
+  if (typeof prompt !== 'string' || !prompt.trim()) return null;
+  // Collapse whitespace and take the first content chunk. Skip leading boilerplate
+  // that might match TUI chrome (e.g., "You are a..." is generic).
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  if (normalized.length < MIN_VERIFIABLE_PREFIX_LEN) {
+    // Very short prompt: use the whole thing
+    return normalized.length >= 5 ? normalized : null;
+  }
+  // For longer prompts, take a prefix from the middle portion to avoid common
+  // prefixes like "You are" or "Please" that might appear elsewhere
+  const startOffset = Math.min(10, Math.floor(normalized.length * 0.1));
+  const prefixLen = Math.min(40, normalized.length - startOffset);
+  return normalized.slice(startOffset, startOffset + prefixLen);
+}
+
+/**
+ * True when the verifiable prompt prefix appears in the post-paste buffer. Both
+ * arguments must be whitespace-normalized (single spaces) and ANSI-stripped.
+ * A null/empty prefix always returns true (no verification possible).
+ *
+ * @param {string} strippedBuffer — ANSI-stripped, whitespace-normalized post-paste output.
+ * @param {string|null} prefix — the prefix from extractVerifiablePromptPrefix.
+ * @returns {boolean}
+ */
+export function verifyPasteRendered(strippedBuffer, prefix) {
+  if (!prefix) return true; // no verification possible
+  if (typeof strippedBuffer !== 'string') return false;
+  // Normalize both to collapse any remaining whitespace differences
+  const normalizedBuffer = strippedBuffer.replace(/\s+/g, ' ');
+  return normalizedBuffer.includes(prefix);
+}
 
 /**
  * Count the `[Pasted text #N …]` paste-commit markers in `strippedText`.
