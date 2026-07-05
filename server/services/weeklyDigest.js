@@ -377,22 +377,25 @@ export async function listWeeklyDigests() {
   await ensureDigestDir();
 
   const files = await readdir(DIGESTS_DIR);
-  const digests = [];
 
-  for (const file of files.filter(f => f.endsWith('.json'))) {
-    const weekId = file.replace('.json', '');
-    const digest = await loadDigest(weekId);
-    if (digest) {
-      digests.push({
-        weekId: digest.weekId,
-        weekStart: digest.weekStart,
-        weekEnd: digest.weekEnd,
-        totalTasks: digest.summary.totalTasks,
-        successRate: digest.summary.successRate,
-        generatedAt: digest.generatedAt
-      });
-    }
-  }
+  // Load each week's digest in parallel rather than serializing one disk read
+  // per week across the full digest history.
+  const loaded = await Promise.all(
+    files
+      .filter(f => f.endsWith('.json'))
+      .map(file => loadDigest(file.replace('.json', '')))
+  );
+
+  const digests = loaded
+    .filter(Boolean)
+    .map(digest => ({
+      weekId: digest.weekId,
+      weekStart: digest.weekStart,
+      weekEnd: digest.weekEnd,
+      totalTasks: digest.summary.totalTasks,
+      successRate: digest.summary.successRate,
+      generatedAt: digest.generatedAt
+    }));
 
   return digests.sort((a, b) => b.weekId.localeCompare(a.weekId));
 }

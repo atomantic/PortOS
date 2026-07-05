@@ -47,13 +47,18 @@ export async function getMessages(options = {}) {
   await ensureDir(CACHE_DIR);
   const { readdir } = await import('fs/promises');
   const files = await readdir(CACHE_DIR).catch(() => []);
+  const accountIds = files
+    .filter(file => file.endsWith('.json'))
+    .map(file => file.replace('.json', ''))
+    .filter(id => UUID_RE.test(id));
+  // Load each account's cache in parallel rather than serializing one disk read
+  // per account before we can aggregate the combined inbox.
+  const caches = await Promise.all(
+    accountIds.map(async id => ({ id, cache: await loadCache(id) }))
+  );
   let allMessages = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const fileAccountId = file.replace('.json', '');
-    if (!UUID_RE.test(fileAccountId)) continue;
-    const cache = await loadCache(fileAccountId);
-    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || fileAccountId })));
+  for (const { id, cache } of caches) {
+    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || id })));
   }
   allMessages = filterBySearch(allMessages, search);
   allMessages.sort((a, b) => safeDate(b.date) - safeDate(a.date));

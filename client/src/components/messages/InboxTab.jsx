@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Mail, Search, RefreshCw, ChevronRight, Sparkles, Archive, Trash2, Reply, Eye, Flag, Pin, Loader2 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from '../ui/Toast';
@@ -185,6 +185,18 @@ export default function InboxTab({ accounts }) {
     }
   };
 
+  // The active triage tab and its filtered message list are derived from
+  // messages + activeTab; memoize so the O(n) filter runs once per change
+  // instead of twice on every render (empty-state check + the rendered list).
+  const currentTab = useMemo(
+    () => TRIAGE_TABS.find(t => t.key === activeTab) || TRIAGE_TABS[0],
+    [activeTab]
+  );
+  const visibleMessages = useMemo(
+    () => messages.filter(currentTab.filter),
+    [messages, currentTab]
+  );
+
   if (selectedMessage) {
     return (
       <MessageDetail
@@ -307,9 +319,7 @@ export default function InboxTab({ accounts }) {
       </div>
 
       {(() => {
-        const currentTab = TRIAGE_TABS.find(t => t.key === activeTab) || TRIAGE_TABS[0];
-        const filtered = messages.filter(currentTab.filter);
-        if (filtered.length === 0 && !loading) return (
+        if (visibleMessages.length === 0 && !loading) return (
           <div className="text-center py-12 text-gray-500">
             <Mail size={48} className="mx-auto mb-4 opacity-50" />
             {messages.length === 0 ? (
@@ -326,7 +336,7 @@ export default function InboxTab({ accounts }) {
       })()}
 
       <div className="space-y-1">
-        {messages.filter((TRIAGE_TABS.find(t => t.key === activeTab) || TRIAGE_TABS[0]).filter).map((msg) => {
+        {visibleMessages.map((msg) => {
           const ev = msg.evaluation;
           return (
             <div

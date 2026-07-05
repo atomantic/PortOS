@@ -557,13 +557,13 @@ function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
   // them to the top alongside genuinely-overdue contacts).
-  const queue = contacts.filter((contact) => contact.ring !== 'external').sort((a, b) => {
+  const queue = useMemo(() => contacts.filter((contact) => contact.ring !== 'external').sort((a, b) => {
     const aStatus = contactStatus(a);
     const bStatus = contactStatus(b);
     const aScore = aStatus.daysRemaining == null ? -999 : aStatus.daysRemaining;
     const bScore = bStatus.daysRemaining == null ? -999 : bStatus.daysRemaining;
     return aScore - bScore;
-  });
+  }), [contacts]);
 
   if (!queue.length) return <EmptyState onNew={onNew} />;
 
@@ -583,12 +583,12 @@ function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
 }
 
 function FocusPanel({ contacts }) {
-  const byEnergy = ENERGY.map((energy) => ({
+  const byEnergy = useMemo(() => ENERGY.map((energy) => ({
     ...energy,
     count: contacts.filter((contact) => contact.energy === energy.id).length,
-  }));
-  const support = contacts.filter((contact) => contact.ring === 'support');
-  const nextMoves = contacts.filter((contact) => contact.nextMove).slice(0, 8);
+  })), [contacts]);
+  const support = useMemo(() => contacts.filter((contact) => contact.ring === 'support'), [contacts]);
+  const nextMoves = useMemo(() => contacts.filter((contact) => contact.nextMove).slice(0, 8), [contacts]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
