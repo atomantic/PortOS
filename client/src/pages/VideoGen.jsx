@@ -919,8 +919,9 @@ export default function VideoGen() {
   // image upload stops overriding it (same flag the preset/remix paths set).
   // Empty/invalid input is left untouched — width/height are numeric state the
   // preview + FFLF-budget math read, so we never let them go 0/NaN. The server
-  // still floors both dims to a multiple of 64 and enforces the per-tier pixel
-  // budget (local.js#buildLtx2Args), so free entry stays safe.
+  // validates 64..2048 (videoGen route) and floors both dims to a multiple of
+  // 64 (generateVideo in local.js) before enforcing the per-tier pixel budget,
+  // so free entry stays safe; the inputs mirror that 64..2048 bound below.
   const handleDimensionChange = (setter) => (e) => {
     const v = Number(e.target.value);
     if (Number.isFinite(v) && v > 0) { setter(v); sizeManuallySetRef.current = true; }
@@ -1728,24 +1729,25 @@ export default function VideoGen() {
 
             {/* Free-form W×H for exact I2V sizing beyond the preset list. Drives
                 the same width/height state as the preset select; the "(custom)"
-                option above reflects any off-preset value. The server rounds to
-                the 64-grid, so an odd size here renders at the nearest valid box. */}
+                option above reflects any off-preset value. The server accepts
+                64..2048 and rounds each dim DOWN to the 64-grid, so an off-grid
+                size here renders at the next-lower multiple of 64. */}
             <FormField label="Width" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <input
-                type="number" min={64} step={64}
+                type="number" min={64} max={2048} step={64}
                 value={width}
                 onChange={handleDimensionChange(setWidth)}
-                title="Custom width in px — the server rounds down to the nearest multiple of 64."
+                title="Custom width in px (64–2048) — the server rounds down to the nearest multiple of 64."
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
             </FormField>
 
             <FormField label="Height" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <input
-                type="number" min={64} step={64}
+                type="number" min={64} max={2048} step={64}
                 value={height}
                 onChange={handleDimensionChange(setHeight)}
-                title="Custom height in px — the server rounds down to the nearest multiple of 64."
+                title="Custom height in px (64–2048) — the server rounds down to the nearest multiple of 64."
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
               />
             </FormField>
