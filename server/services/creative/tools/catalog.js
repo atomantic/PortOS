@@ -13,20 +13,13 @@ import { COST_FREE, COST_LLM } from './shared.js';
 export const CATALOG_TOOLS = [
   {
     name: 'catalog.searchIngredients',
-    description: 'Search the creative ingredients catalog by name/content, optionally narrowed to one type.',
+    // description + parameters are hydrated from the voice `catalog_lookup` tool
+    // (single source of the ingredient-search schema); the guard guarantees the
+    // hydration resolves, so no authored fallback is needed here. Only the Zod
+    // `schema` (used for arg validation) is local.
     costClass: COST_FREE,
-    // Reuse the voice catalog_lookup schema instead of duplicating it.
     hydrateFrom: 'catalog_lookup',
     schema: z.object({ query: z.string().min(1), type: z.string().optional(), limit: z.number().int().positive().max(50).optional() }),
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Free-text search across name + payload content.' },
-        type: { type: 'string', description: 'Optional: restrict to one ingredient kind.' },
-        limit: { type: 'integer', description: 'Max results (default 20).' },
-      },
-      required: ['query'],
-    },
     execute: ({ query, type, limit }) => listIngredients({ query, type, limit: limit ?? 20 }),
   },
   {

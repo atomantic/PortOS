@@ -25,7 +25,8 @@
 import { createHash } from 'crypto';
 import { join } from 'path';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { canonicalStringify } from '../../lib/objects.js';
 
 // Keep the most recent N entries per project — matches the CD project record's
 // MAX_PERSISTED_RUNS spirit (bounded audit log, newest kept).
@@ -33,22 +34,16 @@ export const MAX_LEDGER_ENTRIES = 500;
 
 const DEFAULT_LEDGER_DIR = join(PATHS.data, 'creative', 'ledger');
 
-// One write tail per project file so two appends to the same ledger can't
-// read-modify-write-clobber each other.
-const tails = new Map();
-function tailFor(key) {
-  let tail = tails.get(key);
-  if (!tail) {
-    tail = createFileWriteQueue();
-    tails.set(key, tail);
-  }
-  return tail;
-}
+// Per-project-file serialized write queue (self-pruning) so two appends to the
+// same ledger can't read-modify-write-clobber each other while different
+// projects still write concurrently.
+const ledgerQueue = createKeyCachedQueue();
 
 /**
- * Stable short digest of a tool's args — a sha256 hex prefix plus the sorted
- * top-level key list, so the ledger records the SHAPE and a fingerprint of the
- * inputs without persisting the (possibly huge) values themselves.
+ * Stable short digest of a tool's args — a sha256 hex prefix over a recursively
+ * key-sorted serialization plus the sorted top-level key list, so the ledger
+ * records the SHAPE and a deterministic fingerprint of the inputs (stable across
+ * nested key ordering) without persisting the (possibly huge) values themselves.
  *
  * @param {unknown} args
  * @returns {string}
@@ -56,13 +51,7 @@ function tailFor(key) {
 export function argsDigest(args) {
   if (args == null || typeof args !== 'object') return 'none';
   const keys = Object.keys(args).sort();
-  let json;
-  try {
-    json = JSON.stringify(args, Object.keys(args).sort());
-  } catch {
-    json = String(args);
-  }
-  const hash = createHash('sha256').update(json).digest('hex').slice(0, 12);
+  const hash = createHash('sha256').update(canonicalStringify(args) ?? '').digest('hex').slice(0, 12);
   return keys.length ? `${keys.join(',')}#${hash}` : `#${hash}`;
 }
 
@@ -88,7 +77,7 @@ function sanitizeId(projectId) {
 export async function appendCreativeLedgerEntry(projectId, entry, { dir } = {}) {
   const file = fileFor(projectId, dir);
   const record = { at: new Date().toISOString(), ...entry };
-  await tailFor(file)(async () => {
+  await ledgerQueue(file, async () => {
     await ensureDir(dir || DEFAULT_LEDGER_DIR);
     const existing = await readJSONFile(file, [], { logError: false });
     const list = Array.isArray(existing) ? existing : [];
