@@ -75,11 +75,16 @@ describe('PipelineVoiceFingerprint', () => {
       gatedOff: true,
       issueCount: 2,
       outliers: [],
+      // The server returns `series: {}` below minIssues.
+      series: {},
       matrix: { metricKeys: ['sentenceLenMean'], issues: [{ issue: 1, words: 5, sentences: 1, metrics: { sentenceLenMean: 5 } }, { issue: 2, words: 4, sentences: 1, metrics: { sentenceLenMean: 4 } }] },
     });
     renderAt();
     await waitFor(() => expect(screen.getByText(/Drift detection is off/)).toBeInTheDocument());
     expect(screen.getByText('#1')).toBeInTheDocument();
+    // No misleading mean/σ footer when the series stats are empty.
+    expect(screen.queryByText('mean')).not.toBeInTheDocument();
+    expect(screen.queryByText('σ')).not.toBeInTheDocument();
   });
 
   it('renders an empty state when nothing is drafted', async () => {
