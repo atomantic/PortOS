@@ -227,6 +227,7 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
   // budget-gates and records each of its own LLM/render steps against the same
   // cos budget internally, so charging one action here would double-count and,
   // under a tight cap, consume the last action before the run does any work.
+  let charged = false;
   if (BUDGETED_COST_CLASSES.has(tool.costClass) && !tool.selfBudgeted) {
     const status = await getDomainBudgetStatus(BUDGET_DOMAIN);
     if (!status.withinBudget) {
@@ -235,6 +236,7 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
       return { ok: false, rejected: true, reason: 'budget', exceeded: status.exceeded, mode, tool: name };
     }
     await recordDomainUsage(BUDGET_DOMAIN, { actions: 1 });
+    charged = true;
   }
 
   const startedAt = Date.now();
@@ -251,6 +253,11 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
     // successful start for a run the inner gate refused.
     if (result && result.rejected === true) {
       console.log(`🚫 creative dispatch ${name} rejected by wrapped service (${result.mode ?? 'gate'})`);
+      // The tool did no work — refund the action charged before execute so a
+      // self-gated (non-selfBudgeted) tool doesn't burn budget on a no-op. Today
+      // only the selfBudgeted autopilot self-rejects (never charged), so this is
+      // defensive for future self-gating tools that keep the registry charge.
+      if (charged) await recordDomainUsage(BUDGET_DOMAIN, { actions: -1 });
       await recordLedger(ctx, { ...base, outcome: 'rejected', timingMs });
       return { ok: false, rejected: true, reason: result.reason || 'tool-rejected', mode, tool: name, result, timingMs };
     }

@@ -269,6 +269,17 @@ describe('wrapped-service self-rejection', () => {
     expect(out.result).toEqual({ rejected: true, mode: 'off' });
     expect(appendLedger.mock.calls[0][0].outcome).toBe('rejected');
   });
+
+  it('refunds the charged action when a non-selfBudgeted llm tool self-rejects', async () => {
+    setMode('execute');
+    // generateStage is COST_LLM and NOT selfBudgeted, so dispatch charges before
+    // execute; a self-reject must refund so a no-op doesn't burn budget.
+    generateStage.mockResolvedValueOnce({ rejected: true, reason: 'inner-gate' });
+    const out = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' });
+    expect(out).toMatchObject({ ok: false, rejected: true, reason: 'inner-gate' });
+    expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
+    expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: -1 });
+  });
 });
 
 describe('run ledger append', () => {
