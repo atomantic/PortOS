@@ -8,7 +8,8 @@ vi.mock('./shell.js', () => ({
   writeToSession: vi.fn(),
   killSession: vi.fn(),
   getSession: vi.fn(),
-  getSessionProcess: vi.fn()
+  getSessionProcess: vi.fn(),
+  isExternalSessionAttached: vi.fn().mockReturnValue(false)
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -396,6 +397,11 @@ describe('spawnTuiAgent runtime', () => {
     // Tests that want to exercise the idle-no-changes failure path override this.
     vi.mocked(gitService.getStatus).mockResolvedValue({ clean: false, files: [{ path: 'file.txt', status: 'M' }] });
     vi.mocked(gitService.getDiff).mockResolvedValue('diff content here');
+
+    // Reset viewer-attached state: no Shell viewer bound by default. The
+    // viewer-attached test overrides this — clearAllMocks doesn't undo a
+    // mockReturnValue override, so it must be reset explicitly here.
+    vi.mocked(shellService.isExternalSessionAttached).mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -477,6 +483,42 @@ describe('spawnTuiAgent runtime', () => {
         completionReason: 'idle-complete',
       })
     );
+  });
+
+  // ── 1b. Idle timer must not reap a session a human is actively viewing ──────
+  // A large bracketed paste into a live agent TUI can sit in a silent
+  // reflow/commit window with no PTY output yet, which looks identical to
+  // "idle" to this timer. If a viewer is attached (Shell page open on this
+  // session), the idle reaper must not fire at all — mirrors the guard
+  // tuiPromptRunner.js already has for its one-shot idle-watch timer.
+  it('idle timer does not reap when isExternalSessionAttached returns true', async () => {
+    vi.mocked(shellService.isExternalSessionAttached).mockReturnValue(true);
+
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
+    await vi.advanceTimersByTimeAsync(800);
+    await capturedOnData(Buffer.from('(2s · thinking with high effort)\n'));
+
+    // Advance well past DEFAULT_TUI_MIN_RUNTIME_MS + idleTimeoutMs — the
+    // un-guarded timer would have reaped by now (see test 1 above).
+    await vi.advanceTimersByTimeAsync(21000);
+    await flushMicrotasks();
+
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
   });
 
   // ── 1a. Idle-out with NO work activity → failure (issue #1229) ───────────────

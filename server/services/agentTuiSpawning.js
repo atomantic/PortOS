@@ -1043,6 +1043,13 @@ export async function spawnTuiAgent({
 
   const idleTimer = setInterval(() => {
     if (!promptSentAt || finalized) return;
+    // Don't reap a session a human is actively watching in the Shell page —
+    // they may be mid-paste or reading output. A big bracketed paste can sit
+    // in a silent reflow/commit window with no PTY output yet, which looks
+    // identical to "idle" to this timer otherwise (issue: paste into a live
+    // agent TUI got reaped mid-paste, same class of bug as #2074/#2084 but for
+    // an attached viewer instead of a merge-queue/review-loop wait).
+    if (sessionId && shellService.isExternalSessionAttached(sessionId)) return;
     const runtime = Date.now() - promptSentAt;
     const idle = Date.now() - lastOutputAt;
     if (runtime < DEFAULT_TUI_MIN_RUNTIME_MS) return;
