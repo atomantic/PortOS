@@ -127,12 +127,19 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   // Measure overflow while the prompt is collapsed. Kept sticky when expanded
   // (removing the clamp collapses scrollHeight, which would otherwise hide the
   // toggle mid-expand); recomputed only on the collapsed path when the text
-  // changes so an edit that shortens the prompt clears a stale toggle.
+  // changes so an edit that shortens the prompt clears a stale toggle. A
+  // ResizeObserver re-measures on width changes (sidebar collapse, rotation,
+  // window resize) so a prompt that wraps to a new line at a narrower width
+  // still surfaces the toggle instead of silently clamping with no affordance.
   useEffect(() => {
     if (promptExpanded) return;
     const el = descRef.current;
     if (!el) return;
-    setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [task.description, promptExpanded, editing]);
 
   // Get models for selected provider in edit mode
@@ -362,6 +369,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             <>
               <p
                 ref={descRef}
+                id={`task-desc-${task.id}`}
                 className={`text-white whitespace-pre-wrap ${promptExpanded ? '' : 'line-clamp-2'}`}
               >
                 {task.description}
@@ -372,6 +380,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                   onClick={() => setPromptExpanded(v => !v)}
                   className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
                   aria-expanded={promptExpanded}
+                  aria-controls={`task-desc-${task.id}`}
                 >
                   {promptExpanded ? (
                     <><ChevronUp size={12} aria-hidden="true" /> Show less</>
