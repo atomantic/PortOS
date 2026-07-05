@@ -161,7 +161,12 @@ export const getSettings = async () => {
   if (settingsCache === null) {
     // stripStoreKeys builds a fresh top-level object over the just-parsed
     // loadRaw() graph, which nothing else references — safe to cache directly.
-    settingsCache = stripStoreKeys(await loadRaw());
+    const loaded = stripStoreKeys(await loadRaw());
+    // A save()/reloadSettings() may have populated the cache via the
+    // settings:updated listener while this cold read was awaiting the disk read.
+    // Only fill if still empty, so an older on-disk snapshot can't clobber that
+    // fresher in-memory value and strand consumers on stale settings.
+    if (settingsCache === null) settingsCache = loaded;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
   // can't corrupt the shared cache — matching the prior per-call
