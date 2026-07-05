@@ -591,7 +591,7 @@ export async function getRepoBranches(dir) {
 
 /**
  * Get all local branches with tracking info
- * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number}>>}
+ * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean}>>}
  */
 export async function getBranches(dir) {
   // Get branches with verbose info (includes tracking)
