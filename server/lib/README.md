@@ -93,6 +93,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `promptPartials.js` | Mustache-style partial expansion. |
 | `mediaModels.js` | Single source of truth for image/video model metadata. |
 | `providerModels.js` | Provider model resolution sentinel + helpers. |
+| `opencodeConfig.js` | OpenCode config builder — `buildOpencodeEnvVars(provider, model)` builds dynamic `OPENCODE_CONFIG_CONTENT` with the models map for Ollama-backed OpenCode providers. Fixes --model rejection. |
 | `cliProviderArgs.js` | Per-CLI argv conventions (`buildCliArgs`) for stdin prompt delivery — dependency-light extraction from runner.js so out-of-process callers (autofixer) can import it. |
 | `cliProviderRun.js` | One-shot CLI provider invocation (`pickCliProvider` + `runCliProviderPrompt`) — lightweight path for the autofixer + calendar MCP sync to honor the configured provider/model. |
 | `runners.js` | Image-runner family constants. |
