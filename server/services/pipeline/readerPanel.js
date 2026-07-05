@@ -19,6 +19,7 @@
  */
 
 import { join } from 'path';
+import { rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import {
@@ -53,6 +54,10 @@ async function loadSnapshot(seriesId) {
 async function saveSnapshot(snapshot) {
   await ensureDir(panelDir());
   await atomicWrite(snapshotPath(snapshot.seriesId), snapshot);
+}
+
+async function removeSnapshot(seriesId) {
+  await rm(snapshotPath(seriesId), { force: true }).catch(() => {});
 }
 
 const personaStage = (personaId) => `pipeline-panel-${personaId}`;
@@ -130,14 +135,17 @@ export async function finalizePanel(seriesId, digest, responses, { runId = null 
 }
 
 /**
- * Dismiss any prior reader-panel consensus findings when the panel can't produce
- * a fresh read (no analyzable content). A `fresh`-mode seed with no findings
- * auto-dismisses every open finding of this check id, so removing all content
- * doesn't strand old consensus findings as open (inflating the health score). A
- * no-op when none exist.
+ * Handle a convene that has no analyzable content to read. Two cleanups so a
+ * later `GET /panel` doesn't surface obsolete state:
+ *  1. Dismiss any prior consensus findings — a `fresh`-mode seed with no findings
+ *     auto-dismisses every open finding of this check id (so they don't linger
+ *     open and inflate the health score). A no-op when none exist.
+ *  2. Remove the stored snapshot — otherwise `getReaderPanel` keeps returning the
+ *     old `status: 'complete'` personas after the content was removed.
  */
-export async function reconcileConsensusFindings(seriesId, { runId = null } = {}) {
+export async function clearReaderPanel(seriesId, { runId = null } = {}) {
   await seedReviewFromFindings(seriesId, [], { runId, mode: 'fresh', checkId: CONSENSUS_CHECK_ID });
+  await removeSnapshot(seriesId);
 }
 
 // Re-hash the current issue content to decide whether a stored panel is stale

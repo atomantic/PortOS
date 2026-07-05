@@ -156,8 +156,13 @@ export async function buildDigestForSeries(seriesId, { issues: issuesArg, series
     seriesArg !== undefined ? seriesArg : getSeries(seriesId).catch(() => null),
     getSceneSegmentation(seriesId).catch(() => ({ scenes: [] })),
   ]);
+  // Only trust scene summaries from a CURRENT outline. A stale outline (manuscript
+  // edited since it was generated) would leak old summaries into the digest while
+  // the panel's sourceContentHash — which covers only issue text — still reports
+  // the panel as current; fall back to text-derived summaries instead.
+  const usableScenes = segmentation.stale ? [] : (segmentation.scenes || []);
   const scenesByNumber = new Map();
-  for (const scene of segmentation.scenes || []) {
+  for (const scene of usableScenes) {
     const num = scene?.issueNumber;
     if (!Number.isInteger(num)) continue;
     if (!scenesByNumber.has(num)) scenesByNumber.set(num, []);

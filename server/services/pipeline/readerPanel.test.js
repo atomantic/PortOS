@@ -8,6 +8,9 @@ const atomicWrite = vi.fn(async () => {});
 const ensureDir = vi.fn(async () => {});
 const tryReadFile = vi.fn(async () => null);
 const computeSourceContentHash = vi.fn(async () => 'hash-current');
+const rm = vi.fn(async () => {});
+
+vi.mock('fs/promises', () => ({ rm: (...a) => rm(...a) }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { data: '/tmp/panel-test-data' },
@@ -25,7 +28,7 @@ vi.mock('./manuscriptReview.js', () => ({
   seedReviewFromFindings: (...a) => seedReviewFromFindings(...a),
 }));
 
-const { finalizePanel, getReaderPanel, reconcileConsensusFindings } = await import('./readerPanel.js');
+const { finalizePanel, getReaderPanel, clearReaderPanel } = await import('./readerPanel.js');
 
 // Build a persona response with a given per-question citation set.
 function persona(id, cites = {}) {
@@ -42,6 +45,7 @@ beforeEach(() => {
   seedReviewFromFindings.mockClear();
   atomicWrite.mockClear();
   ensureDir.mockClear();
+  rm.mockClear();
   tryReadFile.mockReset().mockResolvedValue(null);
   computeSourceContentHash.mockReset().mockResolvedValue('hash-current');
 });
@@ -79,10 +83,12 @@ describe('finalizePanel', () => {
   });
 });
 
-describe('reconcileConsensusFindings', () => {
-  it('fresh-seeds an empty finding set to dismiss stale consensus findings', async () => {
-    await reconcileConsensusFindings('ser-3', { runId: 'run-3' });
+describe('clearReaderPanel', () => {
+  it('fresh-seeds an empty finding set AND removes the stored snapshot', async () => {
+    await clearReaderPanel('ser-3', { runId: 'run-3' });
     expect(seedReviewFromFindings).toHaveBeenCalledWith('ser-3', [], { runId: 'run-3', mode: 'fresh', checkId: 'reader-panel.consensus' });
+    expect(rm).toHaveBeenCalledTimes(1);
+    expect(rm.mock.calls[0][0]).toContain('ser-3.json');
   });
 });
 
