@@ -166,8 +166,11 @@ router.get('/editorial/checks', asyncHandler(async (req, res) => {
 // series + per issue), the readiness signal, and the revision trend +
 // regressions. Reads the same manuscript-review findings the triage view shows.
 router.get('/series/:id/editorial/health', asyncHandler(async (req, res) => {
-  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const settings = await getSettings();
+  // Independent loads — fetch the series and settings concurrently.
+  const [series, settings] = await Promise.all([
+    seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); }),
+    getSettings()
+  ]);
   const gate = readReadinessGate(settings) || DEFAULT_READINESS_GATE;
   // Per-series severity-weight override (#1616) so the returned score + `weights`
   // echo reflect the override the autopilot health gate also uses.

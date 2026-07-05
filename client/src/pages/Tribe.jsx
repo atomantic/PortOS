@@ -556,14 +556,16 @@ function EmptyState({ onNew }) {
 function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
-  // them to the top alongside genuinely-overdue contacts).
-  const queue = useMemo(() => contacts.filter((contact) => contact.ring !== 'external').sort((a, b) => {
-    const aStatus = contactStatus(a);
-    const bStatus = contactStatus(b);
-    const aScore = aStatus.daysRemaining == null ? -999 : aStatus.daysRemaining;
-    const bScore = bStatus.daysRemaining == null ? -999 : bStatus.daysRemaining;
-    return aScore - bScore;
-  }), [contacts]);
+  // them to the top alongside genuinely-overdue contacts). Memoized + status
+  // computed once per contact (instead of twice per comparison in the sort).
+  const queue = useMemo(() => contacts
+    .filter((contact) => contact.ring !== 'external')
+    .map((contact) => {
+      const score = contactStatus(contact).daysRemaining;
+      return { contact, score: score == null ? -999 : score };
+    })
+    .sort((a, b) => a.score - b.score)
+    .map(({ contact }) => contact), [contacts]);
 
   if (!queue.length) return <EmptyState onNew={onNew} />;
 

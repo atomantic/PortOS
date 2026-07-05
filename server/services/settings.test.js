@@ -14,11 +14,14 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, __resetSettingsCache } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // getSettings memoizes the parsed file; drop the cache so each test observes
+    // its own per-test tryReadFile stub instead of a value cached by a prior test.
+    __resetSettingsCache();
     // Sensible defaults: empty file on disk, writes succeed. Individual tests
     // override as needed.
     tryReadFile.mockResolvedValue('{}');

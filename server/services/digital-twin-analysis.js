@@ -66,16 +66,16 @@ export async function validateCompleteness() {
   const documents = await getDocuments();
   const enabledDocs = documents.filter(d => d.enabled && d.category !== 'behavioral');
 
-  // Load content for all enabled documents in parallel — the reads are
-  // independent and their results are just concatenated for keyword scanning.
-  const contents = (await Promise.all(
-    enabledDocs.map(async doc => {
-      const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
-      if (!existsSync(filePath)) return null;
-      const content = await readFile(filePath, 'utf-8');
-      return { doc, content: content.toLowerCase() };
+  // Load content for all enabled documents in parallel. A missing file just
+  // resolves to null (dropping the synchronous existsSync pre-check that
+  // serialized the loop and hit the filesystem twice per doc).
+  const loaded = await Promise.all(
+    enabledDocs.map(async (doc) => {
+      const content = await readFile(join(DIGITAL_TWIN_DIR, doc.filename), 'utf-8').catch(() => null);
+      return content === null ? null : { doc, content: content.toLowerCase() };
     })
-  )).filter(Boolean);
+  );
+  const contents = loaded.filter(Boolean);
 
   const allContent = contents.map(c => c.content).join('\n');
   const found = [];

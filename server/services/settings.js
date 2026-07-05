@@ -70,6 +70,43 @@ const loadRaw = async () => {
   return safeJSONParse(raw ?? '{}', {});
 };
 
+// Read-side cache. `getSettings()` is called 100+ times across the codebase
+// (many per request), and each call previously did a fresh filesystem read +
+// JSON.parse. Settings is app-wide, rarely-changing data — a textbook memoize.
+// Correctness contract:
+// - The cache is populated lazily on the first `getSettings()` and refreshed
+//   from the `settings:updated` event the SAME emitter already fires on every
+//   `save()` — so any write through the app (saveSettings/updateSettings/
+//   updateSettingsWith) keeps the cache warm and consistent.
+// - Write paths (`save`, `updateSettings`, `updateSettingsWith`) deliberately
+//   still read `loadRaw()` off disk inside the write queue for their
+//   read-merge-write, so their base snapshot is always the freshest persisted
+//   truth, never the cache. The post-write `settings:updated` then syncs the
+//   cache. This keeps the write-ordering guarantees intact.
+// - `null` = not-yet-loaded (distinct from a legitimately empty `{}`), so a
+//   fresh process reads disk exactly once.
+// - The prior `stripStoreKeys(await loadRaw())` handed every caller a fresh deep
+//   object graph, so callers may mutate nested settings in place. To preserve
+//   that isolation the cache is never handed out directly: reads deep-clone it,
+//   and the `settings:updated` listener stores a private clone (save() emits the
+//   same `cleaned` object it also returns to its caller). structuredClone is the
+//   right tool for this JSON-shaped data and stays far cheaper than the disk
+//   read + full-tree JSON.parse it replaces.
+// A manual edit of settings.json while the server runs is not observed until
+// the next app-driven save or a restart — the standard trade-off for a cache,
+// and app-driven changes (the only ones the schedulers care about) refresh it.
+let settingsCache = null;
+settingsEvents.on('settings:updated', (cleaned) => {
+  settingsCache = structuredClone(cleaned);
+});
+
+// Test-only: drop the read cache so a suite that stubs the on-disk file per
+// test observes each fresh stub. Production code never calls this — writes keep
+// the cache coherent via the `settings:updated` event above.
+export const __resetSettingsCache = () => {
+  settingsCache = null;
+};
+
 // Serialize all writes to settings.json on a single tail so an updateSettings
 // read-merge-write can't interleave with a concurrent save (two browser tabs,
 // a background job racing a user save) and clobber the other's patch. Reads
@@ -109,7 +146,17 @@ const save = async (settings) => {
   return cleaned;
 };
 
-export const getSettings = async () => stripStoreKeys(await loadRaw());
+export const getSettings = async () => {
+  if (settingsCache === null) {
+    // stripStoreKeys builds a fresh top-level object over the just-parsed
+    // loadRaw() graph, which nothing else references — safe to cache directly.
+    settingsCache = stripStoreKeys(await loadRaw());
+  }
+  // Hand out a private deep copy so a caller mutating nested settings in place
+  // can't corrupt the shared cache — matching the prior per-call
+  // `stripStoreKeys(await loadRaw())` deep-copy semantics, minus the I/O.
+  return structuredClone(settingsCache);
+};
 export const saveSettings = (settings) => queueWrite(() => save(settings));
 
 // Merge against the unstripped on-disk snapshot so save() sees every

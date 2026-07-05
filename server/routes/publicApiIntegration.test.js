@@ -40,10 +40,16 @@ const resetSettings = (extra = {}) => {
   writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(extra, null, 2) + '\n');
   writeFileSync(join(tempRoot, 'auth-sessions.json'), '{"tokens":[]}\n');
 };
-const setApiAccess = (apiAccess) => {
+// getSettings() memoizes the parsed file and only refreshes off save()'s
+// `settings:updated` event. This helper writes settings.json directly, so a
+// prior getSettings (e.g. from setPassword) would leave the cache stale on this
+// apiAccess block — drop the cache so the app built next reads the fresh file.
+const setApiAccess = async (apiAccess) => {
   const raw = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
   raw.apiAccess = apiAccess;
   writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(raw, null, 2) + '\n');
+  const { __resetSettingsCache } = await import('../services/settings.js');
+  __resetSettingsCache();
 };
 
 const buildApp = async () => {
@@ -101,7 +107,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + exposed + passwordless: public synthesize works WITHOUT a token', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi', engine: 'piper' });
     expect(res.status).toBe(200);
@@ -111,7 +117,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + exposed + passwordless: config mutation is STILL 401', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).put('/api/voice/config').send({ enabled: true });
     expect(res.status).toBe(401);
@@ -121,7 +127,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + requireAuth: public synthesize 401s without a token, works with one', async () => {
     const auth = await import('../services/auth.js');
     const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: true } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: true } });
     const app = await buildApp();
 
     const denied = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi' });
@@ -137,7 +143,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + not exposed: public synthesize 401s', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: false, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: false, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi' });
     expect(res.status).toBe(401);
