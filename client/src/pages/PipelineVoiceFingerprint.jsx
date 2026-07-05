@@ -37,7 +37,7 @@ export default function PipelineVoiceFingerprint() {
     let canceled = false;
     setLoading(true);
     Promise.all([
-      getPipelineSeries(seriesId),
+      getPipelineSeries(seriesId, { silent: true }),
       getVoiceFingerprint(seriesId, { silent: true }),
     ])
       .then(([s, fp]) => {
