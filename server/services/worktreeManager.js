@@ -31,11 +31,17 @@ const WORKTREE_ADD_RETRY_DELAY_MS = 250;
 
 /**
  * True when a git error message indicates lock/contention on the worktree or
- * index lock (as opposed to a genuine, non-retryable failure like a bad ref).
- * Exported for unit testing against real git lock-error wording.
+ * index lock (as opposed to a genuine, non-retryable failure like a bad ref,
+ * a pre-existing branch, or an existing worktree path — retrying those just
+ * wastes the retry budget and spams misleading "lock contention" logs, #2193).
+ * Deliberately does NOT match bare "File exists" / "already exists": the
+ * canonical lock error is `Unable to create '…/index.lock': File exists`
+ * (caught by `index.lock`), whereas `a branch named 'X' already exists` and
+ * `'<path>' already exists` are permanent. Exported for unit testing against
+ * real git lock-error wording.
  */
 export function isGitLockError(message) {
-  return /\.lock|index\.lock|cannot lock|unable to (?:create|write|lock)|File exists|already (?:exists|locked)|another git process/i.test(message || '');
+  return /index\.lock|cannot lock|could not lock|unable to (?:create|write|lock)|already locked|another git process/i.test(message || '');
 }
 
 /**
@@ -237,7 +243,12 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
   // Serialize per source repo so two adds in the same evaluation tick can't
-  // race on git's per-repo worktree lock (#2193). See queueWorktreeCreate.
+  // race on git's per-repo worktree lock (#2193). The whole body runs inside
+  // the tail — not just the add — because the leading `git fetch origin` also
+  // touches the shared ref store and two concurrent fetches on the same repo
+  // can themselves hit `cannot lock ref` contention. Same-repo spawn prep is
+  // low-frequency (a handful of tasks per tick), so serializing the fetch is a
+  // cheap, safe trade for the race guarantee. See queueWorktreeCreate.
   return queueWorktreeCreate(sourceWorkspace, () => createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options));
 }
 
