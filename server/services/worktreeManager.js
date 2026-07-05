@@ -20,6 +20,80 @@ const WORKTREES_DIR = PATHS.worktrees;
 // Lockfiles that npm/yarn/pnpm modify as a side-effect — safe to discard during worktree cleanup
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
+// `git worktree add` lock-contention retry (#2193). Git guards a repo's
+// worktree bookkeeping (`.git/worktrees`, `.git/index.lock`) with a per-repo
+// lock, so two adds fired in the same evaluation tick race — the loser fails
+// with a lock error. Serialization (queueWorktreeCreate) removes the common
+// same-process race; retry handles residual external contention (a human
+// `git` command, another install's tool touching a shared checkout).
+const WORKTREE_ADD_MAX_ATTEMPTS = 4;
+const WORKTREE_ADD_RETRY_DELAY_MS = 250;
+
+/**
+ * True when a git error message indicates lock/contention on the worktree or
+ * index lock (as opposed to a genuine, non-retryable failure like a bad ref).
+ * Exported for unit testing against real git lock-error wording.
+ */
+export function isGitLockError(message) {
+  return /\.lock|index\.lock|cannot lock|unable to (?:create|write|lock)|File exists|already (?:exists|locked)|another git process/i.test(message || '');
+}
+
+/**
+ * Run `git worktree add …` with retry on lock contention. Promise-chained
+ * (no try/catch) so it stays idiomatic with the rest of the module: on a lock
+ * error it backs off and recurses until WORKTREE_ADD_MAX_ATTEMPTS, then lets
+ * the final error reject. Non-lock errors (bad base ref, etc.) reject
+ * immediately — retrying them just wastes time.
+ */
+export function addWorktreeWithRetry(args, repo, attempt = 1) {
+  return execGit(args, repo).catch((err) => {
+    if (attempt >= WORKTREE_ADD_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
+    console.log(`🌳 Worktree add lock contention (attempt ${attempt}/${WORKTREE_ADD_MAX_ATTEMPTS}), retrying in ${WORKTREE_ADD_RETRY_DELAY_MS}ms: ${err.message}`);
+    return new Promise(resolve => setTimeout(resolve, WORKTREE_ADD_RETRY_DELAY_MS))
+      .then(() => addWorktreeWithRetry(args, repo, attempt + 1));
+  });
+}
+
+// Per-source-repo serialization tail for worktree-creating git operations —
+// the issueWriteTail pattern (see server/services/pipeline/issues.js). Git
+// serializes its own worktree bookkeeping behind a per-repo lock, so two
+// `git worktree add` calls in the same evaluation tick race and the loser is
+// blocked with `blockedCategory: worktree-failed` (#2193). A single promise
+// tail per repo collapses that race: each create awaits the previous one to
+// settle before touching the shared `.git/worktrees` state. Keyed by
+// realpath-resolved repo path so /var vs /private/var (macOS) don't split the
+// tail into two lanes that can still collide.
+const worktreeCreateTails = new Map();
+function queueWorktreeCreate(repo, fn) {
+  let key = repo;
+  try { key = realpathSync(repo); } catch { /* repo may not resolve — fall back to the raw path */ }
+  if (!key) key = '__unknown__';
+  const prev = worktreeCreateTails.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  const silenced = next.catch(() => {});
+  worktreeCreateTails.set(key, silenced);
+  silenced.finally(() => {
+    if (worktreeCreateTails.get(key) === silenced) worktreeCreateTails.delete(key);
+  });
+  return next;
+}
+
+/**
+ * Delete a branch we tried (and failed) to create a worktree for, plus prune
+ * stale worktree bookkeeping — so a failed `git worktree add -b/-B` doesn't
+ * leave an orphan branch with no worktree accumulating in the repo (#2193).
+ * Best-effort: every step swallows its own error. Only call for NEW-branch
+ * adds — never for attach-to-existing-branch, which would delete a branch we
+ * didn't create.
+ */
+async function cleanupOrphanBranch(repo, branchName) {
+  if (!branchName) return;
+  await execGit(['branch', '-D', branchName], repo).catch(err => {
+    console.log(`⚠️ Orphan branch cleanup failed for ${branchName}: ${err.message}`);
+  });
+  await execGit(['worktree', 'prune'], repo).catch(() => {});
+}
+
 /**
  * Remove a worktree directory robustly: try `git worktree remove --force`, and
  * if git refuses (locked, already-gone, broken admin files), fall back to a
@@ -162,6 +236,12 @@ export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
+  // Serialize per source repo so two adds in the same evaluation tick can't
+  // race on git's per-repo worktree lock (#2193). See queueWorktreeCreate.
+  return queueWorktreeCreate(sourceWorkspace, () => createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options));
+}
+
+async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options = {}) {
   if (!existsSync(WORKTREES_DIR)) {
     await ensureDir(WORKTREES_DIR);
   }
@@ -190,7 +270,7 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
     const branchName = options.existingBranch;
     const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
     if (localExists) {
-      await execGit(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
+      await addWorktreeWithRetry(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
     } else {
       // No local copy — we need a remote ref. If `git fetch` failed AND the
       // remote ref isn't available, fail loudly rather than emit a confusing
@@ -201,8 +281,9 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
       if (!remoteExists) {
         throw new Error(`Cannot attach worktree to ${branchName}: branch missing locally and origin/${branchName} unavailable${fetchSucceeded ? '' : ' (fetch failed)'}`);
       }
-      // Use -B (force-create) so we don't fail if a stale local ref exists; track origin
-      await execGit(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
+      // Use -B (force-create) so we don't fail if a stale local ref exists; track origin.
+      // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
+      await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
     }
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
@@ -227,11 +308,16 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
     .then(() => `origin/${baseBranch}`)
     .catch(() => baseBranch);
 
-  // Create worktree with a new branch based on the latest default branch
-  await execGit(
+  // Create worktree with a new branch based on the latest default branch.
+  // On final failure, delete the partially-created branch so a failed add
+  // doesn't leave an orphan branch with no worktree (#2193).
+  await addWorktreeWithRetry(
     ['worktree', 'add', '-b', branchName, worktreePath, baseRef],
     sourceWorkspace
-  );
+  ).catch(async (err) => {
+    await cleanupOrphanBranch(sourceWorkspace, branchName);
+    throw err;
+  });
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
@@ -367,6 +453,13 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
  * Unlike regular worktrees, these persist across runs.
  */
 export async function createPersistentWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch) {
+  // Share the per-repo serialization tail with createWorktree so a persistent
+  // feature-agent add and a CoS agent add in the same tick can't race git's
+  // per-repo worktree lock (#2193).
+  return queueWorktreeCreate(sourceWorkspace, () => createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace, branchName, baseBranch));
+}
+
+async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace, branchName, baseBranch) {
   const FA_WORKTREES = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
 
   await ensureDir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId));
@@ -411,14 +504,18 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
   const remoteBranchExists = (await execGit(['branch', '-r', '--list', `origin/${branchName}`], sourceWorkspace)).stdout.trim();
 
   if (localBranchExists) {
-    // Local branch exists - create worktree from existing branch
-    await execGit(['worktree', 'add', FA_WORKTREES, branchName], sourceWorkspace);
+    // Local branch exists - create worktree from existing branch (no orphan
+    // cleanup: the branch pre-dates this add).
+    await addWorktreeWithRetry(['worktree', 'add', FA_WORKTREES, branchName], sourceWorkspace);
   } else if (remoteBranchExists) {
-    // Remote branch exists but no local - track it
-    await execGit(['worktree', 'add', '--track', '-b', branchName, FA_WORKTREES, `origin/${branchName}`], sourceWorkspace);
+    // Remote branch exists but no local - track it. On final failure, drop the
+    // partially-created local tracking branch (it re-creates from origin next run).
+    await addWorktreeWithRetry(['worktree', 'add', '--track', '-b', branchName, FA_WORKTREES, `origin/${branchName}`], sourceWorkspace)
+      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName); throw err; });
   } else {
-    // New branch - create from base
-    await execGit(['worktree', 'add', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace);
+    // New branch - create from base. Clean up the orphan branch on final failure (#2193).
+    await addWorktreeWithRetry(['worktree', 'add', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace)
+      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName); throw err; });
   }
 
   console.log(`🌳 Created persistent worktree for feature agent ${featureAgentId} at ${FA_WORKTREES} (branch: ${branchName})`);

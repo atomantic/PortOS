@@ -1,6 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
-import { shouldRefuseDefaultBranchMerge, isHumanClaimWorktree, classifyWorktreeDirt } from './worktreeManager.js';
+
+// Mock the git exec boundary so addWorktreeWithRetry's retry loop is testable
+// without touching a real repo. Pure helpers below don't call execGit, so the
+// mock is inert for them.
+const execGitMock = vi.fn();
+vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
+
+const {
+  shouldRefuseDefaultBranchMerge,
+  isHumanClaimWorktree,
+  classifyWorktreeDirt,
+  isGitLockError,
+  addWorktreeWithRetry,
+} = await import('./worktreeManager.js');
 
 /**
  * Tests for the worktree manager service.
@@ -435,5 +448,65 @@ describe('Default-Branch Merge Gate (defense-in-depth)', () => {
 
   it('refuses merge when both inputs are missing', () => {
     expect(shouldRefuseDefaultBranchMerge(null, null)).toBe(true);
+  });
+});
+
+describe('isGitLockError (worktree add lock detection, #2193)', () => {
+  it('recognizes the canonical worktree/index lock errors', () => {
+    expect(isGitLockError("fatal: Unable to create '/repo/.git/worktrees/agent-x/index.lock': File exists.")).toBe(true);
+    expect(isGitLockError('fatal: could not lock config file .git/config: File exists')).toBe(true);
+    expect(isGitLockError('error: cannot lock ref')).toBe(true);
+    expect(isGitLockError('Another git process seems to be running in this repository')).toBe(true);
+    expect(isGitLockError("fatal: '.git/worktrees/foo' already exists")).toBe(true);
+  });
+
+  it('does NOT flag genuine, non-retryable failures', () => {
+    expect(isGitLockError("fatal: invalid reference: origin/nope")).toBe(false);
+    expect(isGitLockError('fatal: not a valid object name')).toBe(false);
+    expect(isGitLockError('')).toBe(false);
+    expect(isGitLockError(undefined)).toBe(false);
+  });
+});
+
+describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
+  beforeEach(() => {
+    execGitMock.mockReset();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves without retrying on first-attempt success', async () => {
+    execGitMock.mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 });
+    await addWorktreeWithRetry(['worktree', 'add', '/wt', 'main'], '/repo');
+    expect(execGitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a lock error then succeeds', async () => {
+    execGitMock
+      .mockRejectedValueOnce(new Error("Unable to create '/repo/.git/index.lock': File exists"))
+      .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 });
+    const p = addWorktreeWithRetry(['worktree', 'add', '/wt', 'main'], '/repo');
+    await vi.runAllTimersAsync();
+    await p;
+    expect(execGitMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after the max attempts on persistent lock contention', async () => {
+    execGitMock.mockRejectedValue(new Error('cannot lock ref'));
+    const p = addWorktreeWithRetry(['worktree', 'add', '/wt', 'main'], '/repo');
+    const assertion = expect(p).rejects.toThrow(/cannot lock ref/);
+    await vi.runAllTimersAsync();
+    await assertion;
+    // WORKTREE_ADD_MAX_ATTEMPTS === 4
+    expect(execGitMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does NOT retry a non-lock (permanent) error', async () => {
+    execGitMock.mockRejectedValueOnce(new Error('fatal: invalid reference: origin/nope'));
+    await expect(addWorktreeWithRetry(['worktree', 'add', '/wt', 'origin/nope'], '/repo'))
+      .rejects.toThrow(/invalid reference/);
+    expect(execGitMock).toHaveBeenCalledTimes(1);
   });
 });
