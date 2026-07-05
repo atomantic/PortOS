@@ -256,6 +256,8 @@ For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–
 ## Phase C — Serialize the merges (orchestrator, after all agents finish)
 Merge the ready ${pr}s ONE AT A TIME. For each: re-sync onto the latest default branch, gate on **required** CI (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next), then \`${mergeCmd}\`. After all merges, run Phase 7 cleanup once per merged worktree.
 
+**Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (\`.agent-done\`, with a short run summary of the issues claimed + their ${pr}s + merge outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
+
 Everything not covered above (claim mechanics, branch naming, verify/skip rules, implement conventions, ${pr} body, review loop) is exactly the single-issue flow documented below.
 
 ---
@@ -1288,10 +1290,14 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one. With no
+  // pin, leave metadata.model unset so selectModelForTask resolves the ACTIVE
+  // provider's tier/default model at spawn time — never a hardcoded literal.
+  // (A stale literal here once pinned an opus release that had since dropped
+  // out of the provider config, spawning claude with a --model the provider
+  // no longer lists.)
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`);
@@ -1768,11 +1774,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one; otherwise
+  // leave it unset so selectModelForTask resolves the active provider's tier/
+  // default model at spawn time (see note in generateSelfImprovementTaskForType).
   if (interval.model) {
     metadata.model = interval.model;
-  } else if (!metadata.provider) {
-    // Only default to Claude when no per-stage provider overrides the selection
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);

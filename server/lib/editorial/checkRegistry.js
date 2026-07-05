@@ -36,6 +36,7 @@
 // the public API exactly). Promoted-private helpers used by ./checks/*.js stay
 // internal to ./checkInfra.js and are imported from there directly.
 export {
+  ADVERSARIAL_CUTS_STAGE,
   APPEARANCE_CONTINUITY_STAGE,
   ARC_REGRESSION_STAGE,
   ARC_TRANSITIONS_STAGE,
@@ -50,6 +51,7 @@ export {
   COMIC_PROSE_SYNC_STAGE,
   CUSTOM_CHECK_MAX_FINDINGS_DEFAULT,
   CUSTOM_CHECK_RUN_SOURCE,
+  CUT_TYPES,
   DEAD_METAPHOR_STAGE,
   DIALOGUE_PLEASANTRIES_STAGE,
   EDITORIAL_PRIOR_DIGEST_BODY_CHARS,
@@ -79,6 +81,7 @@ export {
   PLOT_STRUCTURE_STAGE,
   PROSE_SYNC_PROSE_CHAR_CAP,
   REACTION_PROPORTIONALITY_STAGE,
+  SAFE_CUT_TYPES,
   SECONDARY_ARC_STAGE,
   SENSORY_BALANCE_STAGE,
   STYLE_CONFORMANCE_STAGE,
@@ -219,6 +222,7 @@ const CHECK_ORDER = Object.freeze([
   'style.voice-consistency',
   'style.voice-drift',
   'prose.kill-your-darlings',
+  'prose.adversarial-cuts',
   'prose.italic-thoughts',
   'endings.cliffhanger',
   'endings.pov-switch',
