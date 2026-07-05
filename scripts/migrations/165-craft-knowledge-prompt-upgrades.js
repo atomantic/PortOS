@@ -17,11 +17,15 @@
  *     editorial check.
  *
  * `scripts/setup-data.js` only copies *missing* prompt files, so existing
- * installs keep their old templates until this migration rewrites them. It's the
- * first hash-driven update for `pipeline-prose.md` and `pipeline-arc-overview.md`
- * since their current shipped hashes (migration-tracked in the drift baseline),
- * and the first EVER for `writers-room-continue.md` — so no earlier migration's
- * MD5 tables need resyncing.
+ * installs keep their old templates until this migration rewrites them.
+ * `writers-room-continue.md` is migration-tracked for the FIRST time here.
+ * `pipeline-prose.md` and `pipeline-arc-overview.md` already have migration
+ * lineages (003/027/054/127 and 005/019 respectively) — per the drift-cross-sync
+ * convention, those earlier migrations were resynced in this same change: their
+ * previous current hash moved into `ACCEPTED_OLD_MD5` and `NEW_SHIPPED_MD5` was
+ * bumped to the post-165 hash so their drift-catch tests stay in lock-step with
+ * the live sample. The drift baseline in `setup-data-drift.test.js` was updated
+ * to match the merged sweep.
  *
  * Customization-safe: only installs whose copy still hashes to the prior shipped
  * version are auto-updated; customized prompts are left intact and warned about.
