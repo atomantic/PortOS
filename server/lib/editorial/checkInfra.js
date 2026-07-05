@@ -737,9 +737,9 @@ export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 
 // Stage names for the worldbuilding-doctrine LLM check pair (#2175). Both ship in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
-// setup-data.js) and reach existing installs via seed migrations 165/166 (boot
-// runs migrations but NOT setup-data, so the migration is required or the check
-// throws "Stage not found" on first run). Both reconcile the prose against the
+// setup-data.js) and reach existing installs via the multi-stage seed migration
+// 165 (boot runs migrations but NOT setup-data, so the migration is required or
+// the check throws "Stage not found" on first run). Both reconcile the prose against the
 // canon world summary (`canonWorldSummary`) + the continuity-bible world-rule
 // facts so an established-and-planted rule is NOT flagged:
 //   - unforeshadowed-solution: a plot problem solved by a rule/power the reader was
