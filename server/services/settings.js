@@ -107,6 +107,17 @@ export const __resetSettingsCache = () => {
   settingsCache = null;
 };
 
+// Re-sync the read cache with the current on-disk settings.json and notify every
+// `settings:updated` listener. Call after a process replaces settings.json
+// OUTSIDE the normal save() path — e.g. a backup restore rsyncs it into place —
+// since such a write bypasses the save()-emitted event the cache rides on and
+// would otherwise leave every settings consumer serving pre-restore values.
+export const reloadSettings = async () => {
+  const cleaned = stripStoreKeys(await loadRaw());
+  settingsEvents.emit('settings:updated', cleaned);
+  return cleaned;
+};
+
 // Serialize all writes to settings.json on a single tail so an updateSettings
 // read-merge-write can't interleave with a concurrent save (two browser tabs,
 // a background job racing a user save) and clobber the other's patch. Reads
