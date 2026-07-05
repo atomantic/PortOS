@@ -996,9 +996,15 @@ export function canonWorldSummary(canon) {
   }
   if (!objectLines.length && !placeLines.length) return '';
   const blocks = [];
-  if (objectLines.length) blocks.push(`Established artifacts / objects (with their significance):\n${objectLines.join('\n')}`);
-  if (placeLines.length) blocks.push(`Established places (with their recurring details):\n${placeLines.join('\n')}`);
-  return `World canon (already established in the story bible — a rule, power, or artifact drawn from here is FORESHADOWED; do NOT flag its use as unearned):\n\n${blocks.join('\n\n')}`;
+  if (objectLines.length) blocks.push(`Named artifacts / objects (with their significance):\n${objectLines.join('\n')}`);
+  if (placeLines.length) blocks.push(`Named places (with their recurring details):\n${placeLines.join('\n')}`);
+  // Neutral framing: this is the author's reference for what the world's
+  // mechanics ARE, so a check can judge internal consistency. It deliberately
+  // does NOT assert the reader has seen these — each consuming prompt sets that
+  // interpretation (the unforeshadowed-solution check must still flag a canon
+  // rule the PROSE never surfaced; the cost-free-power check reads it for the
+  // costs a system is supposed to carry).
+  return `World-bible reference (the author's record of the world's artifacts, places, and mechanics — use it to understand what a thing is and does; it is NOT the manuscript and does not prove the reader has seen any of it):\n\n${blocks.join('\n\n')}`;
 }
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block
