@@ -54,20 +54,25 @@ const VISION_EVAL_TIMEOUT_MS = 180000;
 const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
 
 // Only `accepted` is load-bearing — everything else is advisory. Map an
-// explicit JSON `null` to `undefined` (absent) BEFORE coercion: `z.coerce`
-// would otherwise turn `null` into `"null"` / `0`, so a model emitting
-// `"refinedPrompt": null` would overwrite the scene prompt with the literal
-// string "null", and `"imageStrength": null` would force strength to 0 instead
-// of leaving it unchanged. Then `.catch(undefined)` drops an out-of-range or
-// unparseable value rather than rejecting the whole verdict (a model emitting
-// `"score": 85` meaning 85% shouldn't nuke an otherwise-usable accept/reject).
+// explicit JSON `null` to `undefined` (absent) BEFORE validation, then
+// `.catch(undefined)` drops anything that doesn't fit rather than rejecting the
+// whole verdict. Two footguns this guards against:
+//   - Numbers: `z.coerce.number` turns `null`/an object into `0`/`NaN`; the
+//     null→undefined map + min/max bound + `.catch` mean a model emitting
+//     `"score": 85` (percent) or `"imageStrength": null` drops the field instead
+//     of forcing 0 or nuking the verdict.
+//   - Strings: use strict `z.string()` (NOT `z.coerce.string()`) so a malformed
+//     nested shape like `"refinedPrompt": {"prompt":"add fog"}` doesn't coerce to
+//     the literal `"[object Object]"` and get written as the retry render prompt.
+//     A non-string just drops to undefined, leaving the prompt unchanged.
 const nullToUndefined = (v) => (v === null ? undefined : v);
 const optNumber = z.preprocess(nullToUndefined, z.coerce.number().min(0).max(1).optional().catch(undefined));
+const optString = (max) => z.preprocess(nullToUndefined, z.string().max(max).optional().catch(undefined));
 const verdictSchema = z.object({
   accepted: z.boolean(),
   score: optNumber,
-  notes: z.preprocess(nullToUndefined, z.coerce.string().max(2000).optional().catch(undefined)),
-  refinedPrompt: z.preprocess(nullToUndefined, z.coerce.string().max(8000).optional().catch(undefined)),
+  notes: optString(2000),
+  refinedPrompt: optString(8000),
   imageStrength: optNumber,
 });
 

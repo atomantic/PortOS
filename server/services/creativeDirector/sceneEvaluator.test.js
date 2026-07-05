@@ -93,6 +93,13 @@ describe('parseVisionVerdict', () => {
     expect(v.notes).toBe('great');
   });
 
+  it('drops a non-string refinedPrompt (object) instead of writing "[object Object]"', () => {
+    const v = parseVisionVerdict('{"accepted": false, "refinedPrompt": {"prompt": "add fog"}, "notes": "off"}');
+    expect(v.accepted).toBe(false);
+    expect(v.refinedPrompt).toBeUndefined();
+    expect(v.notes).toBe('off');
+  });
+
   it('treats explicit JSON null optional fields as absent, not "null"/0', () => {
     const v = parseVisionVerdict('{"accepted": false, "score": null, "notes": null, "refinedPrompt": null, "imageStrength": null}');
     expect(v.accepted).toBe(false);
