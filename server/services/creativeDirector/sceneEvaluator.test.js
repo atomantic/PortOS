@@ -60,6 +60,7 @@ beforeEach(() => {
   mocks.updateScene.mockResolvedValue({});
   mocks.recordRun.mockResolvedValue({});
   mocks.addItem.mockResolvedValue({});
+  mocks.enqueueEvaluateTask.mockResolvedValue({});
   mocks.advanceAfterSceneSettled.mockResolvedValue(undefined);
   mocks.assertVisionRunUsedImages.mockImplementation((r, p) => r?.provider || p);
 });
@@ -252,5 +253,11 @@ describe('dispatchSceneEvaluation', () => {
     mocks.runPromptThroughProvider.mockRejectedValue(new Error('connection refused'));
     await dispatchSceneEvaluation(project, scene);
     expect(mocks.enqueueEvaluateTask).toHaveBeenCalledWith(project, scene);
+  });
+
+  it('never throws even when the agent-fallback enqueue itself rejects', async () => {
+    mocks.listVisionModels.mockResolvedValue([]); // no vision provider → agent fallback
+    mocks.enqueueEvaluateTask.mockRejectedValue(new Error('disk full'));
+    await expect(dispatchSceneEvaluation(project, scene)).resolves.not.toThrow();
   });
 });

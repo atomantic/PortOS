@@ -294,5 +294,12 @@ export async function dispatchSceneEvaluation(project, scene) {
   }
 
   console.log(`🎬 CD scene ${scene.sceneId} evaluation via agent (${result.reason})`);
-  return enqueueEvaluateTask(project, scene);
+  // Honor the never-throws contract: enqueueEvaluateTask can reject on a disk /
+  // prompt-build failure, and this runs off a media-job event listener whose
+  // floating promise would surface as an unhandledRejection (fatal on modern
+  // Node). The scene stays 'evaluating' on failure, so a later resume retries.
+  return enqueueEvaluateTask(project, scene).catch((err) => {
+    console.error(`❌ CD agent-eval enqueue failed for scene ${scene.sceneId}: ${err.message}`);
+    return null;
+  });
 }
