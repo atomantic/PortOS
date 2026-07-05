@@ -17,6 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
@@ -102,6 +103,45 @@ async function readFileTail(path, maxBytes) {
     await fh.close().catch(() => {});
   }
 }
+/**
+ * Check if a worktree has any uncommitted changes. Returns true when the
+ * working tree is dirty (staged or unstaged changes exist). Used to gate
+ * idle-complete success — an agent that idled out with zero file changes
+ * should fail, not succeed.
+ */
+async function worktreeHasChanges(workspacePath) {
+  if (!workspacePath || typeof workspacePath !== 'string') return false;
+  const status = await git.getStatus(workspacePath).catch(() => null);
+  return status && !status.clean;
+}
+
+/**
+ * Capture the git diff (staged + unstaged) from a worktree and save it to the
+ * agent archive dir. Called before worktree cleanup so post-mortems can see
+ * what changes existed even if the worktree is deleted. Non-throwing — a
+ * failure to capture shouldn't block finalize.
+ *
+ * @returns {string|null} The captured diff, or null if none/error.
+ */
+async function captureWorktreeDiff(workspacePath, agentDir) {
+  if (!workspacePath || typeof workspacePath !== 'string') return null;
+  if (!agentDir || typeof agentDir !== 'string') return null;
+  const [staged, unstaged] = await Promise.all([
+    git.getDiff(workspacePath, true).catch(() => ''),
+    git.getDiff(workspacePath, false).catch(() => ''),
+  ]);
+  const combined = [
+    staged ? `### STAGED CHANGES ###\n${staged}` : '',
+    unstaged ? `### UNSTAGED CHANGES ###\n${unstaged}` : '',
+  ].filter(Boolean).join('\n\n');
+  if (!combined.trim()) return null;
+  const diffFile = join(agentDir, 'worktree-diff.txt');
+  await writeFile(diffFile, combined).catch((err) => {
+    console.error(`❌ Failed to capture worktree diff for agent: ${err.message}`);
+  });
+  return combined;
+}
+
 // Debounce window for batching parsed output to disk + state. A chatty TUI can
 // emit hundreds of lines/sec; without batching, each line triggers a full
 // state load+save (see appendAgentOutput) and a small appendFile, which slows
@@ -978,8 +1018,19 @@ export async function spawnTuiAgent({
       // completion on those providers would falsely fail). So: downgrade to
       // failure only when the provider DOES render the counter and we never saw
       // it advance.
+      //
+      // Issue #2191 extension: even when workActivity.active is true, the model
+      // may have "worked" (made tool calls, printed output) without actually
+      // writing any files — e.g. rambled, made invalid tool calls, or hit an
+      // error. Check the worktree for evidence of actual changes: if the
+      // worktree is clean (no git status changes), mark as failed so the
+      // orchestrator doesn't treat a no-op as done. Capture the diff into the
+      // agent archive dir before cleanup so post-mortems can see what (if
+      // anything) was left behind.
       const noWorkButCounterExpected = !workActivity.active && rendersWorkCounter(commandName);
       if (noWorkButCounterExpected) {
+        // Capture any uncommitted changes for post-mortem analysis
+        captureWorktreeDiff(cwd, agentDir).catch(() => {});
         finish({
           success: false,
           exitCode: 1,
@@ -989,8 +1040,32 @@ export async function spawnTuiAgent({
           emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
         });
       } else {
-        finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
-          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        // Gate idle-complete success on evidence of work in the worktree.
+        // An agent that shows activity counters but makes no file changes
+        // (rambled, invalid tool calls, hit an error) should fail, not succeed.
+        (async () => {
+          const hasChanges = await worktreeHasChanges(cwd);
+          // Capture any uncommitted changes for post-mortem analysis regardless
+          // of outcome — the diff is useful even on success for debugging.
+          await captureWorktreeDiff(cwd, agentDir).catch(() => {});
+          if (!hasChanges) {
+            finish({
+              success: false,
+              exitCode: 1,
+              error: 'TUI agent idled out with zero uncommitted file changes — the model may have processed but produced no work.',
+              reason: 'idle-no-changes',
+            }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          } else {
+            finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          }
+        })().catch(err => {
+          emitLog('error', `TUI agent ${agentId} idle-complete check failed: ${err.message}`, { agentId });
+          // Fall back to success if the check itself failed (don't block on git)
+          finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(() => {});
         });
       }
     }
