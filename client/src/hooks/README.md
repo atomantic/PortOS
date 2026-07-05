@@ -47,6 +47,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
+| `useReaderPanel` | Reader-panel snapshot (four personas + mined disagreements) + convene lifecycle (load, re-attach, per-persona SSE, run/cancel, reload). | The Reader Map page's Reader Panel tab (#2170). |
 
 ## Media (annotations, completion, attachments)
 

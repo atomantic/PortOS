@@ -158,6 +158,18 @@ const addSettingsEntries = async (entries) => {
   }
 
   entries.push(makeEntry({
+    id: 'settings.creativeDirector.evaluation',
+    area: 'Creative Director',
+    label: 'Scene evaluation model',
+    source: 'settings.creativeDirector.evaluation',
+    providerId: settings.creativeDirector?.evaluation?.providerId || null,
+    model: settings.creativeDirector?.evaluation?.model || null,
+    providerTypes: apiProviderTypes,
+    notes: 'Vision model that judges each rendered scene. Blank = auto-pick an installed local (Ollama / LM Studio) vision model; if none is available it falls back to the coding agent (Opus).',
+    link: '/creative-director',
+  }));
+
+  entries.push(makeEntry({
     id: 'settings.voice.llm',
     area: 'Voice',
     label: 'Conversational LLM',
@@ -473,6 +485,11 @@ export async function updateAiAssignment(id, { providerId, model } = {}) {
   if (id === 'settings.autofixer' || id === 'settings.calendarSync') {
     const key = id.split('.')[1];
     await updateSettings({ [key]: { providerId: nextProviderId, model: nextModel } });
+    return getAiAssignments();
+  }
+
+  if (id === 'settings.creativeDirector.evaluation') {
+    await patchSettingsPath('creativeDirector.evaluation', { providerId: nextProviderId, model: nextModel });
     return getAiAssignments();
   }
 

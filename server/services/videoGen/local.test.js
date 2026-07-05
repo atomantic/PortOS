@@ -872,6 +872,337 @@ describe('generateVideo — panel-side completion watchdog', () => {
   });
 });
 
+describe('generateVideo — pre-output idle-stall deadline', () => {
+  // Same hanging-proc harness as the completion-watchdog suite, but here the
+  // render never emits its completion marker — it wedges before (or between)
+  // output, which the completion watchdog does NOT cover.
+  function makeHangingProc() {
+    const listeners = {};
+    let stdoutData = null;
+    let stderrData = null;
+    const proc = {
+      pid: 7373,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
+      stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
+    };
+    return {
+      proc,
+      emitStdout: (text) => stdoutData?.(Buffer.from(text)),
+      emitStderr: (text) => stderrData?.(Buffer.from(text)),
+      fireClose: (code, signal) => listeners.close?.(code, signal),
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.VIDEOGEN_IDLE_STALL_MS;
+  });
+
+  it('SIGKILLs a render that never produces any output within the idle window', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    generateVideo({
+      jobId: 'idle-stall-no-output',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'wedge before any output',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Just before the deadline: still alive.
+    await vi.advanceTimersByTimeAsync(59999);
+    expect(hang.proc.kill).not.toHaveBeenCalled();
+
+    // Past the deadline with zero output: the idle-stall timer SIGKILLs it.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('resets the idle timer on each output line so a slow-but-alive render is not killed', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    generateVideo({
+      jobId: 'idle-stall-slow-alive',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'slow but steady',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Emit an output line every 40s (well inside the 60s window) five times —
+    // each resets the countdown, so the render is never killed even though the
+    // total elapsed time (200s) far exceeds one window.
+    for (let i = 0; i < 5; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await vi.advanceTimersByTimeAsync(40000);
+      hang.emitStdout(`STAGE:render:step:${i}:30:rendering\n`);
+      expect(hang.proc.kill).not.toHaveBeenCalled();
+    }
+    // …but once output stops, the window elapses and it IS killed.
+    await vi.advanceTimersByTimeAsync(60001);
+    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('counts a stderr line (weight-load/kernel-compile progress) as liveness', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    generateVideo({
+      jobId: 'idle-stall-stderr-liveness',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'stderr keeps it alive',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(40000);
+    hang.emitStderr('Fetching 12 files: 40%|████      | 5/12\n');
+    // The stderr line reset the timer, so 40s later (80s total) it's still alive.
+    await vi.advanceTimersByTimeAsync(40000);
+    expect(hang.proc.kill).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a stall-kill as a FAILED job (frees the GPU lane) with a stall-specific reason', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+    ({ videoGenEvents } = await import('./events.js'));
+
+    // A genuine pre-output stall wrote no real output — a 0-byte (or absent)
+    // file. Keep existsSync true (the runtime venv check at build time needs
+    // it) but report size 0 so isWatchdogSuccess correctly declines to treat
+    // the kill as success; the failure path must report it as a stall.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 0 });
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    const events = [];
+    const onCompleted = (e) => events.push(['completed', e]);
+    const onFailed = (e) => events.push(['failed', e]);
+    videoGenEvents.on('completed', onCompleted);
+    videoGenEvents.on('failed', onFailed);
+
+    generateVideo({
+      jobId: 'idle-stall-fails-job',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'stall then fail',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Deadline elapses with no output → SIGKILL.
+    await vi.advanceTimersByTimeAsync(60001);
+    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
+    // The OS delivers the kill → 'close' fires with signal SIGKILL.
+    hang.fireClose(null, 'SIGKILL');
+    await vi.advanceTimersByTimeAsync(0);
+
+    videoGenEvents.off('completed', onCompleted);
+    videoGenEvents.off('failed', onFailed);
+
+    const failed = events.find(([k]) => k === 'failed');
+    expect(failed).toBeTruthy();
+    expect(events.map(([k]) => k)).not.toContain('completed');
+    expect(failed[1].error).toMatch(/stalled/i);
+    expect(failed[1].error).toMatch(/VIDEOGEN_IDLE_STALL_MS/);
+  });
+
+  it('treats an idle-stall kill as SUCCESS when a real output file is on disk (runtime wrote its .mp4 but never printed a completion marker, then hung)', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+    ({ videoGenEvents } = await import('./events.js'));
+
+    // The output file exists + is non-empty — the render finished its real work
+    // and wrote the video, but emitted no recognized completion marker, so the
+    // completion watchdog never armed and the idle timer is what killed the
+    // teardown hang. The finished output must be kept, not discarded.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 1000 });
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    const events = [];
+    const onCompleted = (e) => events.push(['completed', e]);
+    const onFailed = (e) => events.push(['failed', e]);
+    videoGenEvents.on('completed', onCompleted);
+    videoGenEvents.on('failed', onFailed);
+
+    generateVideo({
+      jobId: 'idle-stall-output-intact',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'wrote output but hung silently',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No completion marker ever printed; the render goes silent after writing.
+    await vi.advanceTimersByTimeAsync(60001);
+    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
+    hang.fireClose(null, 'SIGKILL');
+    await vi.advanceTimersByTimeAsync(0);
+
+    videoGenEvents.off('completed', onCompleted);
+    videoGenEvents.off('failed', onFailed);
+
+    const kinds = events.map(([k]) => k);
+    expect(kinds).toContain('completed');
+    expect(kinds).not.toContain('failed');
+  });
+
+  it('does NOT SIGKILL/finalize when a manual cancel is already tearing the child down (proc.killed race)', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+    ({ videoGenEvents } = await import('./events.js'));
+
+    // Output file exists + non-empty — so IF the idle timer wrongly fired and
+    // set idleStallFired, the close path would misfinalize the canceled render
+    // as a SUCCESS. The proc.killed guard must prevent the timer from firing.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 1000 });
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    const events = [];
+    const onCompleted = (e) => events.push(['completed', e]);
+    videoGenEvents.on('completed', onCompleted);
+
+    generateVideo({
+      jobId: 'idle-stall-cancel-race',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'canceled near the idle deadline',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Simulate cancel(): killWithEscalation SIGTERMs and sets proc.killed
+    // before exitCode/signalCode populate (they only settle on close).
+    await vi.advanceTimersByTimeAsync(59000);
+    hang.proc.killed = true;
+    hang.proc.kill.mockClear();
+
+    // Deadline elapses — the guard must see proc.killed and bail, NOT SIGKILL.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(hang.proc.kill).not.toHaveBeenCalled();
+
+    videoGenEvents.off('completed', onCompleted);
+    // The idle timer never fired, so nothing finalized this as a success.
+    expect(events.map(([k]) => k)).not.toContain('completed');
+  });
+
+  it('does NOT fire the idle timer when the child exits cleanly (timer cleared on close)', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    generateVideo({
+      jobId: 'idle-stall-clean-exit',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'render and exit',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Child emits its result and exits cleanly well within the window.
+    hang.emitStdout('{"video_path": "/data/videos/out.mp4"}\n');
+    hang.proc.exitCode = 0;
+    hang.fireClose(0, null);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Advancing past the idle window must NOT trigger a SIGKILL — close cleared it.
+    await vi.advanceTimersByTimeAsync(120000);
+    expect(hang.proc.kill).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the default window on a missing/invalid VIDEOGEN_IDLE_STALL_MS', async () => {
+    // Invalid values must not collapse the guard to 0/NaN (which would kill
+    // every render instantly) — they fall back to the generous default.
+    for (const bad of ['', '0', '-5', 'lots']) {
+      // eslint-disable-next-line no-await-in-loop
+      await (async () => {
+        if (bad === '') delete process.env.VIDEOGEN_IDLE_STALL_MS;
+        else process.env.VIDEOGEN_IDLE_STALL_MS = bad;
+        vi.resetModules();
+        ({ generateVideo } = await import('./local.js'));
+
+        const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+        const hang = makeHangingProc();
+        vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+        generateVideo({
+          jobId: `idle-stall-default-${bad || 'unset'}`,
+          pythonPath: '/usr/bin/python3',
+          modelId: 'ltx2_unified',
+          prompt: 'default window',
+          width: 512, height: 512, numFrames: 25, fps: 24,
+          mode: 'text',
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        // A minute in — far past 0/NaN but well short of the 10-min default —
+        // the render must still be alive.
+        await vi.advanceTimersByTimeAsync(60000);
+        expect(hang.proc.kill).not.toHaveBeenCalled();
+      })();
+    }
+    delete process.env.VIDEOGEN_IDLE_STALL_MS;
+  });
+});
+
 describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
   it('emits --user-loras JSON with resolved path + strength for ltx2 renders', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
