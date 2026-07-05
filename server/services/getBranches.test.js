@@ -92,4 +92,44 @@ describe('getBranches', () => {
 
     expect(dev.merged).toBe(false);
   });
+
+  it('falls back to the remote-tracking ref when there is no local branch matching the default (single-branch clone / feature-only worktree)', async () => {
+    execGit.mockImplementation((args) => {
+      if (args[0] === 'branch' && args.includes('-vv')) {
+        return Promise.resolve({
+          stdout: ['*|feature-a||', ' |feature-b||'].join('\n'),
+          stderr: '',
+          exitCode: 0
+        });
+      }
+      if (args[0] === 'symbolic-ref') {
+        // origin/HEAD resolves to main, but there is no local `main` branch
+        return Promise.resolve({ stdout: 'origin/main', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) {
+        return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'branch' && args.includes('--list')) {
+        return Promise.resolve({ stdout: '  feature-a\n  feature-b\n', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'branch' && args.includes('--merged')) {
+        if (args[2] === 'main') {
+          // No local `main` ref exists — git errors out
+          return Promise.resolve({ stdout: '', stderr: 'fatal: malformed object name main', exitCode: 128 });
+        }
+        if (args[2] === 'origin/main') {
+          return Promise.resolve({ stdout: 'feature-b\n', stderr: '', exitCode: 0 });
+        }
+      }
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+
+    const branches = await getBranches('/fake/dir');
+    const featureA = branches.find(b => b.name === 'feature-a');
+    const featureB = branches.find(b => b.name === 'feature-b');
+
+    expect(featureA.current).toBe(true);
+    expect(featureA.merged).toBe(false);
+    expect(featureB.merged).toBe(true);
+  });
 });

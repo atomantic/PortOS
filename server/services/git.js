@@ -608,11 +608,22 @@ export async function getBranches(dir) {
   const protectedSet = new Set(PROTECTED_BRANCHES);
   protectedSet.add(defaultBranch);
 
-  const mergedResult = await execGit(
+  // Prefer the local default-branch ref, but fall back to the remote-tracking
+  // ref when there's no local branch by that name (single-branch clones,
+  // feature-only worktrees) — otherwise `git branch --merged <defaultBranch>`
+  // fails and every branch silently reports unmerged.
+  let mergedResult = await execGit(
     ['branch', '--merged', defaultBranch, '--format=%(refname:short)'],
     dir,
     { ignoreExitCode: true }
   );
+  if (mergedResult.exitCode !== 0) {
+    mergedResult = await execGit(
+      ['branch', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'],
+      dir,
+      { ignoreExitCode: true }
+    );
+  }
   const mergedSet = new Set(mergedResult.stdout.trim().split('\n').filter(Boolean));
 
   return result.stdout.trim().split('\n').filter(Boolean)
