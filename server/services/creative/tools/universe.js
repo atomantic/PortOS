@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import { createUniverse } from '../../universeBuilder.js';
+import { createUniverse, needsEntryIdPersist, updateUniverse } from '../../universeBuilder.js';
 import { expandWorldTemplate } from '../../universeBuilderExpand.js';
 import { renderUniverseJobs } from '../../universeBuilderRender.js';
 import { COST_FREE, COST_LLM, COST_RENDER } from './shared.js';
@@ -66,7 +66,18 @@ export const UNIVERSE_TOOLS = [
       },
       required: ['universeId'],
     },
-    // mapServiceError is an identity rethrow — the dispatcher owns error surfacing.
-    execute: ({ universeId, body }) => renderUniverseJobs(universeId, body || {}, (err) => err),
+    // Mirror the render route's preflight (routes/universeBuilder.js): for a
+    // non-canon render of a legacy universe, persist the transient
+    // variation/sheet entry ids first (a no-op `updateUniverse` write) so they
+    // stay stable across enqueue → completion and the filename hook can attach
+    // rendered files back to the source rows. mapServiceError is an identity
+    // rethrow — the dispatcher owns error surfacing.
+    execute: async ({ universeId, body }) => {
+      const opts = body || {};
+      if (opts.promptMode !== 'canon' && await needsEntryIdPersist(universeId)) {
+        await updateUniverse(universeId, () => ({}));
+      }
+      return renderUniverseJobs(universeId, opts, (err) => err);
+    },
   },
 ];

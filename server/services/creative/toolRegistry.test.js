@@ -43,7 +43,11 @@ vi.mock('../domainUsage.js', () => ({
 
 // Mock every wrapped entry point — keeps the real services (and their heavy
 // import side effects) out, and makes each tool's execute an observable spy.
-vi.mock('../universeBuilder.js', () => ({ createUniverse: vi.fn(async () => ({ id: 'u1' })) }));
+vi.mock('../universeBuilder.js', () => ({
+  createUniverse: vi.fn(async () => ({ id: 'u1' })),
+  needsEntryIdPersist: vi.fn(async () => false),
+  updateUniverse: vi.fn(async () => ({})),
+}));
 vi.mock('../universeBuilderExpand.js', () => ({ expandWorldTemplate: vi.fn(async () => ({ logline: 'x' })) }));
 vi.mock('../universeBuilderRender.js', () => ({ renderUniverseJobs: vi.fn(async () => ({ jobs: [] })) }));
 vi.mock('../storyBuilder.js', () => ({
@@ -56,7 +60,6 @@ vi.mock('../writersRoom/evaluator.js', () => ({ runAnalysis: vi.fn(async () => (
 vi.mock('../pipeline/series.js', () => ({ createSeries: vi.fn(async () => ({ id: 'ser1' })) }));
 vi.mock('../pipeline/seriesGenerate.js', () => ({ generateSeriesConcept: vi.fn(async () => ({ name: 'C' })) }));
 vi.mock('../pipeline/textStages.js', () => ({ generateStage: vi.fn(async () => ({ stage: 'st' })) }));
-vi.mock('../pipeline/visualStages.js', () => ({ enqueueComicCover: vi.fn(async () => ({ jobId: 'j1' })) }));
 vi.mock('../pipeline/seriesAutopilot.js', () => ({ startSeriesAutopilot: vi.fn(async () => ({ runId: 'ap1' })) }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 'mj1' })) }));
 vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));

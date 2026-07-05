@@ -8,9 +8,17 @@ import { z } from 'zod';
 import { createSeries } from '../../pipeline/series.js';
 import { generateSeriesConcept } from '../../pipeline/seriesGenerate.js';
 import { generateStage } from '../../pipeline/textStages.js';
-import { enqueueComicCover } from '../../pipeline/visualStages.js';
 import { startSeriesAutopilot } from '../../pipeline/seriesAutopilot.js';
-import { COST_FREE, COST_LLM, COST_RENDER } from './shared.js';
+import { COST_FREE, COST_LLM } from './shared.js';
+
+// NOTE: a `pipeline_enqueueComicCover` tool is intentionally NOT registered yet.
+// The bare `enqueueComicCover()` service only queues the job — the cover's
+// filename hook attaches the completed render only if the issue's active cover
+// slot already carries the returned jobId, and that slot write lives in the
+// route factory (routes/pipeline/covers.js#makeCoverRenderHandler), not the
+// service. Wrapping the bare service would silently drop orchestrated covers;
+// wrapping it faithfully needs the route's enqueue+persist flow extracted into a
+// shared service first. Tracked as follow-up #2220.
 
 export const PIPELINE_TOOLS = [
   {
@@ -61,22 +69,6 @@ export const PIPELINE_TOOLS = [
       required: ['issueId', 'stageId'],
     },
     execute: ({ issueId, stageId, options }) => generateStage(issueId, stageId, options || {}),
-  },
-  {
-    name: 'pipeline_enqueueComicCover',
-    description: 'Enqueue a comic-cover image render for an issue. Long-running: returns a job handle; completion arrives via media-job events.',
-    costClass: COST_RENDER,
-    longRunning: true,
-    schema: z.object({ issueId: z.string().min(1), options: z.record(z.any()).optional() }),
-    parameters: {
-      type: 'object',
-      properties: {
-        issueId: { type: 'string', description: 'Issue id to render a cover for.' },
-        options: { type: 'object', description: 'Optional cover render options (variant, fromProof).' },
-      },
-      required: ['issueId'],
-    },
-    execute: ({ issueId, options }) => enqueueComicCover(issueId, options || {}),
   },
   {
     name: 'pipeline_startSeriesAutopilot',
