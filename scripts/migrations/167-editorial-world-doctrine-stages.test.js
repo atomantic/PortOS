@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-import migration from './165-editorial-world-doctrine-stages.js';
+import migration from './167-editorial-world-doctrine-stages.js';
 
 // scripts/migrations/<this> → ../.. is the repo root (matches _testHelpers.js).
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -17,7 +17,7 @@ const FILES = [
   { filename: 'pipeline-editorial-world-cost-free-power.md', stageKey: 'pipeline-editorial-world-cost-free-power', body: '# Cost-free power\n\nshipped body\n' },
 ];
 
-describe('migration 165 — seed editorial worldbuilding-doctrine stages', () => {
+describe('migration 167 — seed editorial worldbuilding-doctrine stages', () => {
   let rootDir;
   let stagesDir;
   let refStagesDir;
@@ -38,7 +38,7 @@ describe('migration 165 — seed editorial worldbuilding-doctrine stages', () =>
   };
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-165-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-167-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
     refStagesDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
