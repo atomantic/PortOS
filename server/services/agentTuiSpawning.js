@@ -1049,7 +1049,7 @@ export async function spawnTuiAgent({
     // identical to "idle" to this timer otherwise (issue: paste into a live
     // agent TUI got reaped mid-paste, same class of bug as #2074/#2084 but for
     // an attached viewer instead of a merge-queue/review-loop wait).
-    if (sessionId && shellService.isExternalSessionAttached(sessionId)) return;
+    if (sessionId && shellService.isSessionViewed(sessionId)) return;
     const runtime = Date.now() - promptSentAt;
     const idle = Date.now() - lastOutputAt;
     if (runtime < DEFAULT_TUI_MIN_RUNTIME_MS) return;

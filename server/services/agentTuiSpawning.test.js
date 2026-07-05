@@ -9,7 +9,7 @@ vi.mock('./shell.js', () => ({
   killSession: vi.fn(),
   getSession: vi.fn(),
   getSessionProcess: vi.fn(),
-  isExternalSessionAttached: vi.fn().mockReturnValue(false)
+  isSessionViewed: vi.fn().mockReturnValue(false)
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -401,7 +401,7 @@ describe('spawnTuiAgent runtime', () => {
     // Reset viewer-attached state: no Shell viewer bound by default. The
     // viewer-attached test overrides this — clearAllMocks doesn't undo a
     // mockReturnValue override, so it must be reset explicitly here.
-    vi.mocked(shellService.isExternalSessionAttached).mockReturnValue(false);
+    vi.mocked(shellService.isSessionViewed).mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -491,8 +491,8 @@ describe('spawnTuiAgent runtime', () => {
   // "idle" to this timer. If a viewer is attached (Shell page open on this
   // session), the idle reaper must not fire at all — mirrors the guard
   // tuiPromptRunner.js already has for its one-shot idle-watch timer.
-  it('idle timer does not reap when isExternalSessionAttached returns true', async () => {
-    vi.mocked(shellService.isExternalSessionAttached).mockReturnValue(true);
+  it('idle timer does not reap when isSessionViewed returns true', async () => {
+    vi.mocked(shellService.isSessionViewed).mockReturnValue(true);
 
     runSpawn();
     await flushMicrotasks();

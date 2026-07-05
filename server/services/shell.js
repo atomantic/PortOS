@@ -344,6 +344,19 @@ export function isExternalSessionAttached(sessionId) {
 }
 
 /**
+ * True when ANY socket is currently attached to this session — an interactive
+ * Shell viewer or an external TUI-run viewer. Broader than
+ * `isExternalSessionAttached`, which only covers sessions registered via
+ * `registerExternalSession` (the one-shot tuiPromptRunner path); this one also
+ * covers regular sessions (agent-tui, plain interactive shells) viewed via
+ * `attachSession`, which never sets `external`.
+ */
+export function isSessionViewed(sessionId) {
+  const session = shellSessions.get(sessionId);
+  return !!(session && session.socket);
+}
+
+/**
  * Public "stopped viewing" signal — the client emits this when it leaves the
  * Shell page (the SocketProvider socket persists across navigations, so a plain
  * disconnect doesn't fire). Releases every external (TUI-run) view bound to this
