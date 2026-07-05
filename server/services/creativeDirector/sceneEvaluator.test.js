@@ -302,6 +302,24 @@ describe('dispatchSceneEvaluation', () => {
     expect(mocks.enqueueEvaluateTask).toHaveBeenCalledWith(project, scene);
   });
 
+  it('skips a concurrent duplicate dispatch for the same scene while one is in flight', async () => {
+    mocks.listVisionModels.mockResolvedValue([{ providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true }]);
+    mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));
+    // Hold the vision call open so the first dispatch keeps its lock.
+    let release;
+    const pending = new Promise((res) => { release = res; });
+    mocks.runPromptThroughProvider.mockReturnValue(pending);
+
+    const first = dispatchSceneEvaluation(project, scene); // acquires the lock synchronously
+    const second = await dispatchSceneEvaluation(project, scene); // same scene → skipped
+    expect(second).toBeNull();
+
+    release({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
+    await first;
+    // Exactly one evaluation ran despite two dispatches.
+    expect(mocks.runPromptThroughProvider).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to the agent when the vision path is unavailable', async () => {
     mocks.listVisionModels.mockResolvedValue([]);
     await dispatchSceneEvaluation(project, scene);

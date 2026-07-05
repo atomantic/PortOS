@@ -307,6 +307,15 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
   return advance();
 }
 
+// In-process re-entrancy guard keyed on project:sceneId, acquired SYNCHRONOUSLY
+// at the top of dispatch — before any await — so it closes the whole window,
+// including slow (cache-cold) provider discovery, not just the vision call. Both
+// dispatch call sites (sceneRunner render-completion + completionHook orphan
+// resume) go through here, so a concurrent advanceAfterSceneSettled can't start
+// a second evaluation of the same render. The persisted running-run marker below
+// is the cross-path/observability backstop; this Set is the primary guard.
+const inflightSceneEval = new Set();
+
 /**
  * Single entry point the orchestrator calls to settle a rendered scene. Tries
  * the local-vision path; on no-provider or ANY failure falls back to the
@@ -315,6 +324,20 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
  * process.
  */
 export async function dispatchSceneEvaluation(project, scene) {
+  const lockKey = `${project.id}:${scene.sceneId}`;
+  if (inflightSceneEval.has(lockKey)) {
+    console.log(`⏳ CD scene ${scene.sceneId} evaluation already in flight — skipping duplicate dispatch`);
+    return null;
+  }
+  inflightSceneEval.add(lockKey);
+  try {
+    return await runSceneEvaluation(project, scene);
+  } finally {
+    inflightSceneEval.delete(lockKey);
+  }
+}
+
+async function runSceneEvaluation(project, scene) {
   let result;
   try {
     result = await evaluateSceneWithVision(project, scene);
