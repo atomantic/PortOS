@@ -389,7 +389,7 @@ export const continuityChecks = [
   },
   {
     id: 'chekhov.setups-payoffs',
-    sources: ['manuscript', 'series.arc.readerMap'],
+    sources: ['manuscript', 'series.arc.readerMap', 'series.arc.foreshadowing'],
     label: "Chekhov's guns (setups & payoffs)",
     description:
       'Classifies each setup/payoff thread as paired, false-setup (planted, never fired — cut it), orphaned-payoff (fired, never planted — unearned), or distant (paid off so many issues after the setup the reader may have forgotten). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
@@ -432,8 +432,10 @@ export const continuityChecks = [
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
-      // Authored hooks/payoffs are fixed per-call overhead (re-sent on each chunk).
-      const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      // Authored hooks/payoffs + the foreshadowing ledger (#2172) are fixed
+      // per-call overhead (re-sent on each chunk). The ledger is folded into the
+      // same authoredSetups block so the prompt consumes it unchanged.
+      const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap, ctx.series?.arc?.foreshadowing);
       // 0 disables the distant sub-check; >0 is the issue-gap threshold. Pass a
       // string so the prompt's `{{#distantGap}}` section renders only when enabled.
       const distantGap = ctx.config?.distantGap ?? 4;

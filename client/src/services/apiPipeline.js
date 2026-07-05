@@ -665,6 +665,32 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Reader panel (#2170 — four-persona panel + disagreement mining) ----
+// Stored panel: { status, personas[], disagreements:{consensus,attention,polarizing,totalPersonas}, seededFindings, stale } or { status: 'none' }.
+export const getReaderPanel = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel`, options);
+
+// Convene the panel (batch). { runId, alreadyRunning, sseUrl } — subscribe via
+// readerPanelSseUrl to stream per-persona progress.
+export const runReaderPanel = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelReaderPanel = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/cancel`, {
+    method: 'POST',
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
+export const getReaderPanelStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/status`, options);
+
+export const readerPanelSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/progress`;
+
 // ---- Perspective rewrite (#1290 — rewrite a passage in another POV + analyze) ----
 // Stored alternate-POV rewrites + cast (for the picker) + per-rewrite stale flags:
 // { issueId, seriesId, cast[], hasContent, rewrites[] }

@@ -25,11 +25,12 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations'
 // that the sweep itself is expected to carry it.
 const EXPECTED_STAGE_OLD = {
   'pipeline-idea-expansion.md': ['1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', '41facefbc0c0549d456bef9111f95ab9', '49a208628290543ba2607a5ed48fdc8c', '93e9552c6662811e597a97296f3776a4', 'aee25112b2c596f643b17c559b772c22', 'b5c47c94ffc74637983c95761ab0c66c', 'c50f016639d41cd8244f5ff13429f997'],
-  'pipeline-prose.md': ['30ac30ec2b9d3e2a9eb869c181732cc6', '84523d531eeafa60959c65c553b2563f', 'bef1bc2767b78f585f2bd89f3d615130', 'bfea5aeeb471aae9749baee765b473a7', 'd1f8e3f1d214725b5aa67f309a81cd7d'],
+  'pipeline-prose.md': ['30ac30ec2b9d3e2a9eb869c181732cc6', '84523d531eeafa60959c65c553b2563f', 'bef1bc2767b78f585f2bd89f3d615130', 'bfea5aeeb471aae9749baee765b473a7', 'd1f8e3f1d214725b5aa67f309a81cd7d', '25e3d58c2741bd98acd5d08ba70d8a5e'],
+  'writers-room-continue.md': ['93bfe80543ceca39842201a78b8393fa'],
   'pipeline-comic-script.md': ['133d200d069c2e8173b7c129eea58f53', '1e0af305c27d0c80c4b482d2ebcb4a0d', '40e5fdc1a1e68a7419b7dad936366c1a', '7c05ecde539f04c9fa91e87543057204', 'a4303016c34b65e4b0e641fe71252de3', 'beab031951859ca13579cdb9c4dbe769', 'dea7d497d1cb38e7574f236f4ff8e644', 'e530fc76b89cedaef848ad7ec99c934c', 'e9ee70bf18888492edada6633cd9928a'],
   'pipeline-teleplay.md': ['1280ef6b1ad68fa44070ca7478ec2a5f', '2568e14beaa574d43f8018a5def51d04', '376f779f4687b598f1c92ca4e770fd5a', '3f6fecc25573ed054b47db392250034a', 'afa4215330bf856429d70d7e2f856605'],
   'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb', 'c4928e2a5f833358116b29d2d669888d'],
-  'pipeline-arc-overview.md': ['6a3ecab43d1f46b7ef9aab6c69ea0326', 'd34d72b8e49ba303d38607845dd87f1c'],
+  'pipeline-arc-overview.md': ['6a3ecab43d1f46b7ef9aab6c69ea0326', 'd34d72b8e49ba303d38607845dd87f1c', '0a1f6ffa6908522e3690c5e9e53a6ee0'],
   'pipeline-arc-verify.md': ['52e31abc93e3105176236fcaa5d1575a', 'ff56d8387162017e08d5d0491060ddd6'],
   'pipeline-volume-verify.md': ['03f3c874cb80e1c98abcf03168fa7a92', 'c6ea28e972ad6e229bafb2d602b4dda3'],
   'pipeline-arc-resolve.md': ['5b340885c6e8f8afc63424d6b5bc7eb7', '87bc5c01f1a8a97b681727a38b05edc6', '8e348f3d1894382889f9f0ee7d5c6792', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
@@ -50,11 +51,12 @@ const EXPECTED_STAGE_OLD = {
 };
 const EXPECTED_STAGE_NEW = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f',
-  'pipeline-prose.md': '25e3d58c2741bd98acd5d08ba70d8a5e',
+  'pipeline-prose.md': '430d38ed2da59e0d4212e65edc499a74',
+  'writers-room-continue.md': '67663696c97ebaeb23de25f7410cfdd4',
   'pipeline-comic-script.md': '49af30c05f008b20f6998a0f113f7d87',
   'pipeline-teleplay.md': '2ea9974ac3803658b2314db1f5818b77',
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100',
-  'pipeline-arc-overview.md': '0a1f6ffa6908522e3690c5e9e53a6ee0',
+  'pipeline-arc-overview.md': '612f8b04950e2ff26dd350dd76a062fe',
   'pipeline-arc-verify.md': '36aa70cdfc25d7549573a4d556e7702c',
   'pipeline-volume-verify.md': '49458d36700cb94e34806d536ffe2940',
   'pipeline-arc-resolve.md': 'cc27b4da1d1a13c35e35d1c2d6183815',

@@ -29,6 +29,8 @@ import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js';
 import * as editorialRunner from '../../services/pipeline/editorialAnalysisRunner.js';
+import * as readerPanel from '../../services/pipeline/readerPanel.js';
+import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
 import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
 import { getSettings, updateSettingsWith } from '../../services/settings.js';
@@ -90,6 +92,47 @@ router.get('/series/:id/editorial/analyze/status', (req, res) => {
 router.post('/series/:id/editorial/analyze/cancel', asyncHandler(async (req, res) => {
   const canceled = editorialRunner.cancelSeriesAnalysis(req.params.id);
   res.json({ canceled });
+}));
+
+// ---------------------------------------------------------------------------
+// Reader panel (#2170, CWQE Phase 6) — four personas read a condensed arc
+// digest and answer qualitative questions; ≥3-persona consensus concerns route
+// into manuscript-review findings, disagreements surface for the human. One LLM
+// call per persona — runs only from this explicit action (AI-provider policy).
+// ---------------------------------------------------------------------------
+
+// Stored panel: { status, personas[], disagreements, seededFindings, stale, ... }
+// or { status: 'none' }.
+router.get('/series/:id/editorial/panel', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await readerPanel.getReaderPanel(req.params.id));
+}));
+
+// Convene the panel (batch — per-persona progress via SSE).
+router.post('/series/:id/editorial/panel/run', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialAnalyzeSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = readerPanelRunner.startReaderPanel(req.params.id, body);
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/editorial/panel/run/progress`,
+  });
+}));
+
+router.get('/series/:id/editorial/panel/run/progress', (req, res) => {
+  const attached = readerPanelRunner.attachClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active reader-panel run for this series', { status: 404 });
+  }
+});
+
+// Lightweight probe so a (re)mounting client can re-attach to an in-flight run.
+router.get('/series/:id/editorial/panel/run/status', (req, res) => {
+  res.json({ active: readerPanelRunner.isReaderPanelActive(req.params.id) });
+});
+
+router.post('/series/:id/editorial/panel/run/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: readerPanelRunner.cancelReaderPanel(req.params.id) });
 }));
 
 // ---------------------------------------------------------------------------

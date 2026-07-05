@@ -58,6 +58,10 @@ export async function generateArcOverview(seriesId, options = {}) {
     // Same for the ticking clock — the overview prompt doesn't author it, so
     // preserve any existing countdown across a regenerate.
     tickingClock: series.arc?.tickingClock ?? null,
+    // The arc-overview prompt DOES author the foreshadowing ledger (#2172) —
+    // take the LLM's if present, else preserve any existing one so a regenerate
+    // that omits it doesn't silently wipe the seeds.
+    foreshadowing: content?.foreshadowing ?? series.arc?.foreshadowing ?? null,
     status: 'draft',
   });
   const seasons = shapeSeasonOutlines(content?.seasonOutlines);
@@ -227,6 +231,8 @@ export async function refineArc(seriesId, feedback, options = {}) {
     // The arc-refine prompt edits the narrative fields only — preserve the
     // ticking clock (like readerMap/shape) so a refine never wipes it.
     tickingClock: arc.tickingClock ?? null,
+    // Same for the foreshadowing ledger — a narrative refine must not wipe it.
+    foreshadowing: arc.foreshadowing ?? null,
     status: 'draft',
   });
   // sanitizeArc returns null only when every identifying field is empty — which,
@@ -390,6 +396,9 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     readerMap: series.arc?.readerMap ?? null,
     // Same for the ticking clock — auto-resolve must not wipe the countdown.
     tickingClock: series.arc?.tickingClock ?? null,
+    // The resolve prompt doesn't author the foreshadowing ledger — take it if
+    // present, else preserve any existing one so auto-resolve never wipes it.
+    foreshadowing: content?.arc?.foreshadowing ?? series.arc?.foreshadowing ?? null,
     status: 'draft',
   });
 

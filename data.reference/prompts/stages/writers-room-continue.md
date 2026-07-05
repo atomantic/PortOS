@@ -32,6 +32,10 @@ Read the surrounding prose and propose **2 to 4** short continuation options the
 
 Match the established voice, tense, and point of view. Do not contradict what comes after the cursor. Prefer concrete, scene-level moves (an action, a line of dialogue, a turn) over abstract advice. If the selected passage is non-empty, treat it as the focus and suggest how to extend or pivot from it specifically.
 
+When your suggestions include drafted prose (`kind: "prose"` or `"dialogue"`), hold that snippet to the same craft bar the rest of the work is drafted against:
+
+{{> craft-anti-patterns }}
+
 Each option has:
 - `kind`: "beat" (a direction to take) | "prose" (a ready-to-insert snippet) | "dialogue" (a suggested line)
 - `label`: a 3–8 word summary of the direction
