@@ -18,7 +18,7 @@ import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, withOpencodeConfigEnv } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -48,6 +48,7 @@ import {
   applyCommandDefaults,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { execFile } from 'child_process';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
@@ -124,7 +125,10 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, model = null, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
+  // the models map so --model is accepted (the static env var lacked this).
+  const opencodeEnv = buildOpencodeEnvVars(provider, model);
   const sessionId = shellService.createShellSession(null, {
     cwd,
     kind: 'agent-tui',
@@ -144,10 +148,8 @@ export function createAgentTuiSession({ agentId, provider, model = null, tuiConf
     // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
-    // withOpencodeConfigEnv rebuilds OPENCODE_CONFIG_CONTENT with a declared
-    // models map for OpenCode Ollama providers (no-op otherwise) so the
-    // `--model ollama/<id>` the TUI launches with isn't rejected — see issue-2190.
-    env: { ...withOpencodeConfigEnv(provider, model), ...agentGuardEnv() },
+    // opencodeEnv comes after provider.envVars to override the static config.
+    env: { ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });

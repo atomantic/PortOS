@@ -1713,6 +1713,41 @@ export default function VideoGen() {
                 )}
                 {VIDEO_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
               </select>
+              <div className="flex items-center gap-1 mt-1">
+                <input
+                  type="number"
+                  min={64}
+                  max={2048}
+                  step={64}
+                  value={width}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v > 0) {
+                      setWidth(v);
+                      sizeManuallySetRef.current = true;
+                    }
+                  }}
+                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  title="Width in pixels (will be floored to a multiple of 64)"
+                />
+                <span className="text-gray-500 text-xs">x</span>
+                <input
+                  type="number"
+                  min={64}
+                  max={2048}
+                  step={64}
+                  value={height}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v > 0) {
+                      setHeight(v);
+                      sizeManuallySetRef.current = true;
+                    }
+                  }}
+                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  title="Height in pixels (will be floored to a multiple of 64)"
+                />
+              </div>
             </FormField>
 
             <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
