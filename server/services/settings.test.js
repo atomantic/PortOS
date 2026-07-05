@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, reloadSettings, __resetSettingsCache } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -80,6 +80,23 @@ describe('settings.js', () => {
 
       // The read cache means only the first call hits disk.
       expect(tryReadFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('a settings:updated landing during a cold read does not clobber the fresher value', async () => {
+      // Hold the cold read's disk load open until we release it, so we can slip a
+      // save() in while getSettings() is awaiting loadRaw().
+      let releaseRead;
+      tryReadFile.mockReturnValue(new Promise((resolve) => { releaseRead = resolve; }));
+
+      const inflight = getSettings(); // cold — now awaiting the disk read
+      // A save completes mid-flight and populates the cache with fresh settings.
+      settingsEvents.emit('settings:updated', { theme: 'fresh' });
+      // Only now does the older on-disk snapshot resolve.
+      releaseRead(JSON.stringify({ theme: 'stale' }));
+      await inflight;
+
+      // The fresher save value must win — the resumed cold read must not overwrite it.
+      expect(await getSettings()).toEqual({ theme: 'fresh' });
     });
 
     it('hands out a deep copy — mutating a nested field does not corrupt the cache', async () => {
