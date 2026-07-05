@@ -571,9 +571,10 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                         <button
                           onClick={handleCleanupMerged}
                           disabled={cleaningUp}
+                          title="Deletes merged branches both locally and on the remote"
                           className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                         >
-                          {cleaningUp ? 'Deleting...' : `Delete ${localMergedCount} merged`}
+                          {cleaningUp ? 'Deleting...' : 'Delete all merged (local + remote)'}
                         </button>
                         <button
                           onClick={() => setCleanupConfirm(false)}
@@ -721,9 +722,10 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                     <button
                       onClick={handleCleanupMerged}
                       disabled={cleaningUp}
+                      title="Deletes merged branches both locally and on the remote"
                       className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                     >
-                      {cleaningUp ? 'Deleting...' : `Delete ${mergedBranchCount} merged`}
+                      {cleaningUp ? 'Deleting...' : 'Delete all merged (local + remote)'}
                     </button>
                     <button
                       onClick={() => setCleanupConfirm(false)}
