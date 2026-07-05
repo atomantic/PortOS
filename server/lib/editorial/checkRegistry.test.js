@@ -797,12 +797,12 @@ describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
     ...overrides,
   });
 
-  it('is registered as a series-scoped LLM check reading manuscript + reader-map', () => {
+  it('is registered as a series-scoped LLM check reading manuscript + reader-map + foreshadowing ledger', () => {
     const check = getCheck(CHEKHOV);
     expect(check.kind).toBe('llm');
     expect(check.scope).toBe('series');
     expect(check.category).toBe('continuity');
-    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap']);
+    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap', 'series.arc.foreshadowing']);
     expect(check.needsManuscript).toBe(true);
   });
 

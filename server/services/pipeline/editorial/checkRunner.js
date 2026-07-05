@@ -79,6 +79,9 @@ const SOURCE_RESOLVERS = {
   'series.arc.tickingClock': ({ series }) => canonicalStringify(series?.arc?.tickingClock ?? null),
   // The authored reader-map hooks/payoffs the Chekhov check reconciles against (#1299).
   'series.arc.readerMap': ({ series }) => canonicalStringify(series?.arc?.readerMap ?? null),
+  // The authored foreshadowing ledger the Chekhov check reconciles against (#2172).
+  // Fingerprint the whole ledger so editing a plant/reinforce/payoff seed stales its findings.
+  'series.arc.foreshadowing': ({ series }) => canonicalStringify(series?.arc?.foreshadowing ?? null),
   // The authored arc themes the theme.coherence check reconciles the prose against
   // (#1317). Lives on the already-loaded series record, so no extra I/O — fingerprint
   // the whole themes array so adding/editing a declared theme stales the findings.

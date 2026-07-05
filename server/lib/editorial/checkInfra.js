@@ -221,6 +221,11 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'series.styleGuide',
   'series.arc.tickingClock',
   'series.arc.readerMap',
+  // The authored foreshadowing ledger (#2172): the arc-overview-emitted
+  // plant → reinforce → payoff seeds the Chekhov check reconciles its detected
+  // setups/payoffs against. Lives on the already-loaded series record (no extra
+  // I/O); fingerprinting it stales Chekhov findings when the author edits the ledger.
+  'series.arc.foreshadowing',
   'series.arc.themes',
   // The author-supplied real-world fact reference the opt-in research.fact-accuracy
   // check reconciles the prose against (#1588). Lives on the already-loaded series
@@ -317,13 +322,20 @@ export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger
 // logged. Pure + deterministic so it's unit-testable and so its token cost can be
 // counted into the per-chunk overhead. Returns '' when nothing is authored (the
 // prompt's `{{#authoredSetups}}` section then renders nothing).
+// Shared preamble for the authored-entry renderers below: an entry's
+// `label — note` (or whichever is present), '' when neither is usable so
+// callers can `.filter(Boolean)`.
+function entryLabelNoteText(e) {
+  const label = typeof e?.label === 'string' ? e.label.trim() : '';
+  const note = typeof e?.note === 'string' ? e.note.trim() : '';
+  return label && note ? `${label} — ${note}` : (label || note);
+}
+
 // Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
 // Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
 // entry with no usable label/note so callers can `.filter(Boolean)`.
 function renderReaderMapEntryLine(e) {
-  const label = typeof e?.label === 'string' ? e.label.trim() : '';
-  const note = typeof e?.note === 'string' ? e.note.trim() : '';
-  const text = label && note ? `${label} — ${note}` : (label || note);
+  const text = entryLabelNoteText(e);
   if (!text) return '';
   // A coarse expected-location hint so the model can reason about WHERE an
   // authored hook should have paid off (reconciliation signal, #1299).
@@ -331,15 +343,49 @@ function renderReaderMapEntryLine(e) {
   return `- ${text}${pos}`;
 }
 
-export function authoredSetupPayoffSummary(readerMap) {
+// Render one foreshadowing-ledger entry (#2172) to a `- text (plant issue N →
+// reinforced issue M → payoff issue P)` line so the Chekhov check reconciles
+// its detected plants/payoffs against the author-declared ledger instead of
+// inferring every seed from scratch. Returns '' for an entry with no usable
+// label/note so callers can `.filter(Boolean)`.
+function renderForeshadowingEntryLine(e) {
+  const text = entryLabelNoteText(e);
+  if (!text) return '';
+  const span = [];
+  if (Number.isFinite(e?.plantIssue)) span.push(`plant issue ${e.plantIssue}`);
+  if (Array.isArray(e?.reinforceIssues) && e.reinforceIssues.length) {
+    span.push(`reinforced issue ${e.reinforceIssues.join(', ')}`);
+  }
+  if (Number.isFinite(e?.payoffIssue)) span.push(`payoff issue ${e.payoffIssue}`);
+  return span.length ? `- ${text} (${span.join(' → ')})` : `- ${text}`;
+}
+
+// Build the authored-foreshadowing-ledger block (#2172). Exported for the
+// Chekhov check + unit tests; returns '' when nothing is authored so the
+// prompt's `{{#authoredSetups}}` section renders nothing.
+export function authoredForeshadowingSummary(foreshadowing) {
+  const entries = Array.isArray(foreshadowing) ? foreshadowing : [];
+  const lines = entries.map(renderForeshadowingEntryLine).filter(Boolean);
+  if (!lines.length) return '';
+  return `Authored foreshadowing ledger (planted seeds the writer logged — plant → reinforce → payoff):\n${lines.join('\n')}`;
+}
+
+// `foreshadowing` (#2172) is the author-declared plant→reinforce→payoff ledger
+// on `series.arc.foreshadowing`; it's folded into the SAME authored-setups
+// block the reader-map hooks/payoffs render into, so the Chekhov prompt
+// consumes it through its existing `{{#authoredSetups}}` section without a
+// template change.
+export function authoredSetupPayoffSummary(readerMap, foreshadowing) {
   const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
   const hookLines = hooks.map(renderReaderMapEntryLine).filter(Boolean);
   const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
-  if (!hookLines.length && !payoffLines.length) return '';
+  const ledgerBlock = authoredForeshadowingSummary(foreshadowing);
+  if (!hookLines.length && !payoffLines.length && !ledgerBlock) return '';
   const parts = [];
   if (hookLines.length) parts.push(`Authored hooks (questions the writer planted):\n${hookLines.join('\n')}`);
   if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
+  if (ledgerBlock) parts.push(ledgerBlock);
   return parts.join('\n\n');
 }
 
