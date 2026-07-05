@@ -50,13 +50,24 @@ export function isGitLockError(message) {
  * error it backs off and recurses until WORKTREE_ADD_MAX_ATTEMPTS, then lets
  * the final error reject. Non-lock errors (bad base ref, etc.) reject
  * immediately — retrying them just wastes time.
+ *
+ * The FIRST attempt's error is preserved on the final rejection as
+ * `err.firstAttemptError` so orphan-branch cleanup can reason about the
+ * ORIGINAL failure cause: a `-b` add that created the branch and then hit a
+ * lock error would fail attempt 2 with a retry-induced `branch already
+ * exists`, and cleanup must NOT mistake that for "the branch pre-dated us"
+ * (#2193) — the branch is exactly the orphan it needs to delete.
  */
-export function addWorktreeWithRetry(args, repo, attempt = 1) {
+export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null) {
   return execGit(args, repo).catch((err) => {
-    if (attempt >= WORKTREE_ADD_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
+    const originalError = firstError || err;
+    if (attempt >= WORKTREE_ADD_MAX_ATTEMPTS || !isGitLockError(err.message)) {
+      err.firstAttemptError = originalError;
+      throw err;
+    }
     console.log(`🌳 Worktree add lock contention (attempt ${attempt}/${WORKTREE_ADD_MAX_ATTEMPTS}), retrying in ${WORKTREE_ADD_RETRY_DELAY_MS}ms: ${err.message}`);
     return new Promise(resolve => setTimeout(resolve, WORKTREE_ADD_RETRY_DELAY_MS))
-      .then(() => addWorktreeWithRetry(args, repo, attempt + 1));
+      .then(() => addWorktreeWithRetry(args, repo, attempt + 1, originalError));
   });
 }
 
@@ -109,9 +120,13 @@ export function isPreexistingRefError(message) {
  * didn't create.
  *
  * Takes the causing error so it can:
- *   - SKIP entirely when the add failed because the branch/path already existed
+ *   - SKIP entirely when the add failed because the branch already existed
  *     (`isPreexistingRefError`) — that branch pre-dated us and may hold real
- *     commits; deleting it would be data loss.
+ *     commits; deleting it would be data loss. This keys off the FIRST
+ *     attempt's error (`err.firstAttemptError`), not the final one: a retried
+ *     `-b` add that created the branch on attempt 1 then failed with a
+ *     retry-induced `branch already exists` on attempt 2 must still clean up
+ *     the orphan branch it created (#2193).
  *   - PRUNE before deleting: a partial add can register a stale worktree AND
  *     create the branch, so a bare `git branch -D` fails with "used by
  *     worktree". `worktree prune` first clears that registration so the delete
@@ -119,7 +134,10 @@ export function isPreexistingRefError(message) {
  */
 async function cleanupOrphanBranch(repo, branchName, err) {
   if (!branchName) return;
-  if (isPreexistingRefError(err?.message)) return;
+  // The original failure cause decides whether the branch pre-dated us — a
+  // later attempt's `already exists` can be self-inflicted by attempt 1.
+  const causeError = err?.firstAttemptError || err;
+  if (isPreexistingRefError(causeError?.message)) return;
   await execGit(['worktree', 'prune'], repo).catch(() => {});
   await execGit(['branch', '-D', branchName], repo).catch(pruneErr => {
     console.log(`⚠️ Orphan branch cleanup failed for ${branchName}: ${pruneErr.message}`);

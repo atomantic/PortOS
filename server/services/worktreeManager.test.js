@@ -520,6 +520,28 @@ describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
       .rejects.toThrow(/already exists/);
     expect(execGitMock).toHaveBeenCalledTimes(1);
   });
+
+  it('preserves the FIRST attempt error so a retry-induced "already exists" cannot mask the real cause', async () => {
+    // Attempt 1 creates the branch then fails on a lock error; attempt 2 then
+    // fails with a self-inflicted "branch already exists". The final rejection
+    // must carry the ORIGINAL lock error so orphan cleanup still runs (#2193).
+    execGitMock
+      .mockRejectedValueOnce(new Error('error: cannot lock ref (attempt 1 created the branch)'))
+      .mockRejectedValueOnce(new Error("fatal: a branch named 'cos/task/agent' already exists"));
+    const settled = addWorktreeWithRetry(['worktree', 'add', '-b', 'cos/task/agent', '/wt', 'main'], '/repo').catch(e => e);
+    await vi.runAllTimersAsync();
+    const err = await settled;
+    expect(err.message).toMatch(/already exists/);
+    expect(err.firstAttemptError.message).toMatch(/cannot lock ref/);
+    expect(execGitMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('sets firstAttemptError to the sole error when the first attempt is non-retryable', async () => {
+    const only = new Error("fatal: a branch named 'cos/task/agent' already exists");
+    execGitMock.mockRejectedValueOnce(only);
+    const err = await addWorktreeWithRetry(['worktree', 'add', '-b', 'cos/task/agent', '/wt', 'main'], '/repo').catch(e => e);
+    expect(err.firstAttemptError).toBe(only);
+  });
 });
 
 describe('isPreexistingRefError (orphan-cleanup guard, #2193)', () => {
