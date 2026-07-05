@@ -1062,12 +1062,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         await unlink(audioFilePath).catch(() => {});
       }
 
-      // A watchdog-triggered SIGKILL means the render already emitted its
-      // completion marker and only the python teardown hung — the output file is
-      // on disk, so treat it as success (not the generic "killed, likely OOM"
-      // failure). Guard on the file actually existing + being non-empty so a
-      // marker without a real output (a malformed runtime) still fails loudly.
-      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+      // A PortOS-fired SIGKILL (completion-teardown watchdog OR idle-stall
+      // deadline) is a SUCCESS when the output file is already on disk and
+      // non-empty — e.g. a runtime that wrote its .mp4 but never printed a
+      // recognized completion marker, then hung: the idle timer kills it, but
+      // the finished video must be kept, not discarded as "no output". A kill
+      // with no output on disk (a genuine pre-output stall, or a marker from a
+      // malformed runtime that wrote nothing) still fails loudly below.
+      const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, idleStallFired, signal, outputPath });
 
       if (code !== 0 && !watchdogSuccess) {
         job.status = 'error';
@@ -1100,7 +1102,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         videoGenEvents.emit('failed', { generationId: jobId, error: reason });
       } else {
         if (watchdogSuccess) {
-          console.log(`⚠️ video child force-killed after completion teardown hang — output is intact [${jobId.slice(0, 8)}]`);
+          const killCause = idleStallFired ? 'idle-stall deadline' : 'completion teardown hang';
+          console.log(`⚠️ video child force-killed (${killCause}) — output is intact [${jobId.slice(0, 8)}]`);
         }
         await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
       }
