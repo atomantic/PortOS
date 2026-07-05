@@ -1093,6 +1093,52 @@ describe('generateVideo — pre-output idle-stall deadline', () => {
     expect(kinds).not.toContain('failed');
   });
 
+  it('does NOT SIGKILL/finalize when a manual cancel is already tearing the child down (proc.killed race)', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+    ({ videoGenEvents } = await import('./events.js'));
+
+    // Output file exists + non-empty — so IF the idle timer wrongly fired and
+    // set idleStallFired, the close path would misfinalize the canceled render
+    // as a SUCCESS. The proc.killed guard must prevent the timer from firing.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 1000 });
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    const events = [];
+    const onCompleted = (e) => events.push(['completed', e]);
+    videoGenEvents.on('completed', onCompleted);
+
+    generateVideo({
+      jobId: 'idle-stall-cancel-race',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'canceled near the idle deadline',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Simulate cancel(): killWithEscalation SIGTERMs and sets proc.killed
+    // before exitCode/signalCode populate (they only settle on close).
+    await vi.advanceTimersByTimeAsync(59000);
+    hang.proc.killed = true;
+    hang.proc.kill.mockClear();
+
+    // Deadline elapses — the guard must see proc.killed and bail, NOT SIGKILL.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(hang.proc.kill).not.toHaveBeenCalled();
+
+    videoGenEvents.off('completed', onCompleted);
+    // The idle timer never fired, so nothing finalized this as a success.
+    expect(events.map(([k]) => k)).not.toContain('completed');
+  });
+
   it('does NOT fire the idle timer when the child exits cleanly (timer cleared on close)', async () => {
     process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
     vi.resetModules();
