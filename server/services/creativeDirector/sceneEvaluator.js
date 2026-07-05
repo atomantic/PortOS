@@ -43,9 +43,10 @@ import { enqueueEvaluateTask } from './agentBridge.js';
 // 5 samples across the timeline is plenty to judge a short clip.
 const MAX_EVAL_FRAMES = 5;
 // Local VLMs on modest hardware can be slow to first token; give them room.
+// This timeout is the only bound on generation length — the toolkit's api
+// runner does not send `max_tokens`, so a verbose model is capped by time, not
+// tokens (the structured-JSON prompt keeps a compliant model's reply short).
 const VISION_EVAL_TIMEOUT_MS = 180000;
-// Structured JSON verdict, so the reply can't truncate mid-object.
-const VISION_EVAL_MAX_TOKENS = 600;
 
 // Local backends served by an aiToolkit `api`-type provider. Auto-resolution
 // only picks from these — the whole point is a LOCAL vision model. An explicit
@@ -200,7 +201,6 @@ export async function evaluateSceneWithVision(project, scene) {
       source: 'cd-scene-evaluate',
       screenshots: frames,
       timeout: VISION_EVAL_TIMEOUT_MS,
-      maxTokens: VISION_EVAL_MAX_TOKENS,
     });
 
     // Guard against a silent fallback to a non-API provider (which would drop the
