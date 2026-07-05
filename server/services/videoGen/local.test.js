@@ -1000,9 +1000,14 @@ describe('generateVideo — pre-output idle-stall deadline', () => {
     ({ generateVideo } = await import('./local.js'));
     ({ videoGenEvents } = await import('./events.js'));
 
-    // No output file was ever written (stalled before output), so even though
-    // the fs mock returns true, the failure path must not treat this as a
-    // watchdog success — that gate keys on completionWatchdogFired, not this.
+    // A genuine pre-output stall wrote no real output — a 0-byte (or absent)
+    // file. Keep existsSync true (the runtime venv check at build time needs
+    // it) but report size 0 so isWatchdogSuccess correctly declines to treat
+    // the kill as success; the failure path must report it as a stall.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 0 });
+
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const hang = makeHangingProc();
     vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
@@ -1038,6 +1043,54 @@ describe('generateVideo — pre-output idle-stall deadline', () => {
     expect(events.map(([k]) => k)).not.toContain('completed');
     expect(failed[1].error).toMatch(/stalled/i);
     expect(failed[1].error).toMatch(/VIDEOGEN_IDLE_STALL_MS/);
+  });
+
+  it('treats an idle-stall kill as SUCCESS when a real output file is on disk (runtime wrote its .mp4 but never printed a completion marker, then hung)', async () => {
+    process.env.VIDEOGEN_IDLE_STALL_MS = '60000';
+    vi.resetModules();
+    ({ generateVideo } = await import('./local.js'));
+    ({ videoGenEvents } = await import('./events.js'));
+
+    // The output file exists + is non-empty — the render finished its real work
+    // and wrote the video, but emitted no recognized completion marker, so the
+    // completion watchdog never armed and the idle timer is what killed the
+    // teardown hang. The finished output must be kept, not discarded.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 1000 });
+
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const hang = makeHangingProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => hang.proc);
+
+    const events = [];
+    const onCompleted = (e) => events.push(['completed', e]);
+    const onFailed = (e) => events.push(['failed', e]);
+    videoGenEvents.on('completed', onCompleted);
+    videoGenEvents.on('failed', onFailed);
+
+    generateVideo({
+      jobId: 'idle-stall-output-intact',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'wrote output but hung silently',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // No completion marker ever printed; the render goes silent after writing.
+    await vi.advanceTimersByTimeAsync(60001);
+    expect(hang.proc.kill).toHaveBeenCalledWith('SIGKILL');
+    hang.fireClose(null, 'SIGKILL');
+    await vi.advanceTimersByTimeAsync(0);
+
+    videoGenEvents.off('completed', onCompleted);
+    videoGenEvents.off('failed', onFailed);
+
+    const kinds = events.map(([k]) => k);
+    expect(kinds).toContain('completed');
+    expect(kinds).not.toContain('failed');
   });
 
   it('does NOT fire the idle timer when the child exits cleanly (timer cleared on close)', async () => {
