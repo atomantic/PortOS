@@ -273,6 +273,15 @@ describe('resolveSwarmBlock', () => {
     expect(block.trimEnd().endsWith('---')).toBe(true);
   });
 
+  it('instructs the orchestrator to still write the completion sentinel after a swarm run', () => {
+    // Swarm work ships via PRs with no working-tree change, so without an
+    // explicit instruction the orchestrator skips the completion sentinel and
+    // the CoS task hangs as if it never finished. Phase C must name the sentinel.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('.agent-done');
+    expect(block).toContain('Completion Workflow');
+  });
+
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
     const block = resolveSwarmBlock('claim-issue-gitlab', 4);
     expect(block).toContain('--swarm=4');
