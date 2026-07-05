@@ -7,16 +7,20 @@ than powers.* A magic or technology that always works, at any scale, with no
 drawback drains tension from every scene it touches — the reader stops fearing
 for anyone.
 
-Flag a use when ALL of these hold:
+Flag a use when BOTH of these hold:
 
 - An **ability, technology, or magic** is used at a **decisive moment** —
   resolving a conflict, escaping danger, saving someone, or turning a scene.
 - The use pays **no cost or limitation on the page** — no fuel, blood, memory,
   time, reputation, physical toll, risk, or hard cap on scale/range is spent or
   even acknowledged.
-- The world canon / established rules give that system a cost or limit it is
-  **supposed** to carry (see below) — OR the prose itself has established one
-  elsewhere — and this decisive use quietly skips it.
+
+This is a finding **whether or not** the system has a defined cost: a power the
+canon / prose says should exact a price and this use skips it is the clearest
+case, but a power that has **never** been given any cost or limit — anywhere — is
+also cost-free by construction and drains tension the same way. Reserve the
+canon / established-cost reference below for judging WHICH price was skipped and
+for the exceptions — not as a precondition for flagging.
 
 Do NOT flag: a use that DOES pay its established price (that is the system
 working as designed); a power the canon explicitly defines as limitless for a

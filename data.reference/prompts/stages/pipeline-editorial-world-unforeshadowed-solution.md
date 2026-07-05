@@ -17,10 +17,18 @@ Flag a solution when ALL of these hold:
 - That mechanism was **never planted** — not demonstrated, explained, or even
   hinted at before the moment it saves the day.
 
-A mechanism counts as **planted** (do NOT flag) when the prose established it
-earlier — the reader saw the power used, was told the rule, or the artifact
-appears in the world canon below — even if the specific application is new. A
-clever new *use* of an established rule is good craft, not a cheat.
+A mechanism counts as **planted** (do NOT flag) only when the **prose itself**
+showed it to the reader earlier — the reader saw the power used, was told the
+rule, or met the artifact on the page before it resolved the problem — even if
+the specific application is new. A clever new *use* of a rule the reader has
+already seen is good craft, not a cheat.
+
+The world canon below is the author's reference for what the world's mechanics
+ARE — use it to understand a mechanism and judge internal consistency. But a
+mechanism appearing in the canon does **NOT** by itself count as planted: canon
+is not the manuscript, and the reader has not read it. A solution built on a
+canon rule the **prose never surfaced before the solving moment is still
+unforeshadowed** — flag it.
 
 {{#finalPart}}
 This is the **final part** of the manuscript, so you can now judge the whole
@@ -42,7 +50,7 @@ special world mechanic; a deliberately mysterious power the story is clearly
 still withholding for a planned later reveal.
 
 {{#canonWorld}}
-## World canon (already established)
+## World-bible reference (mechanics only — NOT proof the reader saw them)
 
 {{canonWorld}}
 {{/canonWorld}}

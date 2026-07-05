@@ -57,11 +57,16 @@ describe('canonWorldSummary (#2175)', () => {
       objects: [{ name: 'The Ember Key', significance: 'burns the bearer to open a door' }],
       places: [{ name: 'The Ashfall', recurringDetails: 'perpetual grey snow' }],
     });
-    expect(out).toContain('World canon');
+    // Neutral framing (codex P2): the block is the author's world-bible
+    // reference, explicitly NOT proof the reader has seen these — so the
+    // unforeshadowed-solution check still flags a canon rule the prose never
+    // surfaced.
+    expect(out).toContain('World-bible reference');
+    expect(out).toContain('does not prove the reader has seen');
     expect(out).toContain('The Ember Key: burns the bearer to open a door');
     expect(out).toContain('The Ashfall: perpetual grey snow');
-    expect(out).toContain('Established artifacts / objects');
-    expect(out).toContain('Established places');
+    expect(out).toContain('Named artifacts / objects');
+    expect(out).toContain('Named places');
   });
 
   it('falls back to description and slugline, and tolerates non-string fields', () => {
@@ -100,7 +105,7 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
       worldRules: '',
       finalPart: '',
     });
-    expect(out).not.toContain('World canon (already established)');
+    expect(out).not.toContain('World-bible reference (mechanics only');
     expect(out).toContain('reading the manuscript in PARTS');
     expect(out).not.toContain('{{');
   });
@@ -116,5 +121,24 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
     expect(out).toContain('CANON_BLOCK');
     expect(out).toContain('RULES_BLOCK');
     expect(out).not.toContain('{{');
+  });
+
+  // Codex P2 false-negative fixes — pin the corrected craft logic so a future
+  // prompt edit can't quietly re-introduce the holes.
+  it('unforeshadowed-solution: bible-only canon does NOT count as reader foreshadowing', () => {
+    const prompt = readStage('pipeline-editorial-world-unforeshadowed-solution.md');
+    const out = applyTemplate(prompt, { manuscript: 'M', canonWorld: 'C', worldRules: '', finalPart: 'true' });
+    // Only the PROSE plants for the reader; a canon rule the prose never
+    // surfaced is still unforeshadowed.
+    expect(out).toContain('prose itself');
+    expect(out).toContain('does **NOT** by itself count as planted');
+  });
+
+  it('cost-free-power: flags a power with NO established cost anywhere (not only a skipped one)', () => {
+    const prompt = readStage('pipeline-editorial-world-cost-free-power.md');
+    const out = applyTemplate(prompt, { manuscript: 'M', canonWorld: '', worldRules: '' });
+    // The finding does not require a pre-defined cost to skip.
+    expect(out).toContain('whether or not');
+    expect(out).toContain('never** been given any cost or limit');
   });
 });
