@@ -388,6 +388,21 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(EXPANSION_PROMPT).toContain("styleNotes:");
   });
 
+  it("injects the worldbuilding craft doctrine (Sanderson's Laws + iceberg/interconnection) (#2175)", () => {
+    // Prevention up-front: the doctrine steers the writer model toward
+    // limitation-first systems, planted solutions, and interconnected worlds so
+    // the review-side world.* checks have less to catch. If this fails, the
+    // generation prompt has regressed to producing decorative, cost-free systems.
+    expect(EXPANSION_PROMPT).toContain("Worldbuilding craft doctrine");
+    expect(EXPANSION_PROMPT).toContain("Limitations over powers");
+    expect(EXPANSION_PROMPT).toContain("Costs must drive plot");
+    expect(EXPANSION_PROMPT).toContain("Foreshadow before you resolve");
+    expect(EXPANSION_PROMPT).toContain("Iceberg depth");
+    expect(EXPANSION_PROMPT).toContain("Interconnection");
+    expect(EXPANSION_PROMPT).toContain("Societal implications");
+    expect(EXPANSION_PROMPT).toContain("Sensory signature per location");
+  });
+
   it("asks the LLM to emit structured influences alongside the prose prompts", () => {
     // The renderer prepends embrace / avoid lists deterministically, so the
     // schema contract must instruct the LLM to populate them.

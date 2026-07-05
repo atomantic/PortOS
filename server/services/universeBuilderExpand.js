@@ -168,6 +168,16 @@ Concrete compositeSheets examples:
 - Universe pitch poster prompts must include a clear editorial poster structure: universe title/subtitle/logline area, dominant hero panorama, inset environment/culture/creature images, visual-language strip, color palette, materials/textures, light/atmosphere, themes/icons, and concise labeled blocks for universe, feel, aesthetic, environments, cultures, and tone. Mention that body copy should be short, clean, and readable; avoid dense tiny text.
 - If the universe needs pitch posters, do not put "text" in the avoid influences. Prefer "watermark", "logo", "unreadable tiny text", "text artifacts" so title/section typography remains possible.
 - When "Current universe state" is provided above: treat it as the established universe. Fields marked [LOCKED] MUST be echoed in your output exactly as given — do not reword, expand, or trim them. Unlocked current-state fields are starting points; you may refine them, but stay consistent with locked fields, the starter idea, and influences.
+
+# Worldbuilding craft doctrine (apply to premise + canon — this is what separates a lived-in world from set dressing)
+- **Limitations over powers.** What a magic/tech system CAN'T do is more interesting than what it can. Define the hard limits, costs, and rules FIRST; the powers follow.
+- **Costs must drive plot, not decorate it.** Every power/technology exacts a price (fuel, blood, memory, time, reputation) that forces hard choices on the page — not flavor text. If a capability has no cost that ever complicates a decision, cut it or give it teeth.
+- **Foreshadow before you resolve.** A problem solved using an established rule/power must have shown that rule to the reader earlier. Plant the mechanism before it saves the day, or the resolution reads as a cheat.
+- **Iceberg depth.** Imply far more history/culture/systems than you state outright — a few concrete specifics (a saying, a scar, a ruin) signal a deep world without an encyclopedia.
+- **Interconnection.** Systems, factions, geography, and economy should link so that pulling one thread visibly moves the others — a drought shifts a faction, which reprices a resource, which pressures the protagonist.
+- **Societal implications.** For each major system (magic, tech, resource), name 2–3 concrete downstream effects on daily life, class, law, or belief — who benefits, who is exploited, what taboo or ritual grew up around it.
+- **Sensory signature per location.** Give each key place one distinct sensory anchor (a smell, a sound, a quality of light) that recurs so the reader re-enters it instantly.
+
 - Output JUST the JSON object. No prose before or after.`;
 }
 

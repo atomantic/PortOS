@@ -92,6 +92,8 @@ export {
   VOICE_CONSISTENCY_STAGE,
   VOICE_DISTINCTIVENESS_STAGE,
   WHITE_ROOM_STAGE,
+  WORLD_COST_FREE_POWER_STAGE,
+  WORLD_UNFORESHADOWED_SOLUTION_STAGE,
   authoredCliffhangerSummary,
   authoredPayoffsSummary,
   authoredSetupPayoffSummary,
@@ -100,6 +102,7 @@ export {
   canonCharacterStatesSummary,
   canonCharacterTraitsSummary,
   canonRosterNamesSummary,
+  canonWorldSummary,
   characterVoiceProfiles,
   comicIssuePages,
   comicLetteringIssues,
@@ -146,6 +149,7 @@ import { characterArcChecks } from './checks/characterArc.js';
 import { proseStyleChecks } from './checks/proseStyle.js';
 import { dialogueChecks } from './checks/dialogue.js';
 import { slopChecks } from './checks/slop.js';
+import { worldChecks } from './checks/world.js';
 
 // Canonical display + run order of the built-in checks. Grouping the checks into
 // ./checks/*.js by category (#1829) would otherwise change the observable order
@@ -178,6 +182,8 @@ const CHECK_ORDER = Object.freeze([
   'arc.transitions',
   'arc.regression',
   'plot.structure-momentum',
+  'world.unforeshadowed-solution',
+  'world.cost-free-power',
   'pacing.escalation-curve',
   'theme.coherence',
   'arc.climax-agency',
@@ -241,6 +247,7 @@ const ASSEMBLED_CHECKS = [
   ...continuityChecks,
   ...researchChecks,
   ...characterArcChecks,
+  ...worldChecks,
   ...proseStyleChecks,
   ...dialogueChecks,
   ...slopChecks,

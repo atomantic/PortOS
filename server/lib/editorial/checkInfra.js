@@ -735,6 +735,20 @@ export function continuityLedgerSummary(facts) {
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
 
+// Stage names for the worldbuilding-doctrine LLM check pair (#2175). Both ship in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and reach existing installs via seed migrations 165/166 (boot
+// runs migrations but NOT setup-data, so the migration is required or the check
+// throws "Stage not found" on first run). Both reconcile the prose against the
+// canon world summary (`canonWorldSummary`) + the continuity-bible world-rule
+// facts so an established-and-planted rule is NOT flagged:
+//   - unforeshadowed-solution: a plot problem solved by a rule/power the reader was
+//     never shown — deus ex machina's worldbuilding sibling.
+//   - cost-free-power: an ability used at a decisive moment with no cost/limitation
+//     on the page (violates "limitations > powers").
+export const WORLD_UNFORESHADOWED_SOLUTION_STAGE = 'pipeline-editorial-world-unforeshadowed-solution';
+export const WORLD_COST_FREE_POWER_STAGE = 'pipeline-editorial-world-cost-free-power';
+
 // Stage name for the series-wide pacing / intensity escalation-curve LLM check
 // (#1618). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
 // installs via setup-data.js) and migrates to existing installs via migration 140
@@ -947,6 +961,44 @@ export function canonRosterNamesSummary(canon) {
   }
   if (!lines.length) return '';
   return `Known characters (already in the story bible — do NOT flag these or their aliases):\n${lines.join('\n')}`;
+}
+
+// Render the established WORLD canon (#2175) — the named objects (with their
+// significance) and places (with their recurring details) — into a compact text
+// block the worldbuilding-doctrine checks pass alongside the manuscript so the
+// model can tell a rule/power/artifact the prose ESTABLISHED (and may legitimately
+// use) from one that appears out of nowhere. Objects carry the artifacts/powers a
+// solution might draw on; places carry the world's physical logic. Prose
+// `significance` / `description` / `recurringDetails` are the fields that state
+// what a thing DOES and what it costs, so those are what get surfaced. Pure +
+// deterministic (unit-testable, token-countable) and type-guarded throughout (the
+// canon rides peer sync, so an older/hand-edited row could carry a non-string
+// field). Returns '' when no object or place has usable content (the prompt's
+// `{{#canonWorld}}` section then renders nothing and the check reasons from the
+// prose alone).
+export function canonWorldSummary(canon) {
+  const objects = Array.isArray(canon?.objects) ? canon.objects : [];
+  const places = Array.isArray(canon?.places) ? canon.places : [];
+  const trim = (v) => (typeof v === 'string' ? v.trim() : '');
+  const objectLines = [];
+  for (const o of objects) {
+    const name = trim(o?.name);
+    if (!name) continue;
+    const detail = trim(o?.significance) || trim(o?.description);
+    objectLines.push(detail ? `- ${name}: ${detail}` : `- ${name}`);
+  }
+  const placeLines = [];
+  for (const p of places) {
+    const name = trim(p?.name) || trim(p?.slugline);
+    if (!name) continue;
+    const detail = trim(p?.recurringDetails) || trim(p?.description);
+    placeLines.push(detail ? `- ${name}: ${detail}` : `- ${name}`);
+  }
+  if (!objectLines.length && !placeLines.length) return '';
+  const blocks = [];
+  if (objectLines.length) blocks.push(`Established artifacts / objects (with their significance):\n${objectLines.join('\n')}`);
+  if (placeLines.length) blocks.push(`Established places (with their recurring details):\n${placeLines.join('\n')}`);
+  return `World canon (already established in the story bible — a rule, power, or artifact drawn from here is FORESHADOWED; do NOT flag its use as unearned):\n\n${blocks.join('\n\n')}`;
 }
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block

@@ -548,6 +548,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-world-unforeshadowed-solution": {
+      "name": "Pipeline — Editorial Check: Unforeshadowed solution",
+      "description": "Editorial check (#2175): the worldbuilding sibling of the deus ex machina — flags a story problem resolved by a rule, power, property, or artifact the reader was never shown before it saved the day (Sanderson's First Law). Reconciles the stitched manuscript against the established world canon (artifacts/objects + places) and the continuity-bible world-rule facts, so a rule that WAS planted earlier is not flagged; the whole-arc verdict lands on the final part with earlier plants carried in the setup digest. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-world-cost-free-power": {
+      "name": "Pipeline — Editorial Check: Cost-free power",
+      "description": "Editorial check (#2175): flags an ability, technology, or magic used at a decisive moment with no cost, limitation, or price paid on the page (Sanderson's Second Law — limitations are more interesting than powers). Reconciles the stitched manuscript against the established world canon and continuity-bible world-rule facts, so a use that pays the established cost — or a power the canon defines as limitless — is not flagged. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-comic-page-turn": {
       "name": "Pipeline — Editorial Check: Comic page-turn beats",
       "description": "Editorial check (#1314): flags comic reveals/cliffhangers placed where the reader sees them early — on a page that shares its two-page spread with earlier pages rather than the first page after a page turn. Reads each issue's parsed comic-page layout and reconciles placement against the authored reader-map reveals/cliffhangers. Returns issue-anchored findings.",
