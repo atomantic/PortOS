@@ -368,6 +368,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               </p>
               {(isOverflowing || promptExpanded) && (
                 <button
+                  type="button"
                   onClick={() => setPromptExpanded(v => !v)}
                   className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
                   aria-expanded={promptExpanded}
