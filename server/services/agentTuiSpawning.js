@@ -52,7 +52,7 @@ import {
   PASTE_RETRY_MAX_ATTEMPTS,
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
-  verifyPasteRendered,
+  isPasteConfirmed,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -903,32 +903,35 @@ export async function spawnTuiAgent({
       );
     };
 
-    // After paste-commit conditions are met, verify the prompt text actually
-    // rendered before submitting. If verification fails, retry with backoff.
-    const verifyAndSubmit = (capturedBuffer) => {
+    // Confirms the TUI actually received the paste before we submit. The
+    // paste-commit MARKER ([Pasted text #N]) is authoritative — Claude Code
+    // collapses a multi-line paste into that chip and HIDES the body text, so a
+    // literal text check false-negatives on every multi-line prompt (real
+    // incident 2026-07-05: agent-656efa6e et al. failed `paste-not-rendered`
+    // despite the marker being present). Literal-text verification is only the
+    // fallback for the markerless path — see isPasteConfirmed.
+    const pasteConfirmed = (buffer) =>
+      isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
+
+    // Markerless AND the prompt text never rendered → the paste was swallowed by
+    // a still-initializing TUI (issue #2192). Retry with backoff, then fail.
+    const retryOrFailPaste = () => {
       if (finalized) return;
-      // If we have a verifiable prefix, check it appeared in the buffer
-      if (verifiablePrefix && !verifyPasteRendered(capturedBuffer, verifiablePrefix)) {
-        // Paste was swallowed — the TUI wasn't ready (issue #2192)
-        if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
-          const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
-          appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
-          setTimeout(() => {
-            if (finalized) return;
-            attemptPaste(reason);
-          }, retryDelayMs);
-          return;
-        }
-        // Max retries exhausted — fail the agent
-        appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
-        finishStartupFailure(
-          'paste-not-rendered',
-          `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
-        ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
+      if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
+        const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+        appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
+        setTimeout(() => {
+          if (finalized) return;
+          attemptPaste(reason);
+        }, retryDelayMs);
         return;
       }
-      // Verification passed (or no prefix to verify) — submit
-      submitEnter();
+      // Max retries exhausted — fail the agent
+      appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
+      finishStartupFailure(
+        'paste-not-rendered',
+        `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
+      ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
     };
 
     const pasteSentAt = Date.now();
@@ -948,39 +951,41 @@ export async function spawnTuiAgent({
         || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
-        // Capture the buffer before clearing, then run verification (issue #2192).
-        // Start a short verification poll to allow a bit more time for the prompt
-        // text to render after the paste-commit marker appears.
+        // Capture the buffer before clearing, then confirm the paste (issue #2192).
         const commitBuffer = postPasteBuffer || '';
         postPasteBuffer = null;
-        // If verification is possible and the prompt text isn't visible yet, give
-        // it a short window to render (the marker can appear before the full echo).
-        if (verifiablePrefix && !verifyPasteRendered(commitBuffer, verifiablePrefix)) {
-          let verifyBuffer = commitBuffer;
-          const verifyStartedAt = Date.now();
-          // Resume accumulation for the verification window
-          postPasteBuffer = commitBuffer;
-          pasteVerifyTimer = setInterval(() => {
-            if (finalized) {
-              clearInterval(pasteVerifyTimer);
-              pasteVerifyTimer = null;
-              postPasteBuffer = null;
-              return;
-            }
-            verifyBuffer = postPasteBuffer || verifyBuffer;
-            const verifyElapsed = Date.now() - verifyStartedAt;
-            // Check if now verified, or if window expired
-            if (verifyPasteRendered(verifyBuffer, verifiablePrefix) || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
-              clearInterval(pasteVerifyTimer);
-              pasteVerifyTimer = null;
-              postPasteBuffer = null;
-              verifyAndSubmit(verifyBuffer);
-            }
-          }, PASTE_VERIFY_POLL_MS);
-        } else {
-          // Already verified or no verification needed
-          verifyAndSubmit(commitBuffer);
+        // Marker present (or text already visible, or nothing to verify) → the
+        // paste landed; submit now. Trusting the marker here is what fixes the
+        // multi-line-collapse false negative — Claude hides the pasted body text.
+        if (pasteConfirmed(commitBuffer)) {
+          submitEnter();
+          return;
         }
+        // Markerless AND text not visible yet: give the prompt a short window to
+        // render (a late marker also counts as confirmed) before declaring it
+        // swallowed. Resume accumulation for the verification window.
+        let verifyBuffer = commitBuffer;
+        const verifyStartedAt = Date.now();
+        postPasteBuffer = commitBuffer;
+        pasteVerifyTimer = setInterval(() => {
+          if (finalized) {
+            clearInterval(pasteVerifyTimer);
+            pasteVerifyTimer = null;
+            postPasteBuffer = null;
+            return;
+          }
+          verifyBuffer = postPasteBuffer || verifyBuffer;
+          const verifyElapsed = Date.now() - verifyStartedAt;
+          const confirmed = pasteConfirmed(verifyBuffer);
+          // Submit once confirmed, or give up and retry/fail when the window expires.
+          if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
+            clearInterval(pasteVerifyTimer);
+            pasteVerifyTimer = null;
+            postPasteBuffer = null;
+            if (confirmed) submitEnter();
+            else retryOrFailPaste();
+          }
+        }, PASTE_VERIFY_POLL_MS);
       }
     }, PASTE_MARKER_POLL_MS);
   };

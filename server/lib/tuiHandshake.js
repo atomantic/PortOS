@@ -88,20 +88,35 @@ export function extractVerifiablePromptPrefix(prompt) {
 }
 
 /**
- * True when the verifiable prompt prefix appears in the post-paste buffer. Both
- * arguments must be whitespace-normalized (single spaces) and ANSI-stripped.
+ * True when the verifiable prompt prefix appears in the post-paste buffer.
+ * ANSI-stripped input; internal whitespace differences are ignored (see below).
  * A null/empty prefix always returns true (no verification possible).
  *
- * @param {string} strippedBuffer — ANSI-stripped, whitespace-normalized post-paste output.
+ * Whitespace is stripped ENTIRELY (not just collapsed to a single space) before
+ * comparing, on both sides. Claude Code (and potentially other TUIs) can
+ * redraw/reflow a pasted multi-word line using cursor-positioning escapes
+ * instead of literal space bytes between words — the same "inter-glyph cursor
+ * moves" quirk already documented above (BRACKETED_PASTE_MODE_PATTERN) as the
+ * reason createInputReadyTracker avoids literal footer-text matching. ANSI
+ * stripping drops those inter-word spaces entirely, so a genuinely-rendered
+ * paste can still fail a single-space-normalized substring match (real
+ * incident: every claude-code-tui CoS agent failed immediately with
+ * "paste-not-rendered" after 3 retries — see tuiHandshake.test.js's "real
+ * incident" regression test for the captured transcript). Comparing with all
+ * whitespace removed makes the match robust to however a given TUI reflows a
+ * line, at the cost of a (very low, given the ~40-char prefix) chance of a
+ * spurious match spanning a word boundary that only lines up once spaces are
+ * gone.
+ *
+ * @param {string} strippedBuffer — ANSI-stripped post-paste output.
  * @param {string|null} prefix — the prefix from extractVerifiablePromptPrefix.
  * @returns {boolean}
  */
 export function verifyPasteRendered(strippedBuffer, prefix) {
   if (!prefix) return true; // no verification possible
   if (typeof strippedBuffer !== 'string') return false;
-  // Normalize both to collapse any remaining whitespace differences
-  const normalizedBuffer = strippedBuffer.replace(/\s+/g, ' ');
-  return normalizedBuffer.includes(prefix);
+  const collapseWhitespace = (s) => s.replace(/\s+/g, '');
+  return collapseWhitespace(strippedBuffer).includes(collapseWhitespace(prefix));
 }
 
 /**
@@ -142,6 +157,39 @@ export function countPasteMarkers(strippedText) {
  */
 export function detectPasteMarker(strippedText) {
   return countPasteMarkers(strippedText) > 0;
+}
+
+/**
+ * True when a post-paste buffer proves the TUI actually RECEIVED the prompt
+ * paste — the gate before sending the submit Enter(s). Two independent signals,
+ * checked in priority order:
+ *
+ *   1. The TUI's own paste-commit MARKER (`[Pasted text #N]`) count exceeds the
+ *      count the prompt itself carried (promptMarkerCount). This is AUTHORITATIVE
+ *      and is checked FIRST because Claude Code collapses a multi-line bracketed
+ *      paste INTO that chip and HIDES the pasted body text from the buffer — so on
+ *      every multi-line prompt the literal text is genuinely absent even though
+ *      the paste landed perfectly. Real incident (2026-07-05): every
+ *      claude-code-tui CoS agent failed `paste-not-rendered` after 3 retries
+ *      because #2192's text-only check never saw the collapsed body — while the
+ *      marker was sitting right there. (agent-656efa6e et al.)
+ *   2. Fallback for the MARKERLESS path — a paste too small to render the marker,
+ *      or one genuinely SWALLOWED by a still-initializing TUI (the #2192 case,
+ *      which renders no marker at all): fall back to confirming the prompt text
+ *      literally rendered. A null/empty verifiablePrefix means no verification is
+ *      possible, so this returns true (nothing to disconfirm).
+ *
+ * Callers MUST pass an ANSI-STRIPPED buffer (both signals require it — see
+ * countPasteMarkers / verifyPasteRendered).
+ *
+ * @param {string} strippedBuffer — ANSI-stripped post-paste output accumulator.
+ * @param {{ verifiablePrefix?: string|null, promptMarkerCount?: number }} [opts]
+ * @returns {boolean}
+ */
+export function isPasteConfirmed(strippedBuffer, { verifiablePrefix = null, promptMarkerCount = 0 } = {}) {
+  if (countPasteMarkers(strippedBuffer) > promptMarkerCount) return true; // marker is authoritative
+  if (!verifiablePrefix) return true; // nothing to verify against
+  return verifyPasteRendered(strippedBuffer, verifiablePrefix);
 }
 
 // Positive "the launched program's input is ready to receive a bracketed paste"
