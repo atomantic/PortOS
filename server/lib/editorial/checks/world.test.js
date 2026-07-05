@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { applyTemplate } from '../../promptTemplate.js';
 import { canonWorldSummary, listChecks, getCheck } from '../checkRegistry.js';
-import { worldChecks } from './world.js';
+import { worldChecks, __testing } from './world.js';
 
 const STAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../../data.reference/prompts/stages');
 const readStage = (file) => readFileSync(join(STAGE_DIR, file), 'utf-8');
@@ -140,5 +140,28 @@ describe('worldbuilding-doctrine prompt rendering (#2175)', () => {
     // The finding does not require a pre-defined cost to skip.
     expect(out).toContain('whether or not');
     expect(out).toContain('never** been given any cost or limit');
+  });
+
+});
+
+describe('worldRuleFacts filter (codex P2 — #2175)', () => {
+  const { worldRuleFacts } = __testing;
+
+  it('keeps only world-rule facts so the ledger block stays on-topic and small', () => {
+    const facts = [
+      { category: 'world-rule', statement: 'Blood-magic costs a year of life.' },
+      { category: 'age', statement: 'Mara is 16.' },
+      { category: 'location', statement: 'The forge is underground.' },
+      { category: 'world-rule', statement: 'No spell works in the Deadzone.' },
+    ];
+    const out = worldRuleFacts(facts);
+    expect(out).toHaveLength(2);
+    expect(out.every((f) => f.category === 'world-rule')).toBe(true);
+  });
+
+  it('tolerates a non-array / null continuity bible', () => {
+    expect(worldRuleFacts(null)).toEqual([]);
+    expect(worldRuleFacts(undefined)).toEqual([]);
+    expect(worldRuleFacts('nope')).toEqual([]);
   });
 });

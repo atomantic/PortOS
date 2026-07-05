@@ -11,6 +11,16 @@ import {
   z,
 } from '../checkInfra.js';
 
+// The worldbuilding checks only reconcile against the WORLD-MECHANICS facts, not
+// the whole continuity ledger (ages, locations, possessions, who-knows-what).
+// Passing the full ledger would let `runManuscriptLlmCheck`'s largest-first
+// context trimming clip the `World rules` section (it renders last of seven
+// categories) after unrelated facts — running the check without the very
+// costs/limits it exists to reconcile against. Filter to `category: 'world-rule'`
+// (continuityBible.js's stable id) first so the block stays small and on-topic.
+const worldRuleFacts = (continuityBible) =>
+  (Array.isArray(continuityBible) ? continuityBible : []).filter((f) => f?.category === 'world-rule');
+
 // Shared config: cap findings per run so a long manuscript can't flood the review.
 const maxFindingsSchema = z.object({
   maxFindings: z.number().int().min(1).max(50).default(12),
@@ -54,7 +64,7 @@ export const worldChecks = [
       // {{#canonWorld}} renders nothing; no world-rule facts ⇒ {{#worldRules}}
       // renders nothing and the model reasons from the prose's own setups.
       const canonWorld = canonWorldSummary(ctx.canon);
-      const worldRules = continuityLedgerSummary(ctx.continuityBible);
+      const worldRules = continuityLedgerSummary(worldRuleFacts(ctx.continuityBible));
       return runManuscriptLlmCheck(ctx, {
         stage: WORLD_UNFORESHADOWED_SOLUTION_STAGE,
         category: 'world',
@@ -76,8 +86,17 @@ export const worldChecks = [
         // The verdict is gated to the final part and anchored on the carried set of
         // established rules, so reserve room for the digest in the packed final chunk.
         reserveSetupDigest: true,
+        // #1667 sibling caveat (mirrors arc.climax-agency): reserving digest room
+        // trims the FINAL chunk's manuscript tail — but the climactic solution
+        // often lands in that tail, and the climax can also sit in a non-final
+        // chunk followed by a denouement. So the digest must carry the decisive
+        // resolution forward as a SOLUTION CANDIDATE (a short verbatim snippet +
+        // the mechanism it used + its issue) — without it the final-part verdict
+        // could neither see nor quote a climax that isn't physically in the last
+        // chunk. Pairing the candidate with the established-rules set is what lets
+        // the final part judge "was this mechanism ever planted for the reader?".
         setupFocus:
-          'Track every magic/tech rule, power, property, or artifact the prose has ESTABLISHED so far (introduced, demonstrated, or explained to the reader) and where it was planted. Carry these forward so the final part can tell a solution built on an established-and-planted rule (fine) from one that draws on a capability the reader was never shown before it resolved the problem (unforeshadowed).',
+          'Track every magic/tech rule, power, property, or artifact the prose has ESTABLISHED so far (introduced, demonstrated, or explained to the reader) and where it was planted. ALSO track the single most decisive problem-resolving scene seen so far as the SOLUTION CANDIDATE — record a SHORT verbatim snippet (≤ 200 chars) of the moment the problem is solved, which issue it is in, and the rule/power/artifact it relies on — and replace it only when a later, higher-stakes resolution supersedes it. Carry both forward so the final part can tell a solution built on an established-and-planted rule (fine) from one that draws on a capability the reader was never shown before it resolved the problem (unforeshadowed), and can quote it even when the climax is not physically in the last chunk.',
       });
     },
   },
@@ -102,7 +121,7 @@ export const worldChecks = [
       // limitations each system is SUPPOSED to carry, so the model can tell a use
       // that skips the established price from a system that legitimately has none.
       const canonWorld = canonWorldSummary(ctx.canon);
-      const worldRules = continuityLedgerSummary(ctx.continuityBible);
+      const worldRules = continuityLedgerSummary(worldRuleFacts(ctx.continuityBible));
       return runManuscriptLlmCheck(ctx, {
         stage: WORLD_COST_FREE_POWER_STAGE,
         category: 'world',
@@ -125,3 +144,7 @@ export const worldChecks = [
     },
   },
 ];
+
+// Exported for unit tests (the world-rule ledger filter is pure and easy to
+// regress if the continuityBible category id changes).
+export const __testing = { worldRuleFacts };
