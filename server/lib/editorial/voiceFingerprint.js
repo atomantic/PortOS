@@ -293,6 +293,15 @@ export function metricLabel(key) {
   return desc ? desc.label : key;
 }
 
+// The rendered unit suffix for a metric key (static descriptor unit, or '' for a
+// well). Single source of truth so the drift outlier's `unit`, the finding text,
+// and the matrix column header all agree.
+export function metricUnit(key) {
+  if (typeof key === 'string' && key.startsWith('well:')) return '';
+  const desc = VOICE_METRICS.find((mm) => mm.key === key);
+  return desc ? desc.unit : '';
+}
+
 // Directional phrase for a drift: what a value ABOVE / BELOW the series mean means
 // for this metric. Wells share a generic phrasing (no static descriptor).
 function directionPhrase(key, direction) {
@@ -304,6 +313,29 @@ function directionPhrase(key, direction) {
   const desc = VOICE_METRICS.find((mm) => mm.key === key);
   if (!desc) return direction === 'high' ? 'runs high' : 'runs low';
   return direction === 'high' ? desc.higher : desc.lower;
+}
+
+/**
+ * Self-describing column descriptor for a metric key — the label, unit, and the
+ * plain-language phrasing for a value that runs high vs low against the series
+ * mean, plus whether it's a vocabulary well. The single source of truth for
+ * rendering a fingerprint-matrix column header (server and client), built on the
+ * same `metricLabel` / `directionPhrase` / `metricUnit` primitives the finding
+ * text (`describeDrift`) uses — so header tooltips can't silently diverge from the
+ * finding cards.
+ *
+ * @param {string} key
+ * @returns {{ key: string, label: string, unit: string, higher: string, lower: string, isWell: boolean }}
+ */
+export function describeMetricColumn(key) {
+  return {
+    key,
+    label: metricLabel(key),
+    unit: metricUnit(key),
+    higher: directionPhrase(key, 'high'),
+    lower: directionPhrase(key, 'low'),
+    isWell: typeof key === 'string' && key.startsWith('well:'),
+  };
 }
 
 // One-sentence finding text for a drift outlier — names the issue, the metric,
@@ -367,11 +399,6 @@ export function computeVoiceDrift(manuscript, opts = {}) {
 
   const series = {};
   const outliers = [];
-  const unitOf = (key) => {
-    if (typeof key === 'string' && key.startsWith('well:')) return '';
-    const d = VOICE_METRICS.find((mm) => mm.key === key);
-    return d ? d.unit : '';
-  };
 
   for (const key of metricKeys) {
     const values = issues.map((it) => it.metrics[key] ?? 0);
@@ -394,7 +421,7 @@ export function computeVoiceDrift(manuscript, opts = {}) {
         std,
         z,
         direction: z > 0 ? 'high' : 'low',
-        unit: unitOf(key),
+        unit: metricUnit(key),
       });
     }
   }
