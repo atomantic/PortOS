@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-import migration from './164-reader-panel-persona-stages.js';
+import migration from './165-reader-panel-persona-stages.js';
 
 // scripts/migrations/<this> → ../.. is the repo root (matches _testHelpers.js).
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -19,7 +19,7 @@ const STAGE_KEYS = [
   'pipeline-panel-first-reader',
 ];
 
-describe('migration 164 — seed reader-panel persona stages', () => {
+describe('migration 165 — seed reader-panel persona stages', () => {
   let rootDir;
   let stagesDir;
   let refStagesDir;
@@ -33,7 +33,7 @@ describe('migration 164 — seed reader-panel persona stages', () => {
   };
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-164-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-165-'));
     stagesDir = join(rootDir, 'data', 'prompts', 'stages');
     refStagesDir = join(rootDir, 'data.reference', 'prompts', 'stages');
     installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
