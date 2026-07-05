@@ -15,7 +15,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
   PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass, BookMarked,
-  Plus, Trash2,
+  Fingerprint, Plus, Trash2,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -229,6 +229,13 @@ export default function PipelineSeries() {
               title="Browse the established-facts ledger — physical traits, ages, dates, places, possessions, world rules, and who knows what"
             >
               <BookMarked size={12} /> Continuity
+            </Link>
+            <Link
+              to={`/pipeline/series/${series.id}/voice-fingerprint`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="See every issue's statistical prose fingerprint (sentence rhythm, register, dialogue ratio…) with drift outliers highlighted"
+            >
+              <Fingerprint size={12} /> Voice Fingerprint
             </Link>
             <Link
               to={buildImporterLink({ universeId: series.universeId, seriesId: series.id })}

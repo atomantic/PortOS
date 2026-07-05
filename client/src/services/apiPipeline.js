@@ -833,6 +833,13 @@ export const getReverseOutlineStatus = (seriesId, options = {}) =>
 export const pipelineReverseOutlineSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/progress`;
 
+// ---- Voice fingerprint matrix (#2194) ----
+// The full issues×metrics fingerprint vector + deterministic drift result:
+// { seriesId, config, wells, columns, gatedOff, issueCount, threshold, matrix,
+//   series, outliers }. Read-only, no LLM cost — drives the dedicated matrix view.
+export const getVoiceFingerprint = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/voice-fingerprint`, options);
+
 // ---- Continuity Bible (established-facts ledger) ----
 // The stored ledger: { facts, stale, status }. `status:'none'` when never
 // generated, `'no-content'` shell while there's no canon and nothing drafted.
