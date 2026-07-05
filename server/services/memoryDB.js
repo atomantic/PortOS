@@ -936,16 +936,22 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
     };
   }
 
-  let merged = 0;
+  // Collect every duplicate to archive (all but the highest-importance member of
+  // each cluster), then archive them in a single set-based UPDATE instead of one
+  // round-trip per memory id.
+  const archiveIds = [];
   for (const cluster of duplicateClusters) {
     // Sort by importance, keep highest
     cluster.sort((a, b) => (importanceMap.get(b) || 0) - (importanceMap.get(a) || 0));
-
     for (let i = 1; i < cluster.length; i++) {
-      await query("UPDATE memories SET status = 'archived' WHERE id = $1", [cluster[i]]);
-      merged++;
+      archiveIds.push(cluster[i]);
     }
   }
+
+  if (archiveIds.length > 0) {
+    await query("UPDATE memories SET status = 'archived' WHERE id = ANY($1)", [archiveIds]);
+  }
+  const merged = archiveIds.length;
 
   console.log(`🧠 Consolidated ${merged} duplicate memories into ${duplicateClusters.length} clusters`);
   return { merged, clusters: duplicateClusters.length };

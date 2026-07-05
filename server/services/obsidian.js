@@ -306,46 +306,57 @@ export async function searchNotes(vaultId, query) {
 async function searchDir(rootPath, currentPath, query, countRe, results) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
+  const subdirs = [];
+  const mdFiles = [];
   for (const entry of entries) {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const fullPath = join(currentPath, entry.name);
+    if (entry.isDirectory()) subdirs.push(fullPath);
+    else if (entry.isFile() && extname(entry.name) === '.md') mdFiles.push({ name: entry.name, fullPath });
+  }
 
-    if (entry.isDirectory()) {
-      await searchDir(rootPath, fullPath, query, countRe, results);
-    } else if (entry.isFile() && extname(entry.name) === '.md') {
-      const content = await readFile(fullPath, 'utf-8');
-      const contentLower = content.toLowerCase();
-      const nameLower = basename(entry.name, '.md').toLowerCase();
-      const titleMatch = nameLower.includes(query);
-      const contentMatch = contentLower.includes(query);
+  // Read every markdown file in this directory concurrently — each match is
+  // independent, so serializing the disk reads only added latency to search.
+  // Per-file synchronous processing (including the shared countRe) never yields,
+  // so there is no interleaving on the regex state.
+  const dirResults = await Promise.all(mdFiles.map(async ({ name, fullPath }) => {
+    const content = await readFile(fullPath, 'utf-8');
+    const contentLower = content.toLowerCase();
+    const nameLower = basename(name, '.md').toLowerCase();
+    const titleMatch = nameLower.includes(query);
+    const contentMatch = contentLower.includes(query);
+    if (!titleMatch && !contentMatch) return null;
 
-      if (titleMatch || contentMatch) {
-        const relativePath = relative(rootPath, fullPath);
-        const { tags } = parseNoteMetadata(content);
+    const relativePath = relative(rootPath, fullPath);
+    const { tags } = parseNoteMetadata(content);
 
-        const snippets = [];
-        if (contentMatch) {
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length && snippets.length < 3; i++) {
-            if (lines[i].toLowerCase().includes(query)) {
-              snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
-            }
-          }
+    const snippets = [];
+    if (contentMatch) {
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length && snippets.length < 3; i++) {
+        if (lines[i].toLowerCase().includes(query)) {
+          snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
         }
-
-        // Reset regex lastIndex before reuse
-        countRe.lastIndex = 0;
-        results.push({
-          path: relativePath,
-          name: basename(entry.name, '.md'),
-          folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
-          titleMatch,
-          matchCount: (contentLower.match(countRe) || []).length,
-          snippets,
-          tags
-        });
       }
     }
+
+    countRe.lastIndex = 0;
+    return {
+      path: relativePath,
+      name: basename(name, '.md'),
+      folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
+      titleMatch,
+      matchCount: (contentLower.match(countRe) || []).length,
+      snippets,
+      tags
+    };
+  }));
+  for (const r of dirResults) if (r) results.push(r);
+
+  // Recurse into subdirectories (kept sequential to bound open file descriptors
+  // on deep vaults; the per-directory file reads above are already parallel).
+  for (const dir of subdirs) {
+    await searchDir(rootPath, dir, query, countRe, results);
   }
 }
 
@@ -390,27 +401,37 @@ export async function getVaultGraph(vaultId) {
 async function collectNotes(rootPath, currentPath, noteMap, nodes) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
+  const subdirs = [];
+  const mdFiles = [];
   for (const entry of entries) {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const fullPath = join(currentPath, entry.name);
+    if (entry.isDirectory()) subdirs.push(fullPath);
+    else if (entry.isFile() && extname(entry.name) === '.md') mdFiles.push({ name: entry.name, fullPath });
+  }
 
-    if (entry.isDirectory()) {
-      await collectNotes(rootPath, fullPath, noteMap, nodes);
-    } else if (entry.isFile() && extname(entry.name) === '.md') {
-      const content = await readFile(fullPath, 'utf-8');
-      const relativePath = relative(rootPath, fullPath);
-      const noteName = basename(entry.name, '.md');
-      const { tags, wikilinks } = parseNoteMetadata(content);
+  // Read this directory's markdown files concurrently, then push results in
+  // stable directory order — building the note graph no longer serializes disk.
+  const parsed = await Promise.all(mdFiles.map(async ({ name, fullPath }) => {
+    const content = await readFile(fullPath, 'utf-8');
+    const relativePath = relative(rootPath, fullPath);
+    const noteName = basename(name, '.md');
+    const { tags, wikilinks } = parseNoteMetadata(content);
+    return { noteName, relativePath, tags, wikilinks };
+  }));
+  for (const { noteName, relativePath, tags, wikilinks } of parsed) {
+    noteMap.set(noteName, relativePath);
+    nodes.push({
+      path: relativePath,
+      name: noteName,
+      folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
+      tags,
+      wikilinks
+    });
+  }
 
-      noteMap.set(noteName, relativePath);
-      nodes.push({
-        path: relativePath,
-        name: noteName,
-        folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
-        tags,
-        wikilinks
-      });
-    }
+  for (const dir of subdirs) {
+    await collectNotes(rootPath, dir, noteMap, nodes);
   }
 }
 

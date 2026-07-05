@@ -1,11 +1,14 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 import { FALLBACK_COLUMNS, ticketInColumn, bucketTickets } from '../lib/kanbanColumns.js';
 
-function TicketCard({ ticket, isDragOverlay }) {
+// Memoized: rendered once per ticket inside a dnd-kit board that re-renders on
+// every pointer move during a drag. Props are a stable ticket object + a
+// primitive flag, so memo skips re-rendering cards that aren't being dragged.
+const TicketCard = memo(function TicketCard({ ticket, isDragOverlay }) {
   return (
     <div className={`p-2 bg-port-card border border-port-border rounded-lg transition-colors ${isDragOverlay ? 'shadow-lg shadow-black/50 border-port-accent/50 rotate-2' : ''}`}>
       <div className="flex items-start justify-between gap-1">
@@ -28,9 +31,11 @@ function TicketCard({ ticket, isDragOverlay }) {
       </div>
     </div>
   );
-}
+});
 
-function DraggableTicket({ ticket, disabled, appId, canQueue }) {
+// Memoized for the same reason as TicketCard: only the card actively being
+// dragged changes; the rest keep stable ticket/disabled/appId/canQueue props.
+const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId, canQueue }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ticket.key,
     data: { ticket },
@@ -93,7 +98,7 @@ function DraggableTicket({ ticket, disabled, appId, canQueue }) {
       </div>
     </div>
   );
-}
+});
 
 function DroppableColumn({ column, isOver, disabled, appId }) {
   const { setNodeRef } = useDroppable({ id: column.id, disabled });

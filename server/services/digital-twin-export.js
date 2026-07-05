@@ -41,15 +41,16 @@ export async function exportDigitalTwin(format, documentIds = null, includeDisab
   // Sort by priority
   docs.sort((a, b) => a.priority - b.priority);
 
-  // Load content for each document
-  const documentsWithContent = [];
-  for (const doc of docs) {
-    const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
-    if (existsSync(filePath)) {
+  // Load content for each document in parallel, preserving priority order —
+  // every doc is needed regardless, so there is no reason to serialize the reads.
+  const documentsWithContent = (await Promise.all(
+    docs.map(async doc => {
+      const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
+      if (!existsSync(filePath)) return null;
       const content = await readFile(filePath, 'utf-8');
-      documentsWithContent.push({ ...doc, content });
-    }
-  }
+      return { ...doc, content };
+    })
+  )).filter(Boolean);
 
   switch (format) {
     case 'system_prompt':

@@ -84,15 +84,20 @@ export async function getEvents(options = {}) {
   const accounts = await listAccounts();
   const accountMap = new Map(accounts.map(a => [a.id, a]));
 
+  const accountIds = files
+    .filter(file => file.endsWith('.json'))
+    .map(file => file.replace('.json', ''))
+    .filter(id => UUID_RE.test(id));
+  // Load each account's cache in parallel rather than serializing one disk read
+  // per account before aggregating the combined calendar view.
+  const caches = await Promise.all(
+    accountIds.map(async id => ({ id, cache: await loadCache(id) }))
+  );
   let allEvents = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const fileAccountId = file.replace('.json', '');
-    if (!UUID_RE.test(fileAccountId)) continue;
-    const cache = await loadCache(fileAccountId);
-    let events = cache.events.map(e => ({ ...e, accountId: e.accountId || fileAccountId }));
+  for (const { id, cache } of caches) {
+    let events = cache.events.map(e => ({ ...e, accountId: e.accountId || id }));
     events = filterDeclinedAndCancelled(events);
-    events = filterByEnabledSubcalendars(events, accountMap.get(fileAccountId));
+    events = filterByEnabledSubcalendars(events, accountMap.get(id));
     allEvents.push(...events);
   }
   allEvents = filterBySearch(allEvents, search);

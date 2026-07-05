@@ -1,9 +1,24 @@
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
+
+// Twin document markdown is re-read on every agent prompt build
+// (getDigitalTwinForPrompt runs per prompt, per twin test). These files rarely
+// change, so cache their contents keyed by path + mtime and only re-read when
+// the file actually changes on disk. A cheap fs.stat gates the expensive read.
+const docContentCache = new Map();
+
+async function readTwinDoc(filePath) {
+  const { mtimeMs } = await stat(filePath);
+  const cached = docContentCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.content;
+  const content = await readFile(filePath, 'utf-8');
+  docContentCache.set(filePath, { mtimeMs, content });
+  return content;
+}
 
 /**
  * Resolve the persona to apply for this prompt. `personaId` may be a specific
@@ -69,7 +84,7 @@ export async function getDigitalTwinForPrompt(options = {}) {
     const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
     if (!existsSync(filePath)) continue;
 
-    const content = await readFile(filePath, 'utf-8');
+    const content = await readTwinDoc(filePath);
 
     if (tokenCount + content.length > maxChars) {
       // Truncate if we're over budget

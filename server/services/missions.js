@@ -26,18 +26,20 @@ async function loadMissions() {
   await ensureDir(DATA_DIR)
 
   const files = await fs.readdir(DATA_DIR).catch(() => [])
-  const missions = []
 
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue
+  // Read every mission file in parallel on cold load rather than serializing
+  // one disk read at a time; the result is memoized in missionsCache below.
+  const loaded = await Promise.all(
+    files
+      .filter(file => file.endsWith('.json'))
+      .map(async file => {
+        const content = await tryReadFile(path.join(DATA_DIR, file))
+        if (!content) return null
+        return safeJSONParse(content, null, { context: `mission:${file}` })
+      })
+  )
 
-    const filePath = path.join(DATA_DIR, file)
-    const content = await tryReadFile(filePath)
-    if (content) {
-      const mission = safeJSONParse(content, null, { context: `mission:${file}` })
-      if (mission) missions.push(mission)
-    }
-  }
+  const missions = loaded.filter(Boolean)
 
   missionsCache = missions
   return missions
