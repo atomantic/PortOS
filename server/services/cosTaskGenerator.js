@@ -1288,10 +1288,14 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one. With no
+  // pin, leave metadata.model unset so selectModelForTask resolves the ACTIVE
+  // provider's tier/default model at spawn time — never a hardcoded literal.
+  // (A stale literal here once pinned an opus release that had since dropped
+  // out of the provider config, spawning claude with a --model the provider
+  // no longer lists.)
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`);
@@ -1768,11 +1772,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one; otherwise
+  // leave it unset so selectModelForTask resolves the active provider's tier/
+  // default model at spawn time (see note in generateSelfImprovementTaskForType).
   if (interval.model) {
     metadata.model = interval.model;
-  } else if (!metadata.provider) {
-    // Only default to Claude when no per-stage provider overrides the selection
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
