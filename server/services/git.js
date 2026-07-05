@@ -590,6 +590,32 @@ export async function getRepoBranches(dir) {
 }
 
 /**
+ * Get the set of local branch names merged into the default branch.
+ * Prefers the local default-branch ref, but falls back to the remote-tracking
+ * ref when there's no local branch by that name (single-branch clones,
+ * feature-only worktrees) — otherwise `git branch --merged <defaultBranch>`
+ * fails and every branch silently reports unmerged.
+ * @param {string} dir - Working directory
+ * @param {string} defaultBranch - Default branch name (e.g. "main")
+ * @returns {Promise<Set<string>>}
+ */
+async function getLocalMergedBranchNames(dir, defaultBranch) {
+  let result = await execGit(
+    ['branch', '--merged', defaultBranch, '--format=%(refname:short)'],
+    dir,
+    { ignoreExitCode: true }
+  );
+  if (result.exitCode !== 0) {
+    result = await execGit(
+      ['branch', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'],
+      dir,
+      { ignoreExitCode: true }
+    );
+  }
+  return new Set(result.stdout.trim().split('\n').filter(Boolean));
+}
+
+/**
  * Get all local branches with tracking info
  * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean}>>}
  */
@@ -608,23 +634,7 @@ export async function getBranches(dir) {
   const protectedSet = new Set(PROTECTED_BRANCHES);
   protectedSet.add(defaultBranch);
 
-  // Prefer the local default-branch ref, but fall back to the remote-tracking
-  // ref when there's no local branch by that name (single-branch clones,
-  // feature-only worktrees) — otherwise `git branch --merged <defaultBranch>`
-  // fails and every branch silently reports unmerged.
-  let mergedResult = await execGit(
-    ['branch', '--merged', defaultBranch, '--format=%(refname:short)'],
-    dir,
-    { ignoreExitCode: true }
-  );
-  if (mergedResult.exitCode !== 0) {
-    mergedResult = await execGit(
-      ['branch', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'],
-      dir,
-      { ignoreExitCode: true }
-    );
-  }
-  const mergedSet = new Set(mergedResult.stdout.trim().split('\n').filter(Boolean));
+  const mergedSet = await getLocalMergedBranchNames(dir, defaultBranch);
 
   return result.stdout.trim().split('\n').filter(Boolean)
     .map(parseBranchVerboseLine)
@@ -1016,12 +1026,12 @@ export async function deleteMergedBranches(dir, { excludeBranches } = {}) {
 
   await execGitSafe(['fetch', 'origin', '--prune'], dir, { ignoreExitCode: true });
 
-  const [localMerged, remoteMerged] = await Promise.all([
-    execGit(['branch', '--merged', defaultBranch, '--format=%(refname:short)'], dir, { ignoreExitCode: true }),
+  const [localMergedNames, remoteMerged] = await Promise.all([
+    getLocalMergedBranchNames(dir, defaultBranch),
     execGit(['branch', '-r', '--merged', `origin/${defaultBranch}`, '--format=%(refname:short)'], dir, { ignoreExitCode: true })
   ]);
 
-  const mergedLocalNames = localMerged.stdout.trim().split('\n').filter(Boolean)
+  const mergedLocalNames = [...localMergedNames]
     .filter(name => !protectedSet.has(name) && !localOnlyProtected.has(name) && name !== currentBranch);
 
   const mergedRemoteNames = remoteMerged.stdout.trim().split('\n').filter(Boolean)
