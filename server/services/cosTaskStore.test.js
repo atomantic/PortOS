@@ -177,6 +177,38 @@ describe('cosTaskStore.addTask', () => {
     expect(tasks).toHaveLength(2);
   });
 
+  it('rejects a raw duplicate whose app lives in metadata.app (queue-path improvement tasks)', async () => {
+    // Queue-path improvement tasks (generateManagedAppImprovementTaskForType) arrive
+    // pre-built with `raw: true` and carry the app in `metadata.app`, NOT top-level
+    // `taskData.app`. Two concurrent queueEligibleImprovementTasks snapshots each add
+    // an identical `[Improvement: PortOS] …` task; the second must be rejected as a
+    // duplicate (regression for the overlapping-duplicate-runs bug).
+    const rawTask = (id) => ({
+      id, description: '[Improvement: PortOS] Performance Analysis', status: 'pending',
+      priority: 'LOW', priorityValue: PRIORITY_VALUES.LOW, taskType: 'internal', autoApproved: true,
+      metadata: { app: 'portos', analysisType: 'performance' }
+    });
+    const first = await addTask(rawTask('sys-perf-1'), 'internal', { raw: true });
+    expect(first.duplicate).toBeUndefined();
+    const second = await addTask(rawTask('sys-perf-2'), 'internal', { raw: true });
+    expect(second.duplicate).toBe(true);
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === '[Improvement: PortOS] Performance Analysis')).toHaveLength(1);
+  });
+
+  it('does NOT treat raw tasks with the same description against different metadata.app as duplicates', async () => {
+    const rawTask = (id, app) => ({
+      id, description: 'shared raw', status: 'pending',
+      priority: 'LOW', priorityValue: PRIORITY_VALUES.LOW, taskType: 'internal', autoApproved: true,
+      metadata: { app }
+    });
+    await addTask(rawTask('sys-a', 'portos'), 'internal', { raw: true });
+    const second = await addTask(rawTask('sys-b', 'bookloom'), 'internal', { raw: true });
+    expect(second.duplicate).toBeUndefined();
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'shared raw')).toHaveLength(2);
+  });
+
   it('ignoreTaskId excludes one in-flight task from the dedup scan (perpetual drain-on-completion)', async () => {
     // The just-completed perpetual task is still in_progress on disk when the
     // refill re-queues an identical first-line for the same app. Passing its id
@@ -438,13 +470,14 @@ describe('addTask — first-line dedup (source guards)', () => {
 
   it('addTask scopes dedup by metadata.app', () => {
     // Same description against two different apps must NOT trip the duplicate
-    // check — the dedup predicate compares the candidate's `metadata?.app` (or
-    // null) against the new task's `taskData.app`.
+    // check — the dedup predicate compares the existing task's `metadata?.app`
+    // (or null) against the candidate's app, which for raw tasks lives in
+    // `taskData.metadata?.app` (top-level `taskData.app` is non-raw only).
     const start = STORE_SRC.indexOf('export async function addTask');
     const end = STORE_SRC.indexOf('export async function', start + 1);
     const fnBody = STORE_SRC.slice(start, end === -1 ? undefined : end);
     expect(fnBody).toMatch(/t\.metadata\?\.app\s*\|\|\s*null/);
-    expect(fnBody).toMatch(/taskData\.app\s*\|\|\s*null/);
+    expect(fnBody).toMatch(/taskData\.metadata\?\.app/);
   });
 });
 
