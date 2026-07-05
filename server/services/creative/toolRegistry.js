@@ -222,8 +222,12 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
     };
   }
 
-  // execute mode — charge the daily action budget for llm/render tools first.
-  if (BUDGETED_COST_CLASSES.has(tool.costClass)) {
+  // execute mode — charge the daily action budget for llm/render tools first,
+  // EXCEPT self-budgeting tools: a long-running coordinator (Series Autopilot)
+  // budget-gates and records each of its own LLM/render steps against the same
+  // cos budget internally, so charging one action here would double-count and,
+  // under a tight cap, consume the last action before the run does any work.
+  if (BUDGETED_COST_CLASSES.has(tool.costClass) && !tool.selfBudgeted) {
     const status = await getDomainBudgetStatus(BUDGET_DOMAIN);
     if (!status.withinBudget) {
       console.log(`⛔ creative dispatch ${name} over budget (${BUDGET_DOMAIN} ${status.exceeded})`);
@@ -239,6 +243,17 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
   try {
     const result = await tool.execute(parsed, ctx);
     const timingMs = Date.now() - startedAt;
+    // A wrapped service that self-gates returns `{ rejected: true, ... }` instead
+    // of throwing (e.g. Series Autopilot when cos autonomy is `off`, reachable
+    // when creative is explicitly overridden to `execute` over an `off` cos).
+    // Surface that honestly through the one chokepoint rather than reporting a
+    // clean `executed` — otherwise the ledger and orchestrator record a
+    // successful start for a run the inner gate refused.
+    if (result && result.rejected === true) {
+      console.log(`🚫 creative dispatch ${name} rejected by wrapped service (${result.mode ?? 'gate'})`);
+      await recordLedger(ctx, { ...base, outcome: 'rejected', timingMs });
+      return { ok: false, rejected: true, reason: result.reason || 'tool-rejected', mode, tool: name, result, timingMs };
+    }
     console.log(`✅ creative dispatch ${name} executed in ${timingMs}ms`);
     await recordLedger(ctx, { ...base, outcome: 'executed', timingMs });
     return { ok: true, mode, tool: name, longRunning: Boolean(tool.longRunning), result, timingMs };

@@ -70,6 +70,7 @@ import { dispatchTool as dispatchVoiceTool } from '../voice/tools.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';
 import { generateStage } from '../pipeline/textStages.js';
+import { startSeriesAutopilot } from '../pipeline/seriesAutopilot.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   CREATIVE_TOOLS,
@@ -246,6 +247,27 @@ describe('budget charging', () => {
     expect(out).toMatchObject({ ok: false, rejected: true, reason: 'budget', exceeded: 'actions' });
     expect(generateStage).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT charge a self-budgeting tool (Series Autopilot charges its own steps)', async () => {
+    setMode('execute');
+    const out = await dispatchCreativeTool('pipeline_startSeriesAutopilot', { seriesId: 'ser1' });
+    expect(out.ok).toBe(true);
+    expect(startSeriesAutopilot).toHaveBeenCalled();
+    expect(getDomainBudgetStatus).not.toHaveBeenCalled();
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+  });
+});
+
+describe('wrapped-service self-rejection', () => {
+  it('surfaces a tool that returns { rejected: true } as a rejected dispatch, not executed', async () => {
+    setMode('execute');
+    startSeriesAutopilot.mockResolvedValueOnce({ rejected: true, mode: 'off' });
+    const appendLedger = vi.fn(async () => {});
+    const out = await dispatchCreativeTool('pipeline_startSeriesAutopilot', { seriesId: 'ser1' }, { appendLedger });
+    expect(out).toMatchObject({ ok: false, rejected: true });
+    expect(out.result).toEqual({ rejected: true, mode: 'off' });
+    expect(appendLedger.mock.calls[0][0].outcome).toBe('rejected');
   });
 });
 

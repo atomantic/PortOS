@@ -75,6 +75,10 @@ export const PIPELINE_TOOLS = [
     description: 'Start (or no-op resume) the Series Autopilot for a series. Long-running: returns a run handle; progress and pauses arrive via events. Autopilot has its own cos-off gate; the orchestrator gate applies first.',
     costClass: COST_LLM,
     longRunning: true,
+    // Self-budgeting: the autopilot budget-gates and records each of its own
+    // LLM/render steps against the cos budget internally, so the dispatcher must
+    // NOT also charge one action for the start call (see dispatchCreativeTool).
+    selfBudgeted: true,
     schema: z.object({ seriesId: z.string().min(1), options: z.record(z.any()).optional() }),
     parameters: {
       type: 'object',
