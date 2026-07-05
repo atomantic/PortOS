@@ -61,6 +61,13 @@ import { execFile } from 'child_process';
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
 const DEFAULT_TUI_MIN_RUNTIME_MS = 15000;
+// Grace window after the last input written to the session (human paste via
+// the Shell page, or our own auto-paste) before the idle reaper is allowed to
+// fire again. Covers a large bracketed paste sitting in a silent reflow/commit
+// window with no PTY output yet — comfortably above the paste-to-enter
+// handshake windows in tuiHandshake.js (PASTE_DEADLINE_MS=10s) without
+// meaningfully weakening the idle-reap protection once input truly stops.
+const PASTE_INPUT_GRACE_MS = 15000;
 // Tail-read window for raw.txt at failure analysis. analyzeAgentFailure only
 // inspects the last ~200 lines, so reading the whole file (which has no upper
 // bound for long-running agents) would reintroduce the OOM risk the disk
@@ -1043,13 +1050,21 @@ export async function spawnTuiAgent({
 
   const idleTimer = setInterval(() => {
     if (!promptSentAt || finalized) return;
-    // Don't reap a session a human is actively watching in the Shell page —
-    // they may be mid-paste or reading output. A big bracketed paste can sit
-    // in a silent reflow/commit window with no PTY output yet, which looks
-    // identical to "idle" to this timer otherwise (issue: paste into a live
-    // agent TUI got reaped mid-paste, same class of bug as #2074/#2084 but for
-    // an attached viewer instead of a merge-queue/review-loop wait).
-    if (sessionId && shellService.isSessionViewed(sessionId)) return;
+    // Don't reap a session that just received real input — a human pasting
+    // into the Shell page, or our own auto-paste. A big bracketed paste can
+    // sit in a silent reflow/commit window with no PTY output yet, which
+    // looks identical to "idle" to this timer otherwise (same class of bug
+    // as #2074/#2084, but for a live paste instead of a merge-queue/
+    // review-loop wait). Gated on INPUT RECENCY, not "is a socket attached" —
+    // a regular (non-external) Shell session keeps its socket bound after the
+    // viewer navigates away (only external one-shot runs get released via
+    // `shell:release-views`), so "attached" would permanently suppress
+    // idle-complete for any agent glanced at once in the Shell UI. Recency
+    // naturally expires once nobody is actually interacting.
+    if (sessionId) {
+      const lastInputAt = shellService.getLastInputAt(sessionId);
+      if (lastInputAt && Date.now() - lastInputAt < PASTE_INPUT_GRACE_MS) return;
+    }
     const runtime = Date.now() - promptSentAt;
     const idle = Date.now() - lastOutputAt;
     if (runtime < DEFAULT_TUI_MIN_RUNTIME_MS) return;

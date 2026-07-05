@@ -475,36 +475,23 @@ describe('registerExternalSession / unregisterExternalSession', () => {
     expect(shell.isExternalSessionAttached(shellId)).toBe(false);
   });
 
-  it('isSessionViewed is true for a plain interactive/agent-tui session with a bound viewer (unlike isExternalSessionAttached)', () => {
-    // The gap isExternalSessionAttached has: it only ever returns true for
-    // sessions registered via registerExternalSession (external: true) — a
-    // regular createShellSession session (what CoS agent-tui sessions use)
-    // never sets `external`, so isExternalSessionAttached is permanently
-    // false for it even with a live viewer attached. isSessionViewed covers
-    // both cases by keying purely on whether a socket is bound.
+  it('getLastInputAt tracks writeToSession recency, independent of socket attachment', () => {
+    // Deliberately NOT keyed on socket attachment (unlike isExternalSessionAttached):
+    // a regular (non-external) session's socket stays bound after its viewer
+    // navigates away — only external one-shot runs get released via
+    // shell:release-views — so an "is a socket attached" signal would never
+    // naturally expire for those. Input recency does expire on its own once
+    // nobody is actually writing to the session.
     const owner = makeSocket('owner');
     const shellId = shell.createShellSession(owner);
-    expect(shell.isSessionViewed(shellId)).toBe(true); // createShellSession binds the creating socket
-    expect(shell.isExternalSessionAttached(shellId)).toBe(false); // still false — not an external session
+    expect(shell.getLastInputAt(shellId)).toBeNull(); // no input yet
 
-    shell.detachSocketSessions(owner);
-    expect(shell.isSessionViewed(shellId)).toBe(false);
+    const before = Date.now();
+    expect(shell.writeToSession(shellId, 'hello\n')).toBe(true);
+    expect(shell.getLastInputAt(shellId)).toBeGreaterThanOrEqual(before);
 
-    const viewer = makeSocket('viewer');
-    shell.attachSession(shellId, viewer);
-    expect(shell.isSessionViewed(shellId)).toBe(true);
-    expect(shell.isExternalSessionAttached(shellId)).toBe(false); // attachSession never sets external either
-
-    shell.detachSocketSessions(viewer);
-    expect(shell.isSessionViewed(shellId)).toBe(false);
-
-    // Never true for unknown ids.
-    expect(shell.isSessionViewed('missing')).toBe(false);
-
-    // Still true for an external (TUI-run) session with a viewer — isSessionViewed is a superset.
-    const runId = shell.registerExternalSession('run-viewed', makeFakePty(), {});
-    shell.attachSession(runId, viewer);
-    expect(shell.isSessionViewed(runId)).toBe(true);
+    // Never null-coalesced weirdly for unknown ids.
+    expect(shell.getLastInputAt('missing')).toBeNull();
   });
 
   it('releases a watched run when the same socket attaches to another session', () => {
