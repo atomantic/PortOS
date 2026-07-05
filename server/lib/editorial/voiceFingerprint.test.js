@@ -155,6 +155,35 @@ describe('computeVoiceDrift', () => {
     expect(drift.outliers).toEqual([]);
   });
 
+  it('excludes empty / not-yet-drafted issue sections from the gate and stats', () => {
+    // Three drafted issues + one empty stub header → only 3 contentful issues,
+    // below the default minIssues of 4, so the check gates off rather than
+    // treating the stub as a fourth issue.
+    const withStub = manuscriptOf([issueBlock(3, 5), issueBlock(3, 5), issueBlock(3, 5)]) + '\n\n# Issue 4\n\n   ';
+    const gated = computeVoiceDrift(withStub);
+    expect(gated.gatedOff).toBe(true);
+    expect(gated.issueCount).toBe(3);
+
+    // Four drafted issues + an empty stub → the stub is neither counted toward
+    // the gate nor flagged as a (wild all-zero) outlier.
+    const withStub2 = manuscriptOf([issueBlock(3, 5), issueBlock(3, 5), issueBlock(3, 5), issueBlock(3, 5)]) + '\n\n# Issue 5\n\n';
+    const drift = computeVoiceDrift(withStub2);
+    expect(drift.gatedOff).toBe(false);
+    expect(drift.issueCount).toBe(4);
+    expect(drift.outliers.some((o) => o.issue === 5)).toBe(false);
+  });
+
+  it('defaults minIssues to 4 — a 3-issue series gates off (√2 < 1.5σ ceiling)', () => {
+    // Three drafted issues, one drifting. At N=3 the largest possible z is √2 ≈
+    // 1.41, below the default 1.5σ threshold, so the default gate stays closed.
+    const ms = manuscriptOf([issueBlock(3, 5), issueBlock(3, 5), issueBlock(3, 20)]);
+    expect(computeVoiceDrift(ms).gatedOff).toBe(true);
+    // An explicit minIssues:3 with a low enough threshold can still flag (√2 clears 1.0).
+    const opened = computeVoiceDrift(ms, { minIssues: 3, threshold: 1.0 });
+    expect(opened.gatedOff).toBe(false);
+    expect(opened.outliers.some((o) => o.metricKey === 'sentenceLenMean')).toBe(true);
+  });
+
   it('flags the outlier issue on sentence-length mean with hand-computed σ', () => {
     // 3 issues at mean 5, 1 issue at mean 20 → values [5,5,5,20].
     // mean = 8.75, σ = √42.1875 ≈ 6.495, z(issue4) = 11.25/6.495 ≈ 1.732 (> 1.5).

@@ -154,8 +154,10 @@ export function computeFingerprint(text, opts = {}) {
   const paragraphs = splitParagraphs(src);
 
   // Sentence-length metrics (words per sentence via the shared word tokenizer, so
-  // "the cat's" counts identically to every other check).
-  const sentenceLengths = sentences.map((s) => tokenizeWords(s.text).length);
+  // "the cat's" counts identically to every other check). Tokenize each sentence
+  // ONCE — both the length pass and the dominant-opener pass below read this.
+  const sentenceTokenLists = sentences.map((s) => tokenizeWords(s.text));
+  const sentenceLengths = sentenceTokenLists.map((toks) => toks.length);
   const sMean = meanOf(sentenceLengths);
   const sStd = stdOf(sentenceLengths, sMean);
   const sCount = sentenceLengths.length;
@@ -195,11 +197,10 @@ export function computeFingerprint(text, opts = {}) {
   // Dominant sentence-opener share: the most common sentence-initial word, as a
   // fraction of sentences. High = every sentence opens the same way ("He … He …").
   const openerCounts = new Map();
-  for (const s of sentences) {
-    const first = tokenizeWords(s.text)[0];
+  for (const toks of sentenceTokenLists) {
+    const first = toks[0];
     if (!first) continue;
-    const key = first.lower;
-    openerCounts.set(key, (openerCounts.get(key) || 0) + 1);
+    openerCounts.set(first.lower, (openerCounts.get(first.lower) || 0) + 1);
   }
   let dominantOpener = 0;
   for (const c of openerCounts.values()) if (c > dominantOpener) dominantOpener = c;
@@ -229,8 +230,12 @@ export function computeFingerprint(text, opts = {}) {
 }
 
 // Split the stitched manuscript into per-issue text blocks on the `# Issue N`
-// headers the manuscript stitcher emits (the same header shape
-// `conflictIntensityTally` in checkInfra.js keys on). Duplicate issue numbers (a
+// headers the manuscript stitcher emits. The header pattern intentionally mirrors
+// `conflictIntensityTally` in checkInfra.js (its own local `headerRe`) — kept as a
+// parallel literal here rather than a shared `/g` constant on purpose: a single
+// exported `/g` regex instance carries mutable `lastIndex` state, so two `.exec`
+// callers in different modules would corrupt each other's scan. If the stitcher's
+// header shape ever changes, update both. Duplicate issue numbers (a
 // chunk boundary that repeats a header) accumulate into ONE block so an issue
 // isn't split into two thin, noisy fingerprints. Returns [] when there are no
 // headers (the drift check then gates off — a single unlabelled blob can't drift
@@ -310,7 +315,7 @@ export function describeDrift(o) {
   const val = `${o.value}${o.unit || ''}`;
   const mean = `${round2(o.mean)}${o.unit || ''}`;
   return `Issue ${o.issue}'s ${label} is ${val} vs the series mean of ${mean} `
-    + `(${o.z.toFixed(1)}σ ${o.direction === 'high' ? 'above' : 'below'}) — ${dir}. `
+    + `(${Math.abs(o.z).toFixed(1)}σ ${o.direction === 'high' ? 'above' : 'below'}) — ${dir}. `
     + 'A statistical outlier against the series voice; confirm it is an earned modulation, not drift.';
 }
 
@@ -319,9 +324,15 @@ export function describeDrift(o) {
  * structured results the `style.voice-drift` check maps to editorial findings (so
  * the severity/config policy lives in the check, not here).
  *
- * Small-N gate: with fewer than `minIssues` issues drafted, σ is meaningless
- * (a two-point "series" always shows each point as ±1σ), so the check gates OFF
- * and emits nothing — `{ gatedOff: true, issueCount, outliers: [] }`.
+ * Small-N gate: with fewer than `minIssues` issues drafted, σ is too small to be
+ * meaningful, so the check gates OFF and emits nothing — `{ gatedOff: true,
+ * issueCount, outliers: [] }`. The default `minIssues` is 4, not 3, because the
+ * LARGEST possible population z-score for N points is √(N−1) (one issue vs the
+ * rest identical): at N=3 that ceiling is √2 ≈ 1.41 — below the default 1.5σ
+ * threshold, so a 3-issue series could NEVER flag drift and the check would
+ * silently be a no-op. At N=4 the ceiling is √3 ≈ 1.73, so drift is reachable. An
+ * explicit `minIssues: 3` is still honored (it only matters with a lower
+ * `threshold` — e.g. 1.0, where √2 clears it).
  *
  * For each metric, a series mean/σ is computed across issues; a metric whose σ is
  * ~0 (every issue identical) is skipped — no drift is possible. An issue is an
@@ -338,9 +349,17 @@ export function describeDrift(o) {
  */
 export function computeVoiceDrift(manuscript, opts = {}) {
   const threshold = Number.isFinite(opts.threshold) && opts.threshold > 0 ? opts.threshold : 1.5;
-  const minIssues = Number.isInteger(opts.minIssues) && opts.minIssues >= 3 ? opts.minIssues : 3;
-  const matrix = voiceFingerprintMatrix(manuscript, { wells: opts.wells });
-  const { issues, metricKeys } = matrix;
+  const minIssues = Number.isInteger(opts.minIssues) && opts.minIssues >= 3 ? opts.minIssues : 4;
+  const fullMatrix = voiceFingerprintMatrix(manuscript, { wells: opts.wells });
+  // Drop empty / not-yet-drafted issue sections (a `# Issue N` header with no
+  // prose behind it). Counting them would let a stub satisfy `minIssues` and
+  // inject an all-zero row that pulls the series mean and flags the unwritten
+  // issue as a wild outlier on every metric. Drift is computed over the drafted
+  // issues only; the matrix returned is likewise restricted so renderFingerprintTable
+  // agrees with the stats.
+  const issues = fullMatrix.issues.filter((it) => it.words > 0 && it.sentences > 0);
+  const matrix = { ...fullMatrix, issues };
+  const { metricKeys } = matrix;
 
   if (issues.length < minIssues) {
     return { gatedOff: true, issueCount: issues.length, threshold, matrix, series: {}, outliers: [] };

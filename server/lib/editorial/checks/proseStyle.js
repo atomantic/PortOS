@@ -1006,7 +1006,7 @@ export const proseStyleChecks = [
     sources: ['manuscript'],
     label: 'Statistical voice drift (deterministic)',
     description:
-      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the series mean, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. Gates off with fewer than 3 issues drafted (σ is meaningless). No LLM cost.",
+      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the series mean, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. Gates off below 4 issues drafted — with a tiny series the largest possible σ-distance (√(N−1)) can't reach the default 1.5σ threshold. No LLM cost.",
     scope: 'series',
     kind: 'deterministic',
     category: 'style',
@@ -1020,8 +1020,11 @@ export const proseStyleChecks = [
     configSchema: z.object({
       // How many σ from the series mean before an issue's metric is flagged.
       sigmaThreshold: z.number().min(0.5).max(4).default(1.5),
-      // Minimum issues drafted before the check runs (σ is meaningless below 3).
-      minIssues: z.number().int().min(3).max(30).default(3),
+      // Minimum issues drafted before the check runs. Defaults to 4: at N=3 the
+      // largest possible σ-distance is √2 ≈ 1.41, below the default 1.5σ
+      // threshold, so a 3-issue series could never flag. An explicit 3 is honored
+      // (useful only with a lower threshold).
+      minIssues: z.number().int().min(3).max(30).default(4),
       // Cap findings per run so a wildly-uneven series can't flood the review.
       maxFindings: z.number().int().min(1).max(50).default(12),
       // Optional vocabulary "wells" — register categories to track coverage of,
@@ -1045,7 +1048,7 @@ export const proseStyleChecks = [
         min: 3,
         max: 30,
         step: 1,
-        help: 'The check stays off until at least this many issues are drafted — below 3 the standard deviation is meaningless and every issue reads as an outlier.',
+        help: 'The check stays off until at least this many issues are drafted. It defaults to 4 because the biggest σ-distance a series of N issues can show is √(N−1), and at 3 issues that (√2 ≈ 1.41) falls below the default 1.5σ threshold — so a 3-issue series can never flag drift unless you also lower the threshold.',
       },
       {
         key: 'maxFindings',
@@ -1069,7 +1072,7 @@ export const proseStyleChecks = [
       const wells = parseVoiceWells(cfg.vocabularyWells || '');
       const drift = computeVoiceDrift(ctx.manuscript, {
         threshold: cfg.sigmaThreshold ?? 1.5,
-        minIssues: cfg.minIssues ?? 3,
+        minIssues: cfg.minIssues ?? 4,
         wells,
       });
       if (drift.gatedOff) return [];
