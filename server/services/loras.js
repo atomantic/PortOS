@@ -25,7 +25,8 @@ import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS } from '../lib/fileUtils.js';
+import { verifySafetensorsStructure } from '../lib/hfCache.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   applyDownloadToken,
@@ -367,6 +368,43 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
   });
 };
 
+// After a LoRA finishes downloading, verify the on-disk `.safetensors` before
+// we commit to it by writing the sidecar. A truncated (short download) or
+// right-size-but-wrong-bytes file otherwise installs silently and renders
+// garbage ("mosaic" output) at generate time — the leading non-Metal cause of
+// corrupt output (issue #2199; mirrors the HF-cache integrity check in
+// hfCache.js / #1324). Always runs the cheap structural header/size check
+// (reads only the header region, never the multi-GB payload); adds a deep
+// sha256 compare only when the source metadata carried a digest (Civitai
+// `file.hashes.SHA256`). On any failure the file is deleted so the next install
+// re-downloads instead of training/rendering against corrupt weights.
+const verifyDownloadedLora = async (destPath, { expectedSha256 = null, source = 'civitai' } = {}) => {
+  const label = source === 'huggingface' ? 'HuggingFace' : 'Civitai';
+  const code = source === 'huggingface' ? 'HF_LORA_CORRUPT' : 'CIVITAI_LORA_CORRUPT';
+  const st = await stat(destPath).catch(() => null);
+  const structural = await verifySafetensorsStructure(destPath, st?.size ?? 0);
+  if (!structural.ok) {
+    await rm(destPath, { force: true }).catch(() => {});
+    throw new ServerError(
+      `${label} LoRA download is corrupt (${structural.reason}) — the partial file was deleted. Retry the install.`,
+      { status: 502, code },
+    );
+  }
+  // Civitai hashes are uppercase hex; sha256File returns lowercase — compare
+  // case-insensitively and only when the digest is a well-formed sha256.
+  const want = typeof expectedSha256 === 'string' ? expectedSha256.trim().toLowerCase() : '';
+  if (/^[0-9a-f]{64}$/.test(want)) {
+    const actual = await sha256File(destPath).catch(() => null);
+    if (actual && actual.toLowerCase() !== want) {
+      await rm(destPath, { force: true }).catch(() => {});
+      throw new ServerError(
+        `${label} LoRA failed SHA-256 verification (expected ${want.slice(0, 12)}…, got ${actual.slice(0, 12)}…) — the file was deleted. Retry the install.`,
+        { status: 502, code },
+      );
+    }
+  }
+};
+
 // Install a LoRA from a Civitai URL. Returns the new sidecar JSON so the
 // client can render it immediately without a second list round-trip.
 export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
@@ -435,6 +473,7 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
     headers: { 'User-Agent': 'PortOS/civitai-installer' },
     hasApiKey: !!apiKey,
   });
+  await verifyDownloadedLora(destPath, { expectedSha256: file?.hashes?.SHA256 || null, source: 'civitai' });
 
   const sidecar = buildSidecar({ model, version, file, filename });
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
@@ -506,6 +545,10 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
     onProgress,
     signal,
   });
+  // HF's model metadata doesn't expose a per-file digest through pickHfLoraFile,
+  // so the structural header/size check is the integrity guard here (no deep
+  // sha256 compare available for this path).
+  await verifyDownloadedLora(destPath, { source: 'huggingface' });
 
   const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
