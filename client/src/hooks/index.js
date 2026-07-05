@@ -70,6 +70,7 @@ export * from './useImporterProgress.js';
 export * from './useInstallStream.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineProgress.js';
+export * from './useReaderPanel.js';
 export * from './useSeriesEditorial.js';
 export * from './useSseProgress.js';
 export * from './useModelDownloadStatus.js';
