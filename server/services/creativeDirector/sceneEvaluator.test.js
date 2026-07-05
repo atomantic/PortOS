@@ -90,6 +90,15 @@ describe('parseVisionVerdict', () => {
     expect(v.notes).toBe('great');
   });
 
+  it('treats explicit JSON null optional fields as absent, not "null"/0', () => {
+    const v = parseVisionVerdict('{"accepted": false, "score": null, "notes": null, "refinedPrompt": null, "imageStrength": null}');
+    expect(v.accepted).toBe(false);
+    expect(v.score).toBeUndefined();
+    expect(v.notes).toBeUndefined();
+    expect(v.refinedPrompt).toBeUndefined();
+    expect(v.imageStrength).toBeUndefined();
+  });
+
   it('throws when there is no JSON object', () => {
     expect(() => parseVisionVerdict('the render looks fine to me')).toThrow();
   });
@@ -128,6 +137,20 @@ describe('resolveVisionEvalTarget', () => {
     mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));
     const target = await resolveVisionEvalTarget();
     expect(target).toEqual({ provider: OLLAMA, model: 'llama3.2-vision' });
+  });
+
+  it('skips a disabled/missing local provider and uses the next usable one', async () => {
+    mocks.listVisionModels.mockResolvedValue([
+      { providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true },
+      { providerId: 'lmstudio', backend: 'lmstudio', id: 'llava', vision: true },
+    ]);
+    mocks.getProviderById.mockImplementation(async (id) => {
+      if (id === 'ollama') return { id: 'ollama', type: 'api', enabled: false }; // disabled
+      if (id === 'lmstudio') return { id: 'lmstudio', type: 'api', enabled: true };
+      return null;
+    });
+    const target = await resolveVisionEvalTarget();
+    expect(target).toEqual({ provider: { id: 'lmstudio', type: 'api', enabled: true }, model: 'llava' });
   });
 
   it('returns null when no vision-capable API provider exists', async () => {

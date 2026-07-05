@@ -51,17 +51,22 @@ const VISION_EVAL_MAX_TOKENS = 600;
 // assignment (below) may still point at any configured API vision provider.
 const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
 
-// Only `accepted` is load-bearing — everything else is advisory. Coerce loose
-// numbers/strings, and `.catch(undefined)` so an out-of-range or unparseable
-// optional field just drops out instead of rejecting the whole verdict (which
-// would needlessly fall the scene back to the Opus agent). A model that emits
-// `"score": 85` meaning 85% shouldn't nuke an otherwise-usable accept/reject.
+// Only `accepted` is load-bearing — everything else is advisory. Map an
+// explicit JSON `null` to `undefined` (absent) BEFORE coercion: `z.coerce`
+// would otherwise turn `null` into `"null"` / `0`, so a model emitting
+// `"refinedPrompt": null` would overwrite the scene prompt with the literal
+// string "null", and `"imageStrength": null` would force strength to 0 instead
+// of leaving it unchanged. Then `.catch(undefined)` drops an out-of-range or
+// unparseable value rather than rejecting the whole verdict (a model emitting
+// `"score": 85` meaning 85% shouldn't nuke an otherwise-usable accept/reject).
+const nullToUndefined = (v) => (v === null ? undefined : v);
+const optNumber = z.preprocess(nullToUndefined, z.coerce.number().min(0).max(1).optional().catch(undefined));
 const verdictSchema = z.object({
   accepted: z.boolean(),
-  score: z.coerce.number().min(0).max(1).optional().catch(undefined),
-  notes: z.coerce.string().max(2000).optional().catch(undefined),
-  refinedPrompt: z.coerce.string().max(8000).optional().catch(undefined),
-  imageStrength: z.coerce.number().min(0).max(1).optional().catch(undefined),
+  score: optNumber,
+  notes: z.preprocess(nullToUndefined, z.coerce.string().max(2000).optional().catch(undefined)),
+  refinedPrompt: z.preprocess(nullToUndefined, z.coerce.string().max(8000).optional().catch(undefined)),
+  imageStrength: optNumber,
 });
 
 /**
@@ -111,11 +116,15 @@ export async function resolveVisionEvalTarget() {
     // to auto-resolution so a healthy local VLM is still preferred.
   }
 
+  // Scan ALL local vision candidates, not just the first: the first entry may
+  // belong to a disabled/missing provider (e.g. Ollama off) while a later one
+  // (e.g. LM Studio) is usable. Stopping at the first would wrongly fall back
+  // to the Opus agent.
   const visionModels = await listVisionModels().catch(() => []);
-  const local = visionModels.find((m) => LOCAL_VISION_BACKENDS.has(m.backend));
-  if (local) {
-    const provider = await usableApiProvider(local.providerId);
-    if (provider) return { provider, model: local.id };
+  for (const m of visionModels) {
+    if (!LOCAL_VISION_BACKENDS.has(m.backend)) continue;
+    const provider = await usableApiProvider(m.providerId);
+    if (provider) return { provider, model: m.id };
   }
   return null;
 }
