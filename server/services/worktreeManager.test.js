@@ -457,12 +457,15 @@ describe('isGitLockError (worktree add lock detection, #2193)', () => {
     expect(isGitLockError('fatal: could not lock config file .git/config: File exists')).toBe(true);
     expect(isGitLockError('error: cannot lock ref')).toBe(true);
     expect(isGitLockError('Another git process seems to be running in this repository')).toBe(true);
-    expect(isGitLockError("fatal: '.git/worktrees/foo' already exists")).toBe(true);
   });
 
-  it('does NOT flag genuine, non-retryable failures', () => {
+  it('does NOT flag permanent failures — including "already exists", which is NOT lock contention', () => {
+    // These fast-fail identically on every retry, so matching them would just
+    // burn the retry budget and spam misleading "lock contention" logs (#2193).
     expect(isGitLockError("fatal: invalid reference: origin/nope")).toBe(false);
     expect(isGitLockError('fatal: not a valid object name')).toBe(false);
+    expect(isGitLockError("fatal: '/repo/data/cos/worktrees/agent-x' already exists")).toBe(false);
+    expect(isGitLockError("fatal: a branch named 'cos/task/agent' already exists")).toBe(false);
     expect(isGitLockError('')).toBe(false);
     expect(isGitLockError(undefined)).toBe(false);
   });
