@@ -85,19 +85,38 @@ function queueWorktreeCreate(repo, fn) {
 }
 
 /**
- * Delete a branch we tried (and failed) to create a worktree for, plus prune
- * stale worktree bookkeeping — so a failed `git worktree add -b/-B` doesn't
- * leave an orphan branch with no worktree accumulating in the repo (#2193).
+ * A git error saying the branch or worktree path already exists — a permanent
+ * precondition failure meaning the ref/dir PRE-DATED this add (git created
+ * nothing), NOT an orphan this add left behind. cleanupOrphanBranch keys off
+ * this to avoid `git branch -D`-ing a branch it didn't create (#2193).
+ */
+export function isPreexistingRefError(message) {
+  return /already exists/i.test(message || '');
+}
+
+/**
+ * Delete a branch a failed `git worktree add -b/-B` left orphaned (a ref with
+ * no worktree), so failed adds don't accumulate orphan branches (#2193).
  * Best-effort: every step swallows its own error. Only call for NEW-branch
  * adds — never for attach-to-existing-branch, which would delete a branch we
  * didn't create.
+ *
+ * Takes the causing error so it can:
+ *   - SKIP entirely when the add failed because the branch/path already existed
+ *     (`isPreexistingRefError`) — that branch pre-dated us and may hold real
+ *     commits; deleting it would be data loss.
+ *   - PRUNE before deleting: a partial add can register a stale worktree AND
+ *     create the branch, so a bare `git branch -D` fails with "used by
+ *     worktree". `worktree prune` first clears that registration so the delete
+ *     succeeds.
  */
-async function cleanupOrphanBranch(repo, branchName) {
+async function cleanupOrphanBranch(repo, branchName, err) {
   if (!branchName) return;
-  await execGit(['branch', '-D', branchName], repo).catch(err => {
-    console.log(`⚠️ Orphan branch cleanup failed for ${branchName}: ${err.message}`);
-  });
+  if (isPreexistingRefError(err?.message)) return;
   await execGit(['worktree', 'prune'], repo).catch(() => {});
+  await execGit(['branch', '-D', branchName], repo).catch(pruneErr => {
+    console.log(`⚠️ Orphan branch cleanup failed for ${branchName}: ${pruneErr.message}`);
+  });
 }
 
 /**
@@ -326,7 +345,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     ['worktree', 'add', '-b', branchName, worktreePath, baseRef],
     sourceWorkspace
   ).catch(async (err) => {
-    await cleanupOrphanBranch(sourceWorkspace, branchName);
+    await cleanupOrphanBranch(sourceWorkspace, branchName, err);
     throw err;
   });
 
@@ -522,11 +541,11 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
     // Remote branch exists but no local - track it. On final failure, drop the
     // partially-created local tracking branch (it re-creates from origin next run).
     await addWorktreeWithRetry(['worktree', 'add', '--track', '-b', branchName, FA_WORKTREES, `origin/${branchName}`], sourceWorkspace)
-      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName); throw err; });
+      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName, err); throw err; });
   } else {
     // New branch - create from base. Clean up the orphan branch on final failure (#2193).
     await addWorktreeWithRetry(['worktree', 'add', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace)
-      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName); throw err; });
+      .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName, err); throw err; });
   }
 
   console.log(`🌳 Created persistent worktree for feature agent ${featureAgentId} at ${FA_WORKTREES} (branch: ${branchName})`);
