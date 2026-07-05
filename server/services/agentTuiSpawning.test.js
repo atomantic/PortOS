@@ -543,6 +543,12 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
 
+    // Emit the prompt echo so paste verification passes (issue #2192) — without
+    // it the Enter is never sent, promptSubmittedAt stays null, and the run
+    // finalizes as idle-no-activity instead of exercising the idle-no-changes path.
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+
     // Advance past PASTE_TO_ENTER_FALLBACK_MS so submit fires.
     await vi.advanceTimersByTimeAsync(3600);
     await flushMicrotasks();
