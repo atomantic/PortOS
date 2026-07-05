@@ -129,6 +129,17 @@ export async function finalizePanel(seriesId, digest, responses, { runId = null 
   return snapshot;
 }
 
+/**
+ * Dismiss any prior reader-panel consensus findings when the panel can't produce
+ * a fresh read (no analyzable content). A `fresh`-mode seed with no findings
+ * auto-dismisses every open finding of this check id, so removing all content
+ * doesn't strand old consensus findings as open (inflating the health score). A
+ * no-op when none exist.
+ */
+export async function reconcileConsensusFindings(seriesId, { runId = null } = {}) {
+  await seedReviewFromFindings(seriesId, [], { runId, mode: 'fresh', checkId: CONSENSUS_CHECK_ID });
+}
+
 // Re-hash the current issue content to decide whether a stored panel is stale
 // (the drafts moved since the digest was built). Cheap — issue list + content
 // only, no series record or scene segmentation (the hash ignores both).

@@ -176,8 +176,29 @@ describe('consensusToFindings', () => {
     expect(f.checkId).toBe('reader-panel.consensus');
     expect(f.category).toBe('pacing'); // momentum_loss category
     expect(f.severity).toBe('high');   // 4/4 == all personas
+    // problem is the STABLE key-bearing text (question + issue only) — no persona
+    // names or verbatim quotes, so the finding key survives a re-convene.
     expect(f.problem).toContain('#4');
-    expect(f.problem).toContain('The Editor');
+    expect(f.problem).not.toContain('The Editor');
+    // volatile detail (who agreed + quotes) rides in suggestion, off the key.
+    expect(f.suggestion).toContain('The Editor');
+    expect(f.suggestion).toContain('4/4');
+  });
+
+  it('keeps problem stable across re-convenes with different persona quotes', () => {
+    const run1 = [
+      persona('editor', { momentum_loss: [4] }),
+      persona('genre-reader', { momentum_loss: [4] }),
+      persona('writer', { momentum_loss: [4] }),
+    ];
+    // Same consensus (issue 4, momentum_loss), but the personas re-worded their answers.
+    const run2 = run1.map((r) => ({ ...r, answers: { ...r.answers, momentum_loss: { text: `${r.persona} reworded`, issues: [4] } } }));
+    const m1 = minePanelDisagreements(run1, { validIssueNumbers: [4] });
+    const m2 = minePanelDisagreements(run2, { validIssueNumbers: [4] });
+    const f1 = consensusToFindings(m1.consensus, run1, { totalPersonas: 4 })[0];
+    const f2 = consensusToFindings(m2.consensus, run2, { totalPersonas: 4 })[0];
+    expect(f1.problem).toBe(f2.problem); // identity-bearing text unchanged
+    expect(f1.suggestion).not.toBe(f2.suggestion); // detail differs
   });
 
   it('grades a non-unanimous consensus as medium', () => {

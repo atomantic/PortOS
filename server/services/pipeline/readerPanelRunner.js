@@ -13,7 +13,7 @@
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { PANEL_PERSONAS } from '../../lib/editorial/panelDisagreement.js';
 import { buildDigestForSeries } from './readerPanelDigest.js';
-import { runPersona, finalizePanel } from './readerPanel.js';
+import { runPersona, finalizePanel, reconcileConsensusFindings } from './readerPanel.js';
 
 const runner = createSseRunner({ logLabel: 'reader panel' });
 
@@ -38,6 +38,9 @@ export function startReaderPanel(seriesId, options = {}) {
   return runner.start(seriesId, async ({ runId, record, broadcast }) => {
     const digest = await buildDigestForSeries(seriesId);
     if (!digest.issueCount) {
+      // No analyzable content — clear any stale consensus findings a prior panel
+      // seeded so they don't linger open after the content was removed.
+      await reconcileConsensusFindings(seriesId, { runId });
       broadcast({ type: 'complete', runId, personas: 0, empty: true, completedAt: new Date().toISOString() });
       return;
     }

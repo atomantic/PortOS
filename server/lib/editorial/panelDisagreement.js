@@ -162,8 +162,11 @@ export function minePanelDisagreements(responses, { validIssueNumbers = null, co
         personas: [...personaSet],
         count,
       };
+      // consensus = at/above the routing bar; everything else flagged (by some
+      // but not all, OR unanimous-yet-below a custom threshold) is attention —
+      // a total fall-through so no flagged concern is silently dropped.
       if (count >= consensusThreshold) consensus.push(entry);
-      else if (count < totalPersonas) attention.push(entry);
+      else attention.push(entry);
     }
   }
 
@@ -192,8 +195,17 @@ export function minePanelDisagreements(responses, { validIssueNumbers = null, co
 /**
  * Shape consensus entries into `seedReviewFromFindings` findings. A concern
  * agreed by every persona is `high`; one merely at/above the consensus bar is
- * `medium`. `problem` names the agreeing personas and folds in a short quote from
- * each so the triage view shows WHY it was flagged.
+ * `medium`.
+ *
+ * `problem` is kept STABLE across re-convenes — it names only the invariant
+ * (question + issue number), NOT the persona set or their verbatim quotes, both
+ * of which the LLM re-generates every run. Because `manuscriptReview.findingKey`
+ * folds `problem` into the finding's identity (`checkId|issueNumber|anchorQuote|
+ * problem`), a volatile `problem` would mint a new key each convene — dismissing
+ * the prior finding and re-raising an already-accepted concern as a fresh open
+ * one. The volatile detail (who agreed + their quotes) rides in `suggestion`,
+ * which is not part of the key, so the triage view still shows WHY it was
+ * flagged without destabilizing identity.
  */
 export function consensusToFindings(consensus, responses, { checkId = 'reader-panel.consensus', totalPersonas } = {}) {
   const list = Array.isArray(responses) ? responses : [];
@@ -209,11 +221,13 @@ export function consensusToFindings(consensus, responses, { checkId = 'reader-pa
       })
       .filter(Boolean)
       .join(' ');
-    const lead = `Reader panel (${entry.count}/${denom}: ${names}) agree on "${entry.questionLabel}" at issue #${entry.issueNumber}.`;
     findings.push({
       severity: entry.count >= denom ? 'high' : 'medium',
       category: entry.category,
-      problem: `${lead}${snippets ? ` ${snippets}` : ''}`.slice(0, PROBLEM_MAX),
+      // Stable key-bearing text (question + issue only).
+      problem: `Reader panel consensus on "${entry.questionLabel}" at issue #${entry.issueNumber}.`.slice(0, PROBLEM_MAX),
+      // Volatile detail — kept out of the finding key.
+      suggestion: `${entry.count}/${denom} personas agree (${names}).${snippets ? ` ${snippets}` : ''}`.slice(0, PROBLEM_MAX),
       issueNumber: entry.issueNumber,
       checkId,
     });
