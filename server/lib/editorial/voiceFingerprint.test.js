@@ -278,7 +278,7 @@ describe('style.voice-drift check (registry wiring)', () => {
     expect(findings[0].location).toContain('Issue 4');
   });
 
-  it('gates off (no findings) below 3 issues', () => {
+  it('gates off (no findings) below the minIssues default of 4', () => {
     const ms = manuscriptOf([issueBlock(3, 5), issueBlock(3, 20)]);
     expect(runCheck(ms)).toEqual([]);
   });
