@@ -23,7 +23,7 @@
  * lineages (003/027/054/127 and 005/019 respectively) — per the drift-cross-sync
  * convention, those earlier migrations were resynced in this same change: their
  * previous current hash moved into `ACCEPTED_OLD_MD5` and `NEW_SHIPPED_MD5` was
- * bumped to the post-165 hash so their drift-catch tests stay in lock-step with
+ * bumped to the post-166 hash so their drift-catch tests stay in lock-step with
  * the live sample. The drift baseline in `setup-data-drift.test.js` was updated
  * to match the merged sweep.
  *

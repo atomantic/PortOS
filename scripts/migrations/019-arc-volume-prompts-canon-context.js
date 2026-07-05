@@ -58,7 +58,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':   '612f8b04950e2ff26dd350dd76a062fe', // post-165 (foreshadowing ledger)
+  'pipeline-arc-overview.md':   '612f8b04950e2ff26dd350dd76a062fe', // post-166 (foreshadowing ledger)
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-arc-resolve.md':    'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940', // post-019

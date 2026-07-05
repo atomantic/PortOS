@@ -34,7 +34,7 @@ export const ACCEPTED_OLD_MD5 = {
 // migration installs). Mirror these into setup-data.js's drift table.
 export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
-  'pipeline-prose.md':          '430d38ed2da59e0d4212e65edc499a74', // post-165 (craft anti-patterns)
+  'pipeline-prose.md':          '430d38ed2da59e0d4212e65edc499a74', // post-166 (craft anti-patterns)
   'pipeline-comic-script.md':   '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'pipeline-teleplay.md':       '2ea9974ac3803658b2314db1f5818b77', // post-128 (canonical scene list)
 };
