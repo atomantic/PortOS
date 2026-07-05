@@ -14,3 +14,4 @@ export * from './repetition.js';
 export * from './shotContinuity.js';
 export * from './slopScore.js';
 export * from './voiceFingerprint.js';
+export * from './panelDisagreement.js';

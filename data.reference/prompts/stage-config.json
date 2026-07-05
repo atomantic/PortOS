@@ -289,6 +289,34 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-panel-editor": {
+      "name": "Pipeline — Reader Panel: The Editor",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-genre-reader": {
+      "name": "Pipeline — Reader Panel: The Genre Reader",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A voracious genre reader (50+ novels/year) reads a condensed arc digest and answers the panel's ~10 qualitative questions from a pure page-turn-pull perspective, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-writer": {
+      "name": "Pipeline — Reader Panel: The Writer",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A working novelist reads a condensed arc digest for craft — structure, beats, setup/payoff — and answers the panel's ~10 qualitative questions citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-first-reader": {
+      "name": "Pipeline — Reader Panel: The First Reader",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). An ordinary reader with no craft vocabulary reads a condensed arc digest and answers the panel's ~10 qualitative questions as pure emotional response, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
     "pipeline-reverse-outline": {
       "name": "Pipeline — Reverse Outline (scene segmentation + plotline tagging)",
       "description": "Read the whole drafted manuscript and produce a reverse outline: identify the recurring plotlines, then segment the prose into scenes (each tagged to the plotline it advances, with POV, setting, and narrative/action/dialogue mix). Feeds the color-coded Reverse Outline view and is the canonical scene-segmentation substrate other editorial checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
