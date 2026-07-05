@@ -10,15 +10,21 @@ import { COST_FREE, COST_LLM } from './shared.js';
 export const STORY_BUILDER_TOOLS = [
   {
     name: 'storyBuilder.createStorySession',
-    description: 'Create a new story-builder session (optionally minting a universe). Persists the session; returns its id.',
+    description: 'Create a new story-builder session (optionally minting a universe/series from the title + seed). Persists the session; returns its id.',
     costClass: COST_FREE,
-    schema: z.object({}).passthrough(),
+    // The wrapped service requires a non-empty `title` (it doubles as the minted
+    // universe/series name); other fields are optional passthrough.
+    schema: z.object({ title: z.string().min(1) }).passthrough(),
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Optional session name.' },
-        universeId: { type: 'string', description: 'Optional existing universe to attach to.' },
+        title: { type: 'string', description: 'Session title (also used as the minted universe/series name).' },
+        seedIdea: { type: 'string', description: 'Optional seed idea that seeds the universe starter prompt.' },
+        universeId: { type: 'string', description: 'Optional existing universe to attach to (instead of minting one).' },
+        seriesId: { type: 'string', description: 'Optional existing series to attach to.' },
+        intakeMode: { type: 'string', description: "Intake mode (default 'seed')." },
       },
+      required: ['title'],
     },
     execute: (args) => createStorySession(args),
   },

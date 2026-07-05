@@ -12,6 +12,7 @@ vi.mock('../voice/tools.js', () => ({
           parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
         }
       : null),
+  dispatchTool: vi.fn(async () => ({ summary: 'voice catalog result', results: [] })),
 }));
 
 // Mock the autonomy config + budget/usage services so gating is deterministic.
@@ -43,6 +44,7 @@ vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items:
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
 
 import { loadState } from '../cosState.js';
+import { dispatchTool as dispatchVoiceTool } from '../voice/tools.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';
 import { generateStage } from '../pipeline/textStages.js';
@@ -193,6 +195,14 @@ describe('budget charging', () => {
     setMode('execute');
     await dispatchCreativeTool('pipeline.createSeries', { name: 'S' });
     expect(recordDomainUsage).not.toHaveBeenCalled();
+  });
+
+  it('catalog.searchIngredients delegates to the voice catalog_lookup tool (honors the hydrated contract)', async () => {
+    setMode('execute');
+    const out = await dispatchCreativeTool('catalog.searchIngredients', { query: 'noir' }, { some: 'ctx' });
+    expect(dispatchVoiceTool).toHaveBeenCalledWith('catalog_lookup', { query: 'noir' }, { some: 'ctx' });
+    expect(out.ok).toBe(true);
+    expect(recordDomainUsage).not.toHaveBeenCalled(); // free tool
   });
 
   it('rejects when the budget is exhausted, without executing', async () => {

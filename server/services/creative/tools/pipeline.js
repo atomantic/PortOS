@@ -17,13 +17,17 @@ export const PIPELINE_TOOLS = [
     name: 'pipeline.createSeries',
     description: 'Create a new pipeline series record. Persists a record; returns it.',
     costClass: COST_FREE,
-    schema: z.object({}).passthrough(),
+    // The wrapped service rejects a missing/blank `name`; require it here so a
+    // bad orchestrator call fails the gate instead of the service.
+    schema: z.object({ name: z.string().min(1) }).passthrough(),
     parameters: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Optional series name.' },
+        name: { type: 'string', description: 'Series name (required).' },
         universeId: { type: 'string', description: 'Optional universe to attach the series to.' },
+        premise: { type: 'string', description: 'Optional series premise.' },
       },
+      required: ['name'],
     },
     execute: (args) => createSeries(args),
   },
