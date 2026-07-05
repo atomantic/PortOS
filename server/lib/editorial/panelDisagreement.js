@@ -153,8 +153,7 @@ export function minePanelDisagreements(responses, { validIssueNumbers = null, co
     const cites = citationsForQuestion(list, qid);
     for (const [issueNumber, personaSet] of cites) {
       if (validSet && !validSet.has(issueNumber)) continue;
-      const count = personaSet.size;
-      if (count < 1) continue;
+      const count = personaSet.size; // ≥ 1 — citationsForQuestion only maps issues at least one persona cited
       const entry = {
         questionId: qid,
         questionLabel: q.label,

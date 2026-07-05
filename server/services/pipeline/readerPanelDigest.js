@@ -126,6 +126,22 @@ const digestContentHash = (issues) =>
     .digest('hex');
 
 /**
+ * The digest's `sourceContentHash` depends ONLY on each issue's number + drafted
+ * text (see `digestContentHash`), so the staleness check doesn't need the full
+ * digest (series record, scene segmentation, excerpts). This lightweight variant
+ * reads only the issue list + content — cheap enough for the panel read path.
+ */
+export async function computeSourceContentHash(seriesId, { issues: issuesArg } = {}) {
+  const issues = Array.isArray(issuesArg) ? issuesArg : await listIssues({ seriesId });
+  const withContent = [];
+  for (const issue of issues) {
+    const picked = pickAnalyzableContent(issue);
+    if (picked) withContent.push({ number: issue.number, text: picked.text });
+  }
+  return digestContentHash(withContent);
+}
+
+/**
  * Build the full series digest the panel reads. Only issues with drafted
  * reader-facing content are included. Returns the structured digest plus a
  * `sourceContentHash` pinning the analyzed drafts (so a later edit flips the
@@ -133,9 +149,13 @@ const digestContentHash = (issues) =>
  * for disagreement mining).
  */
 export async function buildDigestForSeries(seriesId, { issues: issuesArg, series: seriesArg } = {}) {
-  const issues = Array.isArray(issuesArg) ? issuesArg : await listIssues({ seriesId });
-  const series = seriesArg !== undefined ? seriesArg : await getSeries(seriesId).catch(() => null);
-  const segmentation = await getSceneSegmentation(seriesId).catch(() => ({ scenes: [] }));
+  // Three independent reads — one is a whole-manuscript stitch inside
+  // getSceneSegmentation — so fan them out rather than awaiting serially.
+  const [issues, series, segmentation] = await Promise.all([
+    Array.isArray(issuesArg) ? issuesArg : listIssues({ seriesId }),
+    seriesArg !== undefined ? seriesArg : getSeries(seriesId).catch(() => null),
+    getSceneSegmentation(seriesId).catch(() => ({ scenes: [] })),
+  ]);
   const scenesByNumber = new Map();
   for (const scene of segmentation.scenes || []) {
     const num = scene?.issueNumber;

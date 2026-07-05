@@ -82,53 +82,58 @@ function PersonaChips({ ids }) {
   );
 }
 
+// consensus + attention are the same concern shape (differ only in tone) — one
+// helper renders both; polarizing has its own loved/hated shape below.
+function ConcernSection({ items, icon: Icon, title, headTone, itemClass, metaTone, labelClass }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <h3 className={`text-[11px] uppercase tracking-wider ${headTone} mb-1.5 flex items-center gap-1.5`}>
+        <Icon size={12} /> {title}
+      </h3>
+      <ul className="space-y-1.5">
+        {items.map((c, i) => (
+          <li key={`${c.questionId}-${c.issueNumber}-${i}`} className={`border rounded p-2 ${itemClass}`}>
+            <div className="flex items-center gap-2 flex-wrap text-xs text-gray-300">
+              <span className={`font-mono text-[10px] ${metaTone}`}>#{c.issueNumber}</span>
+              <span className={labelClass}>{c.questionLabel}</span>
+              <span className={`text-[10px] ${metaTone}`}>{c.count}/{c.totalPersonas}</span>
+              <PersonaChips ids={c.personas} />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function DisagreementList({ disagreements }) {
   const { consensus = [], attention = [], polarizing = [], totalPersonas = 0 } = disagreements || {};
   const nothing = !consensus.length && !attention.length && !polarizing.length;
   if (nothing) {
     return <p className="text-xs text-gray-500 italic">The panel found no notable disagreements — a rare and suspicious consensus.</p>;
   }
+  const withTotal = (list) => list.map((c) => ({ ...c, totalPersonas }));
   return (
     <div className="space-y-4">
-      {consensus.length ? (
-        <div>
-          <h3 className="text-[11px] uppercase tracking-wider text-port-error/80 mb-1.5 flex items-center gap-1.5">
-            <AlertTriangle size={12} /> Consensus concerns — routed to editorial findings
-          </h3>
-          <ul className="space-y-1.5">
-            {consensus.map((c, i) => (
-              <li key={`${c.questionId}-${c.issueNumber}-${i}`} className="border border-port-error/30 bg-port-error/5 rounded p-2">
-                <div className="flex items-center gap-2 flex-wrap text-xs text-gray-200">
-                  <span className="font-mono text-[10px] text-gray-400">#{c.issueNumber}</span>
-                  <span className="font-medium">{c.questionLabel}</span>
-                  <span className="text-[10px] text-gray-500">{c.count}/{totalPersonas}</span>
-                  <PersonaChips ids={c.personas} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {attention.length ? (
-        <div>
-          <h3 className="text-[11px] uppercase tracking-wider text-port-warning/80 mb-1.5 flex items-center gap-1.5">
-            <Scale size={12} /> Editorial attention — some flagged, some didn’t
-          </h3>
-          <ul className="space-y-1.5">
-            {attention.map((c, i) => (
-              <li key={`${c.questionId}-${c.issueNumber}-${i}`} className="border border-port-border rounded p-2 bg-port-bg/40">
-                <div className="flex items-center gap-2 flex-wrap text-xs text-gray-300">
-                  <span className="font-mono text-[10px] text-gray-500">#{c.issueNumber}</span>
-                  <span>{c.questionLabel}</span>
-                  <span className="text-[10px] text-gray-600">{c.count}/{totalPersonas}</span>
-                  <PersonaChips ids={c.personas} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <ConcernSection
+        items={withTotal(consensus)}
+        icon={AlertTriangle}
+        title="Consensus concerns — routed to editorial findings"
+        headTone="text-port-error/80"
+        itemClass="border-port-error/30 bg-port-error/5"
+        metaTone="text-gray-400"
+        labelClass="font-medium text-gray-200"
+      />
+      <ConcernSection
+        items={withTotal(attention)}
+        icon={Scale}
+        title="Editorial attention — some flagged, some didn’t"
+        headTone="text-port-warning/80"
+        itemClass="border-port-border bg-port-bg/40"
+        metaTone="text-gray-500"
+        labelClass=""
+      />
 
       {polarizing.length ? (
         <div>

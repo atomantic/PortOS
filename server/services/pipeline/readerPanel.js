@@ -22,13 +22,12 @@ import { join } from 'path';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import {
-  PANEL_PERSONAS,
   PANEL_PERSONA_IDS,
   minePanelDisagreements,
   consensusToFindings,
   sanitizePersonaResponse,
 } from '../../lib/editorial/panelDisagreement.js';
-import { buildDigestForSeries, renderDigestText } from './readerPanelDigest.js';
+import { computeSourceContentHash, renderDigestText } from './readerPanelDigest.js';
 import { seedReviewFromFindings } from './manuscriptReview.js';
 
 const CONSENSUS_CHECK_ID = 'reader-panel.consensus';
@@ -99,9 +98,10 @@ export async function finalizePanel(seriesId, digest, responses, { runId = null 
   });
 
   let seededFindings = 0;
-  if (findings.length || responses.length) {
+  if (responses.length) {
     // Even with zero findings, run in 'fresh' mode so a re-run that resolved a
-    // prior consensus auto-dismisses that stale finding.
+    // prior consensus auto-dismisses that stale finding. (`findings` derives from
+    // `responses`, so a non-empty `findings` already implies a non-empty panel.)
     await seedReviewFromFindings(seriesId, findings, {
       runId,
       mode: 'fresh',
@@ -130,13 +130,13 @@ export async function finalizePanel(seriesId, digest, responses, { runId = null 
 }
 
 // Re-hash the current issue content to decide whether a stored panel is stale
-// (the drafts moved since the digest was built). Cheap — issues + content only,
-// no scene segmentation.
+// (the drafts moved since the digest was built). Cheap — issue list + content
+// only, no series record or scene segmentation (the hash ignores both).
 async function isPanelStale(snapshot, seriesId) {
   if (!snapshot || snapshot.status !== 'complete' || !snapshot.sourceContentHash) return false;
-  const digest = await buildDigestForSeries(seriesId).catch(() => null);
-  if (!digest) return false;
-  return digest.sourceContentHash !== snapshot.sourceContentHash;
+  const hash = await computeSourceContentHash(seriesId).catch(() => null);
+  if (hash === null) return false;
+  return hash !== snapshot.sourceContentHash;
 }
 
 /**
@@ -149,6 +149,3 @@ export async function getReaderPanel(seriesId) {
   if (!snapshot) return { seriesId, status: 'none', personas: [], disagreements: null };
   return { ...snapshot, stale: await isPanelStale(snapshot, seriesId) };
 }
-
-export const PANEL_META = { personas: PANEL_PERSONAS, consensusCheckId: CONSENSUS_CHECK_ID };
-export const __testing = { assertValidSeriesId, CONSENSUS_CHECK_ID };
