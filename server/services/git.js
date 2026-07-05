@@ -595,15 +595,33 @@ export async function getRepoBranches(dir) {
  */
 export async function getBranches(dir) {
   // Get branches with verbose info (includes tracking)
-  const result = await execGit(
-    ['branch', '-vv', '--format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)'],
+  const [result, { baseBranch }] = await Promise.all([
+    execGit(
+      ['branch', '-vv', '--format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)'],
+      dir,
+      { ignoreExitCode: true }
+    ),
+    getRepoBranches(dir)
+  ]);
+
+  const defaultBranch = baseBranch || 'main';
+  const protectedSet = new Set(PROTECTED_BRANCHES);
+  protectedSet.add(defaultBranch);
+
+  const mergedResult = await execGit(
+    ['branch', '--merged', defaultBranch, '--format=%(refname:short)'],
     dir,
     { ignoreExitCode: true }
   );
+  const mergedSet = new Set(mergedResult.stdout.trim().split('\n').filter(Boolean));
 
-  const branches = result.stdout.trim().split('\n').filter(Boolean).map(parseBranchVerboseLine);
-
-  return branches;
+  return result.stdout.trim().split('\n').filter(Boolean)
+    .map(parseBranchVerboseLine)
+    .map(b => ({
+      ...b,
+      isDefault: b.name === defaultBranch,
+      merged: !b.current && !protectedSet.has(b.name) && mergedSet.has(b.name)
+    }));
 }
 
 /**
