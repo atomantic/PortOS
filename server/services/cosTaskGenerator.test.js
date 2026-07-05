@@ -299,6 +299,31 @@ describe('swarm block wiring', () => {
   });
 });
 
+// A scheduled/self-improvement task with no configured model must NOT pin a
+// hardcoded model literal — it must leave metadata.model unset so
+// selectModelForTask resolves the ACTIVE provider's tier/default model at spawn
+// time. A stale literal here once pinned `claude-opus-4-5-20251101`, which had
+// dropped out of the claude-code-tui provider config, so the scheduler spawned
+// `claude --model claude-opus-4-5-20251101` — a model the provider no longer
+// listed. The only assignment to metadata.model in either generator must come
+// from `interval.model`.
+describe('improvement-task model is never a hardcoded literal', () => {
+  it('does not assign a hardcoded claude-* model literal to metadata.model', () => {
+    expect(GEN_SRC).not.toMatch(/metadata\.model\s*=\s*['"]claude-/);
+  });
+
+  it('sets metadata.model only from config-driven fields, never a string literal', () => {
+    const assignments = GEN_SRC.match(/metadata\.model\s*=\s*[^;]+/g) || [];
+    expect(assignments.length).toBeGreaterThan(0);
+    for (const line of assignments) {
+      // Every assignment must read from schedule/stage config (interval.model,
+      // stage0.model, …) — never a bare quoted model id.
+      expect(line).not.toMatch(/metadata\.model\s*=\s*['"]/);
+      expect(line).toMatch(/metadata\.model\s*=\s*\w+\.model/);
+    }
+  });
+});
+
 describe('exceedsMaxSpawns', () => {
   it('is false below the ceiling and true at/above it — no mutation', () => {
     expect(exceedsMaxSpawns(task('a', { totalSpawnCount: 0 }))).toBe(false);
