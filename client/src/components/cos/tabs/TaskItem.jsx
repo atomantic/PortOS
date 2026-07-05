@@ -370,7 +370,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               <p
                 ref={descRef}
                 id={`task-desc-${task.id}`}
-                className={`text-white whitespace-pre-wrap ${promptExpanded ? '' : 'line-clamp-2'}`}
+                className={`text-white whitespace-pre-wrap break-words ${promptExpanded ? '' : 'line-clamp-2'}`}
               >
                 {task.description}
               </p>
