@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   addItem: vi.fn(),
   updateScene: vi.fn(),
   recordRun: vi.fn(),
+  updateRun: vi.fn(),
   enqueueEvaluateTask: vi.fn(),
   advanceAfterSceneSettled: vi.fn(),
   existsSync: vi.fn(() => true),
@@ -37,6 +38,7 @@ vi.mock('../mediaCollections.js', () => ({ addItem: mocks.addItem }));
 vi.mock('./local.js', () => ({
   updateScene: mocks.updateScene,
   recordRun: mocks.recordRun,
+  updateRun: mocks.updateRun,
 }));
 vi.mock('./agentBridge.js', () => ({ enqueueEvaluateTask: mocks.enqueueEvaluateTask }));
 vi.mock('./completionHook.js', () => ({ advanceAfterSceneSettled: mocks.advanceAfterSceneSettled }));
@@ -59,6 +61,7 @@ beforeEach(() => {
   mocks.getProviderById.mockResolvedValue(null);
   mocks.updateScene.mockResolvedValue({});
   mocks.recordRun.mockResolvedValue({});
+  mocks.updateRun.mockResolvedValue({});
   mocks.addItem.mockResolvedValue({});
   mocks.enqueueEvaluateTask.mockResolvedValue({});
   mocks.advanceAfterSceneSettled.mockResolvedValue(undefined);
@@ -261,6 +264,29 @@ describe('dispatchSceneEvaluation', () => {
     expect(res.via).toBe('vision');
     expect(mocks.updateScene).toHaveBeenCalledWith('p1', 's1', expect.objectContaining({ status: 'accepted' }));
     expect(mocks.enqueueEvaluateTask).not.toHaveBeenCalled();
+  });
+
+  it('opens a running evaluate run before the vision call and closes it after (blocks double-dispatch)', async () => {
+    mocks.listVisionModels.mockResolvedValue([{ providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true }]);
+    mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));
+    mocks.runPromptThroughProvider.mockResolvedValue({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
+    await dispatchSceneEvaluation(project, scene);
+    // A running run is recorded up-front so completionHook's noLiveEvaluateRun sees it.
+    const running = mocks.recordRun.mock.calls.find((c) => c[1]?.status === 'running');
+    expect(running).toBeTruthy();
+    expect(running[1]).toMatchObject({ kind: 'evaluate', sceneId: 's1', status: 'running', runId: expect.any(String) });
+    // …then closed to completed via updateRun with the SAME runId.
+    expect(mocks.updateRun).toHaveBeenCalledWith('p1', running[1].runId, expect.objectContaining({ status: 'completed' }));
+  });
+
+  it('marks the running run failed when the vision call throws, then falls back to the agent', async () => {
+    mocks.listVisionModels.mockResolvedValue([{ providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true }]);
+    mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));
+    mocks.runPromptThroughProvider.mockRejectedValue(new Error('connection refused'));
+    await dispatchSceneEvaluation(project, scene);
+    const running = mocks.recordRun.mock.calls.find((c) => c[1]?.status === 'running');
+    expect(mocks.updateRun).toHaveBeenCalledWith('p1', running[1].runId, expect.objectContaining({ status: 'failed' }));
+    expect(mocks.enqueueEvaluateTask).toHaveBeenCalledWith(project, scene);
   });
 
   it('falls back to the agent when the vision path is unavailable', async () => {

@@ -23,6 +23,7 @@
  */
 
 import { existsSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
 import { PATHS } from '../../lib/fileUtils.js';
@@ -34,7 +35,7 @@ import { getSettings } from '../settings.js';
 import { getProviderById } from '../providers.js';
 import { listVisionModels } from '../localLlm.js';
 import { addItem } from '../mediaCollections.js';
-import { updateScene, recordRun } from './local.js';
+import { updateScene, recordRun, updateRun } from './local.js';
 import { enqueueEvaluateTask } from './agentBridge.js';
 
 // Cap frames per call — the runner base64-inlines every frame into one request
@@ -156,7 +157,7 @@ function collectFramePaths(scene) {
  * sampled frames, and parses a structured verdict.
  *
  * @returns {Promise<
- *   | { ok: true, verdict: object, llm: { provider: string, model: string|null } }
+ *   | { ok: true, verdict: object, llm: { provider: string, model: string|null }, runId: string }
  *   | { ok: false, fallbackToAgent: true, reason: string }
  * >}
  */
@@ -173,26 +174,52 @@ export async function evaluateSceneWithVision(project, scene) {
     return { ok: false, fallbackToAgent: true, reason: 'no evaluation frames on disk' };
   }
 
-  const prompt = buildEvaluateVisionPrompt(project, scene, frames.length);
-  const result = await runPromptThroughProvider({
-    provider: target.provider,
-    model: target.model,
-    prompt,
-    source: 'cd-scene-evaluate',
-    screenshots: frames,
-    timeout: VISION_EVAL_TIMEOUT_MS,
-    maxTokens: VISION_EVAL_MAX_TOKENS,
-  });
+  // Record a RUNNING evaluate run BEFORE the (up-to-180s) vision call so a
+  // concurrent advanceAfterSceneSettled (user clicks Start/Resume, or a stale
+  // completion fires) sees a live run via completionHook's `noLiveEvaluateRun`
+  // check and won't dispatch a second evaluation of the same render. This
+  // mirrors the agent path, which records a running run in agentBridge before
+  // enqueueing. applySceneVerdict flips this run to completed on success.
+  const runId = randomUUID();
+  await recordRun(project.id, {
+    runId,
+    kind: 'evaluate',
+    sceneId: scene.sceneId || null,
+    status: 'running',
+    via: 'vision',
+    provider: target.provider.id,
+    model: target.model || null,
+  }).catch((err) => console.log(`⚠️ CD vision recordRun(running) failed: ${err.message}`));
 
-  // Guard against a silent fallback to a non-API provider (which would drop the
-  // images and hallucinate a verdict from the prompt text alone).
-  const ran = assertVisionRunUsedImages(result, target.provider);
-  const verdict = parseVisionVerdict(result.text);
-  return {
-    ok: true,
-    verdict,
-    llm: { provider: ran.id || target.provider.id, model: result.model || target.model || null },
-  };
+  try {
+    const prompt = buildEvaluateVisionPrompt(project, scene, frames.length);
+    const result = await runPromptThroughProvider({
+      provider: target.provider,
+      model: target.model,
+      prompt,
+      source: 'cd-scene-evaluate',
+      screenshots: frames,
+      timeout: VISION_EVAL_TIMEOUT_MS,
+      maxTokens: VISION_EVAL_MAX_TOKENS,
+    });
+
+    // Guard against a silent fallback to a non-API provider (which would drop the
+    // images and hallucinate a verdict from the prompt text alone).
+    const ran = assertVisionRunUsedImages(result, target.provider);
+    const verdict = parseVisionVerdict(result.text);
+    return {
+      ok: true,
+      verdict,
+      llm: { provider: ran.id || target.provider.id, model: result.model || target.model || null },
+      runId,
+    };
+  } catch (err) {
+    // The vision call / parse failed — close the running run so it doesn't
+    // linger as "live" and block the agent fallback's own orphan handling.
+    await updateRun(project.id, runId, { status: 'failed', completedAt: new Date().toISOString() })
+      .catch(() => {});
+    throw err;
+  }
 }
 
 // advanceAfterSceneSettled is dynamically imported to avoid a static import
@@ -210,8 +237,12 @@ const loadAdvance = () => import('./completionHook.js').then((m) => m.advanceAft
  *
  * `score`/`imageStrength` are already validated to [0,1]-or-undefined by
  * `verdictSchema`, so no re-clamping is needed here.
+ *
+ * `runId` closes the RUNNING evaluate run opened by evaluateSceneWithVision.
+ * When absent (a direct caller), a completed run is recorded instead so the
+ * Runs tab still shows a local-model evaluation.
  */
-export async function applySceneVerdict(project, scene, verdict, llm = null) {
+export async function applySceneVerdict(project, scene, verdict, llm = null, runId = null) {
   const evaluation = {
     accepted: !!verdict.accepted,
     score: verdict.score,
@@ -220,17 +251,19 @@ export async function applySceneVerdict(project, scene, verdict, llm = null) {
   };
   const retryCount = scene.retryCount || 0;
 
-  // Best-effort run record so the Runs tab shows a local-model evaluation
-  // instead of a silent gap where an agent run used to be.
-  await recordRun(project.id, {
-    kind: 'evaluate',
-    sceneId: scene.sceneId || null,
+  // Close the in-flight evaluate run (or record a fresh completed one) so the
+  // Runs tab shows a local-model evaluation instead of a silent gap.
+  const runPatch = {
     status: 'completed',
     completedAt: evaluation.sampledAt,
     via: 'vision',
     provider: llm?.provider || null,
     model: llm?.model || null,
-  }).catch((err) => console.log(`⚠️ CD vision recordRun failed: ${err.message}`));
+  };
+  await (runId
+    ? updateRun(project.id, runId, runPatch)
+    : recordRun(project.id, { kind: 'evaluate', sceneId: scene.sceneId || null, ...runPatch })
+  ).catch((err) => console.log(`⚠️ CD vision run record failed: ${err.message}`));
 
   const advanceAfterSceneSettled = await loadAdvance();
 
@@ -281,7 +314,7 @@ export async function dispatchSceneEvaluation(project, scene) {
 
   if (result.ok) {
     try {
-      await applySceneVerdict(project, scene, result.verdict, result.llm);
+      await applySceneVerdict(project, scene, result.verdict, result.llm, result.runId);
       return { via: 'vision', verdict: result.verdict, llm: result.llm };
     } catch (err) {
       // Verdict came back but persisting/advancing threw. Don't re-run on the
