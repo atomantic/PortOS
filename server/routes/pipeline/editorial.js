@@ -31,6 +31,7 @@ import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js
 import * as editorialRunner from '../../services/pipeline/editorialAnalysisRunner.js';
 import * as readerPanel from '../../services/pipeline/readerPanel.js';
 import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js';
+import * as voiceFingerprint from '../../services/pipeline/voiceFingerprint.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
 import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
 import { getSettings, updateSettingsWith } from '../../services/settings.js';
@@ -50,6 +51,21 @@ const editorialAnalyzeSchema = z.object({
 router.get('/series/:id/editorial', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(await editorialAnalysis.getSeriesEditorial(req.params.id));
+}));
+
+// Series id path param — a non-empty trimmed string (record ids are `ser-<uuid>`
+// shaped; the service throws a mapped 404 for an unknown id).
+const seriesIdParamSchema = z.object({ id: z.string().trim().min(1).max(200) });
+
+// Voice-fingerprint matrix (#2194) — the full issues×metrics fingerprint vector
+// plus the deterministic drift result (outliers flagged), a thin read-only wrapper
+// over the pure `voiceFingerprintMatrix()`/`computeVoiceDrift()` primitives. Drives
+// the dedicated deep-linkable matrix view, which shows EVERY issue's fingerprint,
+// not just the flagged outliers that surface as editorial findings.
+router.get('/series/:id/voice-fingerprint', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(seriesIdParamSchema, req.params);
+  const result = await voiceFingerprint.getVoiceFingerprint(id).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 // Full per-issue snapshot (section-by-section emotion log + character arcs)
