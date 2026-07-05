@@ -523,9 +523,13 @@ describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
 });
 
 describe('isPreexistingRefError (orphan-cleanup guard, #2193)', () => {
-  it('is true for branch/path already-exists failures (add created nothing)', () => {
+  it('is true ONLY for a pre-existing BRANCH (git created nothing → skip cleanup)', () => {
     expect(isPreexistingRefError("fatal: a branch named 'cos/task/agent' already exists")).toBe(true);
-    expect(isPreexistingRefError("fatal: '/repo/data/cos/worktrees/agent-x' already exists")).toBe(true);
+    expect(isPreexistingRefError("fatal: a branch named 'main' already exists.")).toBe(true);
+  });
+
+  it('is FALSE for an occupied worktree PATH — git already created the branch there, so it IS an orphan to clean up', () => {
+    expect(isPreexistingRefError("fatal: '/repo/data/cos/worktrees/agent-x' already exists")).toBe(false);
   });
 
   it('is false for lock contention and other failures (add may have left an orphan)', () => {
