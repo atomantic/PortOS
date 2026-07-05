@@ -69,6 +69,13 @@ vi.mock('./agentState.js', () => ({
   pausedAgents: new Map()
 }));
 
+vi.mock('./git.js', () => ({
+  // Default: worktree has changes so idle-complete succeeds. Tests that want
+  // to exercise the idle-no-changes failure path override via mockResolvedValueOnce.
+  getStatus: vi.fn().mockResolvedValue({ clean: false, files: [{ path: 'file.txt', status: 'M' }] }),
+  getDiff: vi.fn().mockResolvedValue('diff content here'),
+}));
+
 vi.mock('fs', () => ({
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
   // overrides this to true. Re-set in beforeEach so it can't leak between tests.
@@ -154,6 +161,7 @@ import * as shellService from './shell.js';
 import * as agentLifecycle from './agentLifecycle.js';
 import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgents from './cosAgents.js';
+import * as gitService from './git.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 
 describe('agent TUI spawning', () => {
@@ -383,6 +391,11 @@ describe('spawnTuiAgent runtime', () => {
     // implementation, so re-set explicitly to prevent cross-test leakage.
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(readFile).mockResolvedValue('');
+
+    // Reset git mock: default is worktree has changes (idle-complete succeeds).
+    // Tests that want to exercise the idle-no-changes failure path override this.
+    vi.mocked(gitService.getStatus).mockResolvedValue({ clean: false, files: [{ path: 'file.txt', status: 'M' }] });
+    vi.mocked(gitService.getDiff).mockResolvedValue('diff content here');
   });
 
   afterEach(() => {
@@ -420,6 +433,12 @@ describe('spawnTuiAgent runtime', () => {
     // threshold (1200ms). The poll interval (300ms) ticks during this window
     // and fires the paste once both gates open, setting promptSentAt.
     await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    // In a real TUI, the paste is echoed in the input buffer; tests must
+    // simulate this or verification fails and Enter is never sent.
+    await capturedOnData(Buffer.from('do the thing\n'));
     await flushMicrotasks();
 
     // Advance past PASTE_TO_ENTER_FALLBACK_MS (3500ms) so the submit-Enter fires
@@ -496,6 +515,56 @@ describe('spawnTuiAgent runtime', () => {
         agentId: 'agent-1',
         success: false,
         completionReason: 'idle-no-activity',
+      })
+    );
+  });
+
+  // ── 1a-ter. Idle-out with work activity but zero file changes → failure (#2191) ─
+  // Issue #2191: a TUI agent that shows the working counter (workActivity.active
+  // becomes true) but produces NO file changes in the worktree should fail, not
+  // succeed. Examples: the model rambled, made invalid tool calls, hit an error
+  // ("Model is not valid"), or ended at an interactive prompt with zero edits.
+  // The fix gates idle-complete success on evidence of work in the worktree
+  // (non-empty git status) in addition to the work-counter signal.
+  it('idle-no-changes: finalizes failure when work counter advanced but worktree is clean (zero file changes)', async () => {
+    // Override the default git mock to report a clean worktree (no changes, no diff).
+    vi.mocked(gitService.getStatus).mockResolvedValue({ clean: true, files: [] });
+    vi.mocked(gitService.getDiff).mockResolvedValue('');
+
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Advance past PASTE_TO_ENTER_FALLBACK_MS so submit fires.
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    // Feed PTY chunks that PROVE the model was working — the elapsed working
+    // counter ADVANCING through two distinct values. This sets workActivity.active
+    // to true, but the worktree is still clean (no file changes).
+    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
+    await vi.advanceTimersByTimeAsync(800);
+    await capturedOnData(Buffer.from('(2s · thinking with high effort)\n'));
+
+    // Advance past DEFAULT_TUI_MIN_RUNTIME_MS + idleTimeoutMs.
+    await vi.advanceTimersByTimeAsync(21000);
+
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        success: false,
+        completionReason: 'idle-no-changes',
       })
     );
   });
@@ -700,6 +769,11 @@ describe('spawnTuiAgent runtime', () => {
     // emit the [Pasted text] marker, so the 3500ms fallback drives submit).
     expect(pasteWrites()).toHaveLength(1);
     expect(enterWrites()).toHaveLength(0);
+
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    // In a real TUI, the paste is echoed in the input buffer.
+    await capturedOnData(Buffer.from('ste me into the box\n'));
+    await flushMicrotasks();
 
     // Advance past the fallback window AND the full spread of retry spacing
     // intervals. Once the budget is exhausted the interval stops re-sending
@@ -964,6 +1038,9 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3600); // submit-Enter fires → promptSubmittedAt set
     await flushMicrotasks();
     await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
@@ -1045,7 +1122,10 @@ describe('agentTuiSpawning — idle reap decision (#2074)', () => {
   const MERGE_QUEUE_IDLE_TIMEOUT_MS = 900000;
   const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
 
-  // Faithful copy of the idleTimer body's finalize-selection logic.
+  // Faithful copy of the SYNCHRONOUS part of the idleTimer body's finalize-
+  // selection logic. The real code has an async worktree-changes check (#2191)
+  // that may downgrade `idle-complete` to `idle-no-changes` — that's tested via
+  // the full fake-timer harness above, not this pure function.
   function decideIdleReap({ idle, baseIdleTimeoutMs, mergeQueueActive, reviewLoopActive, workActive, rendersCounter }) {
     const effectiveIdleTimeoutMs = mergeQueueActive
       ? Math.max(baseIdleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)

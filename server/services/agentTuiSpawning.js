@@ -17,6 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
@@ -46,6 +47,12 @@ import {
   RAW_SPOOL_MAX_BYTES,
   inferTuiCommand,
   applyCommandDefaults,
+  PASTE_VERIFY_POLL_MS,
+  PASTE_VERIFY_WINDOW_MS,
+  PASTE_RETRY_MAX_ATTEMPTS,
+  PASTE_RETRY_BASE_DELAY_MS,
+  extractVerifiablePromptPrefix,
+  verifyPasteRendered,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -102,6 +109,45 @@ async function readFileTail(path, maxBytes) {
     await fh.close().catch(() => {});
   }
 }
+/**
+ * Check if a worktree has any uncommitted changes. Returns true when the
+ * working tree is dirty (staged or unstaged changes exist). Used to gate
+ * idle-complete success — an agent that idled out with zero file changes
+ * should fail, not succeed.
+ */
+async function worktreeHasChanges(workspacePath) {
+  if (!workspacePath || typeof workspacePath !== 'string') return false;
+  const status = await git.getStatus(workspacePath).catch(() => null);
+  return status && !status.clean;
+}
+
+/**
+ * Capture the git diff (staged + unstaged) from a worktree and save it to the
+ * agent archive dir. Called before worktree cleanup so post-mortems can see
+ * what changes existed even if the worktree is deleted. Non-throwing — a
+ * failure to capture shouldn't block finalize.
+ *
+ * @returns {string|null} The captured diff, or null if none/error.
+ */
+async function captureWorktreeDiff(workspacePath, agentDir) {
+  if (!workspacePath || typeof workspacePath !== 'string') return null;
+  if (!agentDir || typeof agentDir !== 'string') return null;
+  const [staged, unstaged] = await Promise.all([
+    git.getDiff(workspacePath, true).catch(() => ''),
+    git.getDiff(workspacePath, false).catch(() => ''),
+  ]);
+  const combined = [
+    staged ? `### STAGED CHANGES ###\n${staged}` : '',
+    unstaged ? `### UNSTAGED CHANGES ###\n${unstaged}` : '',
+  ].filter(Boolean).join('\n\n');
+  if (!combined.trim()) return null;
+  const diffFile = join(agentDir, 'worktree-diff.txt');
+  await writeFile(diffFile, combined).catch((err) => {
+    console.error(`❌ Failed to capture worktree diff for agent: ${err.message}`);
+  });
+  return combined;
+}
+
 // Debounce window for batching parsed output to disk + state. A chatty TUI can
 // emit hundreds of lines/sec; without batching, each line triggers a full
 // state load+save (see appendAgentOutput) and a small appendFile, which slows
@@ -343,6 +389,7 @@ export async function spawnTuiAgent({
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
   let pasteEnterTimer = null;
+  let pasteVerifyTimer = null;
   let submitEnterTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
@@ -493,6 +540,7 @@ export async function spawnTuiAgent({
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
     if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
     // Release the post-paste accumulator even when finalize fires mid-paste-
     // window. The pasteEnterTimer's own cleanup path nulls this too, but if
@@ -791,6 +839,11 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Extract a verifiable prefix from the prompt for paste verification (issue #2192).
+  // Computed once up front so retry attempts use the same verification target.
+  const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+  let pasteAttempt = 0;
+
   const sendPrompt = async (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
@@ -808,13 +861,26 @@ export async function spawnTuiAgent({
       );
       return;
     }
+    // Start the paste attempt — may be retried if verification fails (issue #2192).
+    attemptPaste(reason);
+  };
+
+  // Actually perform a paste attempt. Separated from sendPrompt so retries don't
+  // re-run the liveness guard or re-set promptSentAt. Increments pasteAttempt on
+  // each call; clears any pending timers from the previous attempt first.
+  const attemptPaste = (reason) => {
+    pasteAttempt += 1;
+    const attemptNum = pasteAttempt;
+    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     // Start capturing post-paste output. Set BEFORE writing the paste so
     // every chunk that arrives in response gets appended. Cleared the moment
     // detection resolves (marker seen or fallback elapsed) so the accumulator
     // never lives beyond the paste-marker window.
     postPasteBuffer = '';
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
+    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})${attemptSuffix}`);
 
     // Submit the pasted prompt with repeated Enters — a single `\r` can be
     // swallowed while the TUI is still reflowing a large paste, stranding the
@@ -828,6 +894,34 @@ export async function spawnTuiAgent({
         () => shellService.writeToSession(sessionId, '\r'),
         () => finalized
       );
+    };
+
+    // After paste-commit conditions are met, verify the prompt text actually
+    // rendered before submitting. If verification fails, retry with backoff.
+    const verifyAndSubmit = (capturedBuffer) => {
+      if (finalized) return;
+      // If we have a verifiable prefix, check it appeared in the buffer
+      if (verifiablePrefix && !verifyPasteRendered(capturedBuffer, verifiablePrefix)) {
+        // Paste was swallowed — the TUI wasn't ready (issue #2192)
+        if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
+          const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+          appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
+          setTimeout(() => {
+            if (finalized) return;
+            attemptPaste(reason);
+          }, retryDelayMs);
+          return;
+        }
+        // Max retries exhausted — fail the agent
+        appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
+        finishStartupFailure(
+          'paste-not-rendered',
+          `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
+        ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
+        return;
+      }
+      // Verification passed (or no prefix to verify) — submit
+      submitEnter();
     };
 
     const pasteSentAt = Date.now();
@@ -847,8 +941,39 @@ export async function spawnTuiAgent({
         || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
+        // Capture the buffer before clearing, then run verification (issue #2192).
+        // Start a short verification poll to allow a bit more time for the prompt
+        // text to render after the paste-commit marker appears.
+        const commitBuffer = postPasteBuffer || '';
         postPasteBuffer = null;
-        submitEnter();
+        // If verification is possible and the prompt text isn't visible yet, give
+        // it a short window to render (the marker can appear before the full echo).
+        if (verifiablePrefix && !verifyPasteRendered(commitBuffer, verifiablePrefix)) {
+          let verifyBuffer = commitBuffer;
+          const verifyStartedAt = Date.now();
+          // Resume accumulation for the verification window
+          postPasteBuffer = commitBuffer;
+          pasteVerifyTimer = setInterval(() => {
+            if (finalized) {
+              clearInterval(pasteVerifyTimer);
+              pasteVerifyTimer = null;
+              postPasteBuffer = null;
+              return;
+            }
+            verifyBuffer = postPasteBuffer || verifyBuffer;
+            const verifyElapsed = Date.now() - verifyStartedAt;
+            // Check if now verified, or if window expired
+            if (verifyPasteRendered(verifyBuffer, verifiablePrefix) || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
+              clearInterval(pasteVerifyTimer);
+              pasteVerifyTimer = null;
+              postPasteBuffer = null;
+              verifyAndSubmit(verifyBuffer);
+            }
+          }, PASTE_VERIFY_POLL_MS);
+        } else {
+          // Already verified or no verification needed
+          verifyAndSubmit(commitBuffer);
+        }
       }
     }, PASTE_MARKER_POLL_MS);
   };
@@ -978,8 +1103,19 @@ export async function spawnTuiAgent({
       // completion on those providers would falsely fail). So: downgrade to
       // failure only when the provider DOES render the counter and we never saw
       // it advance.
+      //
+      // Issue #2191 extension: even when workActivity.active is true, the model
+      // may have "worked" (made tool calls, printed output) without actually
+      // writing any files — e.g. rambled, made invalid tool calls, or hit an
+      // error. Check the worktree for evidence of actual changes: if the
+      // worktree is clean (no git status changes), mark as failed so the
+      // orchestrator doesn't treat a no-op as done. Capture the diff into the
+      // agent archive dir before cleanup so post-mortems can see what (if
+      // anything) was left behind.
       const noWorkButCounterExpected = !workActivity.active && rendersWorkCounter(commandName);
       if (noWorkButCounterExpected) {
+        // Capture any uncommitted changes for post-mortem analysis
+        captureWorktreeDiff(cwd, agentDir).catch(() => {});
         finish({
           success: false,
           exitCode: 1,
@@ -989,8 +1125,32 @@ export async function spawnTuiAgent({
           emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
         });
       } else {
-        finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
-          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        // Gate idle-complete success on evidence of work in the worktree.
+        // An agent that shows activity counters but makes no file changes
+        // (rambled, invalid tool calls, hit an error) should fail, not succeed.
+        (async () => {
+          const hasChanges = await worktreeHasChanges(cwd);
+          // Capture any uncommitted changes for post-mortem analysis regardless
+          // of outcome — the diff is useful even on success for debugging.
+          await captureWorktreeDiff(cwd, agentDir).catch(() => {});
+          if (!hasChanges) {
+            finish({
+              success: false,
+              exitCode: 1,
+              error: 'TUI agent idled out with zero uncommitted file changes — the model may have processed but produced no work.',
+              reason: 'idle-no-changes',
+            }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          } else {
+            finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          }
+        })().catch(err => {
+          emitLog('error', `TUI agent ${agentId} idle-complete check failed: ${err.message}`, { agentId });
+          // Fall back to success if the check itself failed (don't block on git)
+          finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(() => {});
         });
       }
     }
