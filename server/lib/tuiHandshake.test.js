@@ -40,6 +40,7 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
+  isPasteConfirmed,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
 
@@ -697,5 +698,72 @@ describe('tuiHandshake.verifyPasteRendered', () => {
 
     // Also verify partial echo (just the middle portion where the prefix is from)
     expect(verifyPasteRendered(`Ask anything... o:next --issues --swarm using the trunca...`, prefix)).toBe(true);
+  });
+
+  // Every claude-code-tui CoS agent started failing immediately after #2192
+  // shipped, all with identical "paste-not-rendered" after 3 retries — 100%
+  // reproduction across real agent runs (agent-65e4d17f, agent-1f0bda99,
+  // agent-ec5a000c, agent-7dda893e, agent-9916b7be, agent-f5c8ca2a,
+  // agent-d0fa3cdc, 2026-07-05). Root cause: Claude Code redraws/reflows a
+  // pasted multi-word line using cursor-positioning escapes instead of literal
+  // space bytes between words — the exact "inter-glyph cursor moves" quirk
+  // already documented above (BRACKETED_PASTE_MODE_PATTERN comment) as the
+  // reason createInputReadyTracker deliberately avoids literal footer-text
+  // matching. #2192's verifyPasteRendered was never carved out for Claude (the
+  // changelog claimed "Claude TUIs ... are unaffected" but sendPrompt/
+  // attemptPaste is shared across all providers), so it inherited the same
+  // trap: normalizing to a SINGLE space still requires a space to exist, and a
+  // reflowed line has none. Captured verbatim (post-production-ansiStrip) from
+  // agent-147ad88f's raw.txt.
+  it('finds a pasted prompt whose words got glued together by Claude Code reflow (real incident)', () => {
+    const prompt = 'On the tasks page when we render pending/active/blocked task cards, I want to truncate the prompt and only show the first couple of lines with an expand button\n\nBegin working on the task now.';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    const renderedBuffer = '⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents Opus 4.8 (1M context) │ agent-147ad88f [Pastedtext#1+3lines] paste again to expand ctrl+g to edit in Vim ──────── ❯ Onthetaskspagewhenwerenderpending/active/blockedtaskcards,Iwant totruncatethepromptandonlyshowthefirstcoupleoflineswithan expandbutton Begin working on the task now.';
+    expect(verifyPasteRendered(renderedBuffer, prefix)).toBe(true);
+  });
+});
+
+describe('tuiHandshake.isPasteConfirmed', () => {
+  const PROMPT = 'On the tasks page when we render pending/active/blocked task cards, I want to truncate the prompt and only show the first couple of lines with an expand button\n\nBegin working on the task now.';
+  const prefix = extractVerifiablePromptPrefix(PROMPT);
+
+  // THE core regression: Claude Code collapses a multi-line paste into a
+  // `[Pasted text #1 +3 lines]` chip and HIDES the body text. Verbatim
+  // (ANSI-stripped) from agent-656efa6e's failed run, 2026-07-05 — the body text
+  // ("On the tasks page…") is genuinely absent, only the marker + the trailing
+  // "Begin working…" line survive. The old text-only gate false-failed here and
+  // killed every claude-code-tui CoS agent after 3 retries. The marker is
+  // authoritative proof the paste landed, so this MUST confirm.
+  it('confirms a multi-line paste that Claude collapsed to a chip (body text hidden) — real incident', () => {
+    const collapsedBuffer = 'Opus 4.8 │ agent-656efa6e [Pastedtext#1+3lines] paste again to expand ──────── ❯ [Pastedtext#1+3lines] ──────── Begin working on the task now. ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    // The body prefix really is NOT in the buffer — verifyPasteRendered alone fails…
+    expect(verifyPasteRendered(collapsedBuffer, prefix)).toBe(false);
+    // …but the marker proves delivery, so isPasteConfirmed confirms it.
+    expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
+  it('confirms when the prompt text DID render inline (markerless small paste)', () => {
+    const inlineBuffer = '❯ Onthetaskspagewhenwerenderpending/active/blockedtaskcards Begin working on the task now.';
+    expect(isPasteConfirmed(inlineBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
+  it('does NOT confirm when neither the marker nor the text appears (paste swallowed by a not-ready TUI)', () => {
+    const swallowedBuffer = '❯ Try "how does PipelineEditorialChecks.jsx work?" ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    expect(isPasteConfirmed(swallowedBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(false);
+  });
+
+  it('ignores paste markers echoed from the prompt itself (count must EXCEED promptMarkerCount)', () => {
+    // A transcript-analysis prompt that itself contains a `[Pasted text #1]` chip:
+    // the echoed marker must not be mistaken for the TUI's own commit marker.
+    const echoOnlyBuffer = '❯ [Pastedtext#1+2lines] analyze this transcript';
+    expect(isPasteConfirmed(echoOnlyBuffer, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(false);
+    // One MORE marker than the prompt carried → the TUI's genuine commit → confirmed.
+    const echoPlusCommit = '❯ [Pastedtext#1+2lines] analyze this transcript [Pastedtext#2+2lines]';
+    expect(isPasteConfirmed(echoPlusCommit, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(true);
+  });
+
+  it('confirms when there is nothing to verify against (no verifiable prefix)', () => {
+    expect(isPasteConfirmed('anything at all', { verifiablePrefix: null, promptMarkerCount: 0 })).toBe(true);
+    expect(isPasteConfirmed('anything at all', {})).toBe(true);
   });
 });
