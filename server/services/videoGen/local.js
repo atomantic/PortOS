@@ -889,7 +889,9 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // would crash the Node process, so guard the whole body.
       try {
         completionWatchdog = null;
-        if (activeProcess !== proc || proc.exitCode !== null || proc.signalCode !== null) return;
+        // proc.killed covers a manual-cancel SIGTERM that hasn't reached close
+        // yet (killWithEscalation sets it before exitCode/signalCode populate).
+        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
         console.log(`⚠️ video child reported completion but never exited — SIGKILL [${jobId.slice(0, 8)}]`);
         completionWatchdogFired = true;
         proc.kill('SIGKILL');
@@ -925,7 +927,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       // can't crash the Node process.
       try {
         idleStallTimer = null;
-        if (activeProcess !== proc || proc.exitCode !== null || proc.signalCode !== null) return;
+        // Also bail if the child is already being torn down by a manual
+        // cancel: killWithEscalation() sends SIGTERM and sets `proc.killed`
+        // BEFORE exitCode/signalCode populate on close. Without this check the
+        // idle timer could still fire, set idleStallFired, and SIGKILL — and
+        // the close handler would then finalize a user-canceled render (whose
+        // partial .mp4 is on disk) as a SUCCESS instead of canceled/failed.
+        if (activeProcess !== proc || proc.killed || proc.exitCode !== null || proc.signalCode !== null) return;
         console.log(`⚠️ video child produced no output for ${IDLE_STALL_DEADLINE_MS}ms — stalled, SIGKILL [${jobId.slice(0, 8)}]`);
         idleStallFired = true;
         proc.kill('SIGKILL');
