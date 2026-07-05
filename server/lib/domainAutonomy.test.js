@@ -5,7 +5,10 @@ import {
   AUTONOMY_DOMAINS,
   DOMAIN_IDS,
   normalizeDomainAutonomy,
-  getDomainMode
+  getDomainMode,
+  CREATIVE_DOMAIN,
+  CREATIVE_DOMAIN_ID,
+  getCreativeAutonomyMode
 } from './domainAutonomy.js';
 
 describe('domainAutonomy constants', () => {
@@ -67,5 +70,29 @@ describe('getDomainMode', () => {
 
   it('falls back to execute for an invalid stored value', () => {
     expect(getDomainMode({ domainAutonomy: { brain: 'haywire' } }, 'brain')).toBe('execute');
+  });
+});
+
+describe('creative domain (#2183)', () => {
+  it('is kept out of the four normalized core domains', () => {
+    expect(DOMAIN_IDS).not.toContain(CREATIVE_DOMAIN_ID);
+    expect(CREATIVE_DOMAIN.id).toBe('creative');
+    expect(CREATIVE_DOMAIN.label).toBeTruthy();
+    expect(CREATIVE_DOMAIN.description).toBeTruthy();
+  });
+
+  it('mirrors the cos mode when no explicit creative value is stored', () => {
+    expect(getCreativeAutonomyMode(undefined)).toBe('execute'); // cos default
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'off' } })).toBe('off');
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'dry-run' } })).toBe('dry-run');
+  });
+
+  it('lets an explicit valid creative value override the cos mirror', () => {
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'off', creative: 'execute' } })).toBe('execute');
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'execute', creative: 'off' } })).toBe('off');
+  });
+
+  it('falls back to the cos mirror for an invalid creative value', () => {
+    expect(getCreativeAutonomyMode({ domainAutonomy: { cos: 'off', creative: 'haywire' } })).toBe('off');
   });
 });

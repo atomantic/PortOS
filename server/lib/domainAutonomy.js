@@ -84,3 +84,36 @@ export function getDomainMode(config, domainId) {
   const candidate = config?.domainAutonomy?.[domainId];
   return isValidMode(candidate) ? candidate : DEFAULT_DOMAIN_MODE;
 }
+
+// The `creative` autonomy domain (#2183) governs the Creative Director
+// orchestrator's gated tool dispatch (universe/story/pipeline/media generators an
+// agent may drive autonomously). It is deliberately kept SEPARATE from the four
+// normalized core domains above — it is NOT in DOMAIN_IDS, so it carries no forced
+// `execute` default and no parallel budget/usage ledger, and existing budget/UI
+// tests are untouched. Its default MIRRORS the `cos` domain's mode so installs
+// that already tuned CoS auto-run get consistent orchestrator behavior with no
+// migration; an explicit stored `domainAutonomy.creative` value (settable by a
+// future settings UI) overrides the mirror. Decision recorded for review: keep
+// separate + mirror cos rather than folding into `cos` outright, so the knob can
+// diverge later without another migration.
+export const CREATIVE_DOMAIN_ID = 'creative';
+
+export const CREATIVE_DOMAIN = Object.freeze({
+  id: CREATIVE_DOMAIN_ID,
+  label: 'Creative orchestrator',
+  description:
+    'Automatically run creative-suite tools (universe, story, pipeline, media) from an orchestrating agent. Defaults to mirror the CoS auto-run mode.'
+});
+
+/**
+ * Resolve the `creative` domain's mode (off | dry-run | execute). An explicit,
+ * valid `domainAutonomy.creative` value wins; otherwise the mode MIRRORS the
+ * `cos` domain (which itself defaults to `execute` for an absent config).
+ *
+ * @param {object|null|undefined} config - CoS config
+ * @returns {'off'|'dry-run'|'execute'}
+ */
+export function getCreativeAutonomyMode(config) {
+  const explicit = config?.domainAutonomy?.[CREATIVE_DOMAIN_ID];
+  return isValidMode(explicit) ? explicit : getDomainMode(config, 'cos');
+}
