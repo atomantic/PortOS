@@ -8,7 +8,8 @@ vi.mock('./shell.js', () => ({
   writeToSession: vi.fn(),
   killSession: vi.fn(),
   getSession: vi.fn(),
-  getSessionProcess: vi.fn()
+  getSessionProcess: vi.fn(),
+  getLastInputAt: vi.fn().mockReturnValue(null)
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -396,6 +397,11 @@ describe('spawnTuiAgent runtime', () => {
     // Tests that want to exercise the idle-no-changes failure path override this.
     vi.mocked(gitService.getStatus).mockResolvedValue({ clean: false, files: [{ path: 'file.txt', status: 'M' }] });
     vi.mocked(gitService.getDiff).mockResolvedValue('diff content here');
+
+    // Reset input-recency state: no input recorded by default. The
+    // recent-input test overrides this — clearAllMocks doesn't undo a
+    // mockReturnValue override, so it must be reset explicitly here.
+    vi.mocked(shellService.getLastInputAt).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -477,6 +483,46 @@ describe('spawnTuiAgent runtime', () => {
         completionReason: 'idle-complete',
       })
     );
+  });
+
+  // ── 1b. Idle timer must not reap a session that just received real input ────
+  // A large bracketed paste into a live agent TUI can sit in a silent
+  // reflow/commit window with no PTY output yet, which looks identical to
+  // "idle" to this timer. While input keeps arriving recently (within
+  // PASTE_INPUT_GRACE_MS), the idle reaper must not fire — gated on input
+  // RECENCY rather than "is a socket attached", since a regular Shell session
+  // keeps its socket bound after the viewer navigates away (only external
+  // one-shot runs release on `shell:release-views`), which would otherwise
+  // permanently suppress idle-complete for any agent glanced at once (caught
+  // in review — see shell.test.js for the isolated getLastInputAt coverage).
+  it('idle timer does not reap while getLastInputAt reports recent input', async () => {
+    vi.mocked(shellService.getLastInputAt).mockImplementation(() => Date.now());
+
+    runSpawn();
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
+    await vi.advanceTimersByTimeAsync(800);
+    await capturedOnData(Buffer.from('(2s · thinking with high effort)\n'));
+
+    // Advance well past DEFAULT_TUI_MIN_RUNTIME_MS + idleTimeoutMs — the
+    // un-guarded timer would have reaped by now (see test 1 above).
+    await vi.advanceTimersByTimeAsync(21000);
+    await flushMicrotasks();
+
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
   });
 
   // ── 1a. Idle-out with NO work activity → failure (issue #1229) ───────────────

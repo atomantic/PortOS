@@ -466,10 +466,23 @@ export function getSessionProcess(sessionId) {
 export function writeToSession(sessionId, data) {
   const session = shellSessions.get(sessionId);
   if (session) {
+    session.lastInputAt = Date.now();
     session.pty.write(data);
     return true;
   }
   return false;
+}
+
+/**
+ * When input was last written to this session (human paste/keystrokes via
+ * `shell:input`, or an internal writer like the CoS agent's auto-paste) — or
+ * `null` if none yet. Unlike a socket-attached check, this recency naturally
+ * expires once nobody is actually interacting, so it can't get stuck forever
+ * the way "is a socket bound" can for a regular (non-external) session whose
+ * viewer navigated away without disconnecting.
+ */
+export function getLastInputAt(sessionId) {
+  return shellSessions.get(sessionId)?.lastInputAt || null;
 }
 
 /**

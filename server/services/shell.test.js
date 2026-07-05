@@ -475,6 +475,25 @@ describe('registerExternalSession / unregisterExternalSession', () => {
     expect(shell.isExternalSessionAttached(shellId)).toBe(false);
   });
 
+  it('getLastInputAt tracks writeToSession recency, independent of socket attachment', () => {
+    // Deliberately NOT keyed on socket attachment (unlike isExternalSessionAttached):
+    // a regular (non-external) session's socket stays bound after its viewer
+    // navigates away — only external one-shot runs get released via
+    // shell:release-views — so an "is a socket attached" signal would never
+    // naturally expire for those. Input recency does expire on its own once
+    // nobody is actually writing to the session.
+    const owner = makeSocket('owner');
+    const shellId = shell.createShellSession(owner);
+    expect(shell.getLastInputAt(shellId)).toBeNull(); // no input yet
+
+    const before = Date.now();
+    expect(shell.writeToSession(shellId, 'hello\n')).toBe(true);
+    expect(shell.getLastInputAt(shellId)).toBeGreaterThanOrEqual(before);
+
+    // Never null-coalesced weirdly for unknown ids.
+    expect(shell.getLastInputAt('missing')).toBeNull();
+  });
+
   it('releases a watched run when the same socket attaches to another session', () => {
     const viewer = makeSocket('viewer');
     const runId = shell.registerExternalSession('run-watch', makeFakePty(), {});
