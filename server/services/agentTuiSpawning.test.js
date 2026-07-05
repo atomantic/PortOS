@@ -422,6 +422,12 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
 
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    // In a real TUI, the paste is echoed in the input buffer; tests must
+    // simulate this or verification fails and Enter is never sent.
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+
     // Advance past PASTE_TO_ENTER_FALLBACK_MS (3500ms) so the submit-Enter fires
     // and promptSubmittedAt is set — work-activity is only observed AFTER submit
     // (the prompt echo before that must not be scanned; issue #1229 review).
@@ -701,6 +707,11 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteWrites()).toHaveLength(1);
     expect(enterWrites()).toHaveLength(0);
 
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    // In a real TUI, the paste is echoed in the input buffer.
+    await capturedOnData(Buffer.from('ste me into the box\n'));
+    await flushMicrotasks();
+
     // Advance past the fallback window AND the full spread of retry spacing
     // intervals. Once the budget is exhausted the interval stops re-sending
     // (Enter into an empty box would be a no-op anyway).
@@ -963,6 +974,9 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnData(Buffer.from('Codex booting...\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    // Emit the prompt echo so paste verification passes (issue #2192).
+    await capturedOnData(Buffer.from('do the thing\n'));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3600); // submit-Enter fires → promptSubmittedAt set
     await flushMicrotasks();

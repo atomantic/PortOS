@@ -46,6 +46,12 @@ import {
   RAW_SPOOL_MAX_BYTES,
   inferTuiCommand,
   applyCommandDefaults,
+  PASTE_VERIFY_POLL_MS,
+  PASTE_VERIFY_WINDOW_MS,
+  PASTE_RETRY_MAX_ATTEMPTS,
+  PASTE_RETRY_BASE_DELAY_MS,
+  extractVerifiablePromptPrefix,
+  verifyPasteRendered,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -343,6 +349,7 @@ export async function spawnTuiAgent({
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
   let pasteEnterTimer = null;
+  let pasteVerifyTimer = null;
   let submitEnterTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
@@ -493,6 +500,7 @@ export async function spawnTuiAgent({
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
     if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
     // Release the post-paste accumulator even when finalize fires mid-paste-
     // window. The pasteEnterTimer's own cleanup path nulls this too, but if
@@ -791,6 +799,11 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Extract a verifiable prefix from the prompt for paste verification (issue #2192).
+  // Computed once up front so retry attempts use the same verification target.
+  const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+  let pasteAttempt = 0;
+
   const sendPrompt = async (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
@@ -808,13 +821,26 @@ export async function spawnTuiAgent({
       );
       return;
     }
+    // Start the paste attempt — may be retried if verification fails (issue #2192).
+    attemptPaste(reason);
+  };
+
+  // Actually perform a paste attempt. Separated from sendPrompt so retries don't
+  // re-run the liveness guard or re-set promptSentAt. Increments pasteAttempt on
+  // each call; clears any pending timers from the previous attempt first.
+  const attemptPaste = (reason) => {
+    pasteAttempt += 1;
+    const attemptNum = pasteAttempt;
+    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     // Start capturing post-paste output. Set BEFORE writing the paste so
     // every chunk that arrives in response gets appended. Cleared the moment
     // detection resolves (marker seen or fallback elapsed) so the accumulator
     // never lives beyond the paste-marker window.
     postPasteBuffer = '';
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
+    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})${attemptSuffix}`);
 
     // Submit the pasted prompt with repeated Enters — a single `\r` can be
     // swallowed while the TUI is still reflowing a large paste, stranding the
@@ -828,6 +854,34 @@ export async function spawnTuiAgent({
         () => shellService.writeToSession(sessionId, '\r'),
         () => finalized
       );
+    };
+
+    // After paste-commit conditions are met, verify the prompt text actually
+    // rendered before submitting. If verification fails, retry with backoff.
+    const verifyAndSubmit = (capturedBuffer) => {
+      if (finalized) return;
+      // If we have a verifiable prefix, check it appeared in the buffer
+      if (verifiablePrefix && !verifyPasteRendered(capturedBuffer, verifiablePrefix)) {
+        // Paste was swallowed — the TUI wasn't ready (issue #2192)
+        if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
+          const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+          appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
+          setTimeout(() => {
+            if (finalized) return;
+            attemptPaste(reason);
+          }, retryDelayMs);
+          return;
+        }
+        // Max retries exhausted — fail the agent
+        appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
+        finishStartupFailure(
+          'paste-not-rendered',
+          `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
+        ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
+        return;
+      }
+      // Verification passed (or no prefix to verify) — submit
+      submitEnter();
     };
 
     const pasteSentAt = Date.now();
@@ -847,8 +901,39 @@ export async function spawnTuiAgent({
         || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
+        // Capture the buffer before clearing, then run verification (issue #2192).
+        // Start a short verification poll to allow a bit more time for the prompt
+        // text to render after the paste-commit marker appears.
+        const commitBuffer = postPasteBuffer || '';
         postPasteBuffer = null;
-        submitEnter();
+        // If verification is possible and the prompt text isn't visible yet, give
+        // it a short window to render (the marker can appear before the full echo).
+        if (verifiablePrefix && !verifyPasteRendered(commitBuffer, verifiablePrefix)) {
+          let verifyBuffer = commitBuffer;
+          const verifyStartedAt = Date.now();
+          // Resume accumulation for the verification window
+          postPasteBuffer = commitBuffer;
+          pasteVerifyTimer = setInterval(() => {
+            if (finalized) {
+              clearInterval(pasteVerifyTimer);
+              pasteVerifyTimer = null;
+              postPasteBuffer = null;
+              return;
+            }
+            verifyBuffer = postPasteBuffer || verifyBuffer;
+            const verifyElapsed = Date.now() - verifyStartedAt;
+            // Check if now verified, or if window expired
+            if (verifyPasteRendered(verifyBuffer, verifiablePrefix) || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
+              clearInterval(pasteVerifyTimer);
+              pasteVerifyTimer = null;
+              postPasteBuffer = null;
+              verifyAndSubmit(verifyBuffer);
+            }
+          }, PASTE_VERIFY_POLL_MS);
+        } else {
+          // Already verified or no verification needed
+          verifyAndSubmit(commitBuffer);
+        }
       }
     }, PASTE_MARKER_POLL_MS);
   };
