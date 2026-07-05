@@ -157,6 +157,9 @@ function EmptyState({ gatedOff, issueCount, minIssues }) {
 
 function FingerprintMatrix({ columns, issues, seriesStats, outlierSet }) {
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  // Below minIssues the server gates drift off and returns `series: {}`, so a
+  // mean/σ footer would render misleading 0s — only show it once stats exist.
+  const hasStats = seriesStats && Object.keys(seriesStats).length > 0;
   return (
     <div className="overflow-x-auto border border-port-border rounded-lg">
       <table className="border-collapse font-mono text-xs w-full">
@@ -202,24 +205,26 @@ function FingerprintMatrix({ columns, issues, seriesStats, outlierSet }) {
             </tr>
           ))}
         </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-port-border bg-port-card">
-            <td className="sticky left-0 z-10 bg-port-card text-gray-500 px-3 py-1.5">mean</td>
-            {columns.map((col) => (
-              <td key={col.key} className="px-2 py-1.5 text-right text-gray-500 tabular-nums">
-                {round2(seriesStats?.[col.key]?.mean)}{col.unit || ''}
-              </td>
-            ))}
-          </tr>
-          <tr className="bg-port-card">
-            <td className="sticky left-0 z-10 bg-port-card text-gray-500 px-3 py-1.5">σ</td>
-            {columns.map((col) => (
-              <td key={col.key} className="px-2 py-1.5 text-right text-gray-500 tabular-nums">
-                {round2(seriesStats?.[col.key]?.std)}
-              </td>
-            ))}
-          </tr>
-        </tfoot>
+        {hasStats ? (
+          <tfoot>
+            <tr className="border-t-2 border-port-border bg-port-card">
+              <td className="sticky left-0 z-10 bg-port-card text-gray-500 px-3 py-1.5">mean</td>
+              {columns.map((col) => (
+                <td key={col.key} className="px-2 py-1.5 text-right text-gray-500 tabular-nums">
+                  {round2(seriesStats?.[col.key]?.mean)}{col.unit || ''}
+                </td>
+              ))}
+            </tr>
+            <tr className="bg-port-card">
+              <td className="sticky left-0 z-10 bg-port-card text-gray-500 px-3 py-1.5">σ</td>
+              {columns.map((col) => (
+                <td key={col.key} className="px-2 py-1.5 text-right text-gray-500 tabular-nums">
+                  {round2(seriesStats?.[col.key]?.std)}
+                </td>
+              ))}
+            </tr>
+          </tfoot>
+        ) : null}
       </table>
     </div>
   );
