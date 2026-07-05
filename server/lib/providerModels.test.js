@@ -12,6 +12,8 @@ import {
   toBedrockModelId,
   resolveBedrockCliModel,
   prefixOpencodeModel,
+  buildOpencodeConfigContent,
+  withOpencodeConfigEnv,
   isOpencodeCommand,
   isClaudeCommand,
   isOllamaClaudeProvider,
@@ -90,6 +92,79 @@ describe('providerModels', () => {
       expect(prefixOpencodeModel(oc, '')).toBe('');
       expect(prefixOpencodeModel(oc, null)).toBeNull();
       expect(prefixOpencodeModel(oc, undefined)).toBeUndefined();
+    });
+  });
+
+  describe('buildOpencodeConfigContent', () => {
+    const STORED = '{"permission":"allow","provider":{"ollama":{"npm":"@ai-sdk/openai-compatible","name":"Ollama (local)","options":{"baseURL":"http://localhost:11434/v1"}}}}';
+
+    it('returns null for a non-opencode provider (caller keeps env untouched)', () => {
+      expect(buildOpencodeConfigContent({ command: 'claude' }, 'qwen2.5:7b')).toBeNull();
+      expect(buildOpencodeConfigContent({ command: 'codex' }, 'gpt-5')).toBeNull();
+    });
+
+    it('injects a models map for the run model, preserving the stored base config', () => {
+      const provider = { command: 'opencode', ollamaBacked: true, models: [], envVars: { OPENCODE_CONFIG_CONTENT: STORED } };
+      const cfg = JSON.parse(buildOpencodeConfigContent(provider, 'qwen2.5:7b'));
+      expect(cfg.permission).toBe('allow');
+      expect(cfg.provider.ollama.options.baseURL).toBe('http://localhost:11434/v1');
+      expect(cfg.provider.ollama.models).toEqual({ 'qwen2.5:7b': { name: 'qwen2.5:7b', tool_call: true } });
+    });
+
+    it('unions configured models, defaultModel, and the run model (deduped)', () => {
+      const provider = {
+        command: 'opencode', ollamaBacked: true,
+        models: ['qwen2.5:7b', 'llama3.1:8b'], defaultModel: 'llama3.1:8b',
+        envVars: { OPENCODE_CONFIG_CONTENT: STORED },
+      };
+      const cfg = JSON.parse(buildOpencodeConfigContent(provider, 'mistral:7b'));
+      expect(Object.keys(cfg.provider.ollama.models).sort()).toEqual(['llama3.1:8b', 'mistral:7b', 'qwen2.5:7b']);
+    });
+
+    it('strips the ollama/ namespace so keys are bare ids', () => {
+      const provider = { command: 'opencode', ollamaBacked: true, models: [], envVars: { OPENCODE_CONFIG_CONTENT: STORED } };
+      const cfg = JSON.parse(buildOpencodeConfigContent(provider, 'ollama/qwen2.5:7b'));
+      expect(cfg.provider.ollama.models['qwen2.5:7b']).toEqual({ name: 'qwen2.5:7b', tool_call: true });
+      expect(cfg.provider.ollama.models['ollama/qwen2.5:7b']).toBeUndefined();
+    });
+
+    it('falls back to a canonical default when the stored config is absent or unparseable', () => {
+      const provider = { command: 'opencode', ollamaBacked: true, models: ['qwen2.5:7b'], envVars: {} };
+      const cfg = JSON.parse(buildOpencodeConfigContent(provider, null));
+      expect(cfg.permission).toBe('allow');
+      expect(cfg.provider.ollama.npm).toBe('@ai-sdk/openai-compatible');
+      expect(cfg.provider.ollama.models['qwen2.5:7b']).toBeDefined();
+
+      const broken = { command: 'opencode', ollamaBacked: true, models: ['x:1'], envVars: { OPENCODE_CONFIG_CONTENT: 'not json' } };
+      const cfg2 = JSON.parse(buildOpencodeConfigContent(broken, null));
+      expect(cfg2.provider.ollama.models['x:1']).toBeDefined();
+    });
+
+    it('omits the models key entirely when no ids are known (no regression from the shipped base)', () => {
+      const provider = { command: 'opencode', ollamaBacked: true, models: [], defaultModel: null, envVars: { OPENCODE_CONFIG_CONTENT: STORED } };
+      const cfg = JSON.parse(buildOpencodeConfigContent(provider, null));
+      expect(cfg.provider.ollama.models).toBeUndefined();
+    });
+  });
+
+  describe('withOpencodeConfigEnv', () => {
+    it('overrides OPENCODE_CONFIG_CONTENT for opencode providers, preserving other env vars', () => {
+      const provider = {
+        command: 'opencode', ollamaBacked: true, models: ['qwen2.5:7b'],
+        envVars: { OPENCODE_CONFIG_CONTENT: '{"provider":{"ollama":{}}}', OTHER: 'keep' },
+      };
+      const env = withOpencodeConfigEnv(provider, 'qwen2.5:7b');
+      expect(env.OTHER).toBe('keep');
+      expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT).provider.ollama.models['qwen2.5:7b']).toBeDefined();
+    });
+
+    it('returns provider.envVars unchanged for non-opencode providers', () => {
+      const envVars = { CLAUDE_CODE_USE_BEDROCK: '1' };
+      expect(withOpencodeConfigEnv({ command: 'claude', envVars }, 'claude-opus-4-8')).toBe(envVars);
+    });
+
+    it('returns an empty object (not undefined) when a provider has no envVars', () => {
+      expect(withOpencodeConfigEnv({ command: 'claude' })).toEqual({});
     });
   });
 

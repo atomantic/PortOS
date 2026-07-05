@@ -26,7 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, withOpencodeConfigEnv } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -424,7 +424,10 @@ export async function spawnDirectly({
     // The pm2 shim must be prepended onto the FINAL PATH (after any
     // provider.envVars override) so a `--dangerously-skip-permissions` agent
     // can't `pm2 kill` the shared daemon.
-    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
+    // withOpencodeConfigEnv rebuilds OPENCODE_CONFIG_CONTENT with a declared
+    // models map for OpenCode Ollama providers (no-op for every other provider)
+    // so `--model ollama/<id>` isn't rejected as "not valid" — see issue-2190.
+    env: (() => { const e = { ...process.env, ...claudeSettingsEnv, ...withOpencodeConfigEnv(provider, model) }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })()
   });
 
   registerSpawnedAgent(claudeProcess.pid, {
