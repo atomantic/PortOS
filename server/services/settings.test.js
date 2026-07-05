@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, __resetSettingsCache } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, reloadSettings, __resetSettingsCache } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -70,6 +70,45 @@ describe('settings.js', () => {
       const result = await getSettings();
 
       expect(result).toEqual(mockSettings);
+    });
+
+    it('memoizes the parsed file — a second call does not re-read disk', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark' }));
+
+      await getSettings();
+      await getSettings();
+
+      // The read cache means only the first call hits disk.
+      expect(tryReadFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('hands out a deep copy — mutating a nested field does not corrupt the cache', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ display: { theme: 'dark' } }));
+
+      const first = await getSettings();
+      first.display.theme = 'light'; // mutate the returned nested object
+
+      const second = await getSettings();
+      // The cache is isolated from the mutation — second read is untouched.
+      expect(second.display.theme).toBe('dark');
+    });
+  });
+
+  describe('reloadSettings', () => {
+    it('re-syncs the cache with the current on-disk file (for out-of-band writes like restore)', async () => {
+      // Warm the cache with the original file.
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark' }));
+      expect(await getSettings()).toEqual({ theme: 'dark' });
+
+      // A restore rsyncs a new settings.json into place, bypassing save().
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'light', added: true }));
+      // Without reloadSettings the cache would still serve the stale value...
+      expect(await getSettings()).toEqual({ theme: 'dark' });
+
+      // ...reloadSettings re-reads disk and refreshes every settings consumer.
+      const reloaded = await reloadSettings();
+      expect(reloaded).toEqual({ theme: 'light', added: true });
+      expect(await getSettings()).toEqual({ theme: 'light', added: true });
     });
   });
 
