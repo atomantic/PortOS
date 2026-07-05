@@ -10,7 +10,7 @@
  * silently produced zero output.
  *
  * The primary fix builds `OPENCODE_CONFIG_CONTENT` dynamically at spawn time
- * (`withOpencodeConfigEnv` in `server/lib/providerModels.js`), folding in the
+ * (`buildOpencodeEnvVars` in `server/lib/opencodeConfig.js`), folding in the
  * provider's configured models + the model being run. This migration keeps the
  * STORED config honest/consistent for installs that already configured models
  * (e.g. a `defaultModel` or a populated `models[]`): it injects the matching
