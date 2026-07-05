@@ -137,6 +137,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     if (!el) return;
     const measure = () => setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
     measure();
+    if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
