@@ -372,6 +372,14 @@ export const featureProviderConfigSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
+// Creative Director settings slice. `evaluation` pins the vision provider/model
+// used to judge each rendered scene server-side (blank = auto-pick a local
+// vision model, else fall back to the coding agent). Reuses the shared
+// feature-provider shape so an empty-string picker value normalizes to unset.
+export const creativeDirectorSettingsSchema = z.object({
+  evaluation: featureProviderConfigSchema.partial().optional(),
+});
+
 /**
  * Validate data against a schema
  * Returns { success: true, data } or { success: false, errors }
