@@ -26,8 +26,7 @@ import {
 import {
   computeVoiceDrift,
   parseVoiceWells,
-  metricLabel,
-  VOICE_METRICS,
+  describeMetricColumn,
 } from '../../lib/editorial/voiceFingerprint.js';
 
 // The deterministic check whose per-series config (threshold / minIssues /
@@ -36,46 +35,20 @@ import {
 // server/lib/editorial/checks/proseStyle.js.
 export const VOICE_DRIFT_CHECK_ID = 'style.voice-drift';
 
-// One column descriptor per metric key so the UI renders a stable, self-describing
-// header without re-deriving labels/units/direction phrasing client-side. `higher`
-// / `lower` explain what a value above/below the series mean MEANS for that metric;
-// wells share a generic phrasing (no static descriptor).
-function describeColumn(key) {
-  const desc = VOICE_METRICS.find((m) => m.key === key);
-  if (desc) {
-    return {
-      key,
-      label: desc.label,
-      unit: desc.unit || '',
-      higher: desc.higher,
-      lower: desc.lower,
-      isWell: false,
-    };
-  }
-  const isWell = typeof key === 'string' && key.startsWith('well:');
-  return {
-    key,
-    label: metricLabel(key),
-    unit: '',
-    higher: isWell ? `leans harder on the "${key.slice(5)}" register` : 'runs high',
-    lower: isWell ? `uses the "${key.slice(5)}" register less` : 'runs low',
-    isWell,
-  };
-}
-
 /**
  * Resolve the effective `style.voice-drift` config for a series from the persisted
  * per-check settings (threshold / minIssues / vocabularyWells), tolerant of a
- * hand-edited or absent slice — falls back to the registry defaults via
- * `resolveCheckConfig`.
+ * hand-edited or absent slice. `resolveCheckConfig` validates the stored slice
+ * through the check's Zod `configSchema`, so every key comes back populated with
+ * its schema default when unset — the caller can trust the fields are present.
+ * (`style.voice-drift` is statically registered, so `getCheckById` never misses.)
  *
  * @param {object} [settings] pre-loaded settings (optional; fetched when omitted)
- * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string }>}
+ * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string, maxFindings: number }>}
  */
 export async function resolveVoiceDriftConfig(settings) {
   const s = settings || await getSettings();
   const check = getCheckById(s, VOICE_DRIFT_CHECK_ID);
-  if (!check) return { sigmaThreshold: 1.5, minIssues: 4, vocabularyWells: '' };
   const stored = readChecksSlice(s)[VOICE_DRIFT_CHECK_ID] || {};
   return resolveCheckConfig(check, stored.config);
 }
@@ -89,7 +62,7 @@ export async function resolveVoiceDriftConfig(settings) {
  * @param {string} seriesId
  * @returns {Promise<{
  *   seriesId: string,
- *   config: { sigmaThreshold: number, minIssues: number, vocabularyWells: string },
+ *   config: object,
  *   wells: string[],
  *   columns: Array<{ key, label, unit, higher, lower, isWell }>,
  *   gatedOff: boolean,
@@ -109,26 +82,20 @@ export async function getVoiceFingerprint(seriesId) {
     collectManuscriptSections(seriesId),
     resolveVoiceDriftConfig(),
   ]);
-  const manuscript = sectionsCorpus(sections);
-  const wells = parseVoiceWells(cfg.vocabularyWells || '');
 
-  const drift = computeVoiceDrift(manuscript, {
-    threshold: cfg.sigmaThreshold ?? 1.5,
-    minIssues: cfg.minIssues ?? 4,
-    wells,
+  // `cfg` is schema-validated, so sigmaThreshold/minIssues/vocabularyWells are
+  // always present (defaults applied by resolveCheckConfig) — no `??` needed.
+  const drift = computeVoiceDrift(sectionsCorpus(sections), {
+    threshold: cfg.sigmaThreshold,
+    minIssues: cfg.minIssues,
+    wells: parseVoiceWells(cfg.vocabularyWells),
   });
-
-  const columns = (drift.matrix.metricKeys || []).map(describeColumn);
 
   return {
     seriesId,
-    config: {
-      sigmaThreshold: cfg.sigmaThreshold ?? 1.5,
-      minIssues: cfg.minIssues ?? 4,
-      vocabularyWells: cfg.vocabularyWells || '',
-    },
+    config: cfg,
     wells: drift.matrix.wells || [],
-    columns,
+    columns: (drift.matrix.metricKeys || []).map(describeMetricColumn),
     gatedOff: drift.gatedOff,
     issueCount: drift.issueCount,
     threshold: drift.threshold,
