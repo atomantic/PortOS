@@ -836,9 +836,11 @@ async function cascadeDeleteSideEffects(id) {
 // the `universeId` hierarchy guard. See issue #1361.
 const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig', 'severityWeights', 'blockingSeverities'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
-// shipped at schema v2, tickingClock at #1289/v3) still sends an `arc` object —
-// just without these keys — so the erasure for them happens one level down.
-const ADDITIVE_ARC_FIELDS = ['readerMap', 'tickingClock'];
+// shipped at schema v2, tickingClock at #1289/v3, foreshadowing at #2172/v10)
+// still sends an `arc` object — just without these keys — so the erasure for
+// them happens one level down. (The v10 gate rejects OLDER peers; this list
+// additionally guards a SAME-version peer whose arc simply omits the key.)
+const ADDITIVE_ARC_FIELDS = ['readerMap', 'tickingClock', 'foreshadowing'];
 
 const keyAbsent = (obj, key) => !obj || typeof obj !== 'object' || !(key in obj) || obj[key] === undefined;
 

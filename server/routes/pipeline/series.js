@@ -66,6 +66,11 @@ const arcSchema = z.object({
   // sanitizeTickingClock (storyArc.js). Listed here so Zod doesn't strip it on
   // an arc PATCH and updateSeries's wholesale arc replace doesn't wipe it.
   tickingClock: z.object({}).passthrough().nullable().optional(),
+  // Foreshadowing ledger (#2172): the plant → reinforce → payoff seeds. Same
+  // defer-to-service pattern — an ARRAY of opaque entries sanitized by
+  // sanitizeForeshadowing (storyArc.js). Listed here so Zod doesn't strip it on
+  // an arc PATCH and updateSeries's wholesale arc replace doesn't wipe it.
+  foreshadowing: z.array(z.object({}).passthrough()).nullable().optional(),
   status: z.enum(ARC_STATUSES).optional(),
 });
 

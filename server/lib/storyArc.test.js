@@ -578,13 +578,14 @@ describe('storyArc — sanitizeForeshadowing (#2172)', () => {
     expect(entry.reinforceIssues).toEqual([0, 3, 5]);
   });
 
-  it('flags distanceOk true when payoff is >= MIN distance after plant, false when too close, null when unknown', () => {
-    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 1 + FORESHADOW_LIMITS.MIN_PLANT_PAYOFF_DISTANCE }).distanceOk).toBe(true);
-    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 2 }).distanceOk).toBe(false);
-    // A too-close entry is kept (not dropped), just flagged.
-    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 2 })).not.toBe(null);
-    // Unknown span (one end missing) → null, not a misleading false.
-    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1 }).distanceOk).toBe(null);
+  it('stores the ledger faithfully — a too-close plant/payoff span is kept, not dropped (distance is a prompt rule)', () => {
+    // The >= 3-issue distance rule lives in the arc-overview prompt, not the
+    // sanitizer, so a too-close entry round-trips unchanged.
+    const entry = sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 2 });
+    expect(entry).not.toBe(null);
+    expect(entry.plantIssue).toBe(1);
+    expect(entry.payoffIssue).toBe(2);
+    expect(entry).not.toHaveProperty('distanceOk');
   });
 
   it('caps the ledger at ENTRIES_MAX', () => {

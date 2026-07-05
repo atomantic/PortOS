@@ -322,13 +322,20 @@ export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger
 // logged. Pure + deterministic so it's unit-testable and so its token cost can be
 // counted into the per-chunk overhead. Returns '' when nothing is authored (the
 // prompt's `{{#authoredSetups}}` section then renders nothing).
+// Shared preamble for the authored-entry renderers below: an entry's
+// `label — note` (or whichever is present), '' when neither is usable so
+// callers can `.filter(Boolean)`.
+function entryLabelNoteText(e) {
+  const label = typeof e?.label === 'string' ? e.label.trim() : '';
+  const note = typeof e?.note === 'string' ? e.note.trim() : '';
+  return label && note ? `${label} — ${note}` : (label || note);
+}
+
 // Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
 // Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
 // entry with no usable label/note so callers can `.filter(Boolean)`.
 function renderReaderMapEntryLine(e) {
-  const label = typeof e?.label === 'string' ? e.label.trim() : '';
-  const note = typeof e?.note === 'string' ? e.note.trim() : '';
-  const text = label && note ? `${label} — ${note}` : (label || note);
+  const text = entryLabelNoteText(e);
   if (!text) return '';
   // A coarse expected-location hint so the model can reason about WHERE an
   // authored hook should have paid off (reconciliation signal, #1299).
@@ -342,9 +349,7 @@ function renderReaderMapEntryLine(e) {
 // inferring every seed from scratch. Returns '' for an entry with no usable
 // label/note so callers can `.filter(Boolean)`.
 function renderForeshadowingEntryLine(e) {
-  const label = typeof e?.label === 'string' ? e.label.trim() : '';
-  const note = typeof e?.note === 'string' ? e.note.trim() : '';
-  const text = label && note ? `${label} — ${note}` : (label || note);
+  const text = entryLabelNoteText(e);
   if (!text) return '';
   const span = [];
   if (Number.isFinite(e?.plantIssue)) span.push(`plant issue ${e.plantIssue}`);

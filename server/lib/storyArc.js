@@ -95,12 +95,6 @@ export const FORESHADOW_LIMITS = Object.freeze({
   ENTRIES_MAX: 60,
   REINFORCE_MAX: 20,
   ISSUE_MAX: 9999,
-  // The craft target the arc-overview prompt is instructed to hit: a plant and
-  // its payoff should sit at least this many issues apart so the reader has
-  // forgotten the seed by the time it fires. Exposed so the sanitizer can stamp
-  // a `distanceOk` flag (informative, non-destructive — a too-close entry is
-  // kept, not dropped) and so the check/tests share one source of truth.
-  MIN_PLANT_PAYOFF_DISTANCE: 3,
 });
 
 // Per-episode arc roles produced by the season-episodes generator and
@@ -461,9 +455,9 @@ function cleanReinforceIssues(raw) {
 /**
  * Sanitize one foreshadowing-ledger entry. Returns `null` when the entry
  * carries no identifying content (no label/note and no plant/payoff position)
- * so an empty row from the LLM is dropped. A too-close plant→payoff span is
- * NOT dropped — it's kept with `distanceOk: false` so the data stays faithful
- * to what the author/LLM declared and the editorial check can still see it.
+ * so an empty row from the LLM is dropped. The plant-to-payoff distance rule
+ * (>= 3 issues) is a generation instruction enforced in the arc-overview prompt,
+ * not here — the sanitizer stores the ledger faithfully as authored.
  */
 export function sanitizeForeshadowingEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -471,15 +465,9 @@ export function sanitizeForeshadowingEntry(raw) {
   const note = trimTo(raw.note, FORESHADOW_LIMITS.NOTE_MAX);
   const plantIssue = optPosition(raw.plantIssue, FORESHADOW_LIMITS.ISSUE_MAX);
   const payoffIssue = optPosition(raw.payoffIssue, FORESHADOW_LIMITS.ISSUE_MAX);
-  const reinforceIssues = cleanReinforceIssues(raw.reinforceIssues);
   if (!label && !note && plantIssue == null && payoffIssue == null) return null;
-  // distanceOk is only meaningful when BOTH ends are pinned; when either is
-  // absent we can't judge the span, so report `null` (unknown) rather than a
-  // misleading `false`.
-  const distanceOk = plantIssue != null && payoffIssue != null
-    ? payoffIssue - plantIssue >= FORESHADOW_LIMITS.MIN_PLANT_PAYOFF_DISTANCE
-    : null;
-  return { id: ensureFsId(raw.id), label, plantIssue, reinforceIssues, payoffIssue, note, distanceOk };
+  const reinforceIssues = cleanReinforceIssues(raw.reinforceIssues);
+  return { id: ensureFsId(raw.id), label, plantIssue, reinforceIssues, payoffIssue, note };
 }
 
 /**
