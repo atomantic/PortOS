@@ -60,4 +60,6 @@ A self-contained short-story draft for this issue, **{{lengthTargets.proseWordsM
 - **Land the ending on a cliffhanger or strong lead-in to the next issue** — a reveal that flips what the reader thought, a character in unresolved peril, or an antagonist's arrival. The last paragraph is what the comic's final-page panel will render, so make it visually decisive. Resolution-only endings are not acceptable; serialized comics need pull.
 - Don't invent contradictions to the character bible. Add details, but match the established ones.
 
+{{> craft-anti-patterns }}
+
 Return ONLY the prose. No commentary, no header summarizing the piece, no preamble. Start with the first `## Scene 1 — …` heading.

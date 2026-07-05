@@ -101,7 +101,7 @@ export const LOCKABLE_STAGES = Object.freeze(['arc']);
 // while preserving locked ones verbatim. Sibling to the binary `locked.arc`
 // (which freezes everything); the two stack — `locked.arc: true` always wins.
 export const ARC_LOCKABLE_FIELDS = Object.freeze([
-  'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap', 'tickingClock',
+  'logline', 'summary', 'protagonistArc', 'themes', 'shape', 'readerMap', 'tickingClock', 'foreshadowing',
 ]);
 
 // Series Autopilot run marker (full autonomous mode). A thin, persisted

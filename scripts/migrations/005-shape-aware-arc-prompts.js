@@ -24,6 +24,7 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-overview.md': [
     '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (original)
     'd34d72b8e49ba303d38607845dd87f1c', // post-005 / pre-019 — the hash this migration originally produced
+    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019 / pre-164 (foreshadowing ledger)
   ],
   'pipeline-arc-verify.md': [
     '52e31abc93e3105176236fcaa5d1575a', // pre-005 (original)
@@ -43,7 +44,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-overview.md':    '612f8b04950e2ff26dd350dd76a062fe', // post-164 (foreshadowing ledger)
   'pipeline-arc-verify.md':      '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-volume-verify.md':   '49458d36700cb94e34806d536ffe2940', // post-019
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005 (live sample)

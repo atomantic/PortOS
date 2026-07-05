@@ -32,6 +32,7 @@ export const ACCEPTED_OLD_MD5 = {
     '30ac30ec2b9d3e2a9eb869c181732cc6', // post-003 / pre-027 — the hash this migration originally produced
     'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027 / pre-054
     'bef1bc2767b78f585f2bd89f3d615130', // post-054 / pre-054-fence
+    '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 / pre-164 (scene markers)
   ],
   'pipeline-comic-script.md': [ 'a4303016c34b65e4b0e641fe71252de3',
     '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (original)
@@ -52,7 +53,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
-  'pipeline-prose.md':           '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 (scene markers)
+  'pipeline-prose.md':           '430d38ed2da59e0d4212e65edc499a74', // post-164 (craft anti-patterns)
   'pipeline-comic-script.md':    '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)
   'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005

@@ -17,6 +17,9 @@ const {
   buildSeason,
   sanitizeReaderMap,
   sanitizeTickingClock,
+  sanitizeForeshadowing,
+  sanitizeForeshadowingEntry,
+  FORESHADOW_LIMITS,
   renderTickingClock,
   TICKING_CLOCK_LIMITS,
   TICKING_CLOCK_KINDS,
@@ -54,6 +57,7 @@ describe('storyArc — sanitizeArc', () => {
       shape: null,
       readerMap: null,
       tickingClock: null,
+      foreshadowing: [],
       status: 'draft',
     });
   });
@@ -544,5 +548,57 @@ describe('storyArc — buildSeason', () => {
   it('returns null when the input has no identifying content', () => {
     expect(buildSeason({})).toBe(null);
     expect(buildSeason({ logline: 'just a logline' })).toBe(null);
+  });
+});
+
+describe('storyArc — sanitizeForeshadowing (#2172)', () => {
+  it('returns [] for non-array input', () => {
+    expect(sanitizeForeshadowing(null)).toEqual([]);
+    expect(sanitizeForeshadowing(undefined)).toEqual([]);
+    expect(sanitizeForeshadowing('x')).toEqual([]);
+    expect(sanitizeForeshadowing({})).toEqual([]);
+  });
+
+  it('drops entries with no identifying content', () => {
+    expect(sanitizeForeshadowingEntry(null)).toBe(null);
+    expect(sanitizeForeshadowingEntry({})).toBe(null);
+    expect(sanitizeForeshadowingEntry({ label: '   ' })).toBe(null);
+    expect(sanitizeForeshadowing([{}, { note: '' }])).toEqual([]);
+  });
+
+  it('mints an fs- id, clamps positions, dedupes+sorts reinforce issues', () => {
+    const [entry] = sanitizeForeshadowing([
+      { label: 'The locked room', plantIssue: 1, reinforceIssues: [5, 3, 3, -2], payoffIssue: 6, note: 'the room opens' },
+    ]);
+    expect(entry.id).toMatch(/^fs-/);
+    expect(entry.label).toBe('The locked room');
+    expect(entry.plantIssue).toBe(1);
+    expect(entry.payoffIssue).toBe(6);
+    // -2 clamps to 0; duplicate 3 collapses; sorted ascending.
+    expect(entry.reinforceIssues).toEqual([0, 3, 5]);
+  });
+
+  it('flags distanceOk true when payoff is >= MIN distance after plant, false when too close, null when unknown', () => {
+    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 1 + FORESHADOW_LIMITS.MIN_PLANT_PAYOFF_DISTANCE }).distanceOk).toBe(true);
+    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 2 }).distanceOk).toBe(false);
+    // A too-close entry is kept (not dropped), just flagged.
+    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1, payoffIssue: 2 })).not.toBe(null);
+    // Unknown span (one end missing) → null, not a misleading false.
+    expect(sanitizeForeshadowingEntry({ label: 'a', plantIssue: 1 }).distanceOk).toBe(null);
+  });
+
+  it('caps the ledger at ENTRIES_MAX', () => {
+    const many = Array.from({ length: FORESHADOW_LIMITS.ENTRIES_MAX + 5 }, (_, i) => ({ label: `seed ${i}`, plantIssue: 1 }));
+    expect(sanitizeForeshadowing(many)).toHaveLength(FORESHADOW_LIMITS.ENTRIES_MAX);
+  });
+
+  it('sanitizeArc round-trips the foreshadowing ledger and survives on ledger alone', () => {
+    const arc = sanitizeArc({ foreshadowing: [{ label: 'Mara’s limp', plantIssue: 2, payoffIssue: 8 }] });
+    expect(arc).not.toBe(null);
+    expect(arc.foreshadowing).toHaveLength(1);
+    expect(arc.foreshadowing[0].label).toBe('Mara’s limp');
+    // An arc with no foreshadowing still exposes the field as an array.
+    const bare = sanitizeArc({ logline: 'just a logline' });
+    expect(bare.foreshadowing).toEqual([]);
   });
 });

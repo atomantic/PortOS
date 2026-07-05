@@ -134,7 +134,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // overrides and last-writer-wins the loss back onto the newer peer. Bump makes
   // the older peer reject the ahead-version series transfer instead. Per-category
   // gate → only series sync pauses with old peers.
-  pipelineSeries: 9,
+  // v10 = `series.arc.foreshadowing` added (#2172) — the arc-overview-emitted
+  // plant → reinforce → payoff ledger the Chekhov check consumes. Same additive
+  // field INSIDE the series.arc payload as readerMap (v2) / tickingClock (v3): a
+  // ≤v9 peer that re-sanitizes a series through its foreshadowing-unaware
+  // `sanitizeArc` would silently strip the ledger and last-writer-wins the loss
+  // back onto the newer peer. Bump makes the older peer reject the ahead-version
+  // series transfer instead. Per-category gate → only series sync pauses with old peers.
+  pipelineSeries: 10,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
