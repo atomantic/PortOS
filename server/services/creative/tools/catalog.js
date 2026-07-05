@@ -12,7 +12,7 @@ import { COST_FREE, COST_LLM } from './shared.js';
 
 export const CATALOG_TOOLS = [
   {
-    name: 'catalog.searchIngredients',
+    name: 'catalog_searchIngredients',
     // Full conductor over the voice `catalog_lookup` tool: description +
     // parameters are hydrated from it (single source of the ingredient-search
     // schema; the guard guarantees hydration resolves) AND execute delegates to
@@ -25,7 +25,7 @@ export const CATALOG_TOOLS = [
     execute: (args, ctx) => dispatchVoiceTool('catalog_lookup', args, ctx),
   },
   {
-    name: 'catalog.suggestCastForBrief',
+    name: 'catalog_suggestCastForBrief',
     description: 'Suggest catalog ingredients to cast for a creative brief (ranked). Uses embedding search over the catalog.',
     costClass: COST_LLM,
     schema: z.object({ brief: z.string().min(1), types: z.array(z.string()).optional(), limit: z.number().int().positive().max(50).optional() }),

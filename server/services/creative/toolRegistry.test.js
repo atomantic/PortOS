@@ -71,7 +71,7 @@ describe('registry shape', () => {
   it('registers the six-domain tool inventory with unique names', () => {
     const names = getAllCreativeToolNames();
     expect(new Set(names).size).toBe(names.length);
-    for (const prefix of ['universe.', 'storyBuilder.', 'writersRoom.', 'pipeline.', 'media.', 'catalog.']) {
+    for (const prefix of ['universe_', 'storyBuilder_', 'writersRoom_', 'pipeline_', 'media_', 'catalog_']) {
       expect(names.some((n) => n.startsWith(prefix))).toBe(true);
     }
   });
@@ -81,6 +81,12 @@ describe('registry shape', () => {
       expect(typeof t.execute).toBe('function');
       expect(typeof t.schema.parse).toBe('function');
       expect(['free', 'llm', 'render']).toContain(t.costClass);
+    }
+  });
+
+  it('every registered tool name is function-calling-safe (no dots)', () => {
+    for (const name of getAllCreativeToolNames()) {
+      expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
     }
   });
 
@@ -95,20 +101,23 @@ describe('registry shape', () => {
   });
 
   it('hydrates catalog.searchIngredients description + parameters from the voice tool', () => {
-    const meta = getCreativeToolMetadata('catalog.searchIngredients');
+    const meta = getCreativeToolMetadata('catalog_searchIngredients');
     expect(meta.description).toBe('VOICE catalog search description');
     expect(meta.parameters.required).toEqual(['query']);
   });
 });
 
 describe('assertCreativeToolIntegrity', () => {
-  const ok = { name: 'a.x', costClass: 'free', schema: z.object({}), execute: () => {} };
+  const ok = { name: 'a_x', costClass: 'free', schema: z.object({}), execute: () => {} };
 
   it('accepts a valid tool set', () => {
     expect(() => assertCreativeToolIntegrity([ok])).not.toThrow();
   });
   it('throws on a duplicate name', () => {
     expect(() => assertCreativeToolIntegrity([ok, { ...ok }])).toThrow(/duplicate tool name/);
+  });
+  it('throws on a function-calling-unsafe (dotted) name', () => {
+    expect(() => assertCreativeToolIntegrity([{ ...ok, name: 'a.x' }])).toThrow(/function-calling-safe/);
   });
   it('throws on a missing execute', () => {
     expect(() => assertCreativeToolIntegrity([{ ...ok, execute: undefined }])).toThrow(/missing execute/);
@@ -135,7 +144,7 @@ describe('filterDestructive', () => {
 describe('dispatch gating per mode', () => {
   it('off → rejects without executing or charging', async () => {
     setMode('off');
-    const out = await dispatchCreativeTool('pipeline.createSeries', { name: 'S' });
+    const out = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' });
     expect(out).toMatchObject({ ok: false, rejected: true, reason: 'autonomy-off', mode: 'off' });
     expect(createSeries).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
@@ -143,8 +152,8 @@ describe('dispatch gating per mode', () => {
 
   it('dry-run → returns a plan frame with no side effects', async () => {
     setMode('dry-run');
-    const out = await dispatchCreativeTool('pipeline.generateStage', { issueId: 'i1', stageId: 'st1' });
-    expect(out).toMatchObject({ ok: true, planned: true, mode: 'dry-run', tool: 'pipeline.generateStage', costClass: 'llm' });
+    const out = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' });
+    expect(out).toMatchObject({ ok: true, planned: true, mode: 'dry-run', tool: 'pipeline_generateStage', costClass: 'llm' });
     expect(out.args).toMatchObject({ issueId: 'i1', stageId: 'st1' });
     expect(generateStage).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
@@ -152,15 +161,15 @@ describe('dispatch gating per mode', () => {
 
   it('execute → runs the wrapped entry point and returns its result', async () => {
     setMode('execute');
-    const out = await dispatchCreativeTool('pipeline.createSeries', { name: 'S' });
-    expect(out).toMatchObject({ ok: true, mode: 'execute', tool: 'pipeline.createSeries' });
+    const out = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' });
+    expect(out).toMatchObject({ ok: true, mode: 'execute', tool: 'pipeline_createSeries' });
     expect(out.result).toEqual({ id: 'ser1' });
     expect(createSeries).toHaveBeenCalledWith({ name: 'S' });
   });
 
   it('creative mode mirrors cos but an explicit creative override wins', async () => {
     loadState.mockResolvedValue({ config: { domainAutonomy: { cos: 'off', creative: 'execute' } } });
-    const out = await dispatchCreativeTool('pipeline.createSeries', { name: 'S' });
+    const out = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' });
     expect(out.ok).toBe(true);
     expect(createSeries).toHaveBeenCalled();
   });
@@ -171,7 +180,7 @@ describe('dispatch gating per mode', () => {
 
   it('throws on invalid args (Zod) before any gating', async () => {
     setMode('execute');
-    await expect(dispatchCreativeTool('pipeline.generateStage', { issueId: 'i1' })).rejects.toBeInstanceOf(z.ZodError);
+    await expect(dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1' })).rejects.toBeInstanceOf(z.ZodError);
     expect(generateStage).not.toHaveBeenCalled();
   });
 });
@@ -179,27 +188,27 @@ describe('dispatch gating per mode', () => {
 describe('budget charging', () => {
   it('charges one action for an llm tool on execute', async () => {
     setMode('execute');
-    await dispatchCreativeTool('pipeline.generateStage', { issueId: 'i1', stageId: 'st1' });
+    await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' });
     expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
     expect(generateStage).toHaveBeenCalled();
   });
 
   it('charges for a render (media) tool on execute', async () => {
     setMode('execute');
-    await dispatchCreativeTool('media.enqueueImageJob', { params: { prompt: 'p' } }, { projectId: 'p1' });
+    await dispatchCreativeTool('media_enqueueImageJob', { params: { prompt: 'p' } }, { projectId: 'p1' });
     expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'image', params: { prompt: 'p' }, owner: 'creative-director:p1' });
   });
 
   it('does not charge a free tool', async () => {
     setMode('execute');
-    await dispatchCreativeTool('pipeline.createSeries', { name: 'S' });
+    await dispatchCreativeTool('pipeline_createSeries', { name: 'S' });
     expect(recordDomainUsage).not.toHaveBeenCalled();
   });
 
   it('catalog.searchIngredients delegates to the voice catalog_lookup tool (honors the hydrated contract)', async () => {
     setMode('execute');
-    const out = await dispatchCreativeTool('catalog.searchIngredients', { query: 'noir' }, { some: 'ctx' });
+    const out = await dispatchCreativeTool('catalog_searchIngredients', { query: 'noir' }, { some: 'ctx' });
     expect(dispatchVoiceTool).toHaveBeenCalledWith('catalog_lookup', { query: 'noir' }, { some: 'ctx' });
     expect(out.ok).toBe(true);
     expect(recordDomainUsage).not.toHaveBeenCalled(); // free tool
@@ -208,7 +217,7 @@ describe('budget charging', () => {
   it('rejects when the budget is exhausted, without executing', async () => {
     setMode('execute');
     getDomainBudgetStatus.mockResolvedValue({ withinBudget: false, exceeded: 'actions' });
-    const out = await dispatchCreativeTool('pipeline.generateStage', { issueId: 'i1', stageId: 'st1' });
+    const out = await dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' });
     expect(out).toMatchObject({ ok: false, rejected: true, reason: 'budget', exceeded: 'actions' });
     expect(generateStage).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
@@ -219,10 +228,10 @@ describe('run ledger append', () => {
   it('appends an executed entry with tool, digest, outcome and timing', async () => {
     setMode('execute');
     const appendLedger = vi.fn(async () => {});
-    await dispatchCreativeTool('pipeline.createSeries', { name: 'S' }, { projectId: 'p1', appendLedger });
+    await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { projectId: 'p1', appendLedger });
     expect(appendLedger).toHaveBeenCalledTimes(1);
     const entry = appendLedger.mock.calls[0][0];
-    expect(entry).toMatchObject({ tool: 'pipeline.createSeries', outcome: 'executed' });
+    expect(entry).toMatchObject({ tool: 'pipeline_createSeries', outcome: 'executed' });
     expect(typeof entry.argsDigest).toBe('string');
     expect(typeof entry.timingMs).toBe('number');
   });
@@ -230,14 +239,14 @@ describe('run ledger append', () => {
   it('records outcome=rejected when off', async () => {
     setMode('off');
     const appendLedger = vi.fn(async () => {});
-    await dispatchCreativeTool('pipeline.createSeries', { name: 'S' }, { appendLedger });
+    await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { appendLedger });
     expect(appendLedger.mock.calls[0][0].outcome).toBe('rejected');
   });
 
   it('records outcome=planned in dry-run', async () => {
     setMode('dry-run');
     const appendLedger = vi.fn(async () => {});
-    await dispatchCreativeTool('pipeline.createSeries', { name: 'S' }, { appendLedger });
+    await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { appendLedger });
     expect(appendLedger.mock.calls[0][0].outcome).toBe('planned');
   });
 
@@ -246,7 +255,7 @@ describe('run ledger append', () => {
     generateStage.mockRejectedValueOnce(new Error('boom'));
     const appendLedger = vi.fn(async () => {});
     await expect(
-      dispatchCreativeTool('pipeline.generateStage', { issueId: 'i1', stageId: 'st1' }, { appendLedger }),
+      dispatchCreativeTool('pipeline_generateStage', { issueId: 'i1', stageId: 'st1' }, { appendLedger }),
     ).rejects.toThrow('boom');
     expect(appendLedger.mock.calls[0][0]).toMatchObject({ outcome: 'error', error: 'boom' });
   });
@@ -254,7 +263,7 @@ describe('run ledger append', () => {
   it('a ledger sink failure never breaks the dispatch', async () => {
     setMode('execute');
     const appendLedger = vi.fn(async () => { throw new Error('disk full'); });
-    const out = await dispatchCreativeTool('pipeline.createSeries', { name: 'S' }, { projectId: 'p1', appendLedger });
+    const out = await dispatchCreativeTool('pipeline_createSeries', { name: 'S' }, { projectId: 'p1', appendLedger });
     expect(out.ok).toBe(true);
   });
 });

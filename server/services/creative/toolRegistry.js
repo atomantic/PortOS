@@ -50,6 +50,12 @@ export const CREATIVE_TOOLS = [
 
 const COST_SET = new Set(COST_CLASSES);
 
+// OpenAI/compatible function-calling APIs only accept names matching this
+// pattern — a dotted `domain.action` name would make the model request 400
+// before the orchestrator could dispatch. Enforce it at load so a new tool
+// can't reintroduce an unsafe name.
+const SAFE_TOOL_NAME_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
 /**
  * Fail-fast integrity check (navManifest / voice-tools precedent): every tool
  * must carry a unique name, a Zod schema, an execute fn, and a valid cost class;
@@ -65,6 +71,9 @@ export function assertCreativeToolIntegrity(tools, resolveMeta = getToolMetadata
   for (const t of tools) {
     if (!t || typeof t.name !== 'string' || !t.name) {
       throw new Error('creative tools: a tool is missing its name');
+    }
+    if (!SAFE_TOOL_NAME_RE.test(t.name)) {
+      throw new Error(`creative tools: "${t.name}" is not a function-calling-safe name (letters/digits/_/-, ≤64 chars)`);
     }
     if (seen.has(t.name)) {
       throw new Error(`creative tools: duplicate tool name "${t.name}"`);

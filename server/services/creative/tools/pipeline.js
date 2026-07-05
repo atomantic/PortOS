@@ -14,7 +14,7 @@ import { COST_FREE, COST_LLM, COST_RENDER } from './shared.js';
 
 export const PIPELINE_TOOLS = [
   {
-    name: 'pipeline.createSeries',
+    name: 'pipeline_createSeries',
     description: 'Create a new pipeline series record. Persists a record; returns it.',
     costClass: COST_FREE,
     // The wrapped service rejects a missing/blank `name`; require it here so a
@@ -32,7 +32,7 @@ export const PIPELINE_TOOLS = [
     execute: (args) => createSeries(args),
   },
   {
-    name: 'pipeline.generateSeriesConcept',
+    name: 'pipeline_generateSeriesConcept',
     description: 'Generate a series concept (name, logline, premise, shape) for a universe via the LLM.',
     costClass: COST_LLM,
     schema: z.object({ universeId: z.string().min(1), options: z.record(z.any()).optional() }),
@@ -47,7 +47,7 @@ export const PIPELINE_TOOLS = [
     execute: ({ universeId, options }) => generateSeriesConcept(universeId, options || {}),
   },
   {
-    name: 'pipeline.generateStage',
+    name: 'pipeline_generateStage',
     description: 'Generate one text stage (LLM) for a pipeline issue and persist the updated issue.',
     costClass: COST_LLM,
     schema: z.object({ issueId: z.string().min(1), stageId: z.string().min(1), options: z.record(z.any()).optional() }),
@@ -63,7 +63,7 @@ export const PIPELINE_TOOLS = [
     execute: ({ issueId, stageId, options }) => generateStage(issueId, stageId, options || {}),
   },
   {
-    name: 'pipeline.enqueueComicCover',
+    name: 'pipeline_enqueueComicCover',
     description: 'Enqueue a comic-cover image render for an issue. Long-running: returns a job handle; completion arrives via media-job events.',
     costClass: COST_RENDER,
     longRunning: true,
@@ -79,7 +79,7 @@ export const PIPELINE_TOOLS = [
     execute: ({ issueId, options }) => enqueueComicCover(issueId, options || {}),
   },
   {
-    name: 'pipeline.startSeriesAutopilot',
+    name: 'pipeline_startSeriesAutopilot',
     description: 'Start (or no-op resume) the Series Autopilot for a series. Long-running: returns a run handle; progress and pauses arrive via events. Autopilot has its own cos-off gate; the orchestrator gate applies first.',
     costClass: COST_LLM,
     longRunning: true,

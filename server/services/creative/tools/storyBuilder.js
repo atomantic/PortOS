@@ -9,7 +9,7 @@ import { COST_FREE, COST_LLM } from './shared.js';
 
 export const STORY_BUILDER_TOOLS = [
   {
-    name: 'storyBuilder.createStorySession',
+    name: 'storyBuilder_createStorySession',
     description: 'Create a new story-builder session (optionally minting a universe/series from the title + seed). Persists the session; returns its id.',
     costClass: COST_FREE,
     // The wrapped service requires a non-empty `title` (it doubles as the minted
@@ -29,7 +29,7 @@ export const STORY_BUILDER_TOOLS = [
     execute: (args) => createStorySession(args),
   },
   {
-    name: 'storyBuilder.generateStep',
+    name: 'storyBuilder_generateStep',
     description: 'Generate one story-builder step (LLM) for a session and persist the result.',
     costClass: COST_LLM,
     schema: z.object({ id: z.string().min(1), stepId: z.string().min(1), options: z.record(z.any()).optional() }),
@@ -45,7 +45,7 @@ export const STORY_BUILDER_TOOLS = [
     execute: ({ id, stepId, options }) => generateStep(id, stepId, options || {}),
   },
   {
-    name: 'storyBuilder.generateIssuesFromArc',
+    name: 'storyBuilder_generateIssuesFromArc',
     description: 'Generate the issue breakdown for a story arc (LLM). Long-running: creates multiple issue records.',
     costClass: COST_LLM,
     longRunning: true,

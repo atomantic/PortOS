@@ -11,7 +11,7 @@ import { COST_FREE, COST_LLM, COST_RENDER } from './shared.js';
 
 export const UNIVERSE_TOOLS = [
   {
-    name: 'universe.createUniverse',
+    name: 'universe_createUniverse',
     description: 'Create a new universe record (a creative world container). Persists a record; does not generate content.',
     costClass: COST_FREE,
     schema: z.object({ name: z.string().min(1) }).passthrough(),
@@ -23,15 +23,28 @@ export const UNIVERSE_TOOLS = [
     execute: (args) => createUniverse(args),
   },
   {
-    name: 'universe.expandWorldTemplate',
+    name: 'universe_expandWorldTemplate',
     description: 'Expand a starter prompt into a universe bible (logline, premise, style, canon) via the configured LLM. Returns the parsed bible; does not persist.',
     costClass: COST_LLM,
-    schema: z.object({ starterPrompt: z.string().min(1) }).passthrough(),
+    // `influences` must be the structured `{ embrace, avoid }` token-list shape —
+    // the service's sanitizeInfluences ignores a bare string and silently drops
+    // the style direction, so advertise (and validate) the object shape.
+    schema: z.object({
+      starterPrompt: z.string().min(1),
+      influences: z.object({ embrace: z.array(z.string()).optional(), avoid: z.array(z.string()).optional() }).optional(),
+    }).passthrough(),
     parameters: {
       type: 'object',
       properties: {
         starterPrompt: { type: 'string', description: 'Seed prompt describing the world to expand.' },
-        influences: { type: 'string', description: 'Optional comma-separated stylistic influences.' },
+        influences: {
+          type: 'object',
+          description: 'Optional stylistic influences as token lists.',
+          properties: {
+            embrace: { type: 'array', items: { type: 'string' }, description: 'Positive-prompt style tokens to embrace.' },
+            avoid: { type: 'array', items: { type: 'string' }, description: 'Negative-prompt tokens to avoid.' },
+          },
+        },
         providerId: { type: 'string', description: 'Optional LLM provider override.' },
         model: { type: 'string', description: 'Optional model override.' },
       },
@@ -40,7 +53,7 @@ export const UNIVERSE_TOOLS = [
     execute: (args) => expandWorldTemplate(args),
   },
   {
-    name: 'universe.renderUniverseJobs',
+    name: 'universe_renderUniverseJobs',
     description: "Enqueue a batch of image-generation jobs for a universe's canon/variations/composite sheets (requires local or codex image-gen mode). Long-running: returns job handles; completion arrives via media-job events.",
     costClass: COST_RENDER,
     longRunning: true,

@@ -11,7 +11,7 @@ import { COST_RENDER, resolveOwner } from './shared.js';
 const paramsSchema = z.object({ params: z.record(z.any()).default({}), owner: z.string().optional() });
 
 const mediaTool = (kind, label) => ({
-  name: `media.enqueue${label}Job`,
+  name: `media_enqueue${label}Job`,
   description: `Enqueue a ${kind} media job. Long-running: returns a job handle; completion arrives via media-job events. Tags the job owner to the calling project.`,
   costClass: COST_RENDER,
   longRunning: true,
