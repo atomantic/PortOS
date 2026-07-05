@@ -13,6 +13,7 @@ const {
   classifyWorktreeDirt,
   isGitLockError,
   addWorktreeWithRetry,
+  isPreexistingRefError,
 } = await import('./worktreeManager.js');
 
 /**
@@ -511,5 +512,26 @@ describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
     await expect(addWorktreeWithRetry(['worktree', 'add', '/wt', 'origin/nope'], '/repo'))
       .rejects.toThrow(/invalid reference/);
     expect(execGitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT retry an "already exists" precondition failure', async () => {
+    execGitMock.mockRejectedValueOnce(new Error("fatal: a branch named 'cos/task/agent' already exists"));
+    await expect(addWorktreeWithRetry(['worktree', 'add', '-b', 'cos/task/agent', '/wt', 'main'], '/repo'))
+      .rejects.toThrow(/already exists/);
+    expect(execGitMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isPreexistingRefError (orphan-cleanup guard, #2193)', () => {
+  it('is true for branch/path already-exists failures (add created nothing)', () => {
+    expect(isPreexistingRefError("fatal: a branch named 'cos/task/agent' already exists")).toBe(true);
+    expect(isPreexistingRefError("fatal: '/repo/data/cos/worktrees/agent-x' already exists")).toBe(true);
+  });
+
+  it('is false for lock contention and other failures (add may have left an orphan)', () => {
+    expect(isPreexistingRefError('error: cannot lock ref')).toBe(false);
+    expect(isPreexistingRefError('fatal: invalid reference')).toBe(false);
+    expect(isPreexistingRefError('')).toBe(false);
+    expect(isPreexistingRefError(undefined)).toBe(false);
   });
 });
