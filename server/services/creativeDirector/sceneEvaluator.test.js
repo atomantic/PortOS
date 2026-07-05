@@ -279,6 +279,19 @@ describe('dispatchSceneEvaluation', () => {
     expect(mocks.updateRun).toHaveBeenCalledWith('p1', running[1].runId, expect.objectContaining({ status: 'completed' }));
   });
 
+  it('does NOT overwrite an accepted scene with failed when downstream advance throws', async () => {
+    mocks.listVisionModels.mockResolvedValue([{ providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true }]);
+    mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));
+    mocks.runPromptThroughProvider.mockResolvedValue({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
+    // The next-scene/stitch step fails (e.g. ffmpeg) — must not corrupt the settled scene.
+    mocks.advanceAfterSceneSettled.mockRejectedValue(new Error('ffmpeg stitch failed'));
+    await expect(dispatchSceneEvaluation(project, scene)).resolves.not.toThrow();
+    expect(mocks.updateScene).toHaveBeenCalledWith('p1', 's1', expect.objectContaining({ status: 'accepted' }));
+    // The dispatch catch must NOT have fired to mark the scene failed.
+    const failedCall = mocks.updateScene.mock.calls.find((c) => c[2]?.status === 'failed');
+    expect(failedCall).toBeUndefined();
+  });
+
   it('marks the running run failed when the vision call throws, then falls back to the agent', async () => {
     mocks.listVisionModels.mockResolvedValue([{ providerId: 'ollama', backend: 'ollama', id: 'qwen2.5-vl', vision: true }]);
     mocks.getProviderById.mockImplementation(async (id) => (id === 'ollama' ? OLLAMA : null));

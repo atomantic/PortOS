@@ -265,7 +265,18 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
     : recordRun(project.id, { kind: 'evaluate', sceneId: scene.sceneId || null, ...runPatch })
   ).catch((err) => console.log(`⚠️ CD vision run record failed: ${err.message}`));
 
-  const advanceAfterSceneSettled = await loadAdvance();
+  // Advancing to the next scene / stitch is a downstream orchestration step —
+  // fire-and-forget and self-healing (idempotent, re-triggered on the next
+  // Start/Resume/completion), exactly how the PATCH route calls it. Its failure
+  // must NOT propagate out of applySceneVerdict: dispatchSceneEvaluation's catch
+  // would otherwise overwrite the scene we just correctly settled
+  // (accepted/pending) with 'failed' for a purely downstream error (e.g. an
+  // ffmpeg stitch failure on the final accepted scene).
+  const advance = async () => {
+    const advanceAfterSceneSettled = await loadAdvance();
+    return advanceAfterSceneSettled(project.id).catch((err) =>
+      console.log(`⚠️ CD advance after scene ${scene.sceneId} settled failed: ${err.message}`));
+  };
 
   if (verdict.accepted) {
     await updateScene(project.id, scene.sceneId, { status: 'accepted', evaluation });
@@ -279,7 +290,7 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
         });
     }
     console.log(`✅ CD scene ${scene.sceneId} accepted by vision (${llm?.provider || 'local'}/${llm?.model || '?'})`);
-    return advanceAfterSceneSettled(project.id);
+    return advance();
   }
 
   if (retryCount < CD_MAX_SCENE_RETRIES) {
@@ -288,12 +299,12 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
     if (verdict.imageStrength !== undefined) patch.imageStrength = verdict.imageStrength;
     await updateScene(project.id, scene.sceneId, patch);
     console.log(`🔁 CD scene ${scene.sceneId} rejected by vision — retry ${patch.retryCount}/${CD_MAX_SCENE_RETRIES}`);
-    return advanceAfterSceneSettled(project.id);
+    return advance();
   }
 
   await updateScene(project.id, scene.sceneId, { status: 'failed', evaluation });
   console.log(`⛔ CD scene ${scene.sceneId} failed by vision — retries exhausted`);
-  return advanceAfterSceneSettled(project.id);
+  return advance();
 }
 
 /**
