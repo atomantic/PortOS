@@ -34,6 +34,12 @@ import {
   buildTuiInvocation,
   detectMissingTuiBinary,
   scheduleSubmitEnters,
+  PASTE_VERIFY_POLL_MS,
+  PASTE_VERIFY_WINDOW_MS,
+  PASTE_RETRY_MAX_ATTEMPTS,
+  PASTE_RETRY_BASE_DELAY_MS,
+  extractVerifiablePromptPrefix,
+  verifyPasteRendered,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
 
@@ -587,5 +593,109 @@ describe('tuiHandshake.scheduleSubmitEnters', () => {
     vi.advanceTimersByTime(SUBMIT_ENTER_SPACING_MS * (SUBMIT_ENTER_ATTEMPTS + 2));
     // The immediate write already happened; no interval-driven writes follow.
     expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Paste verification helpers (issue #2192)
+describe('tuiHandshake — paste verification constants', () => {
+  it('pins paste verification constants', () => {
+    expect(PASTE_VERIFY_POLL_MS).toBe(200);
+    expect(PASTE_VERIFY_WINDOW_MS).toBe(2000);
+    expect(PASTE_RETRY_MAX_ATTEMPTS).toBe(3);
+    expect(PASTE_RETRY_BASE_DELAY_MS).toBe(800);
+    // Verification window should be shorter than the overall paste deadline
+    expect(PASTE_VERIFY_WINDOW_MS).toBeLessThan(PASTE_DEADLINE_MS);
+  });
+});
+
+describe('tuiHandshake.extractVerifiablePromptPrefix', () => {
+  it('extracts a prefix from a normal prompt', () => {
+    const prompt = 'Please implement the feature described in issue #123. The feature should...';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).toBeTruthy();
+    expect(prefix.length).toBeGreaterThanOrEqual(15);
+    expect(prefix.length).toBeLessThanOrEqual(40);
+    // The prefix should be from the prompt, not the very beginning (skips common prefixes)
+    expect(prompt.includes(prefix)).toBe(true);
+    expect(prompt.startsWith(prefix)).toBe(false);
+  });
+
+  it('returns the whole prompt for very short prompts', () => {
+    const prompt = 'Fix the bug';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).toBe('Fix the bug');
+  });
+
+  it('returns null for prompts too short to verify', () => {
+    expect(extractVerifiablePromptPrefix('Hi')).toBeNull();
+    expect(extractVerifiablePromptPrefix('')).toBeNull();
+    expect(extractVerifiablePromptPrefix(null)).toBeNull();
+    expect(extractVerifiablePromptPrefix(undefined)).toBeNull();
+  });
+
+  it('collapses whitespace in the prefix', () => {
+    const prompt = 'Please  implement\n\nthe   feature';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).not.toMatch(/\s{2,}/);
+    expect(prefix).not.toContain('\n');
+  });
+
+  it('handles prompts with leading boilerplate', () => {
+    const prompt = 'You are a helpful assistant. Please implement the truncateMiddle function.';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    // Should skip the first few characters to avoid matching common prefixes
+    expect(prefix.startsWith('You are')).toBe(false);
+    expect(prompt.replace(/\s+/g, ' ').includes(prefix)).toBe(true);
+  });
+});
+
+describe('tuiHandshake.verifyPasteRendered', () => {
+  it('returns true when prefix is found in buffer', () => {
+    const prefix = 'implement the truncateMiddle function';
+    const buffer = 'Some TUI chrome... implement the truncateMiddle function ...more text';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+  });
+
+  it('returns false when prefix is not found in buffer', () => {
+    const prefix = 'implement the truncateMiddle function';
+    const buffer = 'Some TUI chrome without the prompt text';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(false);
+  });
+
+  it('handles whitespace normalization', () => {
+    const prefix = 'implement the function';
+    const buffer = 'implement   the\n  function';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+  });
+
+  it('returns true for null/empty prefix (no verification possible)', () => {
+    expect(verifyPasteRendered('any buffer', null)).toBe(true);
+    expect(verifyPasteRendered('any buffer', '')).toBe(true);
+    expect(verifyPasteRendered('any buffer', undefined)).toBe(true);
+  });
+
+  it('returns false for non-string buffer', () => {
+    expect(verifyPasteRendered(null, 'prefix')).toBe(false);
+    expect(verifyPasteRendered(undefined, 'prefix')).toBe(false);
+    expect(verifyPasteRendered(123, 'prefix')).toBe(false);
+  });
+
+  it('handles real-world OpenCode scenario (issue #2192)', () => {
+    // Simulates the case where OpenCode was still initializing
+    const prompt = 'Run /do:next --issues --swarm using the truncateMiddle helper';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+
+    // Empty buffer = paste was swallowed
+    expect(verifyPasteRendered('', prefix)).toBe(false);
+
+    // Only TUI chrome = paste was swallowed
+    expect(verifyPasteRendered('Ask anything... (ESC to exit)', prefix)).toBe(false);
+
+    // Prompt text visible (with the full prompt echoed) = paste succeeded
+    // The buffer would contain the actual prompt text after a successful paste
+    expect(verifyPasteRendered(`Ask anything... ${prompt}`, prefix)).toBe(true);
+
+    // Also verify partial echo (just the middle portion where the prefix is from)
+    expect(verifyPasteRendered(`Ask anything... o:next --issues --swarm using the trunca...`, prefix)).toBe(true);
   });
 });

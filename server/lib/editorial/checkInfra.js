@@ -378,6 +378,28 @@ export const MIRROR_DESCRIPTION_STAGE = 'pipeline-editorial-mirror-description';
 export const DIALOGUE_PLEASANTRIES_STAGE = 'pipeline-editorial-dialogue-pleasantries';
 export const KILL_YOUR_DARLINGS_STAGE = 'pipeline-editorial-kill-your-darlings';
 
+// Stage name for the adversarial-cuts prose-tightening LLM check (#2168). Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js); new file so no migration needed. Asks a ruthless editor
+// persona to cut 8–12% of the text, classifying each cut (FAT, REDUNDANT,
+// OVER-EXPLAIN, GENERIC, TELL, STRUCTURAL). Safe types (OVER-EXPLAIN, REDUNDANT)
+// can be batch-applied mechanically.
+export const ADVERSARIAL_CUTS_STAGE = 'pipeline-editorial-adversarial-cuts';
+
+// The six cut types the adversarial-cuts check returns, ordered by safe-to-auto-
+// apply (the first two are the "safe majority" per the design doc). The applier
+// defaults to OVER-EXPLAIN + REDUNDANT only; other types require manual review.
+export const CUT_TYPES = Object.freeze([
+  'OVER-EXPLAIN',
+  'REDUNDANT',
+  'FAT',
+  'GENERIC',
+  'TELL',
+  'STRUCTURAL',
+]);
+// The subset that can be auto-applied without manual review.
+export const SAFE_CUT_TYPES = Object.freeze(['OVER-EXPLAIN', 'REDUNDANT']);
+
 // Stage names for the two scene-grounding LLM checks (#1309): sensory balance
 // (all-visual / sensory-bare scenes) and white-room (ungrounded, setting-less
 // scenes). Each prompt ships in data.reference/prompts/stages/ + stage-config.json

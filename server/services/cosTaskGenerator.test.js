@@ -273,6 +273,15 @@ describe('resolveSwarmBlock', () => {
     expect(block.trimEnd().endsWith('---')).toBe(true);
   });
 
+  it('instructs the orchestrator to still write the completion sentinel after a swarm run', () => {
+    // Swarm work ships via PRs with no working-tree change, so without an
+    // explicit instruction the orchestrator skips the completion sentinel and
+    // the CoS task hangs as if it never finished. Phase C must name the sentinel.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('.agent-done');
+    expect(block).toContain('Completion Workflow');
+  });
+
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
     const block = resolveSwarmBlock('claim-issue-gitlab', 4);
     expect(block).toContain('--swarm=4');
@@ -296,6 +305,31 @@ describe('swarm block wiring', () => {
     expect(occurrences.length).toBe(2);
     expect(GEN_SRC).toContain('`${swarmBlock}${template}`');
     expect(GEN_SRC).toContain('`${swarmBlock}${promptTemplate}`');
+  });
+});
+
+// A scheduled/self-improvement task with no configured model must NOT pin a
+// hardcoded model literal — it must leave metadata.model unset so
+// selectModelForTask resolves the ACTIVE provider's tier/default model at spawn
+// time. A stale literal here once pinned `claude-opus-4-5-20251101`, which had
+// dropped out of the claude-code-tui provider config, so the scheduler spawned
+// `claude --model claude-opus-4-5-20251101` — a model the provider no longer
+// listed. The only assignment to metadata.model in either generator must come
+// from `interval.model`.
+describe('improvement-task model is never a hardcoded literal', () => {
+  it('does not assign a hardcoded claude-* model literal to metadata.model', () => {
+    expect(GEN_SRC).not.toMatch(/metadata\.model\s*=\s*['"]claude-/);
+  });
+
+  it('sets metadata.model only from config-driven fields, never a string literal', () => {
+    const assignments = GEN_SRC.match(/metadata\.model\s*=\s*[^;]+/g) || [];
+    expect(assignments.length).toBeGreaterThan(0);
+    for (const line of assignments) {
+      // Every assignment must read from schedule/stage config (interval.model,
+      // stage0.model, …) — never a bare quoted model id.
+      expect(line).not.toMatch(/metadata\.model\s*=\s*['"]/);
+      expect(line).toMatch(/metadata\.model\s*=\s*\w+\.model/);
+    }
   });
 });
 

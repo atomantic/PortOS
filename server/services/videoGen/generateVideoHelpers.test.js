@@ -2,7 +2,95 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage } from './generateVideoHelpers.js';
+
+describe('parseByteProgress', () => {
+  it('parses single byte value (e.g., "2.5G")', () => {
+    const result = parseByteProgress('model is 2.5G');
+    expect(result.downloaded).toBeNull();
+    expect(result.total).toBeCloseTo(2.5 * 1024 ** 3, -5);
+  });
+
+  it('parses downloaded/total format (e.g., "1.5G/2.0G")', () => {
+    const result = parseByteProgress('1.5G/2.0G downloaded');
+    expect(result.downloaded).toBeCloseTo(1.5 * 1024 ** 3, -5);
+    expect(result.total).toBeCloseTo(2.0 * 1024 ** 3, -5);
+  });
+
+  it('parses MB values', () => {
+    const result = parseByteProgress('500MB/1024MB');
+    expect(result.downloaded).toBeCloseTo(500 * 1024 ** 2, -5);
+    expect(result.total).toBeCloseTo(1024 * 1024 ** 2, -5);
+  });
+
+  it('parses M suffix (common in tqdm)', () => {
+    const result = parseByteProgress('512M/1.0G');
+    expect(result.downloaded).toBeCloseTo(512 * 1024 ** 2, -5);
+    expect(result.total).toBeCloseTo(1.0 * 1024 ** 3, -5);
+  });
+
+  it('returns nulls when no byte values found', () => {
+    const result = parseByteProgress('model.safetensors 40%');
+    expect(result.downloaded).toBeNull();
+    expect(result.total).toBeNull();
+  });
+
+  it('parses tqdm-style progress bars with bytes', () => {
+    const result = parseByteProgress('50%|█████     | 1.00G/2.00G [00:22<00:22, 45.6MB/s]');
+    expect(result.downloaded).toBeCloseTo(1.0 * 1024 ** 3, -5);
+    expect(result.total).toBeCloseTo(2.0 * 1024 ** 3, -5);
+  });
+
+  it('parses GiB suffix', () => {
+    const result = parseByteProgress('1.5GiB/3.0GiB');
+    expect(result.downloaded).toBeCloseTo(1.5 * 1024 ** 3, -5);
+    expect(result.total).toBeCloseTo(3.0 * 1024 ** 3, -5);
+  });
+});
+
+describe('formatBytes (re-exported from fileUtils)', () => {
+  it('formats bytes as B', () => {
+    expect(formatBytes(512)).toBe('512 B');
+  });
+
+  it('formats kilobytes', () => {
+    expect(formatBytes(2048)).toBe('2 KB');
+  });
+
+  it('formats megabytes', () => {
+    expect(formatBytes(1024 * 1024 * 1.5)).toBe('1.5 MB');
+  });
+
+  it('formats gigabytes', () => {
+    expect(formatBytes(1024 ** 3 * 2.5)).toBe('2.5 GB');
+  });
+
+  it('formats terabytes', () => {
+    expect(formatBytes(1024 ** 4 * 1.2)).toBe('1.2 TB');
+  });
+
+  it('handles null/undefined as 0 B', () => {
+    expect(formatBytes(null)).toBe('0 B');
+    expect(formatBytes(undefined)).toBe('0 B');
+  });
+});
+
+describe('formatDownloadMessage', () => {
+  it('formats with both downloaded and total', () => {
+    const byteInfo = { downloaded: 1.5 * 1024 ** 3, total: 2.5 * 1024 ** 3 };
+    expect(formatDownloadMessage('raw text', byteInfo)).toBe('Downloading model · first run · 1.5 GB / 2.5 GB');
+  });
+
+  it('formats with only total', () => {
+    const byteInfo = { downloaded: null, total: 2.5 * 1024 ** 3 };
+    expect(formatDownloadMessage('raw text', byteInfo)).toBe('Downloading model · first run · 2.5 GB');
+  });
+
+  it('falls back to raw text when no byte info', () => {
+    const byteInfo = { downloaded: null, total: null };
+    expect(formatDownloadMessage('model.safetensors 40%', byteInfo)).toBe('Downloading model... model.safetensors 40%');
+  });
+});
 
 // broadcastSse + videoGenEvents are the two output sinks the line handler
 // writes to; capture both so we can assert the parse → frame mapping.
@@ -47,9 +135,9 @@ describe('makeVideoGenLineHandler', () => {
     expect(eventsOfType('activity')).toContainEqual({ generationId: 'job-12345678' });
   });
 
-  it('STAGE:<s>:step:<cur>:<total>:<label> → fractional progress with label', () => {
+  it('STAGE:<s>:step:<cur>:<total>:<label> → fractional progress with label and phase', () => {
     expect(handle('STAGE:render:step:6:10:Sampling latents')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: 'Sampling latents' });
+    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: 'Sampling latents', phase: 'render' });
     expect(eventsOfType('progress')).toContainEqual({
       generationId: 'job-12345678', progress: 0.6, step: 6, totalSteps: 10, message: 'Sampling latents',
     });
@@ -64,7 +152,7 @@ describe('makeVideoGenLineHandler', () => {
 
   it('normalizes uppercase STEP tag (generate_ltx2.py emits STEP:)', () => {
     expect(handle('STAGE:render:STEP:1:4:warmup')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.25, message: 'warmup' });
+    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.25, message: 'warmup', phase: 'render' });
   });
 
   it('bare STAGE: phase marker → status (no division-by-undefined progress)', () => {
@@ -73,16 +161,37 @@ describe('makeVideoGenLineHandler', () => {
     expect(sseFrames().some((f) => f.type === 'progress')).toBe(false);
   });
 
-  it('DOWNLOAD: → prefixed status frame', () => {
+  it('DOWNLOAD: → prefixed status frame with phase', () => {
     expect(handle('DOWNLOAD:model.safetensors 40%')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'status', message: 'Downloading model... model.safetensors 40%' });
+    expect(sseFrames()).toContainEqual({ type: 'status', message: 'Downloading model... model.safetensors 40%', phase: 'download' });
   });
 
-  it('tqdm bar → progress frame; queue event omits the noisy message', () => {
+  it('DOWNLOAD: with byte values → formatted GB message', () => {
+    expect(handle('DOWNLOAD:1.5G/2.0G model.safetensors')).toBe(true);
+    const frame = sseFrames().find(f => f.type === 'status');
+    expect(frame.message).toBe('Downloading model · first run · 1.5 GB / 2.0 GB');
+    expect(frame.downloadedBytes).toBeCloseTo(1.5 * 1024 ** 3, -5);
+    expect(frame.totalBytes).toBeCloseTo(2.0 * 1024 ** 3, -5);
+  });
+
+  it('tqdm bar → progress frame with phase; queue event omits the noisy message', () => {
     expect(handle('60%|██████    | 6/10 [00:30<00:20, 1.2s/it]')).toBe(true);
-    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: '60%|██████    | 6/10 [00:30<00:20, 1.2s/it]' });
+    expect(sseFrames()).toContainEqual({ type: 'progress', progress: 0.6, message: '60%|██████    | 6/10 [00:30<00:20, 1.2s/it]', phase: 'starting' });
     // The mediaJobQueue dispatcher emit must NOT carry the raw bar as message.
     expect(eventsOfType('progress')).toContainEqual({ generationId: 'job-12345678', progress: 0.6 });
+  });
+
+  it('tqdm bar with byte sizes during download → formatted GB message', () => {
+    // Enter download phase first
+    handle('DOWNLOAD:1/5:model.safetensors');
+    sse.mockClear();
+    // Now a tqdm bar with byte counts
+    expect(handle('50%|█████     | 1.00G/2.00G [00:22<00:22, 45.6MB/s]')).toBe(true);
+    const frame = sseFrames().find(f => f.type === 'progress');
+    expect(frame.message).toBe('Downloading model · first run · 1.0 GB / 2.0 GB');
+    expect(frame.phase).toBe('download');
+    expect(frame.downloadedBytes).toBeCloseTo(1.0 * 1024 ** 3, -5);
+    expect(frame.totalBytes).toBeCloseTo(2.0 * 1024 ** 3, -5);
   });
 
   it('returns false for an unrecognized line (caller raw-logs it)', () => {

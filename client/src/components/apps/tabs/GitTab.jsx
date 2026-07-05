@@ -328,6 +328,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
   };
 
   const mergedBranchCount = remoteBranches.filter(rb => rb.merged && !rb.isDefault).length;
+  const localMergedCount = branches.filter(b => b.merged).length;
 
   const handleCleanupMerged = async () => {
     if (!repoPath || cleaningUp) return;
@@ -552,7 +553,39 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
 
               {/* Local Branches */}
               <div className="bg-port-card border border-port-border rounded-xl p-4">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Local Branches</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <h3 className="text-sm font-medium text-gray-400">Local Branches</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {localMergedCount > 0 && !cleanupConfirm && (
+                      <button
+                        onClick={() => setCleanupConfirm('local')}
+                        disabled={cleaningUp}
+                        className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
+                      >
+                        <Trash2 size={12} />
+                        {cleaningUp ? 'Cleaning...' : `Clean ${localMergedCount} merged`}
+                      </button>
+                    )}
+                    {cleanupConfirm === 'local' && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          onClick={handleCleanupMerged}
+                          disabled={cleaningUp}
+                          title="Deletes merged branches both locally and on the remote"
+                          className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
+                        >
+                          {cleaningUp ? 'Deleting...' : 'Delete all merged (local + remote)'}
+                        </button>
+                        <button
+                          onClick={() => setCleanupConfirm(false)}
+                          className={`px-2 py-1 ${touchBtnCls} text-xs text-gray-400 hover:text-white`}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <div className="space-y-2 max-h-64 overflow-auto">
                   {branches.map((branch) => (
                     <div
@@ -568,6 +601,12 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                         <span className={`text-sm truncate ${branch.current ? 'text-port-accent font-medium' : 'text-gray-300'}`}>
                           {branch.name}
                         </span>
+                        {branch.merged && (
+                          <span className="flex items-center gap-1 text-xs text-port-success px-1.5 py-0.5 bg-port-success/10 rounded shrink-0">
+                            <GitMerge size={10} />
+                            merged
+                          </span>
+                        )}
                         {branch.tracking && (
                           <span className="text-xs text-gray-500 shrink-0">
                             {branch.ahead > 0 && <span className="text-port-success">+{branch.ahead}</span>}
@@ -670,7 +709,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
               <div className="flex flex-wrap items-center gap-2">
                 {mergedBranchCount > 0 && !cleanupConfirm && (
                   <button
-                    onClick={() => setCleanupConfirm(true)}
+                    onClick={() => setCleanupConfirm('remote')}
                     disabled={cleaningUp}
                     className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
                   >
@@ -678,14 +717,15 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                     {cleaningUp ? 'Cleaning...' : `Clean ${mergedBranchCount} merged`}
                   </button>
                 )}
-                {cleanupConfirm && (
+                {cleanupConfirm === 'remote' && (
                   <div className="flex flex-wrap items-center gap-1">
                     <button
                       onClick={handleCleanupMerged}
                       disabled={cleaningUp}
+                      title="Deletes merged branches both locally and on the remote"
                       className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                     >
-                      {cleaningUp ? 'Deleting...' : `Delete ${mergedBranchCount} merged`}
+                      {cleaningUp ? 'Deleting...' : 'Delete all merged (local + remote)'}
                     </button>
                     <button
                       onClick={() => setCleanupConfirm(false)}

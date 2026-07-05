@@ -574,6 +574,25 @@ export const reformatPipelineManuscriptText = (seriesId, { stageId, content, pro
     ...options,
   });
 
+// ---- Adversarial cuts (#2168) ----
+// Preview cuts — dry-run that returns before/after diffs without applying.
+// Returns { preview: [{ issueNumber, before, after, applied, refused, refusedDetails }], totalApplied, totalRefused }.
+export const previewPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
+    ...options,
+  });
+
+// Apply cuts — writes through the serialized stage-write path with snapshots.
+// Returns { applied, refused, sections, refusedDetails, acceptedCount }.
+export const applyPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
+    ...options,
+  });
+
 // ---- Volume beat-sheet bulk generator ----
 // Sequential idea-stage run across every issue in a volume. `mode` is
 // 'skip-existing' (default) or 'regenerate-all'. Returns
