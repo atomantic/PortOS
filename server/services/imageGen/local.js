@@ -31,6 +31,7 @@ import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 import { computePixelDelta } from './regen.js';
+import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -599,6 +600,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // phase so the client knows whether `step/total` reflects download chunks
   // (out of N safetensors files) or actual generation steps.
   let currentPhase = 'starting';
+  let isDownloading = false;
   const handleLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return true;
@@ -613,7 +615,23 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       const stage = colon === -1 ? rest : rest.slice(0, colon);
       const detail = colon === -1 ? '' : rest.slice(colon + 1);
       currentPhase = stage;
+      // Track download phase for tqdm bar formatting
+      isDownloading = stage.startsWith('download');
       broadcastSse(job, { type: 'stage', stage, detail });
+      return true;
+    }
+
+    // DOWNLOAD: marker — parse byte values and emit formatted progress
+    if (trimmed.startsWith('DOWNLOAD:')) {
+      isDownloading = true;
+      currentPhase = 'download';
+      const rawText = trimmed.slice(9);
+      const byteInfo = parseByteProgress(rawText);
+      const message = formatDownloadMessage(rawText, byteInfo);
+      const frame = { type: 'status', message, phase: currentPhase };
+      if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
+      if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
+      broadcastSse(job, frame);
       return true;
     }
 
@@ -622,7 +640,17 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       const pct = parseInt(m[1], 10) / 100;
       const step = parseInt(m[2], 10);
       const total = parseInt(m[3], 10);
-      broadcastSse(job, { type: 'progress', progress: pct, message: trimmed, phase: currentPhase });
+      // Check for byte sizes in tqdm bars during downloads
+      const byteInfo = parseByteProgress(trimmed);
+      let displayMessage = trimmed;
+      const frame = { type: 'progress', progress: pct, phase: currentPhase };
+      if (isDownloading && (byteInfo.downloaded != null || byteInfo.total != null)) {
+        displayMessage = formatDownloadMessage(trimmed, byteInfo);
+        if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
+        if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
+      }
+      frame.message = displayMessage;
+      broadcastSse(job, frame);
       // Only forward to imageGenEvents (which drives the UI step counter)
       // when we're actually in the inference phase — download tqdm bars
       // count safetensors files, not diffusion steps.
