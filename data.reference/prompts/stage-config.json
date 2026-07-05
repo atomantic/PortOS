@@ -771,6 +771,13 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-editorial-adversarial-cuts": {
+      "name": "Pipeline — Editorial Check: Adversarial cuts (prose tightening)",
+      "description": "Editorial check (#2168): a ruthless literary editor persona that cuts 8–12% of the text as 10–20 passages, each an exact verbatim quote classified by cut type (FAT, REDUNDANT, OVER-EXPLAIN, GENERIC, TELL, STRUCTURAL). Also returns fat_percentage, tightest_passage (protected), loosest_passage, and one_sentence_verdict. Safe cut types (OVER-EXPLAIN, REDUNDANT) can be batch-applied mechanically. Returns issue-anchored findings with cutType.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }
