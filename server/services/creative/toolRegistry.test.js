@@ -61,6 +61,12 @@ vi.mock('../pipeline/series.js', () => ({ createSeries: vi.fn(async () => ({ id:
 vi.mock('../pipeline/seriesGenerate.js', () => ({ generateSeriesConcept: vi.fn(async () => ({ name: 'C' })) }));
 vi.mock('../pipeline/textStages.js', () => ({ generateStage: vi.fn(async () => ({ stage: 'st' })) }));
 vi.mock('../pipeline/seriesAutopilot.js', () => ({ startSeriesAutopilot: vi.fn(async () => ({ runId: 'ap1' })) }));
+vi.mock('../pipeline/visualStages.js', () => ({
+  renderComicCover: vi.fn(async () => ({ jobId: 'cov1', variant: 'proof' })),
+  renderComicBackCover: vi.fn(async () => ({ jobId: 'bcov1', variant: 'proof' })),
+  renderVolumeCover: vi.fn(async () => ({ jobId: 'vcov1', variant: 'proof' })),
+  renderVolumeBackCover: vi.fn(async () => ({ jobId: 'vbcov1', variant: 'proof' })),
+}));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 'mj1' })) }));
 vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
@@ -71,6 +77,7 @@ import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';
 import { generateStage } from '../pipeline/textStages.js';
 import { startSeriesAutopilot } from '../pipeline/seriesAutopilot.js';
+import { renderComicCover, renderVolumeCover } from '../pipeline/visualStages.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   CREATIVE_TOOLS,
@@ -256,6 +263,28 @@ describe('budget charging', () => {
     expect(startSeriesAutopilot).toHaveBeenCalled();
     expect(getDomainBudgetStatus).not.toHaveBeenCalled();
     expect(recordDomainUsage).not.toHaveBeenCalled();
+  });
+
+  // #2220 — the cover-render tools wrap the shared render+persist service so an
+  // orchestrated cover completes like a user-driven one; they charge as renders.
+  it('dispatches pipeline_renderComicCover through the shared render service and charges one render action', async () => {
+    setMode('execute');
+    const out = await dispatchCreativeTool('pipeline_renderComicCover', { issueId: 'i1', coverScript: 'c' });
+    expect(out).toMatchObject({ ok: true, tool: 'pipeline_renderComicCover', longRunning: true });
+    expect(renderComicCover).toHaveBeenCalledWith('i1', { coverScript: 'c' });
+    expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
+  });
+
+  it('dispatches pipeline_renderVolumeCover with seriesId + seasonId split from options', async () => {
+    setMode('execute');
+    await dispatchCreativeTool('pipeline_renderVolumeCover', { seriesId: 'ser1', seasonId: 'sea1', target: 'final' });
+    expect(renderVolumeCover).toHaveBeenCalledWith('ser1', 'sea1', { target: 'final' });
+  });
+
+  it('rejects a cover-render tool call missing its required id via the Zod gate', async () => {
+    setMode('execute');
+    await expect(dispatchCreativeTool('pipeline_renderComicCover', {})).rejects.toBeInstanceOf(z.ZodError);
+    expect(renderComicCover).not.toHaveBeenCalled();
   });
 });
 
