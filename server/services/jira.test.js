@@ -1,5 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { buildColumnsFromBoardConfig, buildColumnsFromStatuses } from './jira.js';
+import { buildColumnsFromBoardConfig, buildColumnsFromStatuses, isCloudInstance, jiraAuthHeader } from './jira.js';
+
+describe('isCloudInstance', () => {
+  it('treats *.atlassian.net hosts as Cloud', () => {
+    expect(isCloudInstance('https://example.atlassian.net')).toBe(true);
+    expect(isCloudInstance('https://example.atlassian.net/jira/software/c/projects/PROJ')).toBe(true);
+    expect(isCloudInstance('https://ATLASSIAN.NET')).toBe(true);
+  });
+
+  it('treats Server / Data Center hosts as not Cloud', () => {
+    expect(isCloudInstance('https://jira.example.com')).toBe(false);
+    expect(isCloudInstance('https://jira.example.com:8443')).toBe(false);
+    // Guard against a lookalike host that merely contains the string.
+    expect(isCloudInstance('https://atlassian.net.evil.com')).toBe(false);
+  });
+
+  it('does not throw on a malformed baseUrl', () => {
+    expect(isCloudInstance('not a url')).toBe(false);
+    expect(isCloudInstance(undefined)).toBe(false);
+  });
+});
+
+describe('jiraAuthHeader', () => {
+  it('uses Basic base64(email:token) for Cloud instances', () => {
+    const header = jiraAuthHeader({ baseUrl: 'https://example.atlassian.net', email: 'me@x.com', apiToken: 'tok' });
+    expect(header).toBe(`Basic ${Buffer.from('me@x.com:tok').toString('base64')}`);
+  });
+
+  it('uses Bearer PAT for Server / Data Center instances', () => {
+    const header = jiraAuthHeader({ baseUrl: 'https://jira.example.com', email: 'me@x.com', apiToken: 'pat' });
+    expect(header).toBe('Bearer pat');
+  });
+});
 
 describe('buildColumnsFromBoardConfig', () => {
   const statusById = new Map([
