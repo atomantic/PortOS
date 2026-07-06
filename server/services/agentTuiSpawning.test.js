@@ -317,7 +317,10 @@ describe('spawnTuiAgent runtime', () => {
     args: [],
     commandLine: 'codex',
     promptDelayMs: 100,
-    idleTimeoutMs: 50
+    idleTimeoutMs: 50,
+    // Large so the wall-clock backstop never fires during the modest fake-timer
+    // advances the idle/paste tests perform (the max-runtime test overrides it).
+    maxRuntimeMs: 3600000
   };
 
   function runSpawn(overrides = {}) {
@@ -619,6 +622,89 @@ describe('spawnTuiAgent runtime', () => {
         completionReason: 'idle-no-changes',
       })
     );
+  });
+
+  // ── 1c. Absolute wall-clock backstop reaps a busy-but-stuck agent ───────────
+  // The idle reaper resets on every PTY chunk, so an agent whose working counter
+  // keeps repainting through a stalled provider retry never idles out and would
+  // run unbounded (real incident 2026-07-06: agent-b1c56083 churned for 98min).
+  // The max-runtime timer is the honest ceiling: it fires from submission
+  // regardless of PTY chatter and, with no .agent-done sentinel present,
+  // finalizes as a needs-manual-finish FAILURE.
+  it('max-runtime: reaps a still-chattering agent as failure once the wall-clock ceiling elapses', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    // Idle window LARGER than the max-runtime ceiling so the idle reaper can't
+    // win — this isolates the wall-clock backstop (the real-world stuck agent
+    // keeps its working counter ticking, so idle never fires anyway).
+    runSpawn({ tuiConfig: { ...defaultTuiConfig, idleTimeoutMs: 600000, maxRuntimeMs: 30000 } });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Prompt echo → paste verification passes → submit-Enter fires → the
+    // max-runtime timer is armed.
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    // A busy agent that keeps chattering — but the idle window (600s) is huge so
+    // only the 30s wall-clock ceiling can reap it. Advance past the ceiling.
+    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
+    await vi.advanceTimersByTimeAsync(31000);
+    await flushMicrotasks();
+
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        success: false,
+        completionReason: 'max-runtime-timeout',
+      })
+    );
+  });
+
+  // ── 1d. A written .agent-done sentinel is never overridden by a FAILURE reap ─
+  // If the agent wrote .agent-done, the run truly finished — the max-runtime
+  // ceiling firing would be a false failure. The 2s sentinel poll normally
+  // finalizes it as success first; the max-runtime timer's own salvage branch
+  // (existsSync check) is the boundary backstop mirroring the one-shot runner's
+  // response-file salvage. Either way, with the sentinel present the run must
+  // finalize as SUCCESS — never as a max-runtime FAILURE.
+  it('max-runtime does not fail a run whose .agent-done sentinel exists', async () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ tuiConfig: { ...defaultTuiConfig, maxRuntimeMs: 30000 } });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    vi.useRealTimers();
+    await completeDone;
+
+    const call = vi.mocked(agentLifecycle.finalizeAgent).mock.calls.at(-1)?.[0];
+    expect(call?.success).toBe(true);
+    expect(call?.completionReason).not.toBe('max-runtime-timeout');
   });
 
   // ── 1b. Command exited before the prompt → don't paste into the bare shell ───

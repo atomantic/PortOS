@@ -26,6 +26,7 @@ import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
+  DEFAULT_TUI_MAX_RUNTIME_MS,
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
   REVIEW_LOOP_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
@@ -272,7 +273,8 @@ export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null }
     args,
     commandLine: [command, ...args].map(shellQuote).join(' '),
     promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
-    idleTimeoutMs: provider?.tuiIdleTimeoutMs || DEFAULT_TUI_IDLE_TIMEOUT_MS
+    idleTimeoutMs: provider?.tuiIdleTimeoutMs || DEFAULT_TUI_IDLE_TIMEOUT_MS,
+    maxRuntimeMs: provider?.tuiMaxRuntimeMs || DEFAULT_TUI_MAX_RUNTIME_MS
   };
 }
 
@@ -398,6 +400,12 @@ export async function spawnTuiAgent({
   let pasteEnterTimer = null;
   let pasteVerifyTimer = null;
   let submitEnterTimer = null;
+  // Absolute wall-clock backstop — armed once the prompt is SUBMITTED, cleared
+  // in finish(). Unlike the idle reaper (which resets on every PTY repaint and
+  // so never fires for a busy-but-stuck agent whose working counter keeps
+  // ticking), this bounds the total run so a hung provider/CLI can't run
+  // unbounded. See DEFAULT_TUI_MAX_RUNTIME_MS for the incident.
+  let maxRuntimeTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
 
@@ -549,6 +557,7 @@ export async function spawnTuiAgent({
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
+    if (maxRuntimeTimer) { clearTimeout(maxRuntimeTimer); maxRuntimeTimer = null; }
     // Release the post-paste accumulator even when finalize fires mid-paste-
     // window. The pasteEnterTimer's own cleanup path nulls this too, but if
     // finalize comes from elsewhere (shell-exit, command-not-found, user
@@ -901,6 +910,41 @@ export async function spawnTuiAgent({
         () => shellService.writeToSession(sessionId, '\r'),
         () => finalized
       );
+      // Arm the absolute wall-clock backstop from submission (once — a paste
+      // retry re-enters submitEnter but must not stack timers). The idle reaper
+      // can't bound a busy-but-stuck agent because Claude Code's working counter
+      // keeps repainting through a stalled provider retry, resetting lastOutputAt
+      // forever; this timer is the honest ceiling regardless of PTY chatter.
+      if (!maxRuntimeTimer) {
+        maxRuntimeTimer = setTimeout(() => {
+          if (finalized) return;
+          // Salvage net: if the agent already wrote its .agent-done sentinel the
+          // run truly finished (the TUI just never idled/exited), so complete as
+          // success — mirrors the one-shot runner's response-file salvage. The
+          // 2s doneSentinelTimer normally catches this first; this covers the
+          // boundary where it lands right at the deadline.
+          const salvaged = doneSentinelPath && existsSync(doneSentinelPath);
+          if (salvaged) {
+            finish({ success: true, exitCode: 0, reason: 'max-runtime-sentinel' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId} at max-runtime salvage: ${err.message}`, { agentId });
+            });
+            return;
+          }
+          // Capture any uncommitted work for post-mortem before cleanup, then
+          // fail with a needs-manual-finish message — a stuck orchestrator may
+          // have left PRs/worktrees behind (same recovery guidance as the
+          // merge-queue/review-loop idle-timeout paths).
+          captureWorktreeDiff(cwd, agentDir).catch(() => {});
+          finish({
+            success: false,
+            exitCode: 124,
+            error: `TUI agent exceeded its max runtime of ${Math.round(tuiConfig.maxRuntimeMs / 60000)}min — the provider/CLI likely hung (a stalled request keeps the working counter repainting so the idle reaper never fires); check for open or merged-but-uncleaned PRs and finish them manually.`,
+            reason: 'max-runtime-timeout',
+          }).catch(err => {
+            emitLog('error', `Failed to finalize TUI agent ${agentId} at max-runtime: ${err.message}`, { agentId });
+          });
+        }, tuiConfig.maxRuntimeMs);
+      }
     };
 
     // Confirms the TUI actually received the paste before we submit. The
@@ -1233,7 +1277,8 @@ export async function spawnTuiAgent({
       tuiSessionId: sessionId,
       tuiCommand: tuiConfig.commandLine,
       tuiKind,
-      tuiIdleTimeoutMs: tuiConfig.idleTimeoutMs
+      tuiIdleTimeoutMs: tuiConfig.idleTimeoutMs,
+      tuiMaxRuntimeMs: tuiConfig.maxRuntimeMs
     }
   });
 

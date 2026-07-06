@@ -457,6 +457,24 @@ export function scheduleSubmitEnters(write, isFinalized) {
 export const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
 export const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
 
+// Absolute wall-clock ceiling for a long-running TUI agent, applied from prompt
+// submission. This is the honest backstop the idle reaper CAN'T be: the reaper
+// resets on every PTY chunk, but Claude Code repaints its `(Ns · …)` working
+// counter ~1×/sec while ANY tool/API call is in flight — INCLUDING one stuck
+// retrying a stalled Bedrock/network operation. A "busy-but-stuck" agent keeps
+// `lastOutputAt` advancing forever, so idle-reap never fires and the run has NO
+// ceiling at all (real incident 2026-07-06: agent-b1c56083 churned the counter
+// for 98min on a `/do:next --swarm` claim-issue task before Claude Code's OWN
+// internal "Operation timed out" finally stopped it — had the CLI not self-
+// terminated, the agent would have run unbounded, holding a lane, blocking the
+// app's cooldown, and leaking a shell session). The one-shot runner already has
+// this backstop (tuiPromptRunner.js `hardTimeoutTimer`); the agent path omitted
+// it. 3h sits comfortably above the longest legitimate single run observed
+// (swarm claim-issue orchestrations routinely take 40–98min, and the merge-queue
+// / review-loop idle windows are 15min each) while bounding a genuinely-stuck
+// agent. Provider-configurable via `tuiMaxRuntimeMs`.
+export const DEFAULT_TUI_MAX_RUNTIME_MS = 3 * 60 * 60 * 1000;
+
 // Extended idle threshold applied ONLY while a `/do:next --swarm` orchestrator
 // is in its Phase C serialized merge queue (issue #2074). Merging PRs one at a
 // time makes each subsequent PR rebase onto the new `main` and re-run required

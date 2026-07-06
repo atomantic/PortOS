@@ -86,7 +86,11 @@ export const providerSchema = z.object({
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional()
+  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional(),
+  // Absolute wall-clock ceiling for a long-running TUI agent (idle-reap can't
+  // bound a busy-but-stuck agent — see DEFAULT_TUI_MAX_RUNTIME_MS). Min 1min,
+  // max 12h to cover the longest legitimate multi-hour orchestration.
+  tuiMaxRuntimeMs: z.number().int().min(60000).max(43200000).optional()
 });
 
 export const runSchema = z.object({
