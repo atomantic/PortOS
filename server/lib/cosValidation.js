@@ -265,7 +265,15 @@ export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'simplify', 're
 // Absolute cap on total agent spawns per task (across all retry types)
 export const MAX_TOTAL_SPAWNS = 5;
 
-const ALLOWED_TASK_METADATA_KEYS = [...PIPELINE_BEHAVIOR_FLAGS, 'readOnly'];
+// `cleanupMerged` / `openPr` / `resolveConflicts` / `autoMerge` are the
+// per-app action toggles for the `branch-reconcile` task type (each ON unless
+// explicitly false). They live in the shared task-metadata allowlist — like
+// `prAuthorFilter` / `issueAuthorFilter` — so a per-app override can disable an
+// individual rectification behavior and survive sanitizeTaskMetadata.
+const ALLOWED_TASK_METADATA_KEYS = [
+  ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly',
+  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge'
+];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
 // user (the PortOS operator / their automation); 'others' = everyone else;

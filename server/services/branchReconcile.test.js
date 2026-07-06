@@ -36,7 +36,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import {
-  classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason
+  classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason,
+  actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -197,5 +198,101 @@ describe('reconcile', () => {
     expect(res.inFlight.map((i) => i.branch)).toEqual(['next/issue-2199']);
     expect(res.inFlight[0].state).toBe('IN_REVIEW');
     expect(res.wip.map((i) => i.branch)).toEqual(['wip-local']);
+  });
+});
+
+describe('actionOn', () => {
+  it('is ON for absent/true, OFF only for explicit false', () => {
+    expect(actionOn(undefined, 'openPr')).toBe(true);
+    expect(actionOn({}, 'openPr')).toBe(true);
+    expect(actionOn({ openPr: true }, 'openPr')).toBe(true);
+    expect(actionOn({ openPr: false }, 'openPr')).toBe(false);
+  });
+});
+
+describe('filterActionable', () => {
+  const inFlight = [
+    { branch: 'a', state: 'NEEDS_PR' },
+    { branch: 'b', state: 'CONFLICTED' },
+    { branch: 'c', state: 'IN_REVIEW' }
+  ];
+
+  it('keeps every state when all actions are on (defaults)', () => {
+    expect(filterActionable(inFlight, {}).map((b) => b.branch)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('drops NEEDS_PR when openPr is off', () => {
+    expect(filterActionable(inFlight, { openPr: false }).map((b) => b.branch)).toEqual(['b', 'c']);
+  });
+
+  it('drops CONFLICTED when resolveConflicts is off, and IN_REVIEW only when BOTH resolveConflicts and autoMerge are off', () => {
+    expect(filterActionable(inFlight, { resolveConflicts: false }).map((b) => b.branch)).toEqual(['a', 'c']);
+    expect(filterActionable(inFlight, { resolveConflicts: false, autoMerge: false }).map((b) => b.branch)).toEqual(['a']);
+  });
+
+  it('never surfaces a non-actionable state (MERGED/WIP)', () => {
+    expect(filterActionable([{ branch: 'm', state: 'MERGED' }, { branch: 'w', state: 'WIP' }], {})).toEqual([]);
+  });
+});
+
+describe('desiredEndState', () => {
+  it('tells IN_REVIEW to merge only when autoMerge is on', () => {
+    expect(desiredEndState('IN_REVIEW', {})).toContain('gh pr merge --merge --delete-branch');
+    expect(desiredEndState('IN_REVIEW', { autoMerge: false })).toContain('Do NOT merge');
+  });
+
+  it('gives NEEDS_PR a completeness gate and CONFLICTED a rebase instruction', () => {
+    expect(desiredEndState('NEEDS_PR', {})).toContain('/do:pr');
+    expect(desiredEndState('CONFLICTED', {})).toContain('Rebase');
+  });
+});
+
+describe('actionableSignature', () => {
+  it('is order-independent', () => {
+    const a = [{ branch: 'x', state: 'NEEDS_PR', openPr: null }, { branch: 'y', state: 'IN_REVIEW', openPr: { number: 5 } }];
+    const b = [{ branch: 'y', state: 'IN_REVIEW', openPr: { number: 5 } }, { branch: 'x', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(a)).toBe(actionableSignature(b));
+  });
+
+  it('changes when a branch advances state (progress) — drives the drain forward', () => {
+    const before = [{ branch: 'x', state: 'NEEDS_PR', openPr: null }];
+    const after = [{ branch: 'x', state: 'IN_REVIEW', openPr: { number: 9 } }];
+    expect(actionableSignature(before)).not.toBe(actionableSignature(after));
+  });
+
+  it('is identical for the same stuck set (no progress) — the park trigger', () => {
+    const set = [{ branch: 'stuck', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(set)).toBe(actionableSignature([{ branch: 'stuck', state: 'NEEDS_PR', openPr: null }]));
+  });
+
+  it('changes when a branch leaves the set (merged/cleaned)', () => {
+    const two = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 1 } }, { branch: 'b', state: 'NEEDS_PR', openPr: null }];
+    const one = [{ branch: 'b', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(two)).not.toBe(actionableSignature(one));
+  });
+
+  it('changes when an IN_REVIEW PR becomes mergeable (readiness advanced within the same state)', () => {
+    const unknown = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 3, mergeable: 'UNKNOWN' } }];
+    const mergeable = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 3, mergeable: 'MERGEABLE' } }];
+    expect(actionableSignature(unknown)).not.toBe(actionableSignature(mergeable));
+  });
+
+  it('empty set yields an empty signature', () => {
+    expect(actionableSignature([])).toBe('');
+  });
+});
+
+describe('formatInFlightForPrompt', () => {
+  it('renders the default branch, each branch with its PR + worktree + Do line', () => {
+    const block = formatInFlightForPrompt([
+      { branch: 'next/issue-1', state: 'IN_REVIEW', worktreePath: '/wt/1', openPr: { number: 42, mergeable: 'MERGEABLE', url: 'https://pr/42' } },
+      { branch: 'next/issue-2', state: 'NEEDS_PR' }
+    ], { defaultBranch: 'main', actions: {} });
+    expect(block).toContain('Default branch: `main`');
+    expect(block).toContain('Branches to reconcile (2)');
+    expect(block).toContain('### `next/issue-1` [IN_REVIEW] — PR #42 (MERGEABLE) https://pr/42');
+    expect(block).toContain('- Worktree: `/wt/1`');
+    expect(block).toContain('### `next/issue-2` [NEEDS_PR] — no PR');
+    expect(block).toContain('- Do: ');
   });
 });

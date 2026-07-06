@@ -1582,7 +1582,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   //     tick retries instead of waiting out a full recheck cadence.
   // The detector keys on the RESOLVED promptTaskType so a claim-work router run
   // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
-  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL) {
+  // branch-reconcile is PERPETUAL but is NOT gated by the generic work-detector
+  // registry — its "detector" and its actual work are the SAME scan (the
+  // deterministic reconcile below), so splitting them would double the git/gh
+  // I/O. Its dedicated block further down does the park/clear itself.
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL && taskType !== 'branch-reconcile') {
     const { detectActionableWork } = await import('./perpetualWork.js');
     const detection = await detectActionableWork(promptTaskType, app, {
       issueAuthorFilter: metadata.issueAuthorFilter || 'self'
@@ -1598,6 +1602,84 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
       return null;
     }
+  }
+
+  // branch-reconcile: deterministic pre-step (the migrated Tier-1 core). Run the
+  // peer-safe reconcile on THIS app's repo — remove fully-merged orphaned local
+  // branches + their worktrees, then classify the rest. The coordinator agent is
+  // dispatched only while actionable in-flight branches remain; when none do, the
+  // perpetual drain PARKS on the recheck cadence. `{inFlightBranches}` carries the
+  // actionable set into the prompt. Runs in the app's live checkout (no LLM here —
+  // git/gh only), mirroring how pr-watcher/reference-watch do their programmatic
+  // work in the generator before dispatch.
+  let inFlightBranchesBlock = '';
+  if (taskType === 'branch-reconcile') {
+    const { reconcile, filterActionable, formatInFlightForPrompt, actionableSignature } = await import('./branchReconcile.js');
+    const { getActiveAgentIds } = await import('./agentState.js');
+    // Action toggles were merged (global → per-app override) + value-constrained
+    // by sanitizeTaskMetadata into `metadata`; each is ON unless explicitly false.
+    const actions = {
+      cleanupMerged: metadata.cleanupMerged,
+      openPr: metadata.openPr,
+      resolveConflicts: metadata.resolveConflicts,
+      autoMerge: metadata.autoMerge
+    };
+    const result = await reconcile(app.repoPath, {
+      cleanup: actions.cleanupMerged !== false,
+      activeAgentIds: new Set(getActiveAgentIds())
+    }).catch((err) => {
+      emitLog('warn', `branch-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
+      return null;
+    });
+    // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
+    // so the next tick retries instead of waiting out a full recheck cadence.
+    // Trade-off: a PERSISTENT failure (bad repoPath, broken gh auth, non-git dir)
+    // re-probes git every tick. That's git/gh-only cost (no LLM), and parking on
+    // the first failure would delay recovery from a genuine blip by a full
+    // recheck cadence — so transient-skip is the intentional choice here.
+    if (!result) return null;
+    if (result.cleaned.length) {
+      emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
+    }
+    const actionable = filterActionable(result.inFlight, actions);
+    if (actionable.length === 0) {
+      // Definitive idle: nothing in-flight to drive. Park on the recheck cadence
+      // and clear the progress signature so a fresh set later dispatches.
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-in-flight-branches', actionableCount: 0, signature: null });
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length})`, { appId: app.id });
+      return null;
+    }
+    // Convergence guard — kills the back-to-back re-dispatch loop WITHOUT stalling
+    // slow PRs. The signature (branch:state:pr#:mergeable) is stored at dispatch;
+    // when the perpetual-drain refill fires right after the coordinator completes
+    // (metadata.perpetual bypasses the post-completion cooldown), we compare:
+    //   - signature CHANGED → the run made progress (branch advanced
+    //     NEEDS_PR→IN_REVIEW→merged/cleaned, conflicts resolved, PR became
+    //     mergeable) → keep draining back-to-back.
+    //   - signature UNCHANGED → the run left the same branches in the same states
+    //     (a NEEDS_PR branch judged "not ready", an IN_REVIEW PR blocked on human
+    //     review / red CI). Park on the recheck cadence AND CLEAR the stored
+    //     signature — so the next DAILY recheck re-dispatches unconditionally
+    //     (re-driving the PR in case CI turned green / review cleared overnight),
+    //     rather than seeing the same signature and re-parking forever. The
+    //     signature only suppresses the immediate back-to-back refill; it never
+    //     suppresses a recheck.
+    const signature = actionableSignature(actionable);
+    const lastSignature = await taskSchedule.getPerpetualSignature(taskType, app.id);
+    if (signature === lastSignature) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: actionable.length, signature: null });
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${actionable.length} branch(es) unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
+      return null;
+    }
+    // New or advanced actionable set — drive it. Resume the drain (clear any park)
+    // and record the signature so an unproductive back-to-back refill parks instead
+    // of looping. Skip the post-completion cooldown so productive progress drains
+    // back-to-back.
+    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
+    metadata.perpetual = true;
+    inFlightBranchesBlock = formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions });
+    emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
   }
 
   // Honor a direct claim-work prompt customization if the user set one;
@@ -1763,6 +1845,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     // would get mangled. The function form passes the value verbatim.
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{prData\}/g, () => prDataBlock)
+    .replace(/\{inFlightBranches\}/g, () => inFlightBranchesBlock)
     .replace(/\{repoFullName\}/g, () => prRepoFullName)
     .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);

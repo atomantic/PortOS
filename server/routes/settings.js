@@ -8,10 +8,9 @@ import {
   CODEX_PARALLEL_MAX,
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { isValidCron } from '../services/eventScheduler.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, branchReconcileConfigSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -176,19 +175,6 @@ router.put('/', asyncHandler(async (req, res) => {
   // registry would then choke on.
   if (req.body?.pipelineEditorialChecks !== undefined) {
     validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
-  }
-  // Branch & PR Reconciler slice (#branch-reconcile) — validate when present so a
-  // malformed toggle save can't write a non-boolean enabled / bad cron the
-  // scheduler would then choke on.
-  if (req.body?.branchReconcile !== undefined) {
-    validateRequest(branchReconcileConfigSchema.partial(), req.body.branchReconcile);
-    // Range-check the cron against the scheduler's own parser (the schema regex
-    // only counts fields — it can't reject `99 99 * * *`, which would register a
-    // job that never fires).
-    const cron = req.body.branchReconcile.cron;
-    if (cron !== undefined && !isValidCron(cron)) {
-      throw new ServerError(`Invalid cron expression: ${cron}`, { status: 400, code: 'INVALID_CRON' });
-    }
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

@@ -102,6 +102,8 @@ import {
   computePerpetualRecheckAt,
   parkPerpetual,
   clearPerpetualPark,
+  getPerpetualSignature,
+  setPerpetualSignature,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
@@ -1292,6 +1294,47 @@ describe('taskSchedule', () => {
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {} } }
         })
         expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(false)
+      })
+
+      it('parkPerpetual stores an actionable signature and getPerpetualSignature reads it back', async () => {
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-progress', actionableCount: 2, signature: 'a:NEEDS_PR:none|b:IN_REVIEW:5' })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBe('a:NEEDS_PR:none|b:IN_REVIEW:5')
+      })
+
+      it('getPerpetualSignature returns the stored signature (and null when absent)', async () => {
+        mockSchedule({
+          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'sig-1' } } } }
+        })
+        expect(await getPerpetualSignature('branch-reconcile', 'app-1')).toBe('sig-1')
+        expect(await getPerpetualSignature('branch-reconcile', 'app-2')).toBeNull()
+      })
+
+      it('setPerpetualSignature writes it, and null clears it', async () => {
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } } })
+        await setPerpetualSignature('branch-reconcile', 'app-1', 'sig-2')
+        let saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBe('sig-2')
+
+        mockSchedule({
+          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true } },
+          executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'sig-2' } } } }
+        })
+        await setPerpetualSignature('branch-reconcile', 'app-1', null)
+        saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBeUndefined()
+      })
+
+      it('parkPerpetual with signature:null clears a prior signature (idle park)', async () => {
+        mockSchedule({
+          tasks: { 'branch-reconcile': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
+          executions: { 'task:branch-reconcile': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, lastActionableSignature: 'old-sig' } } } }
+        })
+        await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, signature: null })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBeUndefined()
       })
     })
 

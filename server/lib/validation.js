@@ -319,23 +319,6 @@ export const backupConfigSchema = z.object({
   disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
-// Branch & PR Reconciler config (opt-in, disabled by default so a fresh install
-// never spawns agents on a schedule without the user turning it on). `actions`
-// are independent toggles for each rectification behavior. Used by the settings
-// PUT route (.partial()) and re-read on every scheduled run.
-export const branchReconcileConfigSchema = z.object({
-  enabled: z.boolean().optional().default(false),
-  // Exactly 5 whitespace-separated fields — the only shape `eventScheduler`'s
-  // parser accepts (a 6-field or arbitrary string would register a cron with no
-  // next run, silently never firing). This regex is a cheap field-count gate;
-  // the settings route additionally range-validates via the scheduler's own
-  // `isValidCron` so `99 99 * * *` is rejected too.
-  cron: z.string().regex(/^\S+(\s+\S+){4}$/, 'cron must have exactly 5 whitespace-separated fields').optional().default('0 3 * * *'),
-  actions: z.object(optionalBooleanMap([
-    'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge'
-  ])).optional().default({})
-});
-
 // Per-API external-access flags (issue: public API surface). Stored under the
 // top-level `apiAccess` settings key (client-readable — NOT under `secrets`).
 // Drives `server/lib/apiRegistry.js`: an entry that is `exposed && !requireAuth`

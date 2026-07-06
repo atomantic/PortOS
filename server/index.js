@@ -76,7 +76,6 @@ import dataManagerRoutes from './routes/dataManager.js';
 import jiraRoutes from './routes/jira.js';
 import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
-import branchReconcileRoutes from './routes/branchReconcile.js';
 import legacyExportRoutes from './routes/legacyExport.js';
 import cityRoutes from './routes/cityRoutes.js';
 import databaseRoutes from './routes/database.js';
@@ -171,7 +170,6 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
-import { startBranchReconcileScheduler } from './services/branchReconcileScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
@@ -454,7 +452,6 @@ app.use('/api/media/sketches', mediaSketchesRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/client-errors', clientErrorsRoutes);
 app.use('/api/backup', backupRoutes);
-app.use('/api/branch-reconcile', branchReconcileRoutes);
 app.use('/api/legacy-export', legacyExportRoutes);
 app.use('/api/city', cityRoutes);
 app.use('/api/database', databaseRoutes);
@@ -606,10 +603,6 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
 // the user opts in via Settings → iMessage (needs macOS Full Disk Access) (#2151).
 startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
-// Initialize Branch & PR Reconciler — OFF by default; only registers a daily
-// cron when the user opts in via Settings. Reconciles this machine's unfinished
-// local branches/PRs (cleanup merged, finish in-flight) without touching peers.
-startBranchReconcileScheduler().catch(err => console.error(`❌ Branch reconcile scheduler init failed: ${err.message}`));
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
