@@ -623,6 +623,25 @@ async function triggerNow(id) {
   return true
 }
 
+/**
+ * Non-throwing predicate: can this scheduler actually parse+run the expression?
+ * The single source of truth for "a cron value the scheduler will honor" — reuse
+ * this instead of a regex so callers validate against the exact parser (5 fields,
+ * valid numeric ranges) rather than a looser approximation.
+ * @param {string} expr
+ * @returns {boolean}
+ */
+function isValidCron(expr) {
+  if (typeof expr !== 'string' || !expr.trim()) return false;
+  // parseCronToNextRun throws / returns null on an unparseable or out-of-range
+  // expression; wrap it into a boolean here so callers don't need try/catch.
+  try {
+    return Boolean(parseCronToNextRun(expr));
+  } catch {
+    return false;
+  }
+}
+
 export {
   schedule,
   cancel,
@@ -636,5 +655,6 @@ export {
   triggerNow,
   parseCronToNextRun,
   parseCronToPrevRun,
+  isValidCron,
   MAX_TIMEOUT
 }

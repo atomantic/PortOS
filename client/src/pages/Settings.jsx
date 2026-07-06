@@ -5,6 +5,7 @@ import { ApiAccessTab } from '../components/settings/ApiAccessTab';
 import { AutofixerTab } from '../components/settings/AutofixerTab';
 import AiAssignmentsTab from '../components/settings/AiAssignmentsTab';
 import { BackupTab } from '../components/settings/BackupTab';
+import { BranchReconcileTab } from '../components/settings/BranchReconcileTab';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
 import { DatabaseTab } from '../components/settings/DatabaseTab';
 import EmbeddingsTab from '../components/settings/EmbeddingsTab';
@@ -41,6 +42,7 @@ export default function Settings() {
       case 'api-access': return <ApiAccessTab />;
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
+      case 'branch-reconcile': return <BranchReconcileTab />;
       case 'catalog': return <CatalogTypesTab />;
       case 'database': return <DatabaseTab />;
       case 'embeddings': return <EmbeddingsTab />;
