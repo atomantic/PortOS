@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, branchReconcileConfigSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -175,6 +175,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // registry would then choke on.
   if (req.body?.pipelineEditorialChecks !== undefined) {
     validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
+  }
+  // Branch & PR Reconciler slice (#branch-reconcile) — validate when present so a
+  // malformed toggle save can't write a non-boolean enabled / bad cron the
+  // scheduler would then choke on.
+  if (req.body?.branchReconcile !== undefined) {
+    validateRequest(branchReconcileConfigSchema.partial(), req.body.branchReconcile);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

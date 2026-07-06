@@ -25,10 +25,38 @@ import {
   restoreRequestSchema,
   subdirFilterSchema,
   isPaginationRequested,
-  paginateArray
+  paginateArray,
+  branchReconcileConfigSchema,
 } from './validation.js';
 
 describe('validation.js', () => {
+  describe('branchReconcileConfigSchema', () => {
+    it('accepts the shipped default block', () => {
+      const parsed = branchReconcileConfigSchema.parse({
+        enabled: false,
+        cron: '0 3 * * *',
+        actions: { cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true }
+      });
+      expect(parsed.enabled).toBe(false);
+      expect(parsed.actions.autoMerge).toBe(true);
+    });
+
+    it('defaults enabled to false and cron to the daily 3am expression', () => {
+      const parsed = branchReconcileConfigSchema.parse({});
+      expect(parsed.enabled).toBe(false);
+      expect(parsed.cron).toBe('0 3 * * *');
+      expect(parsed.actions).toEqual({});
+    });
+
+    it('rejects a non-boolean enabled', () => {
+      expect(branchReconcileConfigSchema.safeParse({ enabled: 'yes' }).success).toBe(false);
+    });
+
+    it('.partial() allows a single-field toggle patch', () => {
+      expect(branchReconcileConfigSchema.partial().safeParse({ enabled: true }).success).toBe(true);
+    });
+  });
+
   describe('isPaginationRequested', () => {
     it('is false when neither limit nor offset is present', () => {
       expect(isPaginationRequested({})).toBe(false);
