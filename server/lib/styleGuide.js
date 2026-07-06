@@ -27,6 +27,15 @@ export const STYLE_GUIDE_LIMITS = Object.freeze({
   TONES_MAX: 20,
   READING_LEVEL_MIN: 1,
   READING_LEVEL_MAX: 18,
+  // Voice exemplars (#2179, CWQE Phase 14) — concrete prose anchors ("the
+  // tuning fork") beat adjective lists. Passages run ~150–300 words; the cap is
+  // ~2000 chars each and 3 apiece so the fixed per-call prompt overhead stays
+  // tight (exemplars are injected into every draft/revision prompt). Each entry
+  // is `{ passage, note }` — the note says what the passage demonstrates
+  // (exemplar) or what's wrong with it (anti-exemplar: "too ornate").
+  EXEMPLARS_MAX: 3,
+  EXEMPLAR_PASSAGE_MAX: 2000,
+  EXEMPLAR_NOTE_MAX: 200,
 });
 
 export const STYLE_GUIDE_TENSES = Object.freeze(['past', 'present']);
@@ -79,6 +88,25 @@ function cleanTone(raw) {
   return out;
 }
 
+// Sanitize a list of voice exemplar / anti-exemplar passages (#2179). Each
+// entry is `{ passage, note }`: `passage` is the concrete prose anchor (the
+// tuning fork), `note` a one-line gloss of what it demonstrates (exemplar) or
+// what's wrong with it (anti-exemplar). Drops entries with no passage, trims to
+// the char caps, and caps the list length. Returns `[]` when nothing usable.
+function cleanExemplars(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') continue;
+    const passage = trimTo(item.passage, STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX);
+    if (!passage) continue;
+    const note = trimTo(item.note, STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX);
+    out.push(note ? { passage, note } : { passage });
+    if (out.length >= STYLE_GUIDE_LIMITS.EXEMPLARS_MAX) break;
+  }
+  return out;
+}
+
 // Sanitize the copy-edit conventions sub-object. Returns null when nothing is
 // set so a guide that declares only tense/POV doesn't carry an empty husk.
 function sanitizeConventions(raw) {
@@ -107,13 +135,39 @@ export function sanitizeStyleGuide(raw) {
   const readingLevel = optReadingLevel(raw.readingLevel);
   const tone = cleanTone(raw.tone);
   const conventions = sanitizeConventions(raw.conventions);
+  const voiceExemplars = cleanExemplars(raw.voiceExemplars);
+  const voiceAntiExemplars = cleanExemplars(raw.voiceAntiExemplars);
   if (
     tense == null && povPerson == null && targetAudience == null && contentRating == null
     && profanity == null && readingLevel == null && tone.length === 0 && conventions == null
+    && voiceExemplars.length === 0 && voiceAntiExemplars.length === 0
   ) {
     return null;
   }
-  return { tense, povPerson, targetAudience, contentRating, profanity, readingLevel, tone, conventions };
+  return {
+    tense, povPerson, targetAudience, contentRating, profanity, readingLevel, tone, conventions,
+    voiceExemplars, voiceAntiExemplars,
+  };
+}
+
+// Render the voice exemplar / anti-exemplar blocks (#2179). Concrete prose
+// anchors do more to fix voice than any adjective list — so a "MATCH this
+// voice" block of exemplars and a "NEVER drift toward this" block of
+// anti-exemplars are appended to the house-style directives. Both are
+// conditional: absent exemplars render nothing (so a guide with no passages
+// carries no empty husk in the prompt). Returns `''` when neither is present.
+function renderVoiceExemplars(styleGuide) {
+  const blocks = [];
+  const exemplars = Array.isArray(styleGuide.voiceExemplars) ? styleGuide.voiceExemplars : [];
+  const antiExemplars = Array.isArray(styleGuide.voiceAntiExemplars) ? styleGuide.voiceAntiExemplars : [];
+  const renderPassage = (e) => (e.note ? `> ${e.passage}\n> — ${e.note}` : `> ${e.passage}`);
+  if (exemplars.length) {
+    blocks.push(`MATCH this voice — these passages are the tuning fork for the series' prose. Echo their rhythm, diction, and register; do not copy their content:\n${exemplars.map(renderPassage).join('\n\n')}`);
+  }
+  if (antiExemplars.length) {
+    blocks.push(`NEVER drift toward this — these passages are in the wrong register for the series. Avoid what each note flags:\n${antiExemplars.map(renderPassage).join('\n\n')}`);
+  }
+  return blocks.join('\n\n');
 }
 
 /**
@@ -155,8 +209,12 @@ export function renderStyleGuide(styleGuide) {
     if (conv.italicizeThoughts === true) directives.push('Render internal thoughts in italics.');
     else if (conv.italicizeThoughts === false) directives.push('Do not italicize internal thoughts.');
   }
-  if (directives.length === 0) return null;
-  return `Series style guide (house style — follow exactly):\n${directives.map((d) => `- ${d}`).join('\n')}`;
+  const voiceBlock = renderVoiceExemplars(styleGuide);
+  if (directives.length === 0 && !voiceBlock) return null;
+  const header = directives.length
+    ? `Series style guide (house style — follow exactly):\n${directives.map((d) => `- ${d}`).join('\n')}`
+    : '';
+  return [header, voiceBlock].filter(Boolean).join('\n\n');
 }
 
 /**

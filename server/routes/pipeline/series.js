@@ -124,6 +124,19 @@ const styleGuideSchema = z.object({
     spelling: z.enum(STYLE_GUIDE_SPELLING).nullable().optional(),
     italicizeThoughts: z.boolean().nullable().optional(),
   }).nullable().optional(),
+  // Voice exemplars / anti-exemplars (#2179, CWQE Phase 14). Concrete prose
+  // anchors ("the tuning fork") injected into every draft/revision prompt.
+  // `note` is optional (a passage can stand on its own); the service-side
+  // `cleanExemplars` drops empty passages, trims to the char caps, and caps the
+  // list length, so the schema only bounds the outer shape.
+  voiceExemplars: z.array(z.object({
+    passage: z.string().trim().min(1).max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
+  })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
+  voiceAntiExemplars: z.array(z.object({
+    passage: z.string().trim().min(1).max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
+  })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
 });
 
 // Volume-cover / back-cover sub-schema — accepts the script text plus the

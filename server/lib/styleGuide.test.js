@@ -63,6 +63,37 @@ describe('sanitizeStyleGuide', () => {
   it('survives when only one field is set', () => {
     expect(sanitizeStyleGuide({ tense: 'past' })).toMatchObject({ tense: 'past', povPerson: null });
   });
+
+  it('cleans voice exemplars: drops empty passages, trims, caps at 3', () => {
+    const sg = sanitizeStyleGuide({
+      voiceExemplars: [
+        { passage: '  Spare, clipped prose.  ', note: '  wry  ' },
+        { passage: '', note: 'no passage' }, // dropped — empty passage
+        { passage: 'x'.repeat(3000) }, // trimmed to cap, no note key
+        { passage: 'four' },
+        { passage: 'five' }, // over the cap of 3 → dropped
+        'not an object', // ignored
+      ],
+    });
+    expect(sg.voiceExemplars).toHaveLength(3);
+    expect(sg.voiceExemplars[0]).toEqual({ passage: 'Spare, clipped prose.', note: 'wry' });
+    expect(sg.voiceExemplars[1].passage).toHaveLength(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX);
+    expect(sg.voiceExemplars[1]).not.toHaveProperty('note'); // no note → key omitted
+    expect(sg.voiceExemplars[2]).toEqual({ passage: 'four' });
+  });
+
+  it('a guide with only exemplars is not collapsed to null', () => {
+    const sg = sanitizeStyleGuide({ voiceExemplars: [{ passage: 'anchor prose' }] });
+    expect(sg).not.toBeNull();
+    expect(sg.tense).toBeNull();
+    expect(sg.voiceExemplars).toHaveLength(1);
+    expect(sg.voiceAntiExemplars).toEqual([]);
+  });
+
+  it('all-empty exemplar entries do not save an empty husk', () => {
+    // Every field absent + exemplars that all drop → still null.
+    expect(sanitizeStyleGuide({ voiceExemplars: [{ passage: '' }, 'junk'] })).toBeNull();
+  });
 });
 
 describe('renderStyleGuide', () => {
@@ -98,5 +129,37 @@ describe('renderStyleGuide', () => {
     const block = renderStyleGuide(sanitizeStyleGuide({ contentRating: 'custom', tense: 'past' }));
     expect(block).not.toContain('rating');
     expect(block).toContain('past tense');
+  });
+
+  it('renders MATCH / NEVER voice blocks with passages + notes', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({
+      tense: 'past',
+      voiceExemplars: [{ passage: 'The rain came sideways.', note: 'terse' }],
+      voiceAntiExemplars: [{ passage: 'Verily the tempest did descend.', note: 'too ornate' }],
+    }));
+    expect(block).toContain('past tense');
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('The rain came sideways.');
+    expect(block).toContain('— terse');
+    expect(block).toContain('NEVER drift toward this');
+    expect(block).toContain('Verily the tempest did descend.');
+    expect(block).toContain('— too ornate');
+  });
+
+  it('renders voice blocks even when no mechanical directives are set', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({
+      voiceExemplars: [{ passage: 'Clean, quiet sentences.' }],
+    }));
+    expect(block).not.toBeNull();
+    expect(block).not.toContain('house style — follow exactly'); // no directive header
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('Clean, quiet sentences.');
+  });
+
+  it('conditionally omits absent voice blocks (renders nothing)', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({ tense: 'present' }));
+    expect(block).toContain('present tense');
+    expect(block).not.toContain('MATCH this voice');
+    expect(block).not.toContain('NEVER drift toward this');
   });
 });
