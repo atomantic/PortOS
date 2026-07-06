@@ -81,31 +81,3 @@ describe('Settings routes — apiAccess slice', () => {
     expect(res.body.apiAccess.sdapi.exposed).toBe(true);
   });
 });
-
-describe('Settings routes — branchReconcile slice', () => {
-  beforeEach(() => { store = {}; });
-
-  it('accepts a valid branchReconcile patch', async () => {
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ branchReconcile: { enabled: true, cron: '0 3 * * *' } });
-    expect(res.status).toBe(200);
-    expect(res.body.branchReconcile.enabled).toBe(true);
-  });
-
-  it('rejects a cron with valid field count but out-of-range values (scheduler cannot run it)', async () => {
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ branchReconcile: { enabled: true, cron: '99 99 * * *' } });
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('INVALID_CRON');
-  });
-
-  it('rejects a malformed cron field count via the schema', async () => {
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ branchReconcile: { cron: '0 0 3 * * *' } }); // 6 fields
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-  });
-});

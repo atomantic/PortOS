@@ -1,7 +1,19 @@
 # Branch & PR Reconciler — Design Spec
 
 **Date:** 2026-07-06
-**Status:** Approved (brainstorm) — pending implementation plan
+**Status:** Implemented, then **migrated** — the deterministic Tier-1 core and the
+Tier-2 coordinator prompt described below shipped as designed, but the wiring in
+"Architecture" and "Wiring" (a PortOS-only `branchReconcileScheduler.js` cron +
+`settings.branchReconcile` + `/api/branch-reconcile` route + a dedicated Settings
+tab) was **superseded on 2026-07-06** by folding the feature into the Chief-of-Staff
+per-app scheduled-task system as the **`branch-reconcile`** task type. It now runs
+on *any* managed app (not just PortOS): the deterministic `reconcile()` runs as the
+generator's per-app pre-step (like `pr-watcher`/`reference-watch`), the coordinator
+body is `DEFAULT_TASK_PROMPTS['branch-reconcile']` with an injected `{inFlightBranches}`
+block, and it drains `perpetual`ly (dispatch while in-flight branches remain, else
+park on a daily recheck). Read the two sections below as the design of the *core*
+logic, not the current wiring. See `server/services/cosTaskGenerator.js` (the
+`branch-reconcile` block) and `server/services/taskSchedule.js`.
 **Branch:** `feat/branch-pr-reconciler`
 
 ## Problem

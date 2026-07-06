@@ -101,10 +101,6 @@ export const getBackupSnapshots = (options) => request('/backup/snapshots', opti
 export const restoreBackup = (data, options = {}) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data), ...options });
 export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
 
-// Branch & PR Reconciler — finishes this machine's unfinished local branches/PRs.
-export const getBranchReconcileStatus = (options) => request('/branch-reconcile/status', options);
-export const runBranchReconcile = (options = {}) => request('/branch-reconcile/run', { method: 'POST', ...options });
-
 // Data Manager
 export const getDataOverview = () => request('/data');
 export const getDataCategory = (key) => request(`/data/${key}`);

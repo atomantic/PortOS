@@ -148,7 +148,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 // Unified default interval settings for all task types
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
-  'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
+  'accessibility', 'branch-cleanup', 'branch-reconcile', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'claim-work', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
@@ -180,6 +180,20 @@ export const DEFAULT_TASK_INTERVALS = {
   'performance':         { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'accessibility':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'branch-cleanup':      { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
+  // branch-reconcile finishes THIS machine's in-flight LOCAL branches per app
+  // (open a PR for pushed-but-unopened work, resolve merge conflicts, drive the
+  // review loop, auto-merge when green) AFTER a deterministic pass that removes
+  // fully-merged orphaned branches + their worktrees. PERPETUAL (drain-until-done):
+  // the generator runs the deterministic reconcile every dispatch, and dispatches
+  // the coordinator agent only while actionable in-flight branches remain — then
+  // PARKS on the daily recheckCron. The action toggles (cleanupMerged / openPr /
+  // resolveConflicts / autoMerge) are per-app taskMetadata booleans (each ON
+  // unless explicitly false). useWorktree/openPR are LOCKED off (MANAGED_AGENT_OPTIONS):
+  // the coordinator runs in the app's live checkout so it can see + operate on the
+  // sibling worktrees; a CoS-managed worktree would hide the branches and could
+  // trigger cleanupAgentWorktree's auto-merge. Off by default — enabling it is the
+  // user's explicit consent to let it drive PRs on a schedule.
+  'branch-reconcile':    { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', taskMetadata: { useWorktree: false, openPR: false, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true } },
   'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
@@ -271,6 +285,11 @@ export const DEFAULT_TASK_INTERVALS = {
 // CoS-managed worktree would clobber it).
 export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR'],
+  // branch-reconcile's coordinator MUST run in the app's live checkout (never a
+  // CoS-managed worktree) so it can enumerate + operate on the sibling worktrees
+  // of the in-flight branches; a managed worktree would hide those branches from
+  // the scan AND could trip cleanupAgentWorktree's auto-merge. Lock both off.
+  'branch-reconcile': ['useWorktree', 'openPR'],
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same
   // rationale as plan-task), so CoS must not pre-create one or open the PR.
   'claim-issue': ['useWorktree', 'openPR'],
@@ -1451,6 +1470,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'claim-work': "Ship the next work item from the app's configured tracker (PLAN.md, GitHub/GitLab issues, or JIRA), routed automatically",
   'accessibility': 'Accessibility audit',
   'branch-cleanup': 'Clean up merged branches',
+  'branch-reconcile': "Finish this machine's in-flight local branches: clean up merged ones, open PRs, resolve conflicts, drive review, auto-merge when green",
   'dependency-updates': 'Update dependencies',
   'release-check': 'Check for release readiness',
   'error-handling': 'Improve error handling',

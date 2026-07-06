@@ -13,7 +13,7 @@
 import { PORTOS_API_URL } from '../../lib/ports.js';
 
 // ============================================================
-// Unified DEFAULT_TASK_PROMPTS (17 task types)
+// Unified DEFAULT_TASK_PROMPTS — one entry per scheduled task type / pipeline stage
 // All prompts use {appName} and {repoPath} template variables
 // ============================================================
 
@@ -1233,6 +1233,24 @@ Repository: {repoPath}
     - Any errors encountered
 
 IMPORTANT: Never delete unmerged branches. Only delete branches fully merged into the default branch. Use \`git branch -d\` (not -D) for local branches to ensure safety.`,
+
+  'branch-reconcile': `[Improvement: {appName}] Branch & PR Reconciliation
+
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has already run the deterministic pass (removed fully-merged, orphaned local branches + their worktrees) and handed you ONLY the branches that need judgment.
+
+Repository: {repoPath}
+
+Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a machine that is a federated sync peer, branches created on OTHER machines exist here only as remote-tracking refs (\`origin/*\`) and are deliberately NOT listed — never open, rebase, or merge anything that is not in the list below.
+
+{inFlightBranches}
+
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one.
+
+## Rules
+- Work ONLY on the branches listed above. Never touch a branch that is not listed.
+- Never force-push the default branch and never merge unreviewed work.
+- If a sub-agent reports a branch is incomplete or blocked, leave it as-is and note it in your summary.
+- Summarize what each branch ended up doing (PR opened / conflicts resolved / merged / left incomplete).`,
 
   // pr-reviewer is now a pipeline — this prompt is kept as fallback for non-pipeline mode
   'pr-reviewer': `[Improvement: {appName}] PR Review — Security Scan & Code Review Pipeline

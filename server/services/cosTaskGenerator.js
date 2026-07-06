@@ -1582,7 +1582,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   //     tick retries instead of waiting out a full recheck cadence.
   // The detector keys on the RESOLVED promptTaskType so a claim-work router run
   // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
-  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL) {
+  // branch-reconcile is PERPETUAL but is NOT gated by the generic work-detector
+  // registry — its "detector" and its actual work are the SAME scan (the
+  // deterministic reconcile below), so splitting them would double the git/gh
+  // I/O. Its dedicated block further down does the park/clear itself.
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL && taskType !== 'branch-reconcile') {
     const { detectActionableWork } = await import('./perpetualWork.js');
     const detection = await detectActionableWork(promptTaskType, app, {
       issueAuthorFilter: metadata.issueAuthorFilter || 'self'
@@ -1598,6 +1602,54 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
       return null;
     }
+  }
+
+  // branch-reconcile: deterministic pre-step (the migrated Tier-1 core). Run the
+  // peer-safe reconcile on THIS app's repo — remove fully-merged orphaned local
+  // branches + their worktrees, then classify the rest. The coordinator agent is
+  // dispatched only while actionable in-flight branches remain; when none do, the
+  // perpetual drain PARKS on the recheck cadence. `{inFlightBranches}` carries the
+  // actionable set into the prompt. Runs in the app's live checkout (no LLM here —
+  // git/gh only), mirroring how pr-watcher/reference-watch do their programmatic
+  // work in the generator before dispatch.
+  let inFlightBranchesBlock = '';
+  if (taskType === 'branch-reconcile') {
+    const { reconcile, filterActionable, formatInFlightForPrompt } = await import('./branchReconcile.js');
+    const { getActiveAgentIds } = await import('./agentState.js');
+    // Action toggles were merged (global → per-app override) + value-constrained
+    // by sanitizeTaskMetadata into `metadata`; each is ON unless explicitly false.
+    const actions = {
+      cleanupMerged: metadata.cleanupMerged,
+      openPr: metadata.openPr,
+      resolveConflicts: metadata.resolveConflicts,
+      autoMerge: metadata.autoMerge
+    };
+    const result = await reconcile(app.repoPath, {
+      cleanup: actions.cleanupMerged !== false,
+      activeAgentIds: new Set(getActiveAgentIds())
+    }).catch((err) => {
+      emitLog('warn', `branch-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
+      return null;
+    });
+    // A failed scan is transient (git/gh blip) — skip WITHOUT parking so the next
+    // tick retries instead of waiting out a full recheck cadence.
+    if (!result) return null;
+    if (result.cleaned.length) {
+      emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
+    }
+    const actionable = filterActionable(result.inFlight, actions);
+    if (actionable.length === 0) {
+      // Definitive idle: nothing in-flight to drive. Park on the recheck cadence.
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-in-flight-branches', actionableCount: 0 });
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length})`, { appId: app.id });
+      return null;
+    }
+    // Actionable work remains — resume the back-to-back drain and skip the
+    // post-completion cooldown so the next tick re-dispatches promptly.
+    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    metadata.perpetual = true;
+    inFlightBranchesBlock = formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions });
+    emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
   }
 
   // Honor a direct claim-work prompt customization if the user set one;
@@ -1763,6 +1815,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     // would get mangled. The function form passes the value verbatim.
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{prData\}/g, () => prDataBlock)
+    .replace(/\{inFlightBranches\}/g, () => inFlightBranchesBlock)
     .replace(/\{repoFullName\}/g, () => prRepoFullName)
     .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);

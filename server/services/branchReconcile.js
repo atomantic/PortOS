@@ -259,3 +259,66 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeA
 
   return { defaultBranch, cleaned, inFlight, wip, skipped };
 }
+
+// ============================================================
+// Coordinator prompt helpers (Tier-2 dispatch)
+//
+// These turn the classified `inFlight` set into the actionable subset + the
+// Markdown block injected into the `branch-reconcile` CoS task prompt. They live
+// here (next to the classifier that produces their input) rather than in the
+// scheduler/generator so both the perpetual-drain gate and any prompt builder
+// share one source of truth. The `actions` object mirrors the per-app task
+// metadata toggles (cleanupMerged / openPr / resolveConflicts / autoMerge).
+// ============================================================
+
+/** An action is ON unless the config explicitly set it to false (opt-out). */
+export const actionOn = (actions, key) => actions?.[key] !== false;
+
+/**
+ * Which in-flight branches have an enabled action? Pure — drives both the
+ * drain gate (dispatch nothing when empty → park) and the prompt payload.
+ * @param {object[]} inFlight - reconcile()'s inFlight entries (with `state`)
+ * @param {object} actions - the per-app action toggles
+ */
+export function filterActionable(inFlight, actions) {
+  return inFlight.filter((b) => {
+    if (b.state === 'NEEDS_PR') return actionOn(actions, 'openPr');
+    if (b.state === 'CONFLICTED') return actionOn(actions, 'resolveConflicts');
+    if (b.state === 'IN_REVIEW') return actionOn(actions, 'resolveConflicts') || actionOn(actions, 'autoMerge');
+    return false;
+  });
+}
+
+/** Per-state one-line instruction to the coordinator/sub-agent. */
+export function desiredEndState(state, actions) {
+  if (state === 'NEEDS_PR') {
+    return 'Verify the branch\'s work is complete and ready (tests pass, no stubs/TODO markers, changelog present). If ready, run `/do:pr`. If NOT ready, report it as incomplete and leave the branch untouched — do not open a half-baked PR.';
+  }
+  if (state === 'CONFLICTED') {
+    return 'Rebase the branch onto the default branch, resolve all conflicts, run the tests, and push.';
+  }
+  // IN_REVIEW
+  const canMerge = actionOn(actions, 'autoMerge');
+  return `Drive the open PR toward green: request/await the Copilot review and address feedback.${canMerge
+    ? ' Then MERGE it (`gh pr merge --merge --delete-branch`) ONLY when it is MERGEABLE, CI is fully green, and the LATEST Copilot review reports "0 comments" (pre-resolved threads do NOT count; a PR over 20k lines is exempt from the Copilot check and needs only CI-green + mergeable). After merging, delete the local branch and remove its worktree.'
+    : ' Do NOT merge (auto-merge is disabled) — stop once the PR is green and ready for the user to merge.'}`;
+}
+
+/**
+ * Render the actionable in-flight branch set into the coordinator prompt body
+ * (injected as `{inFlightBranches}`).
+ * @param {object[]} inFlight - actionable branches (post-filterActionable)
+ * @param {{ defaultBranch:string, actions:object }} ctx
+ * @returns {string}
+ */
+export function formatInFlightForPrompt(inFlight, { defaultBranch, actions }) {
+  const lines = [`Default branch: \`${defaultBranch}\`. Branches to reconcile (${inFlight.length}):`, ''];
+  for (const b of inFlight) {
+    const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
+    lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
+    if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\``);
+    lines.push(`- Do: ${desiredEndState(b.state, actions)}`);
+    lines.push('');
+  }
+  return lines.join('\n');
+}

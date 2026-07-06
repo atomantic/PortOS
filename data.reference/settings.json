@@ -54,15 +54,5 @@
   "apiAccess": {
     "voice": { "exposed": false, "requireAuth": false },
     "sdapi": { "exposed": false, "requireAuth": false }
-  },
-  "branchReconcile": {
-    "enabled": false,
-    "cron": "0 3 * * *",
-    "actions": {
-      "cleanupMerged": true,
-      "openPr": true,
-      "resolveConflicts": true,
-      "autoMerge": true
-    }
   }
 }
