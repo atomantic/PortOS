@@ -634,7 +634,9 @@ describe('pipeline text stage generator', () => {
     });
     const { series } = await seed();
     const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
-    const bigTail = 'The tide rolls in. '.repeat(2000); // ~38K chars — far over the window
+    // Distinct opening vs closing markers so we can prove the trim keeps the END
+    // (the actual close the model must flow from), not the head.
+    const bigTail = `PRIOR_OPENING. ${'The tide rolls in. '.repeat(2000)}PRIOR_CLOSING.`;
     await issuesSvc.createIssue({
       seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
       stages: { prose: { status: 'ready', output: bigTail } },
@@ -646,6 +648,10 @@ describe('pipeline text stage generator', () => {
     // Present but trimmed below the raw ~2000-char tail cap — degraded, not dropped or errored.
     expect(ctx.priorIssueProseTail.length).toBeGreaterThan(0);
     expect(ctx.priorIssueProseTail.length).toBeLessThan(2_000);
+    // Regression guard: the trim must keep the CLOSING of the prior issue (the
+    // seam the prose template tells the model to open from), not its opening.
+    expect(ctx.priorIssueProseTail).toContain('PRIOR_CLOSING');
+    expect(ctx.priorIssueProseTail).not.toContain('PRIOR_OPENING');
   });
 
   it('prompt context carries derived lengthTargets for the custom profile', async () => {
