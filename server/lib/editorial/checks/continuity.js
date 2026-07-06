@@ -393,7 +393,12 @@ export const continuityChecks = [
   },
   {
     id: 'chekhov.setups-payoffs',
-    sources: ['manuscript', 'series.arc.readerMap', 'series.arc.foreshadowing'],
+    // `canon` is a real source here (#2178): reveal-gated canon folds into the
+    // authored-payoffs block via `revealGatedPayoffsSummary(ctx.canon)`, so a
+    // canon edit (adding/removing a reveal gate, retitling a gated fact) must
+    // re-fingerprint this check — otherwise an obsolete orphaned-payoff finding
+    // never goes stale after the gate is edited away.
+    sources: ['manuscript', 'canon', 'series.arc.readerMap', 'series.arc.foreshadowing'],
     label: "Chekhov's guns (setups & payoffs)",
     description:
       'Classifies each setup/payoff thread as paired, false-setup (planted, never fired — cut it), orphaned-payoff (fired, never planted — unearned), or distant (paid off so many issues after the setup the reader may have forgotten). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
@@ -528,7 +533,15 @@ export const continuityChecks = [
         stage: PREMATURE_REVEAL_STAGE,
         category: 'continuity',
         context: { revealGatedCanon },
-        buildVars: (manuscript, _meta, c) => ({ manuscript, revealGatedCanon: c.revealGatedCanon }),
+        // `finalPart` gates the shipped prompt's part-vs-whole guidance (a single-
+        // chunk run is its own final part). Without it the prompt always renders
+        // the "reading in PARTS" branch and points at a setup digest that doesn't
+        // exist on a one-chunk run — mirror the sibling checks' meta.isFinal wiring.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          revealGatedCanon: c.revealGatedCanon,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
         // A reveal can leak in an early issue for a fact due much later; the
         // findings digest keeps prior leaks in view so a later chunk doesn't
         // re-flag, and the setup digest rolls forward which gated facts have
