@@ -274,9 +274,9 @@ async function buildProseContextAugment(series, issue, options = {}) {
   const empty = { priorIssueProseTail: '', nextIssueBeats: '', hasNeighborContinuity: false };
 
   const { prior, next } = await resolveVolumeNeighbors(series, issue);
-  const rawTail = prior ? extractProseTail(stageContentOf(prior.stages?.prose)) : '';
+  const priorProse = prior ? stageContentOf(prior.stages?.prose) : '';
   const rawBeats = extractNextIssueBeats(next);
-  if (!rawTail && !rawBeats) return empty;
+  if (!priorProse && !rawBeats) return empty;
 
   // Token-budget both blocks so they degrade by trimming on a small window
   // rather than blowing the prompt. Resolve the prose stage's planning window
@@ -294,8 +294,15 @@ async function buildProseContextAugment(series, issue, options = {}) {
   const continuityChars = Math.max(0, Math.floor(usableTokens * CONTINUITY_BUDGET_FRACTION)) * CHARS_PER_TOKEN;
 
   // Prose tail keeps priority; next beats reclaim whatever the tail doesn't use.
+  // The tail must be trimmed from its HEAD (keep the actual CLOSING of the prior
+  // issue — the seam the template tells the model to flow from), so size it via
+  // extractProseTail (which keeps the end) rather than trimContextToBudget (which
+  // keeps the head and would discard the literal final lines on a small window).
+  // Never grow past PRIOR_PROSE_TAIL_CHARS just because the window is large.
   const tailBudget = rawBeats ? Math.floor(continuityChars * PRIOR_TAIL_SHARE) : continuityChars;
-  const priorIssueProseTail = rawTail ? trimContextToBudget(rawTail, tailBudget) : '';
+  const priorIssueProseTail = priorProse
+    ? extractProseTail(priorProse, Math.min(PRIOR_PROSE_TAIL_CHARS, tailBudget))
+    : '';
   const beatsBudget = continuityChars - priorIssueProseTail.length;
   const nextIssueBeats = rawBeats ? trimContextToBudget(rawBeats, Math.max(0, beatsBudget)) : '';
 
