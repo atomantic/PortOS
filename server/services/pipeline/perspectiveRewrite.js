@@ -115,17 +115,20 @@ function shapeCastEntry(char) {
 // writer-facing GENERATIVE prompt (it grounds regenerated prose in the cast's
 // full canon, incl. background/personality), so it must reveal-gate the canon
 // exactly like `buildStageContext` (#2178) — a later-reveal character's secret
-// must not leak into an earlier issue's rewrite. `keepFullId` (the POV
+// must not leak into an earlier issue's rewrite. `keepFullPov` (the POV
 // character being rewritten FROM) is exempt: the narrator knows their own
-// secrets, so they keep their full record even when gated. Absent
-// `issueNumber` = no gate (backward compatible).
-async function resolveCast(series, issueNumber, keepFullId = null) {
+// secrets, so they keep their full record even when gated. The exemption
+// matches the SAME id-OR-name identity the caller resolves the POV with
+// (`c.id === keepFullPov || c.name === keepFullPov`) — otherwise a name-form
+// POV request on a reveal-gated narrator would surface/drop them and either
+// lose their private canon or return `unknown-character`. Absent `issueNumber`
+// = no gate (backward compatible).
+async function resolveCast(series, issueNumber, keepFullPov = null) {
   const canon = series ? await getSeriesCanon(series).catch(() => ({ characters: [] })) : { characters: [] };
   const chars = Array.isArray(canon.characters) ? canon.characters : [];
+  const isPov = (c) => keepFullPov != null && ((c?.id && c.id === keepFullPov) || (c?.name && c.name === keepFullPov));
   const gated = Number.isFinite(issueNumber)
-    ? chars.map((c) => (c?.id && c.id === keepFullId
-      ? c
-      : filterCanonListForIssue([c], 'character', issueNumber)[0]))
+    ? chars.map((c) => (isPov(c) ? c : filterCanonListForIssue([c], 'character', issueNumber)[0]))
       .filter(Boolean)
     : chars;
   return gated.map(shapeCastEntry).filter(Boolean);
