@@ -24,13 +24,13 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-idea-expansion.md': ['93e9552c6662811e597a97296f3776a4'], // post-124 (scope-discipline)
-  'pipeline-prose.md': ['84523d531eeafa60959c65c553b2563f', '25e3d58c2741bd98acd5d08ba70d8a5e', '430d38ed2da59e0d4212e65edc499a74'], // post-054-fence; post-127/pre-166 (scene markers); post-166/pre-168 (craft anti-patterns)
+  'pipeline-prose.md': ['84523d531eeafa60959c65c553b2563f', '25e3d58c2741bd98acd5d08ba70d8a5e', '430d38ed2da59e0d4212e65edc499a74'], // post-054-fence; post-127/pre-166 (scene markers); post-166/pre-169 (craft anti-patterns)
   'pipeline-comic-script.md': ['a4303016c34b65e4b0e641fe71252de3'], // post-126 (visible text exactness)
 };
 
 export const NEW_SHIPPED_MD5 = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f', // post-127 (scene markers)
-  'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54', // post-168 (cross-issue continuity)
+  'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54', // post-169 (cross-issue continuity)
   'pipeline-comic-script.md': '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
 };
 

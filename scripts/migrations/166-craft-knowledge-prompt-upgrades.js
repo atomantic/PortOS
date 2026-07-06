@@ -43,7 +43,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 // Post-change shipped hashes (partial injected / foreshadowing ledger added).
-// pipeline-prose.md's current hash is resynced to post-168 (cross-issue
+// pipeline-prose.md's current hash is resynced to post-169 (cross-issue
 // continuity, #2177) per the drift-cross-sync convention.
 export const NEW_SHIPPED_MD5 = {
   'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54',
