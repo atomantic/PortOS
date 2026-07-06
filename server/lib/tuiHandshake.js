@@ -132,9 +132,14 @@ export function verifyPasteRendered(strippedBuffer, prefix) {
  * presence check would then fire the submit-Enters ~200ms in, while the paste is
  * still reflowing, reintroducing the unsent-prompt bug (issue #1229 review). So
  * callers gate on the count EXCEEDING the count already present in the prompt —
- * the TUI's genuine (N+1)th marker. (A normal prompt has 0, so the common case
- * is unchanged; a large transcript paste that Claude Code collapses to its own
- * single marker simply falls back to the timer, which is safe.)
+ * the TUI's genuine (N+1)th marker. A normal prompt has 0, so the common case is
+ * unchanged. When Claude Code COLLAPSES a self-marker-containing multi-line
+ * prompt to its own single chip, this count-only comparison false-negatives
+ * (`1 > 1` is false) even though the paste landed — `isCollapsedPasteChip` below
+ * is what rescues that case in isPasteConfirmed (issue #2228). It is NOT safe to
+ * "simply fall back to the timer" there: the collapse HIDES the body, so the
+ * verifyPasteRendered text fallback also fails and the agent dies
+ * `paste-not-rendered`.
  *
  * @param {string} strippedText — ANSI-stripped text (prompt or post-paste output).
  * @returns {number}
@@ -159,6 +164,33 @@ export function detectPasteMarker(strippedText) {
   return countPasteMarkers(strippedText) > 0;
 }
 
+// Claude Code's "this chip is a collapsed multi-line paste, click to see the
+// body" affordance, rendered right next to the `[Pasted text #N]` chip whenever
+// it folds a multi-line paste and HIDES the body. Matched against ANSI-stripped
+// output; whitespace-tolerant for the same inter-glyph-cursor-move reason as
+// PASTE_MARKER_PATTERN. This chrome is emitted by the TUI ITSELF — it never
+// appears in a raw prompt's own echoed `[Pasted text #N]` literal — so it's the
+// discriminator that separates issue #2228's genuine collapse (confirm) from the
+// echoed-marker false-positive the promptMarkerCount subtraction guards (reject).
+export const COLLAPSED_PASTE_CHIP_PATTERN = /paste\s*again\s*to\s*expand/i;
+
+/**
+ * True when `strippedText` shows Claude Code's COLLAPSED-paste chip shape: a
+ * paste-commit marker present alongside the "paste again to expand" affordance
+ * the TUI renders when it folds a multi-line paste and hides the body. A
+ * collapsed chip is the TUI's own commit by construction, so its mere presence
+ * proves delivery even when the marker count doesn't exceed promptMarkerCount
+ * (the self-marker-containing multi-line prompt case, issue #2228). Callers MUST
+ * pass an ANSI-STRIPPED buffer.
+ *
+ * @param {string} strippedText — ANSI-stripped post-paste output accumulator.
+ * @returns {boolean}
+ */
+export function isCollapsedPasteChip(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  return countPasteMarkers(strippedText) >= 1 && COLLAPSED_PASTE_CHIP_PATTERN.test(strippedText);
+}
+
 /**
  * True when a post-paste buffer proves the TUI actually RECEIVED the prompt
  * paste — the gate before sending the submit Enter(s). Two independent signals,
@@ -173,6 +205,16 @@ export function detectPasteMarker(strippedText) {
  *      claude-code-tui CoS agent failed `paste-not-rendered` after 3 retries
  *      because #2192's text-only check never saw the collapsed body — while the
  *      marker was sitting right there. (agent-656efa6e et al.)
+ *   1b. The COLLAPSED-CHIP shape (`isCollapsedPasteChip`) — a marker present
+ *      alongside Claude's "paste again to expand" affordance. This rescues the
+ *      subtraction's blind spot: when the prompt ITSELF embeds `[Pasted text #N]`
+ *      literals AND is multi-line, Claude folds it into its own single chip and
+ *      hides the body, so `count (1) > promptMarkerCount (1)` is false — yet the
+ *      collapse chrome proves the visible marker is the TUI's own commit. The
+ *      chrome never rides in on an echoed prompt literal, so this can't
+ *      re-introduce the echoed-marker false-positive the subtraction guards
+ *      (issue #2228; the inline/uncollapsed echo path has no such chrome and keeps
+ *      subtracting).
  *   2. Fallback for the MARKERLESS path — a paste too small to render the marker,
  *      or one genuinely SWALLOWED by a still-initializing TUI (the #2192 case,
  *      which renders no marker at all): fall back to confirming the prompt text
@@ -188,6 +230,7 @@ export function detectPasteMarker(strippedText) {
  */
 export function isPasteConfirmed(strippedBuffer, { verifiablePrefix = null, promptMarkerCount = 0 } = {}) {
   if (countPasteMarkers(strippedBuffer) > promptMarkerCount) return true; // marker is authoritative
+  if (isCollapsedPasteChip(strippedBuffer)) return true; // collapsed chip is the TUI's own commit (#2228)
   if (!verifiablePrefix) return true; // nothing to verify against
   return verifyPasteRendered(strippedBuffer, verifiablePrefix);
 }
