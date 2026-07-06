@@ -18,7 +18,7 @@
 
 import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
-import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt } from './worktreeManager.js';
+import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
 import { execGh } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -95,6 +95,27 @@ async function getOpenPrsByHead(repoPath) {
 }
 
 /**
+ * Reason a worktree must NOT be torn down, or null if it's safe to remove.
+ * Pure — the dangerous-to-remove cases the deterministic cleanup must respect
+ * (mirrors the guards the existing worktree reaper honors):
+ *   - locked            → the user explicitly `git worktree lock`ed it
+ *   - human `/claim`    → a `claim-<slug>` worktree self-cleaned by the /claim flow
+ *   - active CoS agent  → an agent (`agent-<id>`) is currently running in it
+ * Sibling worktrees (`next-issue-*`, etc.) whose basename is none of these fall
+ * through to null and are cleaned normally.
+ *
+ * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string> }} input
+ * @returns {string|null}
+ */
+export function worktreeProtectionReason({ path, locked, activeAgentIds }) {
+  if (locked) return 'worktree-locked';
+  const basename = (path || '').split('/').pop() || '';
+  if (isHumanClaimWorktree(basename)) return 'worktree-human-claim';
+  if (activeAgentIds?.has(basename)) return 'worktree-active-agent';
+  return null;
+}
+
+/**
  * Is a worktree's working tree carrying real (non-lockfile) uncommitted changes?
  * @param {string} worktreePath
  * @returns {Promise<boolean>}
@@ -124,11 +145,11 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
     getOpenPrsByHead(repoPath)
   ]);
 
-  // Map local branch name -> worktree path (strip the refs/heads/ prefix).
+  // Map local branch name -> worktree record (strip the refs/heads/ prefix).
   const worktreeByBranch = new Map();
   for (const wt of worktrees) {
     const name = wt.branch?.replace(/^refs\/heads\//, '');
-    if (name) worktreeByBranch.set(name, wt.path);
+    if (name) worktreeByBranch.set(name, { path: wt.path, locked: Boolean(wt.locked) });
   }
 
   const candidates = branches.filter(
@@ -137,7 +158,9 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
 
   const inputs = [];
   for (const b of candidates) {
-    const worktreePath = worktreeByBranch.get(b.name) || null;
+    const wt = worktreeByBranch.get(b.name) || null;
+    const worktreePath = wt?.path || null;
+    const worktreeLocked = Boolean(wt?.locked);
     const worktreeDirty = worktreePath ? await isWorktreeDirty(worktreePath) : false;
     // getBranches' `merged` is ancestor-based (misses squash/rebase); confirm
     // the harder cases via isBranchMergedInto (covers squash + rebase). Short
@@ -149,6 +172,7 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
       isMerged,
       hasWorktree: Boolean(worktreePath),
       worktreePath,
+      worktreeLocked,
       worktreeDirty,
       openPr: prsByHead.get(b.name) || null
     });
@@ -167,9 +191,11 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
  * @param {string} repoPath
  * @param {string} defaultBranch
  * @param {object[]} merged - gathered inputs whose state === 'MERGED'
+ * @param {{ activeAgentIds?: Set<string> }} [opts] - CoS agents currently running;
+ *   their worktrees are never torn down even when the branch is merged + clean.
  * @returns {Promise<{cleaned:string[], skipped:{branch:string,reason:string}[]}>}
  */
-export async function cleanupMerged(repoPath, defaultBranch, merged) {
+export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set() } = {}) {
   const cleaned = [];
   const skipped = [];
   for (const b of merged) {
@@ -180,6 +206,15 @@ export async function cleanupMerged(repoPath, defaultBranch, merged) {
       continue;
     }
     if (b.worktreePath) {
+      // Never tear down a worktree that's locked, a human /claim session, or an
+      // active CoS agent workspace — even if its branch is merged and clean.
+      const protectedReason = worktreeProtectionReason({
+        path: b.worktreePath, locked: b.worktreeLocked, activeAgentIds
+      });
+      if (protectedReason) {
+        skipped.push({ branch: b.branch, reason: protectedReason });
+        continue;
+      }
       const dirty = await isWorktreeDirty(b.worktreePath);
       if (dirty) {
         skipped.push({ branch: b.branch, reason: 'worktree-dirty' });
@@ -204,11 +239,12 @@ export async function cleanupMerged(repoPath, defaultBranch, merged) {
  * in-flight set (branches needing an agent) for the scheduler to dispatch.
  *
  * @param {string} [repoPath=PATHS.root]
- * @param {{ cleanup?: boolean }} [opts] - when cleanup is false, merged branches
- *   are reported (in `skipped`, reason `cleanup-disabled`) but not deleted.
+ * @param {{ cleanup?: boolean, activeAgentIds?: Set<string> }} [opts] - when cleanup
+ *   is false, merged branches are reported (in `skipped`, reason `cleanup-disabled`)
+ *   but not deleted. `activeAgentIds` protects in-use CoS agent worktrees.
  * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeAgentIds = new Set() } = {}) {
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   const inputs = await gatherBranchState(repoPath, { defaultBranch });
   const classified = classifyBranches(inputs);
@@ -218,7 +254,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true } = {}) 
   const wip = classified.filter((c) => c.state === 'WIP');
 
   const { cleaned, skipped } = cleanup
-    ? await cleanupMerged(repoPath, defaultBranch, merged)
+    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
 
   return { defaultBranch, cleaned, inFlight, wip, skipped };

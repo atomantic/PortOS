@@ -23,7 +23,8 @@ vi.mock('./worktreeManager.js', () => ({
   listWorktrees: vi.fn(async () => []),
   forceRemoveWorktreeDir: vi.fn(async () => {}),
   // Real pure classifier semantics: empty porcelain = clean.
-  classifyWorktreeDirt: vi.fn((p) => ({ hasRealChanges: Boolean((p || '').trim()) }))
+  classifyWorktreeDirt: vi.fn((p) => ({ hasRealChanges: Boolean((p || '').trim()) })),
+  isHumanClaimWorktree: vi.fn((id) => typeof id === 'string' && id.startsWith('claim-'))
 }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
 vi.mock('../lib/gitRemote.js', () => ({
@@ -35,7 +36,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import {
-  classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState
+  classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -118,6 +119,33 @@ describe('cleanupMerged', () => {
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'orphan', worktreePath: null }]);
     expect(res.cleaned).toEqual(['orphan']);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  it('never tears down a locked / human-claim / active-agent worktree', async () => {
+    git.isBranchMergedInto.mockResolvedValue(true);
+    const activeAgentIds = new Set(['agent-abc12345']);
+    const res = await cleanupMerged('/repo', 'main', [
+      { branch: 'locked-b', worktreePath: '/wt/locked', worktreeLocked: true },
+      { branch: 'claim-b', worktreePath: '/repo/data/cos/worktrees/claim-foo' },
+      { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345' }
+    ], { activeAgentIds });
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([
+      { branch: 'locked-b', reason: 'worktree-locked' },
+      { branch: 'claim-b', reason: 'worktree-human-claim' },
+      { branch: 'active-b', reason: 'worktree-active-agent' }
+    ]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe('worktreeProtectionReason', () => {
+  it('flags locked, human-claim, and active-agent worktrees; passes ordinary ones', () => {
+    expect(worktreeProtectionReason({ path: '/wt/x', locked: true })).toBe('worktree-locked');
+    expect(worktreeProtectionReason({ path: '/x/claim-foo' })).toBe('worktree-human-claim');
+    expect(worktreeProtectionReason({ path: '/x/agent-1', activeAgentIds: new Set(['agent-1']) })).toBe('worktree-active-agent');
+    expect(worktreeProtectionReason({ path: '/repo/next-issue-2199', activeAgentIds: new Set(['agent-1']) })).toBeNull();
   });
 });
 

@@ -20,6 +20,7 @@ vi.mock('./cosTaskStore.js', () => ({
 }));
 vi.mock('./branchReconcile.js', () => ({ reconcile: vi.fn() }));
 vi.mock('./cos.js', () => ({ getConfig: vi.fn(async () => ({ domainAutonomy: { cos: 'execute' } })) }));
+vi.mock('./agentState.js', () => ({ getActiveAgentIds: vi.fn(() => []) }));
 vi.mock('../lib/domainAutonomy.js', () => ({ getDomainMode: vi.fn((config) => config?.domainAutonomy?.cos || 'off') }));
 
 import {
@@ -100,14 +101,14 @@ describe('runBranchReconcile', () => {
     reconcile.mockResolvedValue({ defaultBranch: 'main', cleaned: [], inFlight: [], wip: [], skipped: [] });
     const res = await runBranchReconcile({ force: true, now: 0 });
     expect(res.skipped).not.toBe('disabled'); // ran, not short-circuited
-    expect(reconcile).toHaveBeenCalledWith('/repo', { cleanup: true });
+    expect(reconcile).toHaveBeenCalledWith('/repo', { cleanup: true, activeAgentIds: expect.any(Set) });
   });
 
   it('passes cleanup:false when cleanupMerged disabled', async () => {
     getSettings.mockResolvedValue({ branchReconcile: { enabled: true, actions: { cleanupMerged: false } } });
     reconcile.mockResolvedValue({ defaultBranch: 'main', cleaned: [], inFlight: [], wip: [], skipped: [] });
     await runBranchReconcile({ now: 0 });
-    expect(reconcile).toHaveBeenCalledWith('/repo', { cleanup: false });
+    expect(reconcile).toHaveBeenCalledWith('/repo', { cleanup: false, activeAgentIds: expect.any(Set) });
   });
 
   it('dispatches a coordinator when actionable branches exist', async () => {

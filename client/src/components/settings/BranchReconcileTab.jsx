@@ -80,7 +80,11 @@ export function BranchReconcileTab() {
     setRunning(false);
     if (!summary) { toast.error('Reconcile run failed'); return; }
     setLastRun(summary);
-    if (summary.skipped === 'disabled') toast.error('Reconciler is disabled — enable and save first');
+    // The server catches run failures and returns a 200 `{ error }` summary
+    // (the run happens outside the request lifecycle), so a resolved promise is
+    // NOT proof of success — check the failure fields before toasting success.
+    if (summary.error) toast.error(`Reconcile failed: ${summary.error}`);
+    else if (summary.skipped === 'disabled') toast.error('Reconciler is disabled — enable and save first');
     else toast.success(`Reconcile: cleaned ${summary.cleaned?.length ?? 0}, coordinator ${summary.queued ? 'queued' : 'not queued'}`);
   };
 

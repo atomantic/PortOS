@@ -52,11 +52,11 @@ describe('validation.js', () => {
       expect(branchReconcileConfigSchema.safeParse({ enabled: 'yes' }).success).toBe(false);
     });
 
-    it('rejects a malformed cron expression but accepts 5- and 6-field forms', () => {
+    it('accepts a 5-field cron and rejects other field counts', () => {
       expect(branchReconcileConfigSchema.safeParse({ cron: 'not a cron' }).success).toBe(false);
-      expect(branchReconcileConfigSchema.safeParse({ cron: '0 3 * *' }).success).toBe(false); // only 4 fields
+      expect(branchReconcileConfigSchema.safeParse({ cron: '0 3 * *' }).success).toBe(false); // 4 fields
+      expect(branchReconcileConfigSchema.safeParse({ cron: '0 0 3 * * *' }).success).toBe(false); // 6 fields — scheduler only parses 5
       expect(branchReconcileConfigSchema.safeParse({ cron: '0 3 * * *' }).success).toBe(true);
-      expect(branchReconcileConfigSchema.safeParse({ cron: '0 0 3 * * *' }).success).toBe(true); // 6-field
     });
 
     it('.partial() allows a single-field toggle patch', () => {

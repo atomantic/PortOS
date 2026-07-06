@@ -20,6 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { PRIORITY_VALUES, addTask } from './cosTaskStore.js';
 import { reconcile } from './branchReconcile.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
+import { getActiveAgentIds } from './agentState.js';
 
 const CRON_ID = 'branch-reconcile';
 
@@ -143,7 +144,10 @@ export async function runBranchReconcile({ force = false, now = Date.now() } = {
     }
     const actions = cfg.actions || {};
 
-    const result = await reconcile(PATHS.root, { cleanup: actionOn(actions, 'cleanupMerged') });
+    const result = await reconcile(PATHS.root, {
+      cleanup: actionOn(actions, 'cleanupMerged'),
+      activeAgentIds: new Set(getActiveAgentIds())
+    });
     const actionable = filterActionable(result.inFlight, actions);
 
     let queued = false;
