@@ -17,8 +17,7 @@ import { schedule, cancel } from './eventScheduler.js';
 import { getSettings } from './settings.js';
 import { getUserTimezone } from '../lib/timezone.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { PRIORITY_VALUES } from './cosTaskStore.js';
-import { addTask } from './cosTaskStore.js';
+import { PRIORITY_VALUES, addTask } from './cosTaskStore.js';
 import { reconcile } from './branchReconcile.js';
 
 const CRON_ID = 'branch-reconcile';

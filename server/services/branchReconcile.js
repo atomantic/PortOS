@@ -199,8 +199,8 @@ export async function cleanupMerged(repoPath, defaultBranch, merged) {
  *
  * @param {string} [repoPath=PATHS.root]
  * @param {{ cleanup?: boolean }} [opts] - when cleanup is false, merged branches
- *   are reported (as `merged`) but not deleted (honors the cleanupMerged toggle).
- * @returns {Promise<{ defaultBranch:string, cleaned:string[], merged:object[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
+ *   are reported (in `skipped`, reason `cleanup-disabled`) but not deleted.
+ * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
  */
 export async function reconcile(repoPath = PATHS.root, { cleanup = true } = {}) {
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
@@ -215,5 +215,5 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true } = {}) 
     ? await cleanupMerged(repoPath, defaultBranch, merged)
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
 
-  return { defaultBranch, cleaned, merged, inFlight, wip, skipped };
+  return { defaultBranch, cleaned, inFlight, wip, skipped };
 }
