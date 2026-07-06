@@ -37,7 +37,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 import {
   classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason,
-  actionOn, filterActionable, desiredEndState, formatInFlightForPrompt
+  actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -244,6 +244,35 @@ describe('desiredEndState', () => {
   it('gives NEEDS_PR a completeness gate and CONFLICTED a rebase instruction', () => {
     expect(desiredEndState('NEEDS_PR', {})).toContain('/do:pr');
     expect(desiredEndState('CONFLICTED', {})).toContain('Rebase');
+  });
+});
+
+describe('actionableSignature', () => {
+  it('is order-independent', () => {
+    const a = [{ branch: 'x', state: 'NEEDS_PR', openPr: null }, { branch: 'y', state: 'IN_REVIEW', openPr: { number: 5 } }];
+    const b = [{ branch: 'y', state: 'IN_REVIEW', openPr: { number: 5 } }, { branch: 'x', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(a)).toBe(actionableSignature(b));
+  });
+
+  it('changes when a branch advances state (progress) — drives the drain forward', () => {
+    const before = [{ branch: 'x', state: 'NEEDS_PR', openPr: null }];
+    const after = [{ branch: 'x', state: 'IN_REVIEW', openPr: { number: 9 } }];
+    expect(actionableSignature(before)).not.toBe(actionableSignature(after));
+  });
+
+  it('is identical for the same stuck set (no progress) — the park trigger', () => {
+    const set = [{ branch: 'stuck', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(set)).toBe(actionableSignature([{ branch: 'stuck', state: 'NEEDS_PR', openPr: null }]));
+  });
+
+  it('changes when a branch leaves the set (merged/cleaned)', () => {
+    const two = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 1 } }, { branch: 'b', state: 'NEEDS_PR', openPr: null }];
+    const one = [{ branch: 'b', state: 'NEEDS_PR', openPr: null }];
+    expect(actionableSignature(two)).not.toBe(actionableSignature(one));
+  });
+
+  it('empty set yields an empty signature', () => {
+    expect(actionableSignature([])).toBe('');
   });
 });
 

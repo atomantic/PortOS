@@ -742,7 +742,7 @@ function ensureExecutionRecord(schedule, taskType, appId) {
  * draining and wait until `parkedUntil` before re-probing. Stamps the park
  * fields on the (per-app or global) execution record.
  */
-export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0 } = {}) {
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, signature } = {}) {
   const schedule = await loadSchedule();
   const interval = schedule.tasks[taskType] || {};
   const parkedUntil = await computePerpetualRecheckAt(interval);
@@ -751,9 +751,42 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
   record.parkReason = reason;
   record.parkActionableCount = actionableCount;
   record.parkedAt = new Date().toISOString();
+  // A drain that parks because a full cycle made NO progress (branch-reconcile's
+  // 'no-progress' park) records the actionable signature it was stuck on, so the
+  // next recheck can tell "same stuck set" (park again) from "the set changed"
+  // (resume). `null` clears it (an idle park with nothing actionable); `undefined`
+  // (the default) leaves any prior signature untouched.
+  if (signature !== undefined) {
+    if (signature === null) delete record.lastActionableSignature;
+    else record.lastActionableSignature = signature;
+  }
   await saveSchedule(schedule);
   emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
   cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason });
+  return record;
+}
+
+/** Read the last actionable signature recorded for a perpetual drain (or null). */
+export async function getPerpetualSignature(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  const top = schedule.executions[key];
+  if (!top) return null;
+  const record = appId ? top.perApp?.[appId] : top;
+  return record?.lastActionableSignature ?? null;
+}
+
+/**
+ * Record the actionable signature a perpetual drain is dispatching against, so a
+ * later cycle that finds the same signature can recognize "no progress" and park
+ * instead of re-dispatching an identical run. `null` clears it.
+ */
+export async function setPerpetualSignature(taskType, appId = null, signature) {
+  const schedule = await loadSchedule();
+  const record = ensureExecutionRecord(schedule, taskType, appId);
+  if (signature == null) delete record.lastActionableSignature;
+  else record.lastActionableSignature = signature;
+  await saveSchedule(schedule);
   return record;
 }
 

@@ -305,6 +305,25 @@ export function desiredEndState(state, actions) {
 }
 
 /**
+ * Stable signature of an actionable set — used by the perpetual drain to detect
+ * PROGRESS between dispatches. A productive coordinator run advances branches
+ * through states (NEEDS_PR → IN_REVIEW → merged/cleaned) or removes them, all of
+ * which change this signature; a run that leaves the SAME branches in the SAME
+ * states (a `NEEDS_PR` branch the agent judged "not ready", an `IN_REVIEW` PR
+ * blocked on human review / red CI) produces an identical signature, which the
+ * generator treats as "no progress → park" instead of re-dispatching an
+ * identical coordinator back-to-back. Order-independent (sorted).
+ * @param {object[]} actionable - post-filterActionable branches
+ * @returns {string}
+ */
+export function actionableSignature(actionable) {
+  return actionable
+    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}`)
+    .sort()
+    .join('|');
+}
+
+/**
  * Render the actionable in-flight branch set into the coordinator prompt body
  * (injected as `{inFlightBranches}`).
  * @param {object[]} inFlight - actionable branches (post-filterActionable)
