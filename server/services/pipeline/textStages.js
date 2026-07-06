@@ -25,6 +25,7 @@ import { computeIssueTargets, assessSynopsisScope } from '../../lib/issueLength.
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
+import { filterCanonForIssue } from '../../lib/storyBible.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -369,6 +370,16 @@ function buildIssueScopeText(issue, sourceMaterials, seedInput) {
  * Visual stages aren't included — text templates don't need rendered images.
  */
 function buildStageContext({ series, canon, world, issue, stageId, seedInput, sourceStageIds }) {
+  // Reveal-gated canon / spoiler scoping (#2178). Filter the writer-facing canon
+  // to this issue's reveal horizon BEFORE it's scoped or rostered: a canon fact
+  // gated to a later issue is dropped (or reduced to its spoiler-free
+  // `surfaceDescriptor`) so the drafting prompt can't leak a reveal early. Both
+  // the full-record character block AND the compact world roster are filtered —
+  // they read the same universe arrays, so filtering one is not enough. Absent
+  // gate fields = always visible (full backward compat). The judge (#2167) and
+  // editorial checks bypass this and receive the FULL canon.
+  const revealCanon = filterCanonForIssue(canon, issue.number);
+  const revealWorld = world ? { ...world, ...filterCanonForIssue(world, issue.number) } : world;
   const stages = {};
   for (const id of TEXT_STAGE_IDS) {
     if (id === stageId) break; // only include stages BEFORE the current one
@@ -391,8 +402,8 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   // named in the issue's source text. Only the roster-backed stages are scoped
   // (see ROSTER_BACKED_STAGES); the idea stage keeps the full cast.
   const scopedCharacters = ROSTER_BACKED_STAGES.has(stageId)
-    ? scopeCharactersForIssue(canon?.characters || [], buildIssueScopeText(issue, sourceMaterials, seedInput))
-    : (canon?.characters || []);
+    ? scopeCharactersForIssue(revealCanon.characters, buildIssueScopeText(issue, sourceMaterials, seedInput))
+    : revealCanon.characters;
   // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
   // per-issue text prompts reference named entities without paying the full
   // canon-block token cost. The roster carries the REST of the cast — everyone
@@ -405,8 +416,8 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   const scopedCharacterNames = new Set(
     scopedCharacters.map((c) => (c?.name || '').trim().toLowerCase()).filter(Boolean),
   );
-  const worldEntitiesSummary = world
-    ? (renderEntitiesSummary(world, {
+  const worldEntitiesSummary = revealWorld
+    ? (renderEntitiesSummary(revealWorld, {
       maxPerKind: { characters: Infinity },
       excludeCharacterNames: scopedCharacterNames,
     }) || '(none)')

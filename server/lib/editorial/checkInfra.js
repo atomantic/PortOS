@@ -57,6 +57,7 @@ import {
   authoredRevealSummary,
 } from './comicPacing.js';
 import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
+import { revealGatedCanonRows, canonHasRevealGated } from '../storyBible.js';
 
 // Re-exported so ./checks/*.js and ./checkRegistry.js import everything from here.
 export {
@@ -108,6 +109,8 @@ export {
   splitScenes,
   summarizeStoryboardShots,
   transitionOpenerRatio,
+  canonHasRevealGated,
+  revealGatedCanonRows,
   z,
 };
 
@@ -308,6 +311,56 @@ export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
 // setup-data.js) and migrates to existing installs via migration 100 (boot runs
 // migrations but NOT setup-data, so the migration is required).
 export const CHEKHOV_STAGE = 'pipeline-editorial-chekhov';
+
+// Stage name for the premature-reveal editorial LLM check (#2178 — CWQE Phase
+// 13). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration
+// 168 (boot runs migrations but NOT setup-data, so the migration is required).
+export const PREMATURE_REVEAL_STAGE = 'pipeline-editorial-premature-reveal';
+
+// Render the reveal-gated canon (#2178) into a compact text block the
+// premature-reveal check passes alongside the manuscript, so the model knows
+// which facts are SECRETS not yet due and when each is meant to surface. Each
+// row names the entry, its reveal issue (or hard spoiler), the spoiler-free
+// surface stand-in the reader IS allowed to see, and the underlying fact that
+// must NOT leak early. Pure + deterministic so it's unit-testable and its token
+// cost counts into the per-chunk overhead. Returns '' when no canon is
+// reveal-gated (the check gates on `canonHasRevealGated` so this won't be
+// called with an empty set, but the guard keeps it safe).
+export function revealGatedCanonSummary(canon) {
+  const rows = revealGatedCanonRows(canon);
+  if (!rows.length) return '';
+  const lines = rows.map((r) => {
+    const when = r.spoiler
+      ? 'HARD SPOILER — must not appear in ANY drafted issue'
+      : `revealed in Issue ${r.revealIssue} — must not appear before then`;
+    const surface = r.surfaceDescriptor
+      ? ` Pre-reveal, the reader may only know: "${r.surfaceDescriptor}".`
+      : '';
+    const fact = r.fact ? ` The gated fact (must NOT leak early): ${r.fact}.` : '';
+    return `- ${r.kind} "${r.name}" (${when}).${surface}${fact}`;
+  });
+  return 'Reveal-gated canon (these facts are deliberately withheld — flag any that a first-time reader would '
+    + 'learn from the prose before the fact is due):\n' + lines.join('\n');
+}
+
+// Render reveal-gated canon (#2178) as AUTHORED PAYOFFS for the Chekhov check —
+// a gated entry's `revealIssue` is effectively an authored payoff point (the
+// issue where the withheld fact is meant to fire). Folded into the Chekhov
+// `authoredSetups` block so the check can flag a reveal that arrives with zero
+// prior setup (an orphaned payoff). Only NUMERIC reveal gates render — a hard
+// `spoiler` has no scheduled payoff issue to reconcile against. Returns '' when
+// no numeric-gated entry exists (the block renders nothing). Pure.
+export function revealGatedPayoffsSummary(canon) {
+  const rows = revealGatedCanonRows(canon).filter((r) => Number.isInteger(r.revealIssue));
+  if (!rows.length) return '';
+  const lines = rows.map((r) => {
+    const what = r.fact || `the withheld fact about ${r.kind} "${r.name}"`;
+    return `- ${r.kind} "${r.name}" — reveal-gated fact due to pay off in Issue ${r.revealIssue}: ${what}`;
+  });
+  return 'Authored reveal-gated payoffs (each gated fact is meant to be revealed — fire — in its named issue; '
+    + 'flag a reveal that arrives with no prior setup):\n' + lines.join('\n');
+}
 
 // Stage name for the chapter-ending cliffhanger LLM check (#1298). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via

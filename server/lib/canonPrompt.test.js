@@ -5,6 +5,7 @@ import {
   descriptorForCanonEntry,
   hasCanonDescriptorContent,
   previewCanonFragments,
+  shortCanonPrimaryField,
 } from './canonPrompt.js';
 
 describe('canonPrompt.js', () => {
@@ -110,6 +111,22 @@ describe('canonPrompt.js', () => {
       it('returns empty when neither field is set', () => {
         expect(descriptorForCanonEntry('objects', { name: 'Brass Key' })).toBe('');
       });
+    });
+  });
+
+  describe('shortCanonPrimaryField', () => {
+    it('returns the per-kind primary descriptor field (singular + plural kinds)', () => {
+      expect(shortCanonPrimaryField('character')).toBe('physicalDescription');
+      expect(shortCanonPrimaryField('characters')).toBe('physicalDescription');
+      expect(shortCanonPrimaryField('object')).toBe('description');
+      expect(shortCanonPrimaryField('objects')).toBe('description');
+      // Places use a sequence — the first field is the primary.
+      expect(shortCanonPrimaryField('place')).toBe('description');
+      expect(shortCanonPrimaryField('places')).toBe('description');
+    });
+    it('returns null for an unknown kind', () => {
+      expect(shortCanonPrimaryField('gadget')).toBeNull();
+      expect(shortCanonPrimaryField(undefined)).toBeNull();
     });
   });
 

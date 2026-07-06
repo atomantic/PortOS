@@ -152,6 +152,20 @@ export function shortCanonDescriptorFragments(kind, entry) {
 }
 
 /**
+ * The single primary descriptor field for a kind — the field a SHORT card
+ * leads with (chars: `physicalDescription`, objects: `description`, places:
+ * the first `sequence` field, `description`). Single source of truth so
+ * callers that need "which field is the headline descriptor for this kind"
+ * (e.g. the reveal-gated surface substitution in storyBible.js, #2178) don't
+ * hand-maintain a parallel map. Returns null for an unknown kind.
+ */
+export function shortCanonPrimaryField(kind) {
+  const spec = SHORT_SPEC[normalizeKind(kind)];
+  if (!spec) return null;
+  return spec.primary || spec.sequence?.[0]?.field || null;
+}
+
+/**
  * RICH descriptor fragments — every descriptive field that contributes to
  * a render prompt body. Used by render-synthesis and the
  * "has any content?" gate.

@@ -548,6 +548,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-premature-reveal": {
+      "name": "Pipeline — Editorial Check: Premature reveal (spoiler leak)",
+      "description": "Editorial check (#2178): the information-economy guard for reveal-gated canon — flags a deliberately-withheld fact (character secret, late-story twist, hidden identity) that the prose states or unambiguously implies BEFORE its reveal issue, so a first-time reader learns it too early. Reconciles the stitched manuscript against the reveal-gated canon entries (reveal issue / hard-spoiler flag, spoiler-free surface descriptor, and the underlying gated fact) and distinguishes a genuine leak from deliberate foreshadowing, flagging only leaks. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-world-unforeshadowed-solution": {
       "name": "Pipeline — Editorial Check: Unforeshadowed solution",
       "description": "Editorial check (#2175): the worldbuilding sibling of the deus ex machina — flags a story problem resolved by a rule, power, property, or artifact the reader was never shown before it saved the day (Sanderson's First Law). Reconciles the stitched manuscript against the established world canon (artifacts/objects + places) and the continuity-bible world-rule facts, so a rule that WAS planted earlier is not flagged; the whole-arc verdict lands on the final part with earlier plants carried in the setup digest. Returns issue-anchored findings.",

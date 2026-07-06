@@ -201,6 +201,7 @@ const CHECK_ORDER = Object.freeze([
   'style.reading-level',
   'style.conformance',
   'chekhov.setups-payoffs',
+  'continuity.premature-reveal',
   'prose.cliches',
   'prose.modifier-stacking',
   'prose.filter-words',
