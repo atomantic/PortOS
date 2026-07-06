@@ -309,7 +309,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
         issueType: formData.jiraIssueType || 'Task',
         labels: formData.jiraLabels ? formData.jiraLabels.split(',').map(s => s.trim()).filter(Boolean) : [],
         assignee: formData.jiraAssignee || undefined,
-        epicKey: formData.jiraEpicKey || undefined,
+        epicKey: formData.jiraEpicKey.trim() || undefined,
         createPR: formData.jiraCreatePR
       } : { enabled: false },
       datadog: formData.datadogEnabled ? {
