@@ -318,7 +318,7 @@ export function desiredEndState(state, actions) {
  */
 export function actionableSignature(actionable) {
   return actionable
-    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}`)
+    .map((b) => `${b.branch}:${b.state}:${b.openPr?.number ?? 'none'}:${b.openPr?.mergeable ?? 'none'}`)
     .sort()
     .join('|');
 }

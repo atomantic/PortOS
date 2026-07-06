@@ -271,6 +271,12 @@ describe('actionableSignature', () => {
     expect(actionableSignature(two)).not.toBe(actionableSignature(one));
   });
 
+  it('changes when an IN_REVIEW PR becomes mergeable (readiness advanced within the same state)', () => {
+    const unknown = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 3, mergeable: 'UNKNOWN' } }];
+    const mergeable = [{ branch: 'a', state: 'IN_REVIEW', openPr: { number: 3, mergeable: 'MERGEABLE' } }];
+    expect(actionableSignature(unknown)).not.toBe(actionableSignature(mergeable));
+  });
+
   it('empty set yields an empty signature', () => {
     expect(actionableSignature([])).toBe('');
   });

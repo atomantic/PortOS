@@ -1649,25 +1649,30 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length})`, { appId: app.id });
       return null;
     }
-    // Convergence guard: dispatch only when the actionable set CHANGED since the
-    // last dispatch. A productive coordinator run advances branches through states
-    // (NEEDS_PR → IN_REVIEW → merged/cleaned), changing the signature — so the
-    // back-to-back drain keeps driving real progress. But a run that leaves the
-    // SAME branches in the SAME states (a NEEDS_PR branch judged "not ready", an
-    // IN_REVIEW PR blocked on human review / red CI) produces an identical
-    // signature; re-dispatching an identical coordinator would loop forever
-    // (metadata.perpetual bypasses the post-completion cooldown). Park it instead
-    // until the recheck cadence — or until a human advances the branch, which
-    // changes the signature and resumes the drain.
+    // Convergence guard — kills the back-to-back re-dispatch loop WITHOUT stalling
+    // slow PRs. The signature (branch:state:pr#:mergeable) is stored at dispatch;
+    // when the perpetual-drain refill fires right after the coordinator completes
+    // (metadata.perpetual bypasses the post-completion cooldown), we compare:
+    //   - signature CHANGED → the run made progress (branch advanced
+    //     NEEDS_PR→IN_REVIEW→merged/cleaned, conflicts resolved, PR became
+    //     mergeable) → keep draining back-to-back.
+    //   - signature UNCHANGED → the run left the same branches in the same states
+    //     (a NEEDS_PR branch judged "not ready", an IN_REVIEW PR blocked on human
+    //     review / red CI). Park on the recheck cadence AND CLEAR the stored
+    //     signature — so the next DAILY recheck re-dispatches unconditionally
+    //     (re-driving the PR in case CI turned green / review cleared overnight),
+    //     rather than seeing the same signature and re-parking forever. The
+    //     signature only suppresses the immediate back-to-back refill; it never
+    //     suppresses a recheck.
     const signature = actionableSignature(actionable);
     const lastSignature = await taskSchedule.getPerpetualSignature(taskType, app.id);
     if (signature === lastSignature) {
-      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: actionable.length, signature });
-      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${actionable.length} branch(es) unchanged since last run (no progress)`, { appId: app.id });
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: actionable.length, signature: null });
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${actionable.length} branch(es) unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
       return null;
     }
     // New or advanced actionable set — drive it. Resume the drain (clear any park)
-    // and record the signature so an unproductive re-run next cycle parks instead
+    // and record the signature so an unproductive back-to-back refill parks instead
     // of looping. Skip the post-completion cooldown so productive progress drains
     // back-to-back.
     await taskSchedule.clearPerpetualPark(taskType, app.id);
