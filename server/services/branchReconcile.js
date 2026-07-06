@@ -198,9 +198,11 @@ export async function cleanupMerged(repoPath, defaultBranch, merged) {
  * in-flight set (branches needing an agent) for the scheduler to dispatch.
  *
  * @param {string} [repoPath=PATHS.root]
- * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
+ * @param {{ cleanup?: boolean }} [opts] - when cleanup is false, merged branches
+ *   are reported (as `merged`) but not deleted (honors the cleanupMerged toggle).
+ * @returns {Promise<{ defaultBranch:string, cleaned:string[], merged:object[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
  */
-export async function reconcile(repoPath = PATHS.root) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true } = {}) {
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   const inputs = await gatherBranchState(repoPath, { defaultBranch });
   const classified = classifyBranches(inputs);
@@ -209,7 +211,9 @@ export async function reconcile(repoPath = PATHS.root) {
   const inFlight = classified.filter((c) => ['CONFLICTED', 'IN_REVIEW', 'NEEDS_PR'].includes(c.state));
   const wip = classified.filter((c) => c.state === 'WIP');
 
-  const { cleaned, skipped } = await cleanupMerged(repoPath, defaultBranch, merged);
+  const { cleaned, skipped } = cleanup
+    ? await cleanupMerged(repoPath, defaultBranch, merged)
+    : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
 
-  return { defaultBranch, cleaned, inFlight, wip, skipped };
+  return { defaultBranch, cleaned, merged, inFlight, wip, skipped };
 }
