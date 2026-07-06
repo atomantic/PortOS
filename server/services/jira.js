@@ -7,6 +7,7 @@ import fs from 'fs/promises';
 import { createHttpClient } from '../lib/httpClient.js';
 import path from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { hostFromOriginUrl } from '../lib/workTracker.js';
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
@@ -55,7 +56,7 @@ export async function upsertInstance(instanceId, instanceData) {
     name: instanceData.name,
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
-    apiToken: instanceData.apiToken, // PAT (Personal Access Token)
+    apiToken: instanceData.apiToken, // Server/DC PAT (sent as Bearer) or Cloud API token (sent as Basic email:token)
     tokenUpdatedAt: (instanceData.apiToken !== existing?.apiToken) ? new Date().toISOString() : (existing?.tokenUpdatedAt || new Date().toISOString()),
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -75,6 +76,29 @@ export async function deleteInstance(instanceId) {
 }
 
 /**
+ * Whether a JIRA instance is Jira Cloud (*.atlassian.net) vs Server / Data Center.
+ * Uses the shared no-throw host extractor (returns null on unparseable input) so a
+ * hand-edited jira.json can't throw here.
+ */
+export function isCloudInstance(baseUrl) {
+  const host = hostFromOriginUrl(baseUrl);
+  return !!host && /(^|\.)atlassian\.net$/i.test(host);
+}
+
+/**
+ * Build the Authorization header for a JIRA instance.
+ * - Jira Cloud authenticates a personal API token via HTTP Basic (base64 "email:token").
+ * - Jira Server / Data Center authenticates a Personal Access Token (PAT) via Bearer.
+ * Detected by host so Server and Cloud instances can coexist during a migration.
+ */
+export function jiraAuthHeader(instance) {
+  if (isCloudInstance(instance.baseUrl)) {
+    return `Basic ${Buffer.from(`${instance.email}:${instance.apiToken}`).toString('base64')}`;
+  }
+  return `Bearer ${instance.apiToken}`;
+}
+
+/**
  * Create HTTP client for JIRA instance
  */
 export function createJiraClient(instance) {
@@ -85,7 +109,7 @@ export function createJiraClient(instance) {
   const base = createHttpClient({
     baseURL: instance.baseUrl,
     headers: {
-      'Authorization': `Bearer ${instance.apiToken}`,
+      'Authorization': jiraAuthHeader(instance),
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
@@ -96,7 +120,7 @@ export function createJiraClient(instance) {
   // Detect expired token (JIRA returns HTML login page instead of JSON)
   const checkToken = res => {
     if (typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
-      const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your PAT.');
+      const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your token (Server: PAT; Cloud: API token).');
       err.status = 401;
       throw err;
     }
