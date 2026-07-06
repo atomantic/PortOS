@@ -42,7 +42,8 @@ export const ACCEPTED_OLD_MD5 = {
     'bfea5aeeb471aae9749baee765b473a7', // pre-003 (in setup-data OLD list)
     'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027 / pre-054
     'bef1bc2767b78f585f2bd89f3d615130', // post-054 / pre-054-fence
-    '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 / pre-165 (scene markers)
+    '25e3d58c2741bd98acd5d08ba70d8a5e', // post-127 / pre-166 (scene markers)
+    '430d38ed2da59e0d4212e65edc499a74', // post-166 / pre-168 (craft anti-patterns)
   ],
   'pipeline-teleplay.md': [
     '376f779f4687b598f1c92ca4e770fd5a', // pre-027 shipped
@@ -67,7 +68,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-prose.md':            '430d38ed2da59e0d4212e65edc499a74', // post-166 (craft anti-patterns)
+  'pipeline-prose.md':            '4cb3ef48309f3673570cf80e4d544b54', // post-168 (cross-issue continuity)
   'pipeline-teleplay.md':         '2ea9974ac3803658b2314db1f5818b77', // post-128 (canonical scene list)
   'pipeline-comic-script.md':     '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'universe-character-expand.md': '67b6e73ed47f318451a730088b4cff14',

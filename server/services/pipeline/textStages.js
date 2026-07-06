@@ -14,7 +14,7 @@
  * boundary in autoRunner.js, which routes failures through a finalizer.
  */
 
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
@@ -26,6 +26,7 @@ import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
 import { filterCanonForIssue } from '../../lib/storyBible.js';
+import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -83,6 +84,29 @@ function shapeNeighborForIdeaPrompt(iss) {
   return beats ? { ...base, beats } : { ...base, synopsis };
 }
 
+// Resolve an issue's position within its volume plus its immediate siblings —
+// the shared ordering contract behind both the idea-stage neighbor context and
+// the prose-stage cross-issue continuity. Loads WITHOUT run history: neighbor
+// resolution only needs id / position / stage content, never the (potentially
+// large) per-stage runHistory arrays. Returns raw issue records so each caller
+// can shape them for its own template. An ungrouped issue (no season) or one
+// that isn't found in its volume yields `idx: -1` and null siblings.
+async function resolveVolumeNeighbors(series, issue) {
+  const seasonId = issue.seasonId;
+  if (!seasonId) return { volumeIssues: [], idx: -1, prior: null, next: null };
+  const allIssues = await listIssues({ seriesId: series.id, withHistory: false });
+  const volumeIssues = allIssues
+    .filter((i) => i.seasonId === seasonId)
+    .sort(compareIssuesByPosition);
+  const idx = volumeIssues.findIndex((i) => i.id === issue.id);
+  return {
+    volumeIssues,
+    idx,
+    prior: idx > 0 ? volumeIssues[idx - 1] : null,
+    next: idx >= 0 && idx < volumeIssues.length - 1 ? volumeIssues[idx + 1] : null,
+  };
+}
+
 // Mirrors the writer's working frame when drafting beats: whole-series arc
 // + parent volume + immediate-neighbor issues. Other text stages (prose,
 // comicScript, teleplay) don't need it — they derive from beats which
@@ -137,15 +161,9 @@ async function buildIdeaContextAugment(series, issue, seedOverride = '') {
     };
   }
 
-  const allIssues = await listIssues({ seriesId: series.id });
-  const volumeIssues = allIssues
-    .filter((i) => i.seasonId === season.id)
-    .sort(compareIssuesByPosition);
-  const idx = volumeIssues.findIndex((i) => i.id === issue.id);
-  const priorIssue = idx > 0 ? shapeNeighborForIdeaPrompt(volumeIssues[idx - 1]) : null;
-  const nextIssue = idx >= 0 && idx < volumeIssues.length - 1
-    ? shapeNeighborForIdeaPrompt(volumeIssues[idx + 1])
-    : null;
+  const { volumeIssues, idx, prior, next } = await resolveVolumeNeighbors(series, issue);
+  const priorIssue = shapeNeighborForIdeaPrompt(prior);
+  const nextIssue = shapeNeighborForIdeaPrompt(next);
   const positionInVolume = idx >= 0
     ? { ordinal: idx + 1, total: volumeIssues.length }
     : null;
@@ -187,6 +205,104 @@ async function buildIdeaContextAugment(series, issue, seedOverride = '') {
     priorIssue,
     nextIssue,
     priorVolume,
+  };
+}
+
+// Target size of the previous issue's prose tail (in chars) before token
+// budgeting. ~2000 chars ≈ the last few paragraphs — enough for the model to
+// pick up the closing beat + voice at the seam, matching autonovel's
+// last-~2000-char injection. The budgeter trims below this on a small window.
+const PRIOR_PROSE_TAIL_CHARS = 2_000;
+// Fraction of the resolved usable input budget the two continuity blocks may
+// consume in total, split across the prior-prose tail and the next-issue beats.
+// Continuity is a NICE-TO-HAVE relative to the bible + source material, so it
+// yields first on a tight window rather than crowding out the actual beats.
+const CONTINUITY_BUDGET_FRACTION = 0.25;
+// When both blocks are present, the prior-prose tail keeps priority (voice-at-
+// the-seam is the higher-value signal); the next-issue beats reclaim whatever
+// the trimmed tail leaves unused.
+const PRIOR_TAIL_SHARE = 0.6;
+
+/**
+ * Extract the last `maxChars` of an issue's prose, cut on a paragraph boundary
+ * when one falls in the last third of the slice so the tail reads as a coherent
+ * passage rather than mid-sentence. Returns '' for absent/blank prose so the
+ * template's `{{#priorIssueProseTail}}` section simply doesn't render (no fake
+ * continuity — issue task #3).
+ */
+function extractProseTail(text, maxChars = PRIOR_PROSE_TAIL_CHARS) {
+  const s = String(text ?? '').trim();
+  const cap = Math.max(0, Math.floor(maxChars));
+  if (!s || cap === 0) return '';
+  if (s.length <= cap) return s;
+  const slice = s.slice(s.length - cap);
+  // Prefer starting at a paragraph break so the tail opens cleanly — but only
+  // if that break isn't so late it throws away most of the budget.
+  const nl = slice.indexOf('\n\n');
+  const body = nl >= 0 && nl < cap * 0.33 ? slice.slice(nl + 2) : slice;
+  return body.trim();
+}
+
+/**
+ * Head of the next issue's beat sheet (idea stage) — its opening beats, so this
+ * issue can END so it hands off to them. Prefers the expanded beats
+ * (`idea.output`), falls back to the synopsis (`idea.input`); '' when neither
+ * exists so the block doesn't render.
+ */
+function extractNextIssueBeats(iss) {
+  if (!iss) return '';
+  return (iss.stages?.idea?.output || '').trim() || (iss.stages?.idea?.input || '').trim();
+}
+
+/**
+ * Cross-issue prose continuity (#2177 / CWQE Phase 12). Only the `prose` stage
+ * uses it: inject the PREVIOUS issue's actual closing prose (last ~2000 chars)
+ * and the NEXT issue's opening beats so chapter boundaries flow and the voice
+ * carries across units — the gap autonovel closed by feeding the prior chapter's
+ * tail + next chapter's outline head into every draft.
+ *
+ * Both blocks are token-budgeted via `contextBudget.js` so a small-context model
+ * degrades by trimming, not erroring. When the prior issue's prose doesn't exist
+ * yet (non-linear / parallel generation, or this is the first issue of the
+ * volume) the block simply doesn't render — no fabricated continuity.
+ *
+ * Same neighbor resolution as `buildIdeaContextAugment`: sort the volume's issues
+ * by canonical position and take the immediate siblings. An ungrouped issue (no
+ * season) has no resolvable neighbors, so it returns empty blocks.
+ */
+async function buildProseContextAugment(series, issue, options = {}) {
+  const empty = { priorIssueProseTail: '', nextIssueBeats: '', hasNeighborContinuity: false };
+
+  const { prior, next } = await resolveVolumeNeighbors(series, issue);
+  const rawTail = prior ? extractProseTail(stageContentOf(prior.stages?.prose)) : '';
+  const rawBeats = extractNextIssueBeats(next);
+  if (!rawTail && !rawBeats) return empty;
+
+  // Token-budget both blocks so they degrade by trimming on a small window
+  // rather than blowing the prompt. Resolve the prose stage's planning window
+  // (best-effort — a runtime provider fallback isn't reflected, matching every
+  // other budgeting caller) and reserve a fraction of the usable input for
+  // continuity. usableInputTokens already substitutes a conservative floor for a
+  // null/zero window, so no extra fallback is needed here.
+  const { contextWindow } = await resolveStageContext('pipeline-prose', {
+    providerOverride: options.providerId,
+    providerDefault: options.providerIdDefault,
+    modelOverride: options.model,
+    modelDefault: options.modelIdDefault,
+  }).catch(() => ({ contextWindow: null }));
+  const usableTokens = usableInputTokens({ contextWindow });
+  const continuityChars = Math.max(0, Math.floor(usableTokens * CONTINUITY_BUDGET_FRACTION)) * CHARS_PER_TOKEN;
+
+  // Prose tail keeps priority; next beats reclaim whatever the tail doesn't use.
+  const tailBudget = rawBeats ? Math.floor(continuityChars * PRIOR_TAIL_SHARE) : continuityChars;
+  const priorIssueProseTail = rawTail ? trimContextToBudget(rawTail, tailBudget) : '';
+  const beatsBudget = continuityChars - priorIssueProseTail.length;
+  const nextIssueBeats = rawBeats ? trimContextToBudget(rawBeats, Math.max(0, beatsBudget)) : '';
+
+  return {
+    priorIssueProseTail,
+    nextIssueBeats,
+    hasNeighborContinuity: !!(priorIssueProseTail || nextIssueBeats),
   };
 }
 
@@ -497,6 +613,15 @@ export async function generateStage(issueId, stageId, options = {}) {
     if (ctx.paddingRisk) {
       console.log(`⚠️ Pipeline idea — issue=${issueId.slice(0, 8)} terse synopsis vs ${ctx.lengthTargets?.profile} profile: scope-discipline guard engaged`);
     }
+  } else if (stageId === 'prose') {
+    // Cross-issue prose continuity (#2177): the previous issue's closing prose
+    // tail + the next issue's opening beats, token-budgeted. Covers every full
+    // prose (re)generation path — manual route, autoRunner, and Series Autopilot
+    // — because they all funnel through generateStage.
+    Object.assign(ctx, await buildProseContextAugment(series, issue, options));
+    if (ctx.hasNeighborContinuity) {
+      console.log(`🔗 Pipeline prose — issue=${issueId.slice(0, 8)} continuity: priorTail=${ctx.priorIssueProseTail.length}c nextBeats=${ctx.nextIssueBeats.length}c`);
+    }
   }
 
   // Catch only at this boundary so the stage record persists the failure
@@ -603,4 +728,4 @@ export async function generateStage(issueId, stageId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, buildProseContextAugment, resolveVolumeNeighbors, extractProseTail, extractNextIssueBeats, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
