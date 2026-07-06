@@ -44,8 +44,14 @@ const PR_LIST_LIMIT = 200;
  */
 export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, openPr }) {
   if (isMerged) return 'MERGED';
+  // A worktree with real uncommitted changes is NEVER handed to the coordinator
+  // agent — even for a branch with an open PR. The agent's per-state actions
+  // (rebase/resolve/merge) run git operations that could stash/reset/checkout
+  // and silently discard the user's in-progress work. Skip it as WIP regardless
+  // of PR state; the `cleanupMerged` path applies the same guard for MERGED.
+  if (worktreeDirty) return 'WIP';
   if (openPr) return openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW';
-  if (hasUpstream && !worktreeDirty) return 'NEEDS_PR';
+  if (hasUpstream) return 'NEEDS_PR';
   return 'WIP';
 }
 

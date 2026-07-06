@@ -19,6 +19,8 @@ vi.mock('./cosTaskStore.js', () => ({
   addTask: vi.fn(async () => ({ id: 'sys-branch-reconcile-x' }))
 }));
 vi.mock('./branchReconcile.js', () => ({ reconcile: vi.fn() }));
+vi.mock('./cos.js', () => ({ getConfig: vi.fn(async () => ({ domainAutonomy: { cos: 'execute' } })) }));
+vi.mock('../lib/domainAutonomy.js', () => ({ getDomainMode: vi.fn((config) => config?.domainAutonomy?.cos || 'off') }));
 
 import {
   filterActionable, formatInFlightForPrompt, buildCoordinatorTask, runBranchReconcile, getLastRun
@@ -26,10 +28,12 @@ import {
 import { getSettings } from './settings.js';
 import { addTask } from './cosTaskStore.js';
 import { reconcile } from './branchReconcile.js';
+import { getConfig } from './cos.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   addTask.mockResolvedValue({ id: 'sys-branch-reconcile-x' });
+  getConfig.mockResolvedValue({ domainAutonomy: { cos: 'execute' } });
 });
 
 const IN_FLIGHT = [
@@ -114,24 +118,36 @@ describe('runBranchReconcile', () => {
     const res = await runBranchReconcile({ now: 0 });
     expect(addTask).toHaveBeenCalledTimes(1);
     expect(addTask.mock.calls[0][1]).toBe('internal');
-    expect(res.dispatched).toBe(true);
+    expect(res.queued).toBe(true);
+    expect(res.coordinatorWillRun).toBe(true); // cos autonomy mocked to 'execute'
+    expect(res.cosAutonomy).toBe('execute');
     expect(res.actionable).toEqual(['needspr', 'conflicted', 'inreview']);
   });
 
-  it('does not dispatch when nothing is actionable', async () => {
+  it('reports coordinatorWillRun=false when CoS autonomy is not execute', async () => {
+    getSettings.mockResolvedValue({ branchReconcile: { enabled: true, actions: {} } });
+    reconcile.mockResolvedValue({ defaultBranch: 'main', cleaned: [], inFlight: IN_FLIGHT, wip: [], skipped: [] });
+    getConfig.mockResolvedValue({ domainAutonomy: { cos: 'off' } });
+    const res = await runBranchReconcile({ now: 0 });
+    expect(res.queued).toBe(true);
+    expect(res.coordinatorWillRun).toBe(false);
+    expect(res.cosAutonomy).toBe('off');
+  });
+
+  it('does not queue when nothing is actionable', async () => {
     getSettings.mockResolvedValue({ branchReconcile: { enabled: true, actions: {} } });
     reconcile.mockResolvedValue({ defaultBranch: 'main', cleaned: [], inFlight: [], wip: ['x'], skipped: [] });
     const res = await runBranchReconcile({ now: 0 });
     expect(addTask).not.toHaveBeenCalled();
-    expect(res.dispatched).toBe(false);
+    expect(res.queued).toBe(false);
   });
 
-  it('reports dispatched=false when addTask says duplicate', async () => {
+  it('reports queued=false when addTask says duplicate', async () => {
     getSettings.mockResolvedValue({ branchReconcile: { enabled: true, actions: {} } });
     reconcile.mockResolvedValue({ defaultBranch: 'main', cleaned: [], inFlight: IN_FLIGHT, wip: [], skipped: [] });
     addTask.mockResolvedValue({ id: 'existing', duplicate: true });
     const res = await runBranchReconcile({ now: 0 });
-    expect(res.dispatched).toBe(false);
+    expect(res.queued).toBe(false);
     expect(getLastRun()).toBe(res);
   });
 });

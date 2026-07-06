@@ -19,6 +19,7 @@ import { getUserTimezone } from '../lib/timezone.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PRIORITY_VALUES, addTask } from './cosTaskStore.js';
 import { reconcile } from './branchReconcile.js';
+import { getDomainMode } from '../lib/domainAutonomy.js';
 
 const CRON_ID = 'branch-reconcile';
 
@@ -145,16 +146,25 @@ export async function runBranchReconcile({ force = false, now = Date.now() } = {
     const result = await reconcile(PATHS.root, { cleanup: actionOn(actions, 'cleanupMerged') });
     const actionable = filterActionable(result.inFlight, actions);
 
-    let dispatched = false;
+    let queued = false;
+    // The coordinator is an auto-approved INTERNAL task, which the CoS runner
+    // only actually spawns when its autonomy mode for the `cos` domain is
+    // `execute` (off/dry-run leave it queued). Surface the mode so the summary
+    // can't claim an agent will run when it won't — the reconciler's enable
+    // toggle is independent of the CoS auto-run setting.
+    let cosAutonomy = 'unknown';
     if (actionable.length > 0) {
       const task = buildCoordinatorTask(actionable, {
         defaultBranch: result.defaultBranch, actions, now
       });
       const added = await addTask(task, 'internal', { raw: true });
-      dispatched = !added?.duplicate;
+      queued = !added?.duplicate;
       if (added?.duplicate) {
         console.log('🔀 branch-reconcile: a coordinator is already in flight — skipping dispatch');
       }
+      const { getConfig } = await import('./cos.js');
+      const config = await getConfig().catch(() => null);
+      cosAutonomy = config ? getDomainMode(config, 'cos') : 'unknown';
     }
 
     const summary = {
@@ -164,10 +174,13 @@ export async function runBranchReconcile({ force = false, now = Date.now() } = {
       actionable: actionable.map((b) => b.branch),
       wip: result.wip.map((b) => b.branch),
       skipped: result.skipped,
-      dispatched
+      queued,
+      // true only when the coordinator was queued AND the CoS runner will spawn it.
+      coordinatorWillRun: queued && cosAutonomy === 'execute',
+      cosAutonomy
     };
     lastRun = summary;
-    console.log(`🔀 branch-reconcile: cleaned ${result.cleaned.length}, ${actionable.length} in-flight actionable, dispatched=${dispatched}`);
+    console.log(`🔀 branch-reconcile: cleaned ${result.cleaned.length}, ${actionable.length} actionable, queued=${queued}, cosAutonomy=${cosAutonomy}`);
     return summary;
   } catch (err) {
     console.error(`❌ branch-reconcile run failed: ${err.message}`);

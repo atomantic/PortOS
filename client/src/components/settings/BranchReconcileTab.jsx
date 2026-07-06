@@ -81,7 +81,7 @@ export function BranchReconcileTab() {
     if (!summary) { toast.error('Reconcile run failed'); return; }
     setLastRun(summary);
     if (summary.skipped === 'disabled') toast.error('Reconciler is disabled — enable and save first');
-    else toast.success(`Reconcile: cleaned ${summary.cleaned?.length ?? 0}, dispatched=${summary.dispatched ? 'yes' : 'no'}`);
+    else toast.success(`Reconcile: cleaned ${summary.cleaned?.length ?? 0}, coordinator ${summary.queued ? 'queued' : 'not queued'}`);
   };
 
   if (loading) return <BrailleSpinner />;
@@ -180,10 +180,17 @@ export function BranchReconcileTab() {
             <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
               <div><dt className="text-gray-500 text-xs uppercase">When</dt><dd className="text-gray-200">{lastRun.at ? new Date(lastRun.at).toLocaleString() : '—'}</dd></div>
               <div><dt className="text-gray-500 text-xs uppercase">Cleaned</dt><dd className="text-gray-200">{lastRun.cleaned?.length ?? 0}</dd></div>
-              <div><dt className="text-gray-500 text-xs uppercase">Dispatched agent</dt><dd className="text-gray-200">{lastRun.dispatched ? 'yes' : 'no'}</dd></div>
+              <div><dt className="text-gray-500 text-xs uppercase">Coordinator queued</dt><dd className="text-gray-200">{lastRun.queued ? 'yes' : 'no'}</dd></div>
               <div><dt className="text-gray-500 text-xs uppercase">Actionable</dt><dd className="text-gray-200">{lastRun.actionable?.join(', ') || '—'}</dd></div>
               <div><dt className="text-gray-500 text-xs uppercase">WIP (left)</dt><dd className="text-gray-200">{lastRun.wip?.join(', ') || '—'}</dd></div>
             </dl>
+          )}
+          {/* The coordinator is queued but only RUNS when CoS auto-run is in Execute mode.
+              Warn honestly so the queued state isn't mistaken for "an agent is running". */}
+          {lastRun.queued && lastRun.coordinatorWillRun === false && (
+            <p className="text-xs text-port-warning mt-3">
+              Coordinator queued but CoS auto-run is <code>{lastRun.cosAutonomy || 'not execute'}</code> — it will spawn once you set CoS auto-run to <strong>Execute</strong>.
+            </p>
           )}
         </div>
       )}

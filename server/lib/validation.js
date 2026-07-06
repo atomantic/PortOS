@@ -321,7 +321,11 @@ export const backupConfigSchema = z.object({
 // PUT route (.partial()) and re-read on every scheduled run.
 export const branchReconcileConfigSchema = z.object({
   enabled: z.boolean().optional().default(false),
-  cron: z.string().optional().default('0 3 * * *'),
+  // 5- or 6-field cron expression. Validated here (not just typed as a string)
+  // so a malformed save can't reach `startBranchReconcileScheduler` and throw
+  // out of the boot-time cron parse (which the boot `.catch` would swallow,
+  // leaving the scheduler silently unregistered).
+  cron: z.string().regex(/^\S+(\s+\S+){4,5}$/, 'cron must have 5 or 6 whitespace-separated fields').optional().default('0 3 * * *'),
   actions: z.object(optionalBooleanMap([
     'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge'
   ])).optional().default({})

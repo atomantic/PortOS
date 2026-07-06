@@ -66,6 +66,10 @@ describe('classifyBranch', () => {
   it('pushed but dirty worktree → WIP', () => {
     expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: true, worktreeDirty: true })).toBe('WIP');
   });
+  it('dirty worktree wins over an open PR → WIP (never hand a dirty tree to the agent)', () => {
+    expect(classifyBranch({ isMerged: false, openPr: { mergeable: 'MERGEABLE' }, hasUpstream: true, worktreeDirty: true })).toBe('WIP');
+    expect(classifyBranch({ isMerged: false, openPr: { mergeable: 'CONFLICTING' }, hasUpstream: true, worktreeDirty: true })).toBe('WIP');
+  });
   it('local-only (no upstream), no PR → WIP', () => {
     expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false })).toBe('WIP');
   });
