@@ -141,7 +141,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `sanitizeArc` would silently strip the ledger and last-writer-wins the loss
   // back onto the newer peer. Bump makes the older peer reject the ahead-version
   // series transfer instead. Per-category gate → only series sync pauses with old peers.
-  pipelineSeries: 10,
+  // v11 = `series.styleGuide.voiceExemplars` + `series.styleGuide.voiceAntiExemplars`
+  // added (#2179) — the voice exemplar / anti-exemplar "tuning fork" passages. Same
+  // additive field INSIDE the federated `styleGuide` sub-object as styleGuide itself
+  // (v4): a ≤v10 peer that re-sanitizes a series through its voiceExemplars-unaware
+  // `sanitizeStyleGuide` would silently strip the passages and last-writer-wins the
+  // loss back onto the newer peer (`preserveAbsentAdditiveFields` only restores a
+  // wholly-absent `styleGuide`, not a present-but-sub-field-stripped one). Bump makes
+  // the older peer reject the ahead-version series transfer instead. Per-category gate
+  // → only series sync pauses with old peers.
+  pipelineSeries: 11,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
