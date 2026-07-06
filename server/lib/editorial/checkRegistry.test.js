@@ -797,12 +797,14 @@ describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
     ...overrides,
   });
 
-  it('is registered as a series-scoped LLM check reading manuscript + reader-map + foreshadowing ledger', () => {
+  it('is registered as a series-scoped LLM check reading manuscript + canon + reader-map + foreshadowing ledger', () => {
     const check = getCheck(CHEKHOV);
     expect(check.kind).toBe('llm');
     expect(check.scope).toBe('series');
     expect(check.category).toBe('continuity');
-    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap', 'series.arc.foreshadowing']);
+    // `canon` is a source since #2178 — reveal-gated canon folds into the
+    // authored-payoffs block, so a canon edit must re-fingerprint this check.
+    expect(check.sources).toEqual(['manuscript', 'canon', 'series.arc.readerMap', 'series.arc.foreshadowing']);
     expect(check.needsManuscript).toBe(true);
   });
 
