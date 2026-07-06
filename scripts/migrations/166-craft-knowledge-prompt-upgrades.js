@@ -37,14 +37,16 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 // Pre-change shipped hashes (the current shipped bodies before #2172).
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-prose.md': ['25e3d58c2741bd98acd5d08ba70d8a5e'],
+  'pipeline-prose.md': ['25e3d58c2741bd98acd5d08ba70d8a5e', '430d38ed2da59e0d4212e65edc499a74'],
   'writers-room-continue.md': ['93bfe80543ceca39842201a78b8393fa'],
   'pipeline-arc-overview.md': ['0a1f6ffa6908522e3690c5e9e53a6ee0'],
 };
 
 // Post-change shipped hashes (partial injected / foreshadowing ledger added).
+// pipeline-prose.md's current hash is resynced to post-168 (cross-issue
+// continuity, #2177) per the drift-cross-sync convention.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-prose.md': '430d38ed2da59e0d4212e65edc499a74',
+  'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54',
   'writers-room-continue.md': '67663696c97ebaeb23de25f7410cfdd4',
   'pipeline-arc-overview.md': '612f8b04950e2ff26dd350dd76a062fe',
 };

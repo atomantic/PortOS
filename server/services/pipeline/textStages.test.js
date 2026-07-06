@@ -491,6 +491,163 @@ describe('pipeline text stage generator', () => {
 
   // -- end idea-stage context augment --
 
+  // ---- prose-stage cross-issue continuity augment (#2177 / CWQE Phase 12) ----
+  // Exercises buildProseContextAugment via the public generateStage entry so we
+  // hit the same path the LLM caller does. The mocked provider resolves to a
+  // large-window API provider, so budgeting never trims in these fixtures.
+
+  it('prose continuity: injects prior issue prose tail + next issue beats for a middle issue', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A opens.\n\nA middle.\n\nA closes on a held breath.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'C', seasonId: sea.id, arcPosition: 3,
+      stages: { idea: { status: 'ready', output: 'C beat 1\nC beat 2' } },
+    });
+
+    await textStages.generateStage(b.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.hasNeighborContinuity).toBe(true);
+    expect(ctx.priorIssueProseTail).toContain('held breath');
+    expect(ctx.nextIssueBeats).toContain('C beat 1');
+  });
+
+  it('prose continuity: no prior tail for the first issue of a volume (no fake continuity)', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    const a = await issuesSvc.createIssue({ seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2,
+      stages: { idea: { status: 'ready', output: 'B beat 1' } },
+    });
+    await textStages.generateStage(a.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    // The next issue's beats still flow in — only the absent side is blank.
+    expect(ctx.nextIssueBeats).toContain('B beat 1');
+    expect(ctx.hasNeighborContinuity).toBe(true);
+  });
+
+  it('prose continuity: prior block does NOT render when the prior issue has no prose yet', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    // Prior issue exists but its prose stage is empty (non-linear generation).
+    await issuesSvc.createIssue({ seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1 });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await textStages.generateStage(b.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    expect(ctx.nextIssueBeats).toBe('');
+    expect(ctx.hasNeighborContinuity).toBe(false);
+  });
+
+  it('prose continuity: an ungrouped issue (no season) gets no continuity blocks', async () => {
+    const { issue } = await seed();
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    expect(ctx.nextIssueBeats).toBe('');
+    expect(ctx.hasNeighborContinuity).toBe(false);
+  });
+
+  it('prose continuity: next-issue beats fall back to synopsis when beats are not expanded', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A closes.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'C', seasonId: sea.id, arcPosition: 3,
+      stages: { idea: { status: 'draft', input: 'C synopsis only' } },
+    });
+    await textStages.generateStage(b.id, 'prose');
+    expect(ctxFromCall(llmCalls[0]).nextIssueBeats).toBe('C synopsis only');
+  });
+
+  it('prose continuity: the idea stage does NOT get the prose-tail blocks', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A closes.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await textStages.generateStage(b.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx).not.toHaveProperty('priorIssueProseTail');
+    expect(ctx).not.toHaveProperty('hasNeighborContinuity');
+  });
+
+  // -- pure helpers (extraction + tail length) --
+
+  it('extractProseTail returns the whole prose when it is under the cap', () => {
+    expect(textStages.__testing.extractProseTail('short prose', 2000)).toBe('short prose');
+  });
+
+  it('extractProseTail returns at most maxChars of the tail', () => {
+    const long = 'x'.repeat(5000);
+    const tail = textStages.__testing.extractProseTail(long, 2000);
+    expect(tail.length).toBeLessThanOrEqual(2000);
+    // It is the TAIL — the end of the source, not the head.
+    expect(long.endsWith(tail)).toBe(true);
+  });
+
+  it('extractProseTail starts on a clean paragraph boundary when one is near the top of the slice', () => {
+    // Source is over the 200-char cap so it slices; the paragraph break lands
+    // in the first third of the 200-char slice window (index ~18), so the tail
+    // opens on the clean boundary rather than mid-word.
+    const head = 'A'.repeat(100);
+    const finalPara = `Final paragraph opens the tail cleanly. ${'x'.repeat(150)}`;
+    const src = `${head}\n\n${finalPara}`;
+    const tail = textStages.__testing.extractProseTail(src, 200);
+    expect(tail.startsWith('Final paragraph')).toBe(true);
+  });
+
+  it('extractProseTail returns empty string for absent / blank prose (no fake continuity)', () => {
+    expect(textStages.__testing.extractProseTail('', 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail('   \n  ', 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail(null, 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail(undefined, 2000)).toBe('');
+  });
+
+  it('extractNextIssueBeats prefers beats, falls back to synopsis, else empty', () => {
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: { output: 'BEATS', input: 'SYN' } } })).toBe('BEATS');
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: { input: 'SYN' } } })).toBe('SYN');
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: {} } })).toBe('');
+    expect(textStages.__testing.extractNextIssueBeats(null)).toBe('');
+  });
+
+  it('prose continuity: a small-context provider trims the injected block rather than erroring', async () => {
+    // A small (but non-degenerate) window: after the fixed output reserve the
+    // usable input budget is tight enough that the 25% continuity slice is well
+    // under the ~2000-char prose tail, so the budgeter must trim it.
+    const providers = await import('../providers.js');
+    providers.getActiveProvider.mockResolvedValueOnce({
+      id: 'small-local', name: 'Small', type: 'api', enabled: true,
+      defaultModel: 'small-model', endpoint: 'http://localhost:1234/v1', contextWindow: 10_000,
+    });
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    const bigTail = 'The tide rolls in. '.repeat(2000); // ~38K chars — far over the window
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: bigTail } },
+    });
+    // B is the last issue → no next beats, so the tail gets the whole slice.
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await expect(textStages.generateStage(b.id, 'prose')).resolves.toBeTruthy();
+    const ctx = ctxFromCall(llmCalls[0]);
+    // Present but trimmed below the raw ~2000-char tail cap — degraded, not dropped or errored.
+    expect(ctx.priorIssueProseTail.length).toBeGreaterThan(0);
+    expect(ctx.priorIssueProseTail.length).toBeLessThan(2_000);
+  });
+
   it('prompt context carries derived lengthTargets for the custom profile', async () => {
     const { series } = await seed();
     // 44 pages is 2× the standard 22-page baseline, so all derived ranges
