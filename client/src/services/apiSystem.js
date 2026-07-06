@@ -250,7 +250,15 @@ export const searchDatadogErrors = (instanceId, serviceName, environment, fromTi
 
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
-export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
+export const getJiraProjects = (instanceId, options) => request(`/jira/instances/${instanceId}/projects`, options);
+export const getJiraBoards = (instanceId, projectKey, options) =>
+  request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/boards`, options);
+export const getJiraBoardSprints = (instanceId, boardId, options) =>
+  request(`/jira/instances/${instanceId}/boards/${encodeURIComponent(boardId)}/sprints`, options);
+export const searchJiraEpics = (instanceId, projectKey, query, options) =>
+  request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/epics?q=${encodeURIComponent(query || '')}`, options);
+export const getJiraIssue = (instanceId, issueKey, options) =>
+  request(`/jira/instances/${instanceId}/issues/${encodeURIComponent(issueKey)}`, options);
 export const getMySprintTickets = (instanceId, projectKey, options) => request(`/jira/instances/${instanceId}/my-sprint-tickets/${projectKey}`, options);
 export const getJiraBoardColumns = (instanceId, projectKey, boardId, options) =>
   request(`/jira/instances/${instanceId}/board-columns/${projectKey}${boardId ? `?boardId=${encodeURIComponent(boardId)}` : ''}`, options);

@@ -40,6 +40,10 @@ const PORT_FIELDS = [
   ['tlsPort', 'TLS Port']
 ];
 
+// A JIRA issue key like CONTECH-1553 — used to tell "user typed a key to validate"
+// from "user is searching an epic by name" in the epic field.
+const EPIC_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+
 export default function EditAppDrawer({ app, onClose, onSave }) {
   const [activeTab, setActiveTab] = useDrawerTab('appTab', 'general', TAB_IDS);
   const [formData, setFormData] = useState({
@@ -112,6 +116,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
+  const [jiraBoards, setJiraBoards] = useState([]);
+  const [loadingBoards, setLoadingBoards] = useState(false);
+  const [boardSprints, setBoardSprints] = useState([]);
+  const [epicResults, setEpicResults] = useState([]);
+  const [epicDropdownOpen, setEpicDropdownOpen] = useState(false);
+  const [epicValidation, setEpicValidation] = useState({ state: 'idle' });
 
   useEffect(() => {
     const toInstances = (data) => data?.instances ? Object.values(data.instances) : [];
@@ -149,6 +159,72 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     }
   }, [formData.jiraInstanceId, jiraInstances, formData.jiraAssignee]);
 
+  // Detect the project's agile boards so the boardId is picked from live data
+  // instead of hand-typed (which is how a boardId goes stale across a migration).
+  useEffect(() => {
+    if (!formData.jiraInstanceId || !formData.jiraProjectKey) {
+      setJiraBoards([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingBoards(true);
+    api.getJiraBoards(formData.jiraInstanceId, formData.jiraProjectKey, { silent: true })
+      .then(boards => { if (!cancelled) setJiraBoards(boards || []); })
+      .catch(() => { if (!cancelled) setJiraBoards([]); })
+      .finally(() => { if (!cancelled) setLoadingBoards(false); });
+    return () => { cancelled = true; };
+  }, [formData.jiraInstanceId, formData.jiraProjectKey]);
+
+  // Show the selected board's active sprint as confirmation it's the right board.
+  useEffect(() => {
+    if (!formData.jiraInstanceId || !formData.jiraBoardId) {
+      setBoardSprints([]);
+      return;
+    }
+    let cancelled = false;
+    api.getJiraBoardSprints(formData.jiraInstanceId, formData.jiraBoardId, { silent: true })
+      .then(sprints => { if (!cancelled) setBoardSprints(sprints || []); })
+      .catch(() => { if (!cancelled) setBoardSprints([]); });
+    return () => { cancelled = true; };
+  }, [formData.jiraInstanceId, formData.jiraBoardId]);
+
+  // Validate the configured epic key still resolves as an Epic on this instance.
+  useEffect(() => {
+    const key = formData.jiraEpicKey.trim();
+    if (!formData.jiraInstanceId || !EPIC_KEY_RE.test(key)) {
+      setEpicValidation({ state: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    setEpicValidation({ state: 'checking' });
+    const t = setTimeout(() => {
+      api.getJiraIssue(formData.jiraInstanceId, key, { silent: true })
+        .then(issue => {
+          if (cancelled) return;
+          const isEpic = (issue.issueType || '').toLowerCase() === 'epic';
+          setEpicValidation({ state: isEpic ? 'ok' : 'wrongtype', issue });
+        })
+        .catch(() => { if (!cancelled) setEpicValidation({ state: 'stale' }); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [formData.jiraInstanceId, formData.jiraEpicKey]);
+
+  // When the epic field holds free text (not a key), search epics by name to pick one.
+  useEffect(() => {
+    const q = formData.jiraEpicKey.trim();
+    if (!formData.jiraInstanceId || !formData.jiraProjectKey || q.length < 2 || EPIC_KEY_RE.test(q)) {
+      setEpicResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api.searchJiraEpics(formData.jiraInstanceId, formData.jiraProjectKey, q, { silent: true })
+        .then(results => { if (!cancelled) setEpicResults(results || []); })
+        .catch(() => { if (!cancelled) setEpicResults([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [formData.jiraInstanceId, formData.jiraProjectKey, formData.jiraEpicKey]);
+
   // Project-key combobox options: filter by the search box, sort by key, cap at
   // 100. Derived once per render so the predicate isn't duplicated between the
   // option list and the "no matching projects" empty-state check below.
@@ -160,6 +236,22 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     })
     .sort((a, b) => a.key.localeCompare(b.key))
     .slice(0, 100);
+
+  // A saved boardId that isn't among the project's detected boards is stale
+  // (e.g. carried over from a Server instance after a Cloud migration).
+  const boardIsStale = !!formData.jiraBoardId && jiraBoards.length > 0
+    && !jiraBoards.some(b => String(b.id) === String(formData.jiraBoardId));
+  const activeSprint = boardSprints[0] || null;
+
+  // Changing the instance or project invalidates the selected board, so clear it
+  // in one place — every discrete instance/project change goes through these so no
+  // call site forgets the reset. Deliberately interaction-driven, NOT a projectKey
+  // effect: an effect would fire on mount with the saved projectKey and wipe the
+  // saved boardId before the boards fetch resolves, defeating stale-board detection.
+  const changeInstance = (jiraInstanceId) =>
+    setFormData(prev => ({ ...prev, jiraInstanceId, jiraProjectKey: '', jiraBoardId: '' }));
+  const selectProject = (jiraProjectKey) =>
+    setFormData(prev => ({ ...prev, jiraProjectKey, jiraBoardId: '' }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -536,7 +628,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                         <select
                           id="edit-app-jira-instance"
                           value={formData.jiraInstanceId}
-                          onChange={e => setFormData({ ...formData, jiraInstanceId: e.target.value, jiraProjectKey: '' })}
+                          onChange={e => changeInstance(e.target.value)}
                           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                         >
                           <option value="">Select instance...</option>
@@ -575,7 +667,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                             {formData.jiraProjectKey && !projectDropdownOpen && (
                               <button
                                 type="button"
-                                onClick={() => setFormData({ ...formData, jiraProjectKey: '' })}
+                                onClick={() => selectProject('')}
                                 className="absolute right-2 top-8 text-gray-500 hover:text-white text-sm"
                               >
                                 x
@@ -590,7 +682,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                                       type="button"
                                       onMouseDown={e => {
                                         e.preventDefault();
-                                        setFormData({ ...formData, jiraProjectKey: proj.key });
+                                        selectProject(proj.key);
                                         setProjectDropdownOpen(false);
                                         setProjectSearch('');
                                       }}
@@ -622,15 +714,48 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                       </div>
 
                       <div>
-                        <label htmlFor="edit-app-jira-board" className="block text-sm text-gray-400 mb-1">Board ID</label>
-                        <input
-                          id="edit-app-jira-board"
-                          type="text"
-                          value={formData.jiraBoardId}
-                          onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g. 11810 (from JIRA board URL rapidView param)"
-                        />
+                        <label htmlFor="edit-app-jira-board" className="block text-sm text-gray-400 mb-1">Board</label>
+                        {!formData.jiraProjectKey ? (
+                          <div className="text-xs text-gray-500">Select a project to detect its boards.</div>
+                        ) : loadingBoards ? (
+                          <div className="text-xs text-gray-500">Detecting boards…</div>
+                        ) : jiraBoards.length > 0 ? (
+                          <>
+                            <select
+                              id="edit-app-jira-board"
+                              value={formData.jiraBoardId}
+                              onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
+                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                            >
+                              <option value="">Select board...</option>
+                              {jiraBoards.map(b => (
+                                <option key={b.id} value={String(b.id)}>{b.id} — {b.name} ({b.type})</option>
+                              ))}
+                              {boardIsStale && (
+                                <option value={formData.jiraBoardId}>{formData.jiraBoardId} — (not in this project)</option>
+                              )}
+                            </select>
+                            {boardIsStale ? (
+                              <p className="text-xs text-port-warning mt-1">⚠ Saved board {formData.jiraBoardId} isn&apos;t among this project&apos;s boards — pick a current one.</p>
+                            ) : formData.jiraBoardId && (
+                              <p className="text-xs text-gray-500 mt-1">
+                                {activeSprint ? `Active sprint: ${activeSprint.name}` : 'No active sprint on this board.'}
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <input
+                              id="edit-app-jira-board"
+                              type="text"
+                              value={formData.jiraBoardId}
+                              onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
+                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                              placeholder="e.g. 1294 (from JIRA board URL rapidView param)"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Couldn&apos;t auto-detect boards — enter the id manually (board URL <span className="font-mono">rapidView</span> param).</p>
+                          </>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -670,16 +795,49 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                         />
                       </div>
 
-                      <div>
+                      <div className="relative">
                         <label htmlFor="edit-app-jira-epic" className="block text-sm text-gray-400 mb-1">Epic Key</label>
                         <input
                           id="edit-app-jira-epic"
                           type="text"
                           value={formData.jiraEpicKey}
                           onChange={e => setFormData({ ...formData, jiraEpicKey: e.target.value })}
+                          onFocus={() => setEpicDropdownOpen(true)}
+                          onBlur={() => setTimeout(() => setEpicDropdownOpen(false), 150)}
                           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g. CONTECH-100"
+                          placeholder="e.g. CONTECH-100, or type a name to search"
                         />
+                        {epicDropdownOpen && epicResults.length > 0 && (
+                          <div className="absolute z-50 w-full mt-1 bg-port-bg border border-port-border rounded-lg max-h-48 overflow-auto shadow-lg">
+                            {epicResults.map(ep => (
+                              <button
+                                key={ep.key}
+                                type="button"
+                                onMouseDown={e => {
+                                  e.preventDefault();
+                                  setFormData({ ...formData, jiraEpicKey: ep.key });
+                                  setEpicDropdownOpen(false);
+                                }}
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-port-accent/20 text-white"
+                              >
+                                <span className="font-mono">{ep.key}</span>
+                                <span className="text-gray-400 ml-2">{ep.summary}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {epicValidation.state !== 'idle' && (
+                          <p className={`text-xs mt-1 ${
+                            epicValidation.state === 'ok' ? 'text-port-success'
+                              : epicValidation.state === 'checking' ? 'text-gray-500'
+                                : 'text-port-warning'
+                          }`}>
+                            {epicValidation.state === 'checking' && 'Checking epic…'}
+                            {epicValidation.state === 'ok' && `✓ ${epicValidation.issue.key} · ${epicValidation.issue.summary}`}
+                            {epicValidation.state === 'wrongtype' && `⚠ ${epicValidation.issue.key} is a ${epicValidation.issue.issueType}, not an Epic`}
+                            {epicValidation.state === 'stale' && `⚠ ${formData.jiraEpicKey} doesn't resolve on this instance`}
+                          </p>
+                        )}
                       </div>
 
                       <label className="flex items-center gap-2 cursor-pointer">

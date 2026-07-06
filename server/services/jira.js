@@ -560,6 +560,74 @@ export async function searchEpics(instanceId, projectKey, query) {
   }));
 }
 
+/**
+ * List agile boards for a JIRA project (Scrum + Kanban).
+ * Powers the app-config "detect boards" picker so a boardId is chosen from live
+ * data instead of hand-typed — which is how a boardId goes stale across a
+ * Server→Cloud migration (the id is reassigned). The Agile board list paginates,
+ * so walk every page until isLast.
+ */
+export async function getBoards(instanceId, projectKey) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const boards = [];
+  let startAt = 0;
+  let guard = 0;
+  for (;;) {
+    const response = await client.get('/rest/agile/1.0/board', {
+      params: { projectKeyOrId: projectKey, maxResults: 50, startAt }
+    });
+    const values = response.data.values || [];
+    for (const b of values) {
+      boards.push({
+        id: b.id,
+        name: b.name,
+        type: b.type,
+        projectKey: b.location?.projectKey || null
+      });
+    }
+    // isLast is authoritative; the empty-page and guard checks are belt-and-suspenders
+    // so a misbehaving API can't spin this loop forever.
+    if (response.data.isLast || values.length === 0 || ++guard > 40) break;
+    startAt += values.length;
+  }
+  return boards;
+}
+
+/**
+ * Fetch a single issue by key (lightweight — summary/type/status only).
+ * Used by the app-config picker to validate that a configured epicKey still
+ * resolves on the instance (keys can vanish/change across a migration). Throws
+ * (bubbles to a 4xx) when the key doesn't resolve — the caller treats that as
+ * "no longer resolves".
+ */
+export async function getIssue(instanceId, issueKey) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
+    params: { fields: 'summary,status,issuetype' }
+  });
+  const fields = response.data.fields || {};
+  return {
+    key: response.data.key,
+    summary: fields.summary || '',
+    status: fields.status?.name || null,
+    issueType: fields.issuetype?.name || null
+  };
+}
+
 export default {
   getInstances,
   saveInstances,
@@ -567,6 +635,8 @@ export default {
   deleteInstance,
   testConnection,
   getProjects,
+  getBoards,
+  getIssue,
   createTicket,
   updateTicket,
   addComment,
