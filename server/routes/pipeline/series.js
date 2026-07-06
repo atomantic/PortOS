@@ -128,13 +128,17 @@ const styleGuideSchema = z.object({
   // anchors ("the tuning fork") injected into every draft/revision prompt.
   // `note` is optional (a passage can stand on its own); the service-side
   // `cleanExemplars` drops empty passages, trims to the char caps, and caps the
-  // list length, so the schema only bounds the outer shape.
+  // list length, so the schema only bounds the outer shape. `passage` is NOT
+  // `.min(1)`: the editor keeps a blank `{ passage: '', note: '' }` row while
+  // the user is still filling it in, and a save that flushes before the row is
+  // typed (or after a passage is cleared) must not 400 the whole series PATCH —
+  // `cleanExemplars` prunes the empty row on the server instead.
   voiceExemplars: z.array(z.object({
-    passage: z.string().trim().min(1).max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    passage: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
     note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
   })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
   voiceAntiExemplars: z.array(z.object({
-    passage: z.string().trim().min(1).max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    passage: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
     note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
   })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
 });
