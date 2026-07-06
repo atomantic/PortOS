@@ -762,6 +762,79 @@ describe('pipeline text stage generator', () => {
     expect(text).toContain('SRC-B');
   });
 
+  it('buildStageContext reveal-gates canon: hides a later-reveal character before its issue, reveals it at/after (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [
+        { id: 'c1', name: 'Mira', role: 'lead', physicalDescription: 'the detective' },
+        {
+          id: 'c2', name: 'Vex', role: 'suspect',
+          physicalDescription: 'the true killer who poisoned the well',
+          background: 'committed the murder in Issue 8',
+          revealIssue: 8,
+          surfaceDescriptor: 'a reclusive apothecary nobody trusts',
+        },
+      ],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    // The idea stage keeps the full cast (not roster-scoped), so the surfaced
+    // full record is visible directly in `series.characters`.
+    const early = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 2, title: 'T', stages: {} }, stageId: 'idea',
+    });
+    const vexEarly = early.series.characters.find((c) => c.name === 'Vex');
+    // Surfaced view only — the secret is gone, the surface descriptor stands in.
+    expect(vexEarly.physicalDescription).toBe('a reclusive apothecary nobody trusts');
+    expect(vexEarly.surfaced).toBe(true);
+    expect(vexEarly.background).toBeUndefined();
+
+    const late = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 8, title: 'T', stages: {} }, stageId: 'idea',
+    });
+    const vexLate = late.series.characters.find((c) => c.name === 'Vex');
+    expect(vexLate.physicalDescription).toBe('the true killer who poisoned the well');
+    expect(vexLate.background).toBe('committed the murder in Issue 8');
+  });
+
+  it('buildStageContext reveal-gates the prose roster: surfaced view in worldEntitiesSummary, not the secret (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [
+        { id: 'c1', name: 'Mira', role: 'lead', physicalDescription: 'the detective' },
+        {
+          id: 'c2', name: 'Vex', role: 'suspect',
+          physicalDescription: 'the true killer who poisoned the well',
+          revealIssue: 8,
+          surfaceDescriptor: 'a reclusive apothecary nobody trusts',
+        },
+      ],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    // Prose scopes the full-record block to principals/named — Vex (not named)
+    // lands in the roster, which must show its surface view, never the secret.
+    const ctx = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 2, title: 'T', stages: {} }, stageId: 'prose',
+    });
+    expect(ctx.worldEntitiesSummary).not.toContain('true killer');
+    expect(ctx.worldEntitiesSummary).toContain('reclusive apothecary');
+  });
+
+  it('buildStageContext drops a hard-spoiler canon entry with no surface descriptor from context (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [{ id: 'c1', name: 'Ghost', physicalDescription: 'the villain behind it all', spoiler: true }],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    const ctx = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 3, title: 'T', stages: {} }, stageId: 'prose',
+    });
+    expect(ctx.series.characters.find((c) => c.name === 'Ghost')).toBeUndefined();
+    expect(ctx.worldEntitiesSummary).not.toContain('villain behind it all');
+  });
+
   it('does NOT scope the idea stage — it gets the full cast (no roster in that template)', async () => {
     const { series } = await seed();
     const world = await universeSvc.createUniverse({ name: 'Seed Verse' });

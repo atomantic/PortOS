@@ -78,6 +78,9 @@ export const BIBLE_LIMITS = Object.freeze({
   SOURCE_SERIES_ID_MAX: 64,
   VOICE_ID_MAX: 200,
   INGREDIENT_ID_MAX: 64,
+  // Reveal-gated canon / spoiler scoping (#2178).
+  SURFACE_DESCRIPTOR_MAX: 2000,
+  REVEAL_ISSUE_MAX: 100000,
 });
 
 // Client-only helper (the cap *value* IMAGE_REFS_PER_ENTRY_MAX is mirrored from

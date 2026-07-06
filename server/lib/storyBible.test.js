@@ -35,6 +35,11 @@ const {
   SERVER_OWNED_CHARACTER_FIELDS,
   trimTo,
   trimToClause,
+  filterCanonForIssue,
+  filterCanonListForIssue,
+  isCanonEntryGatedForIssue,
+  canonHasRevealGated,
+  revealGatedCanonRows,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -1439,5 +1444,153 @@ describe('storyBible — trimToClause (boundary-aware prose cap)', () => {
   it('never returns more than max characters', () => {
     const long = 'word '.repeat(400); // 2000 chars, no sentence breaks
     expect(trimToClause(long, 100).length).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('storyBible — reveal-gated canon (#2178)', () => {
+  describe('sanitizer field round-trip', () => {
+    it('defaults reveal fields to null/absent on every kind (backward compat)', () => {
+      const c = sanitizeCharacter({ name: 'Alex' });
+      expect(c.revealIssue).toBeNull();
+      expect(c.surfaceDescriptor).toBeNull();
+      expect(c.spoiler).toBeUndefined();
+      const p = sanitizePlace({ name: 'The Wing' });
+      expect(p.revealIssue).toBeNull();
+      expect(p.surfaceDescriptor).toBeNull();
+      const o = sanitizeObject({ name: 'The Locket' });
+      expect(o.revealIssue).toBeNull();
+      expect(o.spoiler).toBeUndefined();
+    });
+
+    it('persists a valid revealIssue (number or numeric string) and rejects bad values', () => {
+      expect(sanitizeCharacter({ name: 'A', revealIssue: 8 }).revealIssue).toBe(8);
+      expect(sanitizeCharacter({ name: 'A', revealIssue: '8' }).revealIssue).toBe(8);
+      expect(sanitizeCharacter({ name: 'A', revealIssue: 0 }).revealIssue).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', revealIssue: -3 }).revealIssue).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', revealIssue: 2.5 }).revealIssue).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', revealIssue: 'soon' }).revealIssue).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', revealIssue: BIBLE_LIMITS.REVEAL_ISSUE_MAX + 1 }).revealIssue).toBeNull();
+    });
+
+    it('persists explicit spoiler true/false and drops a non-boolean', () => {
+      expect(sanitizeCharacter({ name: 'A', spoiler: true }).spoiler).toBe(true);
+      expect(sanitizeCharacter({ name: 'A', spoiler: false }).spoiler).toBe(false);
+      expect(sanitizeCharacter({ name: 'A', spoiler: 'yes' }).spoiler).toBeUndefined();
+      expect(sanitizeCharacter({ name: 'A' }).spoiler).toBeUndefined();
+    });
+
+    it('caps surfaceDescriptor at its limit and collapses blank to null', () => {
+      const long = 'x'.repeat(BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX + 100);
+      expect(sanitizePlace({ name: 'A', surfaceDescriptor: long }).surfaceDescriptor.length)
+        .toBe(BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX);
+      expect(sanitizePlace({ name: 'A', surfaceDescriptor: '   ' }).surfaceDescriptor).toBeNull();
+    });
+  });
+
+  describe('isCanonEntryGatedForIssue', () => {
+    it('hard spoiler gates regardless of issue number', () => {
+      expect(isCanonEntryGatedForIssue({ spoiler: true }, 1)).toBe(true);
+      expect(isCanonEntryGatedForIssue({ spoiler: true }, 99)).toBe(true);
+      expect(isCanonEntryGatedForIssue({ spoiler: true }, undefined)).toBe(true);
+    });
+    it('revealIssue gates only issues before it', () => {
+      expect(isCanonEntryGatedForIssue({ revealIssue: 8 }, 2)).toBe(true);
+      expect(isCanonEntryGatedForIssue({ revealIssue: 8 }, 8)).toBe(false);
+      expect(isCanonEntryGatedForIssue({ revealIssue: 8 }, 9)).toBe(false);
+    });
+    it('an ungated entry is never gated', () => {
+      expect(isCanonEntryGatedForIssue({ name: 'A' }, 1)).toBe(false);
+      expect(isCanonEntryGatedForIssue(null, 1)).toBe(false);
+    });
+    it('a numeric reveal gate is not evaluable without an issue number', () => {
+      expect(isCanonEntryGatedForIssue({ revealIssue: 8 }, undefined)).toBe(false);
+      expect(isCanonEntryGatedForIssue({ revealIssue: 8 }, 'not-a-number')).toBe(false);
+    });
+  });
+
+  describe('filterCanonListForIssue — surface substitution + drop', () => {
+    it('passes ungated entries through untouched', () => {
+      const list = [{ id: 'c1', name: 'Open', physicalDescription: 'tall' }];
+      expect(filterCanonListForIssue(list, 'character', 1)).toEqual(list);
+    });
+    it('substitutes surfaceDescriptor for a gated entry and strips the secret', () => {
+      const list = [{
+        id: 'c1', name: 'Mara', role: 'suspect',
+        physicalDescription: 'the arsonist who burned the mill',
+        background: 'set the fire in Issue 8',
+        revealIssue: 8,
+        surfaceDescriptor: 'a quiet neighbor who keeps to herself',
+      }];
+      const out = filterCanonListForIssue(list, 'character', 2);
+      expect(out).toHaveLength(1);
+      expect(out[0].physicalDescription).toBe('a quiet neighbor who keeps to herself');
+      expect(out[0].name).toBe('Mara');
+      expect(out[0].role).toBe('suspect');
+      expect(out[0].surfaced).toBe(true);
+      // The secret fields are gone.
+      expect(out[0].background).toBeUndefined();
+    });
+    it('drops a gated entry entirely when it has no surfaceDescriptor', () => {
+      const list = [{ id: 'c1', name: 'Twist', description: 'the real killer', revealIssue: 8 }];
+      expect(filterCanonListForIssue(list, 'object', 2)).toEqual([]);
+    });
+    it('substitutes the place description field for a gated place', () => {
+      const list = [{
+        id: 'p1', name: 'East Wing', slugline: 'INT. EAST WING',
+        description: 'the wing where the heir is imprisoned',
+        revealIssue: 5,
+        surfaceDescriptor: 'the locked east wing nobody enters',
+      }];
+      const out = filterCanonListForIssue(list, 'place', 3);
+      expect(out[0].description).toBe('the locked east wing nobody enters');
+      expect(out[0].slugline).toBe('INT. EAST WING');
+    });
+    it('reveals the full entry at/after the reveal issue', () => {
+      const list = [{ id: 'c1', name: 'Mara', physicalDescription: 'the arsonist', revealIssue: 8, surfaceDescriptor: 'a neighbor' }];
+      expect(filterCanonListForIssue(list, 'character', 8)[0].physicalDescription).toBe('the arsonist');
+    });
+  });
+
+  describe('filterCanonForIssue — whole bundle', () => {
+    it('filters all three kinds and returns empty for a nullish canon', () => {
+      expect(filterCanonForIssue(null, 1)).toEqual({ characters: [], places: [], objects: [] });
+      const canon = {
+        characters: [{ id: 'c', name: 'C', spoiler: true }],
+        places: [{ id: 'p', name: 'P' }],
+        objects: [{ id: 'o', name: 'O', revealIssue: 4, surfaceDescriptor: 'a plain box', description: 'the bomb' }],
+      };
+      const out = filterCanonForIssue(canon, 2);
+      expect(out.characters).toEqual([]); // hard spoiler, no surface → dropped
+      expect(out.places).toHaveLength(1); // ungated
+      expect(out.objects[0].description).toBe('a plain box'); // surfaced
+    });
+  });
+
+  describe('canonHasRevealGated + revealGatedCanonRows', () => {
+    it('is false when nothing is gated, true when any entry is gated', () => {
+      expect(canonHasRevealGated({ characters: [{ name: 'A' }] })).toBe(false);
+      expect(canonHasRevealGated({ characters: [{ name: 'A', revealIssue: 3 }] })).toBe(true);
+      expect(canonHasRevealGated({ objects: [{ name: 'O', spoiler: true }] })).toBe(true);
+      expect(canonHasRevealGated(null)).toBe(false);
+    });
+    it('enumerates gated rows with kind/name/reveal/spoiler/fact', () => {
+      const canon = {
+        characters: [{ name: 'Mara', physicalDescription: 'arsonist', background: 'lit the fire', revealIssue: 8, surfaceDescriptor: 'a neighbor' }],
+        objects: [{ name: 'Box', description: 'the bomb', spoiler: true }],
+        places: [{ name: 'Plain Room' }],
+      };
+      const rows = revealGatedCanonRows(canon);
+      expect(rows).toHaveLength(2);
+      const mara = rows.find((r) => r.name === 'Mara');
+      expect(mara.kind).toBe('character');
+      expect(mara.revealIssue).toBe(8);
+      expect(mara.spoiler).toBe(false);
+      expect(mara.surfaceDescriptor).toBe('a neighbor');
+      expect(mara.fact).toContain('arsonist');
+      expect(mara.fact).toContain('lit the fire');
+      const box = rows.find((r) => r.name === 'Box');
+      expect(box.spoiler).toBe(true);
+      expect(box.revealIssue).toBeNull();
+    });
   });
 });

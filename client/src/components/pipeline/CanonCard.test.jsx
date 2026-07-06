@@ -154,6 +154,69 @@ describe('CanonCard — inline description editor', () => {
   });
 });
 
+describe('CanonCard — reveal timing / spoiler scoping (#2178)', () => {
+  const editableKind = {
+    key: 'characters', label: 'Characters',
+    descFor: (e) => e.physicalDescription || e.description || '',
+    descField: 'physicalDescription', descFieldFallback: 'description', descFieldMax: 2000,
+  };
+
+  it('shows a spoiler badge when the entry has a revealIssue', () => {
+    render_({ entry: { ...baseEntry, revealIssue: 8 } });
+    expect(screen.getByText('reveal #8')).toBeInTheDocument();
+  });
+
+  it('shows a hard-spoiler badge when the entry has spoiler: true', () => {
+    render_({ entry: { ...baseEntry, spoiler: true } });
+    expect(screen.getByText('spoiler')).toBeInTheDocument();
+  });
+
+  it('omits the badge for an ungated entry', () => {
+    render_();
+    expect(screen.queryByText(/^reveal #/)).not.toBeInTheDocument();
+    expect(screen.queryByText('spoiler')).not.toBeInTheDocument();
+  });
+
+  it('PATCHes revealIssue from the number input when editable', () => {
+    const onPatchEntry = vi.fn();
+    render(
+      <CanonCard kind={editableKind} entry={baseEntry} onRender={() => {}} onPatchEntry={onPatchEntry} />,
+    );
+    fireEvent.click(screen.getByText(/Reveal timing/));
+    const input = screen.getByLabelText(/Reveal in issue/);
+    fireEvent.change(input, { target: { value: '8' } });
+    expect(onPatchEntry).toHaveBeenCalledWith('ent-1', { revealIssue: 8 });
+  });
+
+  it('PATCHes spoiler from the checkbox and surfaceDescriptor on blur', () => {
+    const onPatchEntry = vi.fn();
+    render(
+      <CanonCard kind={editableKind} entry={baseEntry} onRender={() => {}} onPatchEntry={onPatchEntry} />,
+    );
+    fireEvent.click(screen.getByText(/Reveal timing/));
+    fireEvent.click(screen.getByLabelText(/Hard spoiler/));
+    expect(onPatchEntry).toHaveBeenCalledWith('ent-1', { spoiler: true });
+
+    const surface = screen.getByLabelText(/Surface descriptor/);
+    fireEvent.change(surface, { target: { value: 'a quiet neighbor' } });
+    fireEvent.blur(surface);
+    expect(onPatchEntry).toHaveBeenCalledWith('ent-1', { surfaceDescriptor: 'a quiet neighbor' });
+  });
+
+  it('renders read-only reveal info when locked (no editor inputs)', () => {
+    render(
+      <CanonCard
+        kind={editableKind}
+        entry={{ ...baseEntry, revealIssue: 5, locked: true }}
+        onRender={() => {}}
+        onPatchEntry={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Issue 5')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Reveal in issue/)).not.toBeInTheDocument();
+  });
+});
+
 describe('CanonCard — wardrobe pending-row promotion', () => {
   const renderEditable = (onPatchEntry) => render(
     <CanonCard

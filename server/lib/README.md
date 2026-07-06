@@ -52,7 +52,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `editorial/` | Extensible editorial-check registry (#1284) — `EDITORIAL_CHECKS` + fail-fast guards + lookup/state helpers. See `editorial/README.md`. The runner that executes checks lives at `server/services/pipeline/editorial/checkRunner.js`. |
-| `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. |
+| `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. Also the reveal-gated canon / spoiler-scoping helpers (#2178): `filterCanonForIssue` / `filterCanonListForIssue` / `isCanonEntryGatedForIssue` (hide or surface-substitute a gated entry in a drafting prompt), `canonHasRevealGated` + `revealGatedCanonRows` (for the `continuity.premature-reveal` check gate/summary). |
 | `storyArc.js` | Canonical Arc + Season + Reader-Map shapes for pipeline arc planning. |
 | `styleGuide.js` | Per-series house style (tense/POV/audience/rating/reading-level/tone/conventions): `sanitizeStyleGuide` + `renderStyleGuide` generation block + enums. |
 | `storyBuilderSteps.js` | Unified Story Builder ordered step definitions + helpers (`STEPS`, `STEP_IDS`, `STEP_STATUSES`, `isValidStepId`, `stepIndex`). |
