@@ -1,8 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockJsonResponse } from '../lib/testHelper.js';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// Minimal structurally-valid safetensors blob: 8-byte LE header length + JSON
+// header. verifyDownloadedLora (issue #2199) rejects anything that isn't a
+// parseable safetensors header, so download fixtures below must be valid.
+const validSafetensors = (header = {}) => {
+  const json = Buffer.from(JSON.stringify(header), 'utf8');
+  const len = Buffer.alloc(8);
+  len.writeBigUInt64LE(BigInt(json.length));
+  return Buffer.concat([len, json]);
+};
+const sha256Hex = (buf) => createHash('sha256').update(buf).digest('hex');
 
 // Point PATHS.loras at a temp dir for the duration of each test. PATHS is
 // computed at module load against process.cwd / __dirname, so the cleanest
@@ -277,7 +289,7 @@ describe('installFromCivitai', () => {
   };
 
   it('downloads, writes the file, writes the sidecar', async () => {
-    const downloadedBytes = Buffer.from('fake-lora-weights');
+    const downloadedBytes = validSafetensors();
     const calls = [];
     const fetchImpl = async (url) => {
       calls.push(url);
@@ -305,7 +317,7 @@ describe('installFromCivitai', () => {
     // File on disk
     const installedPath = join(tmpLoras, sidecar.filename);
     expect(existsSync(installedPath)).toBe(true);
-    expect(readFileSync(installedPath, 'utf-8')).toBe('fake-lora-weights');
+    expect(readFileSync(installedPath)).toEqual(downloadedBytes);
     // Sidecar on disk
     const sidecarPath = `${installedPath}.metadata.json`;
     expect(JSON.parse(readFileSync(sidecarPath, 'utf-8')).civitai.modelId).toBe(2600698);
@@ -327,7 +339,7 @@ describe('installFromCivitai', () => {
       if (url.startsWith('https://civitai.com/api/v1/models/')) {
         return mockJsonResponse({ ...FAKE_MODEL, type: 'DoRA' });
       }
-      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); } });
       return { ok: true, status: 200, body: stream };
     };
     const sidecar = await lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl });
@@ -402,6 +414,52 @@ describe('installFromCivitai', () => {
     const tmpFiles = await fs.readdir(tmpLoras);
     expect(tmpFiles.some((f) => f.endsWith('.partial'))).toBe(false);
   });
+
+  it('rejects a truncated/corrupt download and deletes the partial file', async () => {
+    // A short download that isn't a parseable safetensors header — the leading
+    // non-Metal cause of "mosaic" garbage output at generate time (issue #2199).
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(FAKE_MODEL);
+      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('truncated'))); c.close(); } });
+      return { ok: true, status: 200, body: stream };
+    };
+    const err = await lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl }).catch((e) => e);
+    expect(err.code).toBe('CIVITAI_LORA_CORRUPT');
+    // The corrupt file must be gone so the next install re-downloads.
+    expect(existsSync(join(tmpLoras, 'lora-realstagram-v7.safetensors'))).toBe(false);
+    // No sidecar should have been written.
+    expect(existsSync(join(tmpLoras, 'lora-realstagram-v7.safetensors.metadata.json'))).toBe(false);
+  });
+
+  it('rejects a structurally-valid download whose SHA-256 mismatches the Civitai digest', async () => {
+    const bytes = validSafetensors();
+    // A different, well-formed sha256 so the deep compare fails.
+    const wrongSha = 'f'.repeat(64);
+    const model = { ...FAKE_MODEL, modelVersions: [{ ...FAKE_MODEL.modelVersions[0], files: [{ ...FAKE_MODEL.modelVersions[0].files[0], hashes: { SHA256: wrongSha } }] }] };
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(model);
+      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(bytes)); c.close(); } });
+      return { ok: true, status: 200, body: stream };
+    };
+    const err = await lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl }).catch((e) => e);
+    expect(err.code).toBe('CIVITAI_LORA_CORRUPT');
+    expect(existsSync(join(tmpLoras, 'lora-realstagram-v7.safetensors'))).toBe(false);
+  });
+
+  it('accepts a download whose SHA-256 matches the Civitai digest (case-insensitive)', async () => {
+    const bytes = validSafetensors();
+    // Civitai reports hashes in uppercase; sha256File returns lowercase.
+    const rightSha = sha256Hex(bytes).toUpperCase();
+    const model = { ...FAKE_MODEL, modelVersions: [{ ...FAKE_MODEL.modelVersions[0], files: [{ ...FAKE_MODEL.modelVersions[0].files[0], hashes: { SHA256: rightSha } }] }] };
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://civitai.com/api/v1/models/')) return mockJsonResponse(model);
+      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(bytes)); c.close(); } });
+      return { ok: true, status: 200, body: stream };
+    };
+    const sidecar = await lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl });
+    expect(sidecar.filename).toBe('lora-realstagram-v7.safetensors');
+    expect(existsSync(join(tmpLoras, 'lora-realstagram-v7.safetensors'))).toBe(true);
+  });
 });
 
 describe('installFromHuggingface', () => {
@@ -424,7 +482,7 @@ describe('installFromHuggingface', () => {
       }
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
         const stream = new ReadableStream({
-          start(c) { c.enqueue(new Uint8Array(Buffer.from('weights'))); c.close(); },
+          start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); },
         });
         return { ok: true, status: 200, body: stream };
       }
@@ -461,15 +519,19 @@ describe('installFromHuggingface', () => {
         return mockJsonResponse(HF_MODEL);
       }
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        // Split a structurally-valid 10-byte safetensors blob across two chunks
+        // so the byte-progress accounting is exercised without tripping the
+        // post-download integrity check (issue #2199).
+        const bytes = validSafetensors();
         const stream = new ReadableStream({
           start(c) {
-            c.enqueue(new Uint8Array(Buffer.from('abcd')));
-            c.enqueue(new Uint8Array(Buffer.from('efgh')));
+            c.enqueue(new Uint8Array(bytes.subarray(0, 5)));
+            c.enqueue(new Uint8Array(bytes.subarray(5)));
             c.close();
           },
         });
-        // Carry a Content-Length so the total is known (8 bytes).
-        return { ok: true, status: 200, body: stream, headers: { get: (h) => (h === 'content-length' ? '8' : null) } };
+        // Carry a Content-Length so the total is known.
+        return { ok: true, status: 200, body: stream, headers: { get: (h) => (h === 'content-length' ? String(bytes.length) : null) } };
       }
       throw new Error(`unexpected fetch: ${url}`);
     };
@@ -481,8 +543,8 @@ describe('installFromHuggingface', () => {
     expect(ticks.length).toBeGreaterThan(0);
     // The flush tick always fires last with the full byte count.
     const last = ticks[ticks.length - 1];
-    expect(last.received).toBe(8);
-    expect(last.total).toBe(8);
+    expect(last.received).toBe(10);
+    expect(last.total).toBe(10);
   });
 
   it('tolerates a missing Content-Length (total 0, still completes)', async () => {
@@ -491,7 +553,7 @@ describe('installFromHuggingface', () => {
         return mockJsonResponse(HF_MODEL);
       }
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
-        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('weights'))); c.close(); } });
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); } });
         return { ok: true, status: 200, body: stream }; // no headers
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -502,7 +564,7 @@ describe('installFromHuggingface', () => {
       { fetchImpl, onProgress: (p) => ticks.push(p) },
     );
     expect(sidecar.runnerFamily).toBe('ltx-video');
-    expect(ticks[ticks.length - 1]).toEqual({ received: 7, total: 0 });
+    expect(ticks[ticks.length - 1]).toEqual({ received: 10, total: 0 });
   });
 
   it('forwards an AbortSignal to the download fetch so an SSE disconnect can cancel it', async () => {
@@ -512,7 +574,7 @@ describe('installFromHuggingface', () => {
       if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
         sawSignal = opts?.signal;
-        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); } });
         return { ok: true, status: 200, body: stream };
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -532,7 +594,7 @@ describe('installFromHuggingface', () => {
         return mockJsonResponse({ id: 'someone/mystery-lora', siblings: [{ rfilename: 'lora.safetensors' }] });
       }
       if (url.includes('/resolve/main/lora.safetensors')) {
-        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); } });
         return { ok: true, status: 200, body: stream };
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -542,5 +604,22 @@ describe('installFromHuggingface', () => {
       { fetchImpl },
     );
     expect(sidecar.runnerFamily).toBe('ltx-video');
+  });
+
+  it('rejects a truncated/corrupt HF download and deletes the partial file', async () => {
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('truncated'))); c.close(); } });
+        return { ok: true, status: 200, body: stream };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const err = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    ).catch((e) => e);
+    expect(err.code).toBe('HF_LORA_CORRUPT');
+    expect(existsSync(join(tmpLoras, 'lora-fal-ltx2.3-audio-reactive-lora-hf.safetensors'))).toBe(false);
   });
 });
