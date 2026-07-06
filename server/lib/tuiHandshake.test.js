@@ -41,6 +41,7 @@ import {
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
   isPasteConfirmed,
+  isCollapsedPasteChip,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
 
@@ -762,8 +763,64 @@ describe('tuiHandshake.isPasteConfirmed', () => {
     expect(isPasteConfirmed(echoPlusCommit, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(true);
   });
 
+  // Issue #2228: a MULTI-LINE prompt that itself embeds a `[Pasted text #N]`
+  // literal (a TUI-transcript-analysis task — the promptMarkerCount defense was
+  // added for exactly this domain). Claude Code collapses the whole multi-line
+  // paste into its OWN single chip and hides the body — including the prompt's
+  // embedded marker. So the buffer carries only Claude's 1 chip while
+  // promptMarkerCount is also 1: `count (1) > promptMarkerCount (1)` is false,
+  // AND the hidden body defeats the verifyPasteRendered text fallback. Before the
+  // fix this false-negatived and the agent died `paste-not-rendered` despite the
+  // paste landing. The collapsed-chip chrome ("paste again to expand") proves the
+  // visible marker is the TUI's own commit, so this MUST confirm.
+  it('confirms a collapsed multi-line paste even when the prompt embeds a marker literal (#2228)', () => {
+    // Prompt is multi-line AND embeds a `[Pasted text #1]` literal → promptMarkerCount = 1.
+    const selfMarkerPrompt = 'Analyze this TUI transcript where the agent hit a paste bug:\n\n[Pasted text #1 +40 lines]\n\nExplain why the paste false-negatived.';
+    const selfMarkerPrefix = extractVerifiablePromptPrefix(selfMarkerPrompt);
+    const promptMarkerCount = 1;
+    // Claude collapsed the whole thing to ITS OWN chip and hid the body — only the
+    // marker + collapse affordance survive; the prompt body is genuinely gone.
+    const collapsedBuffer = 'Opus 4.8 │ agent-2228abcd ❯ [Pastedtext#1+42lines] paste again to expand ──────── ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    // The count-only comparison false-negatives (1 is not > 1)…
+    expect(countPasteMarkers(collapsedBuffer) > promptMarkerCount).toBe(false);
+    // …and the hidden body defeats the text fallback too…
+    expect(verifyPasteRendered(collapsedBuffer, selfMarkerPrefix)).toBe(false);
+    // …but the collapsed-chip shape proves the paste landed, so this MUST confirm.
+    expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: selfMarkerPrefix, promptMarkerCount })).toBe(true);
+  });
+
+  it('does NOT re-introduce the echoed-marker false-positive: inline (uncollapsed) echo without collapse chrome still rejects (#2228)', () => {
+    // The prompt's `[Pasted text #1]` echoed INLINE (uncollapsed) with no
+    // "paste again to expand" chrome — the paste has NOT committed. The
+    // collapsed-chip rescue must not fire here; the subtraction must still reject.
+    const inlineEchoBuffer = '❯ [Pastedtext#1+40lines] analyze this TUI transcript where the agent hit a paste bug';
+    expect(isCollapsedPasteChip(inlineEchoBuffer)).toBe(false);
+    expect(isPasteConfirmed(inlineEchoBuffer, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(false);
+  });
+
   it('confirms when there is nothing to verify against (no verifiable prefix)', () => {
     expect(isPasteConfirmed('anything at all', { verifiablePrefix: null, promptMarkerCount: 0 })).toBe(true);
     expect(isPasteConfirmed('anything at all', {})).toBe(true);
+  });
+});
+
+describe('tuiHandshake.isCollapsedPasteChip', () => {
+  it('is true only when a marker AND the "paste again to expand" affordance are both present', () => {
+    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] paste again to expand')).toBe(true);
+    // Marker but no collapse affordance → not a collapsed chip.
+    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] analyze this transcript')).toBe(false);
+    // Collapse affordance but no marker → nothing committed.
+    expect(isCollapsedPasteChip('paste again to expand')).toBe(false);
+  });
+
+  it('tolerates the inter-glyph whitespace Claude renders (ANSI-stripped)', () => {
+    expect(isCollapsedPasteChip('[Pastedtext#2+9lines] pasteagaintoexpand')).toBe(true);
+  });
+
+  it('returns false for non-string / empty input', () => {
+    expect(isCollapsedPasteChip(null)).toBe(false);
+    expect(isCollapsedPasteChip(undefined)).toBe(false);
+    expect(isCollapsedPasteChip('')).toBe(false);
+    expect(isCollapsedPasteChip(123)).toBe(false);
   });
 });
