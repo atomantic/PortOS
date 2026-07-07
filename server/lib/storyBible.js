@@ -46,6 +46,27 @@ export const BIBLE_LIMITS = Object.freeze({
   SPECIAL_TRAITS_MAX: 2000,
   VISUAL_IDENTITY_MAX: 1000,
   MOTIVATIONS_MAX: 2000,
+  // Character framework (CWQE Phase 10, #2175). The Ghost → Wound → Lie →
+  // Want → Need chain + Three Sliders + declared arc type. All OPTIONAL so
+  // every pre-existing character round-trips unchanged (absent vs empty rule).
+  // The checkable-test discipline (state the Lie in one sentence; Truth is its
+  // direct opposite; Ghost causally explains the Lie) lives in the prompt, not
+  // the sanitizer — these caps just bound each field's length.
+  GHOST_MAX: 1000,
+  WOUND_MAX: 1000,
+  LIE_MAX: 600,
+  WANT_MAX: 600,
+  NEED_MAX: 600,
+  // Secrets the character keeps (≥2 encouraged in the prompt). Short prose
+  // items, capped per-item and per-character like other string lists.
+  SECRET_MAX: 600,
+  SECRETS_PER_CHARACTER_MAX: 12,
+  // Three Sliders — proactivity / likability / competence on a 1–10 scale.
+  // Stored as integers; a value outside the range (or a non-integer) collapses
+  // to null (unset). Rule (prompt-enforced, not sanitizer-enforced): HIGH on ≥2,
+  // or HIGH on one with clear growth; all-low = boring, all-high = Mary Sue.
+  SLIDER_MIN: 1,
+  SLIDER_MAX: 10,
   LIKES_MAX: 1500,
   DISLIKES_MAX: 1500,
   MANNERISMS_MAX: 1500,
@@ -194,6 +215,13 @@ export const PLACE_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night'])
 const PLACE_INT_EXT_SET = new Set(PLACE_INT_EXT);
 const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 
+// Declared character arc type (CWQE Phase 10, #2175). A positive arc overcomes
+// the Lie and embraces the Truth; a negative arc is consumed by the Lie; a flat
+// arc holds a truth the character already knows and changes the world around
+// them instead. Unset (null) keeps the field absent for every pre-#2175 record.
+export const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
+const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
+
 const trimEnum = (raw, allowed) => {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -226,7 +254,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -762,6 +790,30 @@ function ensureRevealIssue(raw) {
   return n;
 }
 
+// Normalize a Three-Sliders value (proactivity/likability/competence) to an
+// integer in [SLIDER_MIN, SLIDER_MAX] or null (unset). Accepts a finite number
+// or numeric string (LLM/JSON both occur); out-of-range / non-integer collapses
+// to null so an absent or hallucinated value doesn't masquerade as a real rating
+// (CWQE Phase 10, #2175). Null = the slider was never authored — distinct from a
+// deliberate low rating.
+function ensureSlider(raw) {
+  const n = typeof raw === 'number' ? raw : (isStr(raw) && raw.trim() !== '' ? Number(raw) : NaN);
+  if (!Number.isInteger(n) || n < BIBLE_LIMITS.SLIDER_MIN || n > BIBLE_LIMITS.SLIDER_MAX) return null;
+  return n;
+}
+
+// Build the Three-Sliders object from a raw payload. Returns an object with the
+// three keys always present (each null when unset) so the shape is stable and a
+// round-trip never strips it — mirrors the reveal-gating always-present pattern.
+function sanitizeCharacterSliders(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    proactivity: ensureSlider(src.proactivity),
+    likability: ensureSlider(src.likability),
+    competence: ensureSlider(src.competence),
+  };
+}
+
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
 // AND `locked: false` so a Universe-Builder caller can flip the bit and have
 // the change survive round-trips. Missing `locked` still collapses to absent
@@ -839,6 +891,26 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     visualIdentity: trimTo(raw.visualIdentity, BIBLE_LIMITS.VISUAL_IDENTITY_MAX),
     // Narrative depth — drives dialogue + arc planning.
     motivations: trimTo(raw.motivations, BIBLE_LIMITS.MOTIVATIONS_MAX),
+    // Character framework (CWQE Phase 10, #2175). Ghost → Wound → Lie → Want →
+    // Need chain + declared arc type + Three Sliders + secrets. All optional —
+    // a blank string / null / empty array keeps the legacy shape so every
+    // pre-#2175 character round-trips unchanged (absent vs empty rule). The
+    // arc.*/character.consistency editorial checks read the authored Lie/Want/
+    // Need/arc-type when present so they compare plan-vs-delivery instead of
+    // inferring both.
+    ghost: trimTo(raw.ghost, BIBLE_LIMITS.GHOST_MAX),
+    wound: trimTo(raw.wound, BIBLE_LIMITS.WOUND_MAX),
+    lie: trimTo(raw.lie, BIBLE_LIMITS.LIE_MAX),
+    want: trimTo(raw.want, BIBLE_LIMITS.WANT_MAX),
+    need: trimTo(raw.need, BIBLE_LIMITS.NEED_MAX),
+    // Declared arc type — null (unset) unless it's one of the three known
+    // values, so a legacy record with no arc type stays absent.
+    arcType: trimEnum(raw.arcType, CHARACTER_ARC_TYPE_SET),
+    // Three Sliders — always-present object, each axis null when unset.
+    sliders: sanitizeCharacterSliders(raw.sliders),
+    // Secrets the character keeps (≥2 encouraged). Plain string list; empty
+    // array is the legacy shape.
+    secrets: cleanStringArray(raw.secrets, BIBLE_LIMITS.SECRET_MAX, BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX),
     likes: trimTo(raw.likes, BIBLE_LIMITS.LIKES_MAX),
     dislikes: trimTo(raw.dislikes, BIBLE_LIMITS.DISLIKES_MAX),
     mannerisms: trimTo(raw.mannerisms, BIBLE_LIMITS.MANNERISMS_MAX),
@@ -1174,6 +1246,8 @@ const MERGE_CONFIG = Object.freeze({
       'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
       'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
       'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
+      // Character framework (CWQE Phase 10, #2175) — fill only when blank.
+      'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'secrets',
     ],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },

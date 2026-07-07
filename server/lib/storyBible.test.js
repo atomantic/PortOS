@@ -99,6 +99,76 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(preserved.id).toBe('wr-char-existing');
   });
 
+  // Character framework (CWQE Phase 10, #2175). All fields optional — a
+  // pre-#2175 record has no framework keys, so the sanitizer must produce the
+  // empty/legacy shape (absent vs empty rule) and a populated record must round
+  // trip verbatim.
+  describe('character framework (Ghost→Wound→Lie→Want→Need + arc type + sliders + secrets)', () => {
+    it('produces the empty/legacy shape when the fields are absent', () => {
+      const out = sanitizeCharacter({ name: 'Legacy' });
+      expect(out.ghost).toBe('');
+      expect(out.wound).toBe('');
+      expect(out.lie).toBe('');
+      expect(out.want).toBe('');
+      expect(out.need).toBe('');
+      expect(out.arcType).toBeNull();
+      expect(out.sliders).toEqual({ proactivity: null, likability: null, competence: null });
+      expect(out.secrets).toEqual([]);
+    });
+
+    it('round-trips a fully-authored framework', () => {
+      const authored = {
+        name: 'Vale',
+        ghost: 'Watched her mentor die for a cause she now doubts.',
+        wound: 'She cannot trust a cause bigger than herself.',
+        lie: 'I only matter if I stay in control.',
+        need: 'I matter whether or not I am in control.',
+        want: 'To seize command of the resistance.',
+        arcType: 'positive',
+        sliders: { proactivity: 9, likability: 4, competence: 8 },
+        secrets: ['She forged the founding charter.', 'She still writes to the dead mentor.'],
+      };
+      const out = sanitizeCharacter(authored);
+      expect(out.ghost).toBe(authored.ghost);
+      expect(out.wound).toBe(authored.wound);
+      expect(out.lie).toBe(authored.lie);
+      expect(out.need).toBe(authored.need);
+      expect(out.want).toBe(authored.want);
+      expect(out.arcType).toBe('positive');
+      expect(out.sliders).toEqual({ proactivity: 9, likability: 4, competence: 8 });
+      expect(out.secrets).toEqual(authored.secrets);
+      // Re-sanitizing the output is stable (no drift on the second pass).
+      expect(sanitizeCharacter(out)).toMatchObject({
+        ghost: authored.ghost, lie: authored.lie, arcType: 'positive',
+        sliders: { proactivity: 9, likability: 4, competence: 8 },
+      });
+    });
+
+    it('collapses an unknown arc type and out-of-range / non-integer sliders to unset', () => {
+      const out = sanitizeCharacter({
+        name: 'X',
+        arcType: 'redemption', // not one of positive/negative/flat
+        sliders: { proactivity: 11, likability: 0, competence: 5.5 },
+      });
+      expect(out.arcType).toBeNull();
+      // 11 > max, 0 < min, 5.5 non-integer — all collapse to null (unset).
+      expect(out.sliders).toEqual({ proactivity: null, likability: null, competence: null });
+    });
+
+    it('accepts a numeric-string slider and normalizes it to an integer', () => {
+      const out = sanitizeCharacter({ name: 'X', sliders: { proactivity: '7', likability: '', competence: 'nope' } });
+      expect(out.sliders).toEqual({ proactivity: 7, likability: null, competence: null });
+    });
+
+    it('caps framework prose fields and the secrets list', () => {
+      const long = 'g'.repeat(BIBLE_LIMITS.LIE_MAX + 100);
+      const tooMany = Array.from({ length: BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX + 5 }, (_, i) => `secret ${i}`);
+      const out = sanitizeCharacter({ name: 'X', lie: long, secrets: tooMany });
+      expect(out.lie.length).toBe(BIBLE_LIMITS.LIE_MAX);
+      expect(out.secrets.length).toBe(BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX);
+    });
+  });
+
   it('coerces invalid source to `user`', () => {
     expect(sanitizeCharacter({ name: 'A', source: 'evil' }).source).toBe('user');
   });

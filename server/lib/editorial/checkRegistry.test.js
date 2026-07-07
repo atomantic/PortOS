@@ -1467,6 +1467,25 @@ describe('canonCharacterTraitsSummary (#1582)', () => {
     // personality is a non-string and mannerisms is a non-array object → no traits → C drops out.
     expect(canonCharacterTraitsSummary({ characters: [{ name: 'C', personality: 5, mannerisms: {} }] })).toBe('');
   });
+
+  it('surfaces authored character-framework fields for arc reconciliation (#2175)', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Vale', lie: 'I only matter if I win', want: 'seize command', need: 'I matter regardless', arcType: 'positive' },
+    ] });
+    expect(out).toContain('believes (Lie): I only matter if I win');
+    expect(out).toContain('wants: seize command');
+    expect(out).toContain('needs (Truth): I matter regardless');
+    expect(out).toContain('declared arc: positive');
+  });
+
+  it('omits framework fields that are absent (pre-#2175 records)', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Legacy', personality: 'stoic' },
+    ] });
+    expect(out).toContain('personality: stoic');
+    expect(out).not.toContain('believes (Lie)');
+    expect(out).not.toContain('declared arc');
+  });
 });
 
 describe('theme.coherence — LLM check (#1317)', () => {

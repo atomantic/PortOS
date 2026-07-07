@@ -63,6 +63,15 @@ Plan an arc *within* the season that bends from "pickup state" (the natural star
 - **8-episode arc** — pilot, complication, complication, midpoint, complication, complication, all-is-lost, finale.
 - **12+** — add B-plot episodes between the structural beats; don't waste the count on filler.
 
+### Structure rules (enforce while beating out the season)
+
+- **Try-fail mandate.** 60%+ of the middle episodes (everything between pilot and finale) must end in complication, not clean success — "Yes, but…" (they get what they wanted, but it costs or backfires) or "No, and…" (they fail, and it gets worse). A run of clean wins stalls momentum.
+- **Beat rules.**
+  - Catalyst / pilot inciting event is EXTERNAL — it happens TO the protagonist; they don't choose it.
+  - The pivot into the season's main conflict (Break Into Two) is a protagonist CHOICE — they decide to engage.
+  - The all-is-lost beat includes a DEATH — literal, or the death of a hope, a relationship, or an identity.
+- **Finale = the protagonist's hardest ACTIVE choice** between what they WANT (external goal) and what they NEED (the truth). They drive the climax; it does not resolve itself around them.
+
 For each episode write:
 
 - **`number`** — 1-indexed within this season (NOT cumulative across the whole series). Sequential.

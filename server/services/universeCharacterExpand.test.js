@@ -5,10 +5,13 @@ describe('universeCharacterExpand — exported field lists', () => {
   // These are the single source of truth for both the text expand and the
   // vision-driven expand (universeVisionExpand.js). A drift here means one of
   // the two flows silently stops filling a field.
-  it('exports the 16 string fields + 5 list fields', () => {
-    expect(STRING_FIELDS).toHaveLength(16);
-    expect(LIST_FIELDS).toHaveLength(5);
-    expect(LIST_FIELDS).toEqual(['stats', 'colorPalette', 'props', 'expressions', 'handGestures']);
+  it('exports the 21 string fields + 6 list fields', () => {
+    // 16 original + 5 framework prose fields (ghost/wound/lie/want/need, #2175).
+    expect(STRING_FIELDS).toHaveLength(21);
+    expect(STRING_FIELDS).toEqual(expect.arrayContaining(['ghost', 'wound', 'lie', 'want', 'need']));
+    // 5 original + `secrets` (#2175).
+    expect(LIST_FIELDS).toHaveLength(6);
+    expect(LIST_FIELDS).toEqual(['stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'secrets']);
   });
 });
 
@@ -103,22 +106,78 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
       name: 'Vale', pronouns: '', age: '', coreTheme: '', speechAccent: '', speechPattern: '', visualNotes: '',
       silhouetteNotes: '', postureNotes: '', specialTraits: '', visualIdentity: '',
       motivations: '', likes: '', dislikes: '', mannerisms: '', relationships: '', skills: '',
-      stats: [], colorPalette: [], props: [], expressions: [], handGestures: [],
+      ghost: '', wound: '', lie: '', want: '', need: '',
+      stats: [], colorPalette: [], props: [], expressions: [], handGestures: [], secrets: [],
     };
     const content = {
       pronouns: 'she/her', age: '27', coreTheme: 't', speechAccent: 'a', speechPattern: 'sp', visualNotes: 'v',
       silhouetteNotes: 's', postureNotes: 'p', specialTraits: 'st', visualIdentity: 'vi',
       motivations: 'm', likes: 'l', dislikes: 'd', mannerisms: 'mn', relationships: 'r', skills: 'sk',
+      ghost: 'g', wound: 'w', lie: 'li', want: 'wa', need: 'ne',
       stats: [{ label: 'L', value: 'V' }],
       colorPalette: [{ name: 'n' }],
       props: [{ name: 'n' }],
       expressions: [{ name: 'n' }],
       handGestures: [{ name: 'n' }],
+      secrets: ['a hidden thing'],
     };
     const { updatedFields } = applyExpansion(target, content);
-    // 16 strings + 5 lists = 21 fields total in the expand contract.
-    expect(updatedFields).toHaveLength(21);
+    // 21 strings + 6 lists = 27 fields total in the expand contract.
+    expect(updatedFields).toHaveLength(27);
     expect(updatedFields).toContain('speechPattern');
+    expect(updatedFields).toContain('lie');
+    expect(updatedFields).toContain('secrets');
+  });
+
+  // Character framework — arcType (enum) + sliders (structured) are merged
+  // outside the STRING/LIST loops (#2175).
+  describe('character framework — arcType + sliders no-clobber merge', () => {
+    it('fills a blank arcType from a valid enum proposal, ignores an unknown one', () => {
+      expect(applyExpansion({ name: 'V', arcType: '' }, { arcType: 'positive' }))
+        .toMatchObject({ merged: { arcType: 'positive' }, updatedFields: ['arcType'] });
+      // unknown enum → sanitizer folds to null → no update
+      expect(applyExpansion({ name: 'V', arcType: '' }, { arcType: 'redemption' }).updatedFields)
+        .toEqual([]);
+    });
+
+    it('does NOT clobber a populated arcType', () => {
+      const { merged, updatedFields } = applyExpansion({ name: 'V', arcType: 'negative' }, { arcType: 'positive' });
+      expect(merged.arcType).toBe('negative');
+      expect(updatedFields).toEqual([]);
+    });
+
+    it('fills only the unset slider axes, preserving user-rated ones', () => {
+      const target = { name: 'V', sliders: { proactivity: 9, likability: null, competence: null } };
+      const content = { sliders: { proactivity: 3, likability: 4, competence: 8 } };
+      const { merged, updatedFields } = applyExpansion(target, content);
+      // proactivity stays user's 9; the two null axes fill from the proposal.
+      expect(merged.sliders).toEqual({ proactivity: 9, likability: 4, competence: 8 });
+      expect(updatedFields).toEqual(['sliders']);
+    });
+
+    it('no-ops sliders when every axis is already set or every proposal is invalid', () => {
+      const bothSet = applyExpansion(
+        { name: 'V', sliders: { proactivity: 5, likability: 5, competence: 5 } },
+        { sliders: { proactivity: 9, likability: 9, competence: 9 } },
+      );
+      expect(bothSet.updatedFields).toEqual([]);
+      const allInvalid = applyExpansion(
+        { name: 'V', sliders: { proactivity: null, likability: null, competence: null } },
+        { sliders: { proactivity: 99, likability: 0, competence: 'x' } },
+      );
+      expect(allInvalid.updatedFields).toEqual([]);
+    });
+
+    it('fills the framework prose chain + secrets like any string/list field', () => {
+      const target = { name: 'V', ghost: '', lie: '', need: '', secrets: [] };
+      const content = { ghost: 'a wound', lie: 'I must win', need: 'I am enough', secrets: ['hidden'] };
+      const { merged, updatedFields } = applyExpansion(target, content);
+      expect(merged.ghost).toBe('a wound');
+      expect(merged.lie).toBe('I must win');
+      expect(merged.need).toBe('I am enough');
+      expect(merged.secrets).toEqual(['hidden']);
+      expect(updatedFields).toEqual(expect.arrayContaining(['ghost', 'lie', 'need', 'secrets']));
+    });
   });
 
   it('REGRESSION: list proposals whose rows all fail bible sanitization are NOT marked as updated', () => {

@@ -49,6 +49,7 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-season-episodes.md': [
     '6e349ad26bed8a0ccb042571f03f03eb', // pre-003 (original)
     'c4928e2a5f833358116b29d2d669888d', // post-003 / pre-005 — the hash this migration originally produced
+    '50c68a29c3ebc275db3095d06bd87100', // post-005 / pre-172 (structure rules)
   ],
 };
 
@@ -57,7 +58,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-prose.md':           '4cb3ef48309f3673570cf80e4d544b54', // post-169 (cross-issue continuity)
   'pipeline-comic-script.md':    '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
   'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.reference)
-  'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005
+  'pipeline-season-episodes.md': 'a88e8e78a949b7aaf500d03314e2ea0b', // post-172 (structure rules)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

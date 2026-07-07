@@ -26,9 +26,15 @@ export const STRING_FIELDS = Object.freeze([
   'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes',
   'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
   'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
+  // Character framework (CWQE Phase 10, #2175) — the Ghost → Wound → Lie →
+  // Want → Need chain. Plain prose fields; `arcType` (enum) and `sliders`
+  // (structured) are handled separately below.
+  'ghost', 'wound', 'lie', 'want', 'need',
 ]);
 export const LIST_FIELDS = Object.freeze([
   'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
+  // Character framework — secrets are a plain string list (#2175).
+  'secrets',
 ]);
 // `relationshipLinks` (#1287) is INTENTIONALLY excluded from both lists: each
 // link points at a sibling character by `targetCharacterId`, an id the LLM
@@ -94,6 +100,36 @@ export function applyExpansion(target, content) {
     if (cleaned.length === 0) continue;
     merged[field] = cleaned;
     updatedFields.push(field);
+  }
+  // arcType — a bare enum string, filled only when the target has no arc type.
+  // Run through sanitizeCharacter so an unrecognized value (folded to null by
+  // trimEnum) never records a spurious update.
+  if ('arcType' in content && !isBlankString(content.arcType) && isBlankString(target.arcType)) {
+    const sanitized = sanitizeCharacter({ name: target.name, arcType: content.arcType }, { preserveTimestamps: false });
+    if (sanitized?.arcType) {
+      merged.arcType = sanitized.arcType;
+      updatedFields.push('arcType');
+    }
+  }
+  // sliders — a { proactivity, likability, competence } object. Fill each axis
+  // ONLY when the target's axis is unset (null), preserving any the user already
+  // rated. Sanitize the proposal so an out-of-range value collapses to null and
+  // never records a bogus update.
+  if (content.sliders && typeof content.sliders === 'object') {
+    const proposed = sanitizeCharacter({ name: target.name, sliders: content.sliders }, { preserveTimestamps: false })?.sliders || {};
+    const existing = (target.sliders && typeof target.sliders === 'object') ? target.sliders : {};
+    const nextSliders = { ...existing };
+    let changed = false;
+    for (const axis of ['proactivity', 'likability', 'competence']) {
+      if (existing[axis] == null && proposed[axis] != null) {
+        nextSliders[axis] = proposed[axis];
+        changed = true;
+      }
+    }
+    if (changed) {
+      merged.sliders = nextSliders;
+      updatedFields.push('sliders');
+    }
   }
   return { merged, updatedFields };
 }
