@@ -20,3 +20,14 @@ export const getTimelineEvents = (options = {}) => {
   const qs = params.toString();
   return request(`/timeline/events${qs ? `?${qs}` : ''}`, { silent: options.silent });
 };
+
+// Bulk-backfill importer (#2160). Upload a Spotify extended-history export (ZIP
+// or a single history JSON). `preview: true` returns parse-only counts + a
+// summary without writing; a real import is idempotent so re-imports are safe.
+// request() detects the FormData body and lets the browser set the boundary.
+export const importSpotifyHistory = (file, { preview = false, ...options } = {}) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('preview', preview ? 'true' : 'false');
+  return request('/timeline/import/spotify', { method: 'POST', body: formData, ...options });
+};

@@ -5,6 +5,7 @@ import {
   CalendarDays, Music, Play, MessageSquare, Activity,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -123,6 +124,8 @@ export default function Timeline() {
 
   const [day, setDay] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Bumped after a bulk import lands so the current day view re-fetches.
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -132,7 +135,7 @@ export default function Timeline() {
       .catch((err) => { if (active) { setDay(null); toast.error(`Failed to load timeline: ${err.message}`); } })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [urlDate]);
+  }, [urlDate, reloadKey]);
 
   // Browser-local fallbacks cover only the loading/error window before the
   // server response supplies the authoritative `date` and `today`.
@@ -197,6 +200,8 @@ export default function Timeline() {
         </div>
         <div className="text-sm text-gray-400">{dayLabel}</div>
       </div>
+
+      <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 
