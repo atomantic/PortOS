@@ -790,6 +790,15 @@ describe('user model entry mutators (#2124)', () => {
     expect(() => addUserModelEntry(videoEntry, { kind: 'video' })).toThrow(/already/i);
   });
 
+  it('rejects a duplicate repo even under a different id', async () => {
+    const { addUserModelEntry } = await import('./mediaModels.js');
+    addUserModelEntry(imageEntry, { kind: 'image' }); // repo: test/image
+    expect(() => addUserModelEntry(
+      { ...imageEntry, id: 'hf-different-id' },
+      { kind: 'image' },
+    )).toThrow(/already in this install's image registry/i);
+  });
+
   it('conflict-checks only the target platform list, not every list', async () => {
     // A video id present ONLY on the OTHER platform's list must remain addable
     // on the current platform (shared media-models.json across macOS+Windows).

@@ -173,7 +173,14 @@ const looksLikeLora = ({ repo, model }) => {
   // (which typically also sets cardData.base_model) would auto-detect as the base
   // family and register as a base model whose weights from_pretrained() can't load.
   const files = modelSiblingFilenames(model).map((f) => f.toLowerCase());
-  if (files.some((f) => /(^|\/)adapter_config\.json$/.test(f) || /(^|\/)adapter_model\.(safetensors|bin)$/.test(f))) {
+  if (files.some((f) =>
+    /(^|\/)adapter_config\.json$/.test(f)
+    || /(^|\/)adapter_model\.(safetensors|bin)$/.test(f)
+    // pytorch_lora_weights.safetensors is the canonical diffusers LoRA filename
+    // (same one pickHfLoraFile prefers) — a repo shipping it is a LoRA even
+    // without a lora tag/peft library.
+    || /(^|\/)pytorch_lora_weights\.safetensors$/.test(f)
+  )) {
     return true;
   }
   return false;

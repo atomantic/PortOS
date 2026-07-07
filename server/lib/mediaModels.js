@@ -781,6 +781,18 @@ export const addUserModelEntry = (entry, { kind }) => {
     );
   }
   const current = (listKey === 'image' ? reg.image : reg.video?.[listKey]) || [];
+  // Also reject a duplicate REPO in the target list — the same weights under a
+  // different id (e.g. the UI placeholder `notapalindrome/ltx23-mlx-av-q4`,
+  // already shipped as the built-in `ltx23_distilled_q4`) would otherwise add a
+  // second pickable row for identical weights. Only meaningful when the entry
+  // carries a repo.
+  if (typeof entry.repo === 'string' && entry.repo.trim()
+    && current.some((m) => typeof m?.repo === 'string' && m.repo === entry.repo)) {
+    throw new ServerError(
+      `The HuggingFace repo "${entry.repo}" is already in this install's ${kind} registry (possibly as a built-in). It's already available in the model picker.`,
+      { status: 409, code: 'MODEL_REPO_ALREADY_EXISTS' },
+    );
+  }
   persistRegistry(withList(reg, listKey, [...current, entry]));
   console.log(`📝 Added user media model: ${entry.id} (${kind}) → ${entry.repo || '?'}`);
   return entry;

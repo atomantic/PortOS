@@ -84,6 +84,13 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/LoRA adapter/);
   });
 
+  it('refuses a diffusers LoRA repo by its pytorch_lora_weights.safetensors file (no lora tag)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'someone/qwen-style',
+      model: hf({ files: ['pytorch_lora_weights.safetensors'], base: 'Qwen/Qwen-Image', pipeline: 'text-to-image' }),
+    })).toThrow(/LoRA adapter/);
+  });
+
   it('refuses a PEFT adapter repo detected by its sibling files (no lora tag)', () => {
     // adapter_config.json + adapter_model.safetensors is the standard PEFT
     // layout; the repo advertises no lora tag but is still an adapter.
