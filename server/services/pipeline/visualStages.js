@@ -1080,6 +1080,57 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
 }
 
 /**
+ * Splice an in-flight render slot onto
+ * `stages.comicPages.pages[pageIndex].{proofImage|finalImage}` through
+ * `updateStageWithLatest` (the serialized issue write tail) so a concurrent
+ * page edit or sibling render that wrote between the enqueue and this persist
+ * can't be reverted by a stale snapshot. Shared by `renderComicPage` and
+ * `refineComicPageRender` — the filename hook only attaches the completed
+ * image when the target slot already carries the returned jobId (the reason
+ * this write must live behind the shared entry points, not only in the route).
+ *
+ * Returns { issue, stage } from the write tail.
+ */
+async function persistComicPageSlot(issueId, pageIndex, { variant, jobId, prompt, width, height, fromProof }) {
+  const slotKey = slotKeyForVariant(variant);
+  const slotRecord = buildRenderSlot({ slotKey, jobId, prompt, width, height, fromProof });
+  return updateStageWithLatest(issueId, 'comicPages', (currentStage) => {
+    const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+    if (!currentPages[pageIndex]) {
+      throw new ServerError(
+        `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+        { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+      );
+    }
+    const nextPages = [...currentPages];
+    nextPages[pageIndex] = { ...currentPages[pageIndex], [slotKey]: slotRecord };
+    return { status: 'edited', pages: nextPages };
+  });
+}
+
+/**
+ * Enqueue + persist a full comic-page render in ONE service call — the shared
+ * entry point behind both the route handler and the CDO orchestrator tool
+ * (#2241, mirroring the #2234 cover treatment). The bare `enqueueVisualComicPage`
+ * only queues the job; the filename hook attaches the completed render ONLY if
+ * `pages[pageIndex]`'s active variant slot already carries the returned jobId,
+ * and that slot write used to live in the route handler. Extracting it here
+ * means the orchestrator gets orchestrated pages instead of silently dropping
+ * them. `options` mirrors the route body (target/useProofAsBase/referencePage,
+ * width/height, mode, …).
+ *
+ * Returns the enqueue result plus the persisted { issue, stage }.
+ */
+export async function renderComicPage(issueId, options = {}) {
+  const result = await enqueueVisualComicPage(issueId, options);
+  const { issue, stage } = await persistComicPageSlot(issueId, result.pageIndex, {
+    variant: result.variant, jobId: result.jobId, prompt: result.prompt,
+    width: options.width, height: options.height, fromProof: result.fromProof,
+  });
+  return { ...result, issue, stage };
+}
+
+/**
  * AI prompt-refine + image-to-image re-render for a SMALL correction to an
  * already-rendered comic page (issue #1534). Unlike `enqueueVisualComicPage`
  * (which composes a fresh prompt from the page's panels and re-renders from
@@ -1199,7 +1250,10 @@ export async function refineComicPageRender(issueId, options = {}) {
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
     logLine: `🪄 Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant} strength=${initImageStrength}`,
   });
-  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId };
+  const { issue: persistedIssue, stage } = await persistComicPageSlot(issueId, pageIndex, {
+    variant, jobId, prompt: refined, width: options.width, height: options.height,
+  });
+  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId, issue: persistedIssue, stage };
 }
 
 /**

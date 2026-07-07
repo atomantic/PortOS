@@ -107,6 +107,48 @@ vi.mock('../services/pipeline/visualStages.js', async () => {
     };
   };
 
+  // Full-page render+persist. Enqueues then lands the in-flight slot on
+  // stages.comicPages.pages[pageIndex] through the real issue write tail (#2241)
+  // so the route tests exercise the persist end-to-end (mirrors renderComicPage).
+  const persistComicPage = async (issueId, options) => {
+    const pageIndex = options.pageIndex;
+    const variant = options?.target === 'final' ? 'final' : 'proof';
+    const jobId = `page-job-${++uuidCounter}`;
+    const prompt = `comic-page prompt for page ${pageIndex + 1}`;
+    const fromProof = variant === 'final' && options?.useProofAsBase === true;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: options?.width, height: options?.height, fromProof });
+    const { issue, stage } = await issuesSvc.updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const pages = Array.isArray(current?.pages) ? current.pages : [];
+      const next = [...pages];
+      next[pageIndex] = { ...pages[pageIndex], [slotKey]: slotRecord };
+      return { status: 'edited', pages: next };
+    });
+    return { jobId, mode: 'local', prompt, pageIndex, variant, fromProof, issue, stage };
+  };
+
+  // Comic-page AI refine + i2i re-render (issue #1534) + persist (#2241). Lands
+  // the refined render on the matching variant slot via the real write tail.
+  const persistComicPageRefine = async (issueId, options) => {
+    const pageIndex = options.pageIndex;
+    const variant = options?.target === 'final' ? 'final' : 'proof';
+    const jobId = `page-refine-job-${++uuidCounter}`;
+    const prompt = `refined page prompt for page ${pageIndex + 1}`;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: options?.width, height: options?.height });
+    const { issue, stage } = await issuesSvc.updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const pages = Array.isArray(current?.pages) ? current.pages : [];
+      const next = [...pages];
+      next[pageIndex] = { ...pages[pageIndex], [slotKey]: slotRecord };
+      return { status: 'edited', pages: next };
+    });
+    return {
+      jobId, mode: 'local', prompt, pageIndex, variant,
+      changes: ['warmed the lighting'], runId: 'run-mock-page-refine', providerId: 'mock-provider',
+      issue, stage,
+    };
+  };
+
   const persistVolumeCover = async (seriesId, seasonId, target, scriptField, body) => {
     const variant = body?.target === 'final' ? 'final' : 'proof';
     const jobId = `vol-${target === 'cover' ? 'cover' : 'backcover'}-job-${++uuidCounter}`;
@@ -134,17 +176,10 @@ vi.mock('../services/pipeline/visualStages.js', async () => {
     mode: 'local',
     prompt: `style, ${opts.description}`,
   })),
-  enqueueVisualComicPage: vi.fn(async (_issueId, opts) => ({
-    jobId: `page-job-${++uuidCounter}`,
-    mode: 'local',
-    // Match the real service contract: pageNumber is 1-based (pageIndex + 1).
-    prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
-    pageIndex: opts.pageIndex,
-    // Forward proof/final variant + i2i flag so the route's slotKey + slot
-    // record reflect the schema-validated body (target defaults to 'proof').
-    variant: opts?.target === 'final' ? 'final' : 'proof',
-    fromProof: opts?.target === 'final' && opts?.useProofAsBase === true,
-  })),
+  // Full-page render+persist entry point (#2241) — enqueues AND lands the
+  // in-flight slot on stages.comicPages.pages[pageIndex] through the real issue
+  // write tail, driven through persistComicPage above.
+  renderComicPage: vi.fn((issueId, opts) => persistComicPage(issueId, opts)),
   // Front cover render+persist. Lands the in-flight slot on
   // stages.comicPages.cover through the real issue write tail (#2220).
   renderComicCover: vi.fn((issueId, body) => persistComicCover(issueId, 'cover', 'coverScript', body || {})),
@@ -201,19 +236,10 @@ vi.mock('../services/pipeline/visualStages.js', async () => {
     changes: ['mock change'],
     providerId: 'mock-provider',
   })),
-  // Comic-page AI refine + i2i re-render (issue #1534). Returns the shape the
-  // route lands on the matching variant slot via slotKeyForVariant +
-  // buildRenderSlot — variant defaults to 'proof' unless the body forces one.
-  refineComicPageRender: vi.fn(async (_issueId, opts) => ({
-    jobId: `page-refine-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: `refined page prompt for page ${opts.pageIndex + 1}`,
-    pageIndex: opts.pageIndex,
-    variant: opts?.target === 'final' ? 'final' : 'proof',
-    changes: ['warmed the lighting'],
-    runId: 'run-mock-page-refine',
-    providerId: 'mock-provider',
-  })),
+  // Comic-page AI refine + i2i re-render (issue #1534) + persist (#2241).
+  // Enqueues AND lands the refined render on the matching variant slot through
+  // the real write tail — variant defaults to 'proof' unless the body forces one.
+  refineComicPageRender: vi.fn((issueId, opts) => persistComicPageRefine(issueId, opts)),
   };
 });
 
@@ -1696,8 +1722,9 @@ describe('pipeline routes', () => {
       .send({});
     expect(r.status).toBe(404);
     expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
-    // Enqueue is never reached when the page doesn't exist.
-    expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
+    // The render+persist service is never reached when the page doesn't exist
+    // (the route pre-validates the page index before dispatching).
+    expect(visualStages.renderComicPage).not.toHaveBeenCalled();
   });
 
   // ---- comicPages/cover/render ----

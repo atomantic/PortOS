@@ -66,6 +66,8 @@ vi.mock('../pipeline/visualStages.js', () => ({
   renderComicBackCover: vi.fn(async () => ({ jobId: 'bcov1', variant: 'proof' })),
   renderVolumeCover: vi.fn(async () => ({ jobId: 'vcov1', variant: 'proof' })),
   renderVolumeBackCover: vi.fn(async () => ({ jobId: 'vbcov1', variant: 'proof' })),
+  renderComicPage: vi.fn(async () => ({ jobId: 'pg1', variant: 'proof', pageIndex: 0 })),
+  refineComicPageRender: vi.fn(async () => ({ jobId: 'pgr1', variant: 'proof', pageIndex: 0 })),
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 'mj1' })) }));
 vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
@@ -77,7 +79,7 @@ import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';
 import { generateStage } from '../pipeline/textStages.js';
 import { startSeriesAutopilot } from '../pipeline/seriesAutopilot.js';
-import { renderComicCover, renderVolumeCover } from '../pipeline/visualStages.js';
+import { renderComicCover, renderVolumeCover, renderComicPage, refineComicPageRender } from '../pipeline/visualStages.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   CREATIVE_TOOLS,
@@ -285,6 +287,35 @@ describe('budget charging', () => {
     setMode('execute');
     await expect(dispatchCreativeTool('pipeline_renderComicCover', {})).rejects.toBeInstanceOf(z.ZodError);
     expect(renderComicCover).not.toHaveBeenCalled();
+  });
+
+  // #2241 — the page-render + refine-render tools wrap the shared enqueue+persist
+  // service (renderComicPage / refineComicPageRender) so an orchestrated page
+  // completes like a user-driven one; they charge as renders.
+  it('dispatches pipeline_renderComicPage through the shared render+persist service and charges one render action', async () => {
+    setMode('execute');
+    const out = await dispatchCreativeTool('pipeline_renderComicPage', { issueId: 'i1', pageIndex: 2, target: 'final' });
+    expect(out).toMatchObject({ ok: true, tool: 'pipeline_renderComicPage', longRunning: true });
+    expect(renderComicPage).toHaveBeenCalledWith('i1', { pageIndex: 2, target: 'final' });
+    expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
+  });
+
+  it('dispatches pipeline_refineComicPageRender with issueId split from the refine options', async () => {
+    setMode('execute');
+    await dispatchCreativeTool('pipeline_refineComicPageRender', { issueId: 'i1', pageIndex: 0, instruction: 'warm the light' });
+    expect(refineComicPageRender).toHaveBeenCalledWith('i1', { pageIndex: 0, instruction: 'warm the light' });
+  });
+
+  it('rejects a page-render tool call missing pageIndex via the Zod gate', async () => {
+    setMode('execute');
+    await expect(dispatchCreativeTool('pipeline_renderComicPage', { issueId: 'i1' })).rejects.toBeInstanceOf(z.ZodError);
+    expect(renderComicPage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a refine-render tool call missing its instruction via the Zod gate', async () => {
+    setMode('execute');
+    await expect(dispatchCreativeTool('pipeline_refineComicPageRender', { issueId: 'i1', pageIndex: 0 })).rejects.toBeInstanceOf(z.ZodError);
+    expect(refineComicPageRender).not.toHaveBeenCalled();
   });
 });
 
