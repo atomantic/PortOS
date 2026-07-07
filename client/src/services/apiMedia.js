@@ -35,10 +35,15 @@ export const deleteAllUploads = (options = {}) => request('/uploads?confirm=true
 // page's own catch can toast (no silent flag needed — this never double-toasts).
 //
 // `steps` is `{ metadata?: boolean, denoise?: boolean, diffusion?: 'off'|'light'|'gpu',
-//   mask?: Blob, feather?: number }`.
+//   mask?: Blob, feather?: number, strength?: number, maxMp?: number }`.
 // metadata/denoise default on the server (metadata ON, denoise OFF); diffusion
 // defaults to 'off'. 'light' runs the CPU spatial SynthID-disruption pass;
-// 'gpu' (the FLUX round-trip) is not yet wired here and returns a 501.
+// 'gpu' (the FLUX round-trip) is GPU-serialized: the server returns HTTP 202
+// with a `{ mode:'gpu', jobId, ... }` JSON body instead of image bytes. This
+// wrapper detects that and returns `{ gpu: true, job }` so the caller can track
+// progress via the media-job channel and then fetch the result (see
+// `fetchCleanResult` / `saveCleanResult` below). `strength`/`maxMp` are
+// GPU-only diffusion knobs, ignored by the sync passes.
 //
 // When a `mask` Blob (a painted preserve-region PNG) is supplied AND a diffusion
 // step runs, the body is framed as an ignore-zone envelope
@@ -50,6 +55,8 @@ export const cleanImage = async (file, steps = {}) => {
   if (typeof steps.metadata === 'boolean') params.set('metadata', steps.metadata ? '1' : '0');
   if (typeof steps.denoise === 'boolean') params.set('denoise', steps.denoise ? '1' : '0');
   if (typeof steps.diffusion === 'string' && steps.diffusion !== 'off') params.set('diffusion', steps.diffusion);
+  if (typeof steps.strength === 'number') params.set('strength', String(steps.strength));
+  if (typeof steps.maxMp === 'number') params.set('maxMp', String(steps.maxMp));
 
   // Build the request body. With a mask + a diffusion step, prefix the raw image
   // bytes with the length-framed mask; otherwise send the file directly.
@@ -92,9 +99,52 @@ export const cleanImage = async (file, steps = {}) => {
     throw err;
   }
 
+  // GPU FLUX round-trip: the server enqueued a job and returned 202 + JSON
+  // (no image bytes). Hand the job descriptor back so the caller tracks progress
+  // and fetches the result when it completes.
+  if (response.status === 202) {
+    const job = await response.json().catch(() => null);
+    return { gpu: true, job };
+  }
+
   const reportHeader = response.headers.get('X-Clean-Report');
   let report = null;
   if (reportHeader) { try { report = JSON.parse(reportHeader); } catch { report = null; } }
   const blob = await response.blob();
   return { blob, mimeType: blob.type || report?.format || 'application/octet-stream', report };
 };
+
+// Fetch the finished bytes for a GPU FLUX clean job (issue #2264). Returns
+// `{ blob, mimeType, report }` on 200, `{ pending: true }` while the job is
+// still rendering (409 RESULT_NOT_READY — the caller keeps polling the
+// media-job channel), or throws on a hard failure (404/JOB_FAILED). The result
+// is ephemeral; call `saveCleanResult` to keep it in the gallery.
+export const fetchCleanResult = async (jobId) => {
+  const response = await fetch(`${API_BASE}/image-clean/result/${encodeURIComponent(jobId)}`).catch(() => null);
+  if (!response) throw new Error('Server unreachable — check your connection and try again');
+  if (response.status === 409) {
+    const err = await response.json().catch(() => ({}));
+    if (err?.code === 'RESULT_NOT_READY') return { pending: true };
+    const e = new Error(err.error || 'Clean job failed');
+    e.code = err.code; e.status = 409;
+    throw e;
+  }
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: 'Failed to fetch clean result' }));
+    maybeRedirectToLogin(response, err);
+    const e = new Error(err.error || `HTTP ${response.status}`);
+    e.code = err?.code; e.status = response.status;
+    throw e;
+  }
+  const reportHeader = response.headers.get('X-Clean-Report');
+  let report = null;
+  if (reportHeader) { try { report = JSON.parse(reportHeader); } catch { report = null; } }
+  const blob = await response.blob();
+  return { blob, mimeType: blob.type || 'image/png', report };
+};
+
+// Explicit save-to-gallery for a finished GPU clean result (the default is NOT
+// to keep it). Returns the new gallery `{ filename, path }`. Silent so the
+// page's own useAsyncAction/catch owns the error toast.
+export const saveCleanResult = (jobId, options = {}) =>
+  request(`/image-clean/result/${encodeURIComponent(jobId)}/save`, { method: 'POST', ...options });

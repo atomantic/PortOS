@@ -22,13 +22,16 @@ let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;
 let buildSidecarMeta;
+let resolveOutputPlacement;
+let PATHS;
 
 beforeAll(async () => {
   tmpRegistryDir = mkdtempSync(join(tmpdir(), 'portos-imagegen-local-test-'));
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs, buildSidecarMeta } = await import('./local.js'));
+  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement } = await import('./local.js'));
+  ({ PATHS } = await import('../../lib/fileUtils.js'));
 });
 
 afterAll(() => {
@@ -767,5 +770,40 @@ describe('imageGen local.buildSidecarMeta', () => {
     expect(Number.isInteger(meta.seed)).toBe(true);
     expect(meta.seed).toBeGreaterThanOrEqual(0);
     expect(meta.seed).toBeLessThan(2147483647);
+  });
+});
+
+describe('imageGen local.resolveOutputPlacement (issue #2264 non-gallery render seam)', () => {
+  it('defaults to the gallery dir WITH a sidecar when no outputTarget is given', () => {
+    // The lightbox/regenerate/generate path — must be untouched.
+    const p = resolveOutputPlacement(null);
+    expect(p.outputDir).toBe(PATHS.images);
+    expect(p.isGallery).toBe(true);
+    expect(p.skipSidecar).toBe(false);
+  });
+
+  it('renders to a temp dir with NO sidecar when a non-gallery target is given', () => {
+    const p = resolveOutputPlacement({ dir: PATHS.imageCleanTmp, skipSidecar: true });
+    expect(p.outputDir).toBe(PATHS.imageCleanTmp);
+    expect(p.isGallery).toBe(false);
+    expect(p.skipSidecar).toBe(true);
+  });
+
+  it('defaults a non-gallery target to skipSidecar even when the flag is omitted', () => {
+    const p = resolveOutputPlacement({ dir: PATHS.imageCleanTmp });
+    expect(p.skipSidecar).toBe(true);
+  });
+
+  it('always writes a sidecar for a gallery-dir target, even if skipSidecar was passed', () => {
+    // A gallery citizen without a sidecar would be an un-remixable orphan.
+    const p = resolveOutputPlacement({ dir: PATHS.images, skipSidecar: true });
+    expect(p.outputDir).toBe(PATHS.images);
+    expect(p.skipSidecar).toBe(false);
+  });
+
+  it('ignores a malformed outputTarget (non-object / missing dir) → gallery default', () => {
+    expect(resolveOutputPlacement('nope').outputDir).toBe(PATHS.images);
+    expect(resolveOutputPlacement({}).outputDir).toBe(PATHS.images);
+    expect(resolveOutputPlacement({ dir: 123 }).outputDir).toBe(PATHS.images);
   });
 });

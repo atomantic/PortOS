@@ -34,8 +34,12 @@ function isEscapeHatch() {
 
 // Index a single just-generated image. The 'completed' event carries the
 // filename; the full metadata is in the sidecar the generator just wrote.
-async function onImageCompleted({ filename } = {}) {
+async function onImageCompleted({ filename, temp } = {}) {
   if (typeof filename !== 'string' || !filename) return;
+  // A non-gallery temp render (issue #2264, Image Cleaner GPU pass) has no
+  // gallery file or sidecar — skip indexing it. It lives in imageCleanTmp and
+  // is consumed by an explicit result-fetch, never listed in the gallery.
+  if (temp) return;
   const { readImageSidecar } = await import('../imageGen/local.js');
   const { metadata } = await readImageSidecar(filename);
   // Mirror listGallery's entry shape (filename + path + spread sidecar). One

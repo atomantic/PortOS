@@ -275,7 +275,7 @@ export async function readImageDimensions(absPath) {
 // clamping changes the dims, `upscaleTo` carries the source's exact dimensions
 // so `generateImage` resizes the result back up, delivering a watermark-free
 // copy at the original resolution.
-export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps, promptOverride, initImageAbsPath, annotated = false }) {
+export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sourceDims = null, model, pythonPath, strength, steps, promptOverride, initImageAbsPath, annotated = false, maxMegapixels = DEFAULT_MAX_REGEN_MEGAPIXELS }) {
   // The img2img base pixels normally come from the clicked source, but an
   // annotation re-render (issue #2036 phase 2) points the init image at the
   // flattened source+strokes PNG while STILL reading dimensions/metadata/lineage
@@ -305,7 +305,10 @@ export function buildRegenParams({ filename, sourceAbsPath, sourceMeta = {}, sou
     ...(annotated ? { annotatedRegen: true } : {}),
   };
   if (src) {
-    const render = clampRegenDimensions(src.width, src.height);
+    // `maxMegapixels` lets a caller (e.g. the Image Cleaner's optional
+    // max-render-MP override) push or pull the render budget per-run; defaults
+    // to the env-tunable DEFAULT_MAX_REGEN_MEGAPIXELS the lightbox uses.
+    const render = clampRegenDimensions(src.width, src.height, maxMegapixels);
     params.width = render.width;
     params.height = render.height;
     // Clamped or /16-rounded → deliver the cleaned copy at the source's exact
