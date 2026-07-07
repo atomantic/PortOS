@@ -99,6 +99,18 @@ describe('timeline import routes', () => {
     expect(importSpotifyHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false });
   });
 
+  it('400s on an unrecognized preview token instead of silently importing', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'maybe' },
+      { filename: 'history.json', contentType: 'application/json', content: '[]' },
+    );
+    const r = await request(app).post('/api/timeline/import/spotify')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(importSpotifyHistory).not.toHaveBeenCalled();
+  });
+
   it('rejects a disallowed file type with 400', async () => {
     const { boundary, body } = multipart(
       {},

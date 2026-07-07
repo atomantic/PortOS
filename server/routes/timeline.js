@@ -23,12 +23,17 @@ const uploadSpotify = uploadSingle('file', {
 });
 
 // `preview` (a multipart text field, so it arrives as a string) toggles a
-// parse-only dry run — count what would be imported without writing.
+// parse-only dry run — count what would be imported without writing. Only map
+// the recognized true/false tokens; any other string is left as-is so Zod
+// rejects it with a 400 rather than silently coercing an unknown value to a
+// (write-path) real import.
 const importBodySchema = z.object({
-  preview: z.preprocess(
-    (v) => (typeof v === 'string' ? v === 'true' || v === '1' : v),
-    z.boolean().optional().default(false),
-  ),
+  preview: z.preprocess((v) => {
+    if (typeof v !== 'string') return v;
+    if (v === 'true' || v === '1') return true;
+    if (v === 'false' || v === '0' || v === '') return false;
+    return v; // unrecognized → Zod boolean check fails → 400
+  }, z.boolean().optional().default(false)),
 });
 
 const dayQuerySchema = z.object({
