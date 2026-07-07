@@ -1,6 +1,7 @@
 # Layered Intelligence Loop — Design
 
-> Status: approved design (2026-07-07). Tracking issue: _(filled in after filing)_.
+> Status: approved design (2026-07-07). Tracking issue:
+> [#2262](https://github.com/atomantic/PortOS/issues/2262).
 
 A perpetual, per-managed-app self-improvement loop that runs via the Chief of
 Staff. On a schedule it reads each app's goals + telemetry, asks a reasoning
