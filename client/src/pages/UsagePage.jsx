@@ -209,8 +209,13 @@ function ClaudeCodeUsagePanel() {
     setLoading(true);
     setError(false);
     const result = await api.getClaudeCodeUsage({ refresh }).catch(() => null);
-    if (!result) setError(true);
-    setData(result);
+    if (result) {
+      setData(result);
+    } else {
+      // Keep previously-loaded meters on a transient refresh failure instead of
+      // replacing them with the generic error state.
+      setError(true);
+    }
     setLoading(false);
   };
 
@@ -238,8 +243,9 @@ function ClaudeCodeUsagePanel() {
         <div className="flex items-start gap-2 text-sm text-gray-400 py-2">
           <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
           <span>
-            Couldn't read Claude Code usage. The <code className="text-gray-300">claude</code> CLI must be
-            installed and signed in on this machine.
+            {data
+              ? 'Couldn’t refresh Claude Code usage — showing the last successful reading.'
+              : <>Couldn&rsquo;t read Claude Code usage. The <code className="text-gray-300">claude</code> CLI must be installed and signed in on this machine.</>}
           </span>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { existsSync, lstatSync, readlinkSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';
 
 /**
@@ -29,6 +30,32 @@ const SPAWN_TIMEOUT_MS = 60_000;
 const CACHE_TTL_MS = 60_000;
 
 const toInt = (s) => (s == null ? null : parseInt(String(s).replace(/,/g, ''), 10));
+
+/**
+ * Pull the IANA zone (e.g. `America/Los_Angeles`) out of an `/etc/localtime`
+ * symlink target (`.../zoneinfo/America/Los_Angeles`). Returns null if the path
+ * doesn't look like a zoneinfo link. Pure — unit-tested.
+ */
+export function zoneFromLocaltimeLink(link) {
+  const m = (link || '').match(/zoneinfo\/(.+)$/);
+  return m ? m[1] : null;
+}
+
+// Claude Code renders /usage reset times in the child process's timezone (and
+// labels them with it). A server started under PM2/systemd/Docker commonly runs
+// in UTC, which would shift every reset time away from what the user sees in an
+// interactive terminal. Resolve the machine's real timezone from the OS —
+// independent of this process's own (possibly UTC) TZ env — and pass it to the
+// child so headless output matches the interactive TUI. Memoized; best-effort
+// (null → inherit the process env unchanged).
+let cachedSystemTz;
+function systemTimeZone() {
+  if (cachedSystemTz !== undefined) return cachedSystemTz;
+  cachedSystemTz = existsSync('/etc/localtime') && lstatSync('/etc/localtime').isSymbolicLink()
+    ? zoneFromLocaltimeLink(readlinkSync('/etc/localtime'))
+    : null;
+  return cachedSystemTz;
+}
 
 /**
  * Parse one `Current …: N% used · resets <when> (<tz>)` limit line.
@@ -137,7 +164,9 @@ let inflight = null;
  */
 function runUsageCli() {
   return new Promise((resolve, reject) => {
-    const child = spawn(CLI_COMMAND, CLI_ARGS, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const tz = systemTimeZone();
+    const env = tz ? { ...process.env, TZ: tz } : process.env;
+    const child = spawn(CLI_COMMAND, CLI_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], env });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -151,6 +180,11 @@ function runUsageCli() {
 
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
+    // Same crash class as the stdin guard below: a pipe read error (e.g. the
+    // child is SIGKILL'd mid-stream) would otherwise go unhandled and crash the
+    // process. The 'close'/'error'/timeout handlers still settle the promise.
+    child.stdout.on('error', () => {});
+    child.stderr.on('error', () => {});
 
     child.on('error', (err) => {
       if (settled) return;

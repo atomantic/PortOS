@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseUsageOutput } from './claudeCodeUsage.js';
+import { parseUsageOutput, zoneFromLocaltimeLink } from './claudeCodeUsage.js';
 
 // Real `echo "/usage" | claude -p` output captured from a subscription install.
 const SAMPLE = `You are currently using your subscription to power your Claude Code usage
@@ -98,5 +98,27 @@ describe('parseUsageOutput', () => {
   it('handles a limit line with no reset clause', () => {
     const { limits } = parseUsageOutput('Current session: 50% used');
     expect(limits[0]).toMatchObject({ percentUsed: 50, resetsAt: null, timezone: null });
+  });
+
+  it('keeps a reset time that has no (timezone) suffix', () => {
+    const { limits } = parseUsageOutput('Current session: 10% used · resets Jul 7 at 2pm');
+    expect(limits[0]).toMatchObject({ resetsAt: 'Jul 7 at 2pm', timezone: null });
+  });
+
+  it('detects an API (pay-as-you-go) plan', () => {
+    expect(parseUsageOutput('You are using the Claude API (pay as you go) for usage').plan).toBe('api');
+  });
+});
+
+describe('zoneFromLocaltimeLink', () => {
+  it('extracts the IANA zone from an /etc/localtime symlink target', () => {
+    expect(zoneFromLocaltimeLink('/var/db/timezone/zoneinfo/America/Los_Angeles')).toBe('America/Los_Angeles');
+    expect(zoneFromLocaltimeLink('/usr/share/zoneinfo/Europe/Berlin')).toBe('Europe/Berlin');
+  });
+
+  it('returns null when the target is not a zoneinfo path', () => {
+    expect(zoneFromLocaltimeLink('/some/other/path')).toBeNull();
+    expect(zoneFromLocaltimeLink('')).toBeNull();
+    expect(zoneFromLocaltimeLink(null)).toBeNull();
   });
 });
