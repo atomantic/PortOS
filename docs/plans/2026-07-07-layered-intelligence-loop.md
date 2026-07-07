@@ -47,7 +47,9 @@ handler that runs deterministically outside the model invocation" — is Engine 
 contract by construction, not a prompt guard.
 
 - Registered as a single global script job (`category: 'layered-intelligence'`,
-  `type: 'script'`) in `data/cos/autonomous-jobs.json`, scheduled by
+  `type: 'script'`) in the code-level `DEFAULT_JOBS` catalog
+  (`server/services/autonomousJobs/defaults.js`), which is materialized into each
+  install's `data/cos/autonomous-jobs.json` on boot and scheduled by
   `cosJobScheduler`. **Off by default.** It is a user-enabled scheduled
   automation, the sanctioned exception under the AI-provider "no cold-bootstrap
   LLM calls" policy.
@@ -188,11 +190,17 @@ PortOS ships a baseline config: all default sources on; `allowedScopes` includes
 - `server/services/autonomousJobs/scriptHandlers.js` — new `runLayeredIntelligence`
   handler wired into the `category → handler` map (the sweep + 4 layers).
 - `server/services/apps.js` — `getAppLayeredIntelligenceConfig` /
-  `updateAppLayeredIntelligence` accessors + defaults.
-- `data.reference/cos/autonomous-jobs.json` — seed the new job entry (off).
-- `data.reference/` — baseline PortOS `layeredIntelligence` config seed.
-- `scripts/migrations/NNN-add-layered-intelligence-job.js` — add the job entry +
-  PortOS baseline config to existing installs (per-install applied-list).
+  `updateAppLayeredIntelligence` accessors. The accessor returns the default
+  config (all sources on; PortOS gets `loop-meta`/`portos-self` scopes) when the
+  app record has no `layeredIntelligence` key, so no per-app seed write is needed
+  — an install picks up the baseline the first time the loop reads it.
+- `server/services/autonomousJobs/defaults.js` — add the `layered-intelligence`
+  entry to the `DEFAULT_JOBS` catalog (enabled: false). `applyAdditiveFields` /
+  `mergeWithDefaults` add it to existing installs' `data/cos/autonomous-jobs.json`
+  on boot — no separate seed file or migration for the job entry itself.
+- `scripts/migrations/NNN-…js` — **only if** enabling the baseline on existing
+  PortOS installs by default is wanted; the accessor-default above makes a
+  migration optional, not required.
 - Client — per-app config surface (a `Drawer` tab on the app config, reusing the
   shared tabbed `Drawer` convention; deep-linkable tab via `useDrawerTab`). Add a
   `NAV_COMMANDS` entry only if it gets its own route.
@@ -203,8 +211,10 @@ PortOS ships a baseline config: all default sources on; `allowedScopes` includes
 
 - **AI-provider policy.** Off by default; only runs as a user-enabled scheduled
   automation. No cold-bootstrap calls.
-- **Distribution model.** Job entry + baseline config ship via `data.reference/`
-  and a migration, so existing installs and forks pick it up.
+- **Distribution model.** The job ships in the `DEFAULT_JOBS` catalog and is
+  merged into existing installs' job store on boot (`applyAdditiveFields`); the
+  per-app baseline comes from the config accessor's default — so existing installs
+  and forks pick it up without a hand-written seed file.
 - **Single-user trust model.** No auth/rate-limit/concurrency additions; a simple
   per-app in-flight guard within the sweep is sufficient.
 - **No try/catch** except at the scheduler/async boundary (the sweep runs outside
