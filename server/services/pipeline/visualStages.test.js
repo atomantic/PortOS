@@ -111,6 +111,7 @@ const {
   renderComicBackCover,
   renderVolumeCover,
   renderVolumeBackCover,
+  renderComicPage,
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
@@ -764,6 +765,14 @@ describe('refineComicPageRender', () => {
         initImageStrength: 0.35,
       }),
     }));
+
+    // #2241 — the refined render slot is persisted (enqueue+persist in one call)
+    // so the filename hook can attach the completed image; the slot carries the
+    // returned jobId + adjusted prompt on the proof variant.
+    expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'comicPages', expect.any(Function));
+    expect(result.stage.pages[0].proofImage).toMatchObject({
+      jobId: 'job-fake-1234', filename: null, prompt: 'refined prompt body',
+    });
   });
 
   it('honors target=final and an explicit initImageStrength', async () => {
@@ -1223,6 +1232,48 @@ describe('renderVolumeCover / renderVolumeBackCover (enqueue + persist)', () => 
   it('renderVolumeBackCover lands on the season.backCover slot', async () => {
     const result = await renderVolumeBackCover('ser-test', 'sea-test', {});
     expect(result.season.backCover.proofImage.jobId).toBe('job-fake-1234');
+  });
+});
+
+// #2241 — the page render+persist entry point behind BOTH the route handler and
+// the CDO orchestrator tool: enqueue the job AND write the in-flight slot onto
+// pages[pageIndex] the filename hook depends on (the bare enqueueVisualComicPage
+// alone silently dropped orchestrated pages).
+describe('renderComicPage (enqueue + persist)', () => {
+  it('enqueues then persists the proof slot onto stages.comicPages.pages[0].proofImage', async () => {
+    const result = await renderComicPage('iss-test', { pageIndex: 0, width: 832, height: 1216 });
+    expect(result.jobId).toBe('job-fake-1234');
+    expect(enqueueJobMock).toHaveBeenCalledTimes(1);
+    expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'comicPages', expect.any(Function));
+    expect(result.stage.pages[0].proofImage).toMatchObject({
+      jobId: 'job-fake-1234', filename: null, width: 832, height: 1216,
+    });
+    // proof slot must NOT carry the final-only fromProof flag
+    expect(result.stage.pages[0].proofImage).not.toHaveProperty('fromProof');
+    expect(result.stage.status).toBe('edited');
+  });
+
+  it('persists onto finalImage (with fromProof) when target=final + useProofAsBase', async () => {
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      stages: {
+        ...mockIssue.stages,
+        comicPages: {
+          pages: [{
+            panels: [{ description: 'Panel 1 baseline.', dialogue: [], caption: '', sfx: '' }],
+            proofImage: { filename: 'page0-proof.png' },
+          }],
+        },
+      },
+    });
+    const result = await renderComicPage('iss-test', { pageIndex: 0, target: 'final', useProofAsBase: true });
+    expect(result.variant).toBe('final');
+    expect(result.stage.pages[0].finalImage).toMatchObject({ jobId: 'job-fake-1234', fromProof: true });
+  });
+
+  it('surfaces a 404 for an out-of-range pageIndex', async () => {
+    await expect(renderComicPage('iss-test', { pageIndex: 99 }))
+      .rejects.toThrow(/out of range|PIPELINE_COMIC_PAGE_NOT_FOUND/);
   });
 });
 

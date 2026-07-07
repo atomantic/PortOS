@@ -21,7 +21,7 @@ import { generateStage } from '../../services/pipeline/textStages.js';
 import * as autoRunner from '../../services/pipeline/autoRunner.js';
 import {
   enqueueVisualImage,
-  enqueueVisualComicPage,
+  renderComicPage,
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
   refineComicPanelPrompt,
@@ -29,7 +29,6 @@ import {
   refineStoryboardScenePrompt,
   generateComicPanelImagePrompts,
   generateStoryboardSceneImagePrompts,
-  buildRenderSlot,
 } from '../../services/pipeline/visualStages.js';
 import { IMAGE_PROMPT_CANDIDATE_MAX } from '../../services/pipeline/refineHelpers.js';
 import {
@@ -38,7 +37,7 @@ import {
 } from '../../services/universeCanon.js';
 import { getSeriesCanon } from '../../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue } from '../../services/pipeline/episodeVideo.js';
-import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
+import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../../lib/creativeDirectorPresets.js';
 import { IMAGE_GEN_MODE } from '../../services/imageGen/modes.js';
 import { extractScenes, scenesFromBeatSheet, SOURCE_KIND } from '../../lib/sceneExtractor.js';
@@ -878,38 +877,16 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
     );
   }
 
-  const result = await enqueueVisualComicPage(req.params.id, { pageIndex, ...body })
+  // renderComicPage enqueues AND persists the in-flight slot onto
+  // pages[pageIndex].{proofImage|finalImage} through the serialized issue write
+  // tail (#2241) — the same shared entry point the CDO orchestrator tool calls,
+  // so an orchestrated page completes exactly like a user-driven one. The
+  // persist runs inside updateStageWithLatest's computeFn so the slot lands on
+  // the freshest persisted pages array (a concurrent page edit or sibling
+  // render can't be reverted by a stale snapshot).
+  const result = await renderComicPage(req.params.id, { pageIndex, ...body })
     .catch((err) => { throw mapServiceError(err); });
-
-  // The splice happens inside updateStageWithLatest's computeFn so the
-  // slot lands on the freshest persisted pages array — a concurrent page
-  // edit or sibling render that wrote between our enqueue and persist
-  // would otherwise be reverted by a stale snapshot.
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
-    req.params.id,
-    'comicPages',
-    (currentStage) => {
-      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
-      if (!currentPages[pageIndex]) {
-        throw new ServerError(
-          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
-          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
-        );
-      }
-      const nextPages = [...currentPages];
-      nextPages[pageIndex] = {
-        ...currentPages[pageIndex],
-        [slotKey]: slotRecord,
-      };
-      return { status: 'edited', pages: nextPages };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  res.json({ ...result, issue: updatedIssue, stage });
+  res.json(result);
 }));
 
 // AI prompt-refine + image-to-image re-render for a small correction to an
@@ -939,34 +916,14 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/refine-render', asyn
     );
   }
 
+  // refineComicPageRender adjusts the page's stored render prompt (LLM),
+  // re-renders i2i from the page's existing image, AND persists the new slot on
+  // the matching variant through the serialized issue write tail (#2241) — same
+  // shared code path the CDO orchestrator tool uses. A concurrent edit or
+  // sibling render can't be reverted by a stale snapshot.
   const result = await refineComicPageRender(req.params.id, { pageIndex, ...body })
     .catch((err) => { throw mapServiceError(err); });
-
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height,
-  });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
-    req.params.id,
-    'comicPages',
-    (currentStage) => {
-      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
-      if (!currentPages[pageIndex]) {
-        throw new ServerError(
-          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
-          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
-        );
-      }
-      const nextPages = [...currentPages];
-      nextPages[pageIndex] = {
-        ...currentPages[pageIndex],
-        [slotKey]: slotRecord,
-      };
-      return { status: 'edited', pages: nextPages };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  res.json({ ...result, issue: updatedIssue, stage });
+  res.json(result);
 }));
 
 // AI-driven prompt refinement for a single comic panel. Uses

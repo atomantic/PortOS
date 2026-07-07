@@ -14,6 +14,8 @@ import {
   renderComicBackCover,
   renderVolumeCover,
   renderVolumeBackCover,
+  renderComicPage,
+  refineComicPageRender,
 } from '../../pipeline/visualStages.js';
 import { COST_FREE, COST_LLM, COST_RENDER } from './shared.js';
 
@@ -55,6 +57,60 @@ const coverRenderParamProps = {
   seed: { type: 'integer', description: 'Deterministic seed.' },
   target: { type: 'string', enum: ['proof', 'final'], description: "Variant to render — 'proof' (fast layout) or 'final' (hi-res). Defaults to 'proof'." },
   useProofAsBase: { type: 'boolean', description: "For target=final: upscale off this slot's existing proof (i2i)." },
+};
+
+// Page-render options mirror the route's comicPageRenderSchema
+// (routes/pipeline/issues.js): the shared cover knobs plus a `referencePage`
+// consistency-anchor and the per-render character-LoRA opt-out. Uses the same
+// enqueue+persist service the route does (#2241), so an orchestrated page
+// completes exactly like a user-driven one.
+const pageRenderOptionsShape = {
+  ...coverRenderOptionsShape,
+  referencePage: z.union([z.enum(['prior', 'next', 'auto', 'none']), z.number().int().min(0)]).optional(),
+  applyCharacterLoras: z.boolean().optional(),
+};
+
+const pageRenderParamProps = {
+  ...coverRenderParamProps,
+  referencePage: { type: 'string', description: "Consistency reference: 'auto' (chain off the prior page within a scene), 'none' (fresh), 'prior'/'next', or a 0-based page index." },
+  applyCharacterLoras: { type: 'boolean', description: 'Auto-apply trained character LoRAs (local mode). Defaults true.' },
+};
+
+// Refine-render options mirror the route's comicPageRefineSchema — a small i2i
+// correction driven by a free-text `instruction` against the page's existing
+// render. No `extraStyle`/`useProofAsBase`/`referencePage`/`applyCharacterLoras`
+// (a from-self refine renders the LLM-adjusted prompt verbatim, has no proof-vs-
+// final base choice, and does no fresh character matching).
+const pageRefineOptionsShape = {
+  providerId: z.string().max(80).optional(),
+  model: z.string().max(200).optional(),
+  target: z.enum(['proof', 'final']).optional(),
+  initImageStrength: z.number().min(0).max(1).optional(),
+  negativePrompt: z.string().max(2000).optional(),
+  mode: z.enum(['local', 'codex']).optional(),
+  modelId: z.string().max(64).optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+  seed: z.number().int().min(0).optional(),
+};
+
+const pageRefineParamProps = {
+  providerId: { type: 'string', description: 'LLM provider id for the prompt-adjust step (defaults to the active provider).' },
+  model: { type: 'string', description: 'LLM model override for the prompt-adjust step.' },
+  target: { type: 'string', enum: ['proof', 'final'], description: 'Which rendered variant to refine; absent auto-picks (final when present, else proof).' },
+  initImageStrength: { type: 'number', description: 'i2i denoise (0-1); low preserves the page, just enough to apply the change.' },
+  negativePrompt: { type: 'string', description: 'Negative prompt tokens.' },
+  mode: { type: 'string', enum: ['local', 'codex'], description: 'Image-gen mode (defaults to the configured mode).' },
+  modelId: { type: 'string', description: 'Image model id override.' },
+  width: { type: 'integer', description: 'Render width in px.' },
+  height: { type: 'integer', description: 'Render height in px.' },
+  steps: { type: 'integer', description: 'Sampler steps.' },
+  cfgScale: { type: 'number', description: 'CFG scale.' },
+  guidance: { type: 'number', description: 'Guidance scale.' },
+  seed: { type: 'integer', description: 'Deterministic seed.' },
 };
 
 export const PIPELINE_TOOLS = [
@@ -196,5 +252,40 @@ export const PIPELINE_TOOLS = [
       required: ['seriesId', 'seasonId'],
     },
     execute: ({ seriesId, seasonId, ...options }) => renderVolumeBackCover(seriesId, seasonId, options),
+  },
+  {
+    name: 'pipeline_renderComicPage',
+    description: "Enqueue AND persist a full comic-page render (multi-panel layout in one image) for a comic issue. Long-running: returns { jobId, ... }; the finished image attaches to stages.comicPages.pages[pageIndex] via the media-job filename hook. The page-level prompt is built server-side from the page's panels[].",
+    costClass: COST_RENDER,
+    longRunning: true,
+    schema: z.object({ issueId: z.string().min(1), pageIndex: z.number().int().min(0), ...pageRenderOptionsShape }),
+    parameters: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'Comic issue id.' },
+        pageIndex: { type: 'integer', description: '0-based index of the page to render within stages.comicPages.pages.' },
+        ...pageRenderParamProps,
+      },
+      required: ['issueId', 'pageIndex'],
+    },
+    execute: ({ issueId, ...options }) => renderComicPage(issueId, options),
+  },
+  {
+    name: 'pipeline_refineComicPageRender',
+    description: "Enqueue AND persist a SMALL image-to-image correction to an already-rendered comic page: the LLM adjusts the page's stored render prompt per `instruction` and the page re-renders i2i from its own existing image. Long-running: the finished image attaches back to the matching variant slot via the filename hook. Requires an already-rendered page (else it rejects).",
+    costClass: COST_RENDER,
+    longRunning: true,
+    schema: z.object({ issueId: z.string().min(1), pageIndex: z.number().int().min(0), instruction: z.string().min(1).max(2000), ...pageRefineOptionsShape }),
+    parameters: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'Comic issue id.' },
+        pageIndex: { type: 'integer', description: '0-based index of the page to refine within stages.comicPages.pages.' },
+        instruction: { type: 'string', description: 'Free-text description of the small change to apply (everything else is preserved).' },
+        ...pageRefineParamProps,
+      },
+      required: ['issueId', 'pageIndex', 'instruction'],
+    },
+    execute: ({ issueId, ...options }) => refineComicPageRender(issueId, options),
   },
 ];
