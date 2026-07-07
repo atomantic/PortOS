@@ -84,6 +84,17 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/LoRA adapter/);
   });
 
+  it('does NOT treat a full base model as a LoRA just because its card sets base_model', () => {
+    // Full fine-tunes / derived base models legitimately declare base_model but
+    // ship complete weights — they must remain addable (no lora/peft marker).
+    expect(classifyHfMediaModel({
+      repo: 'someone/qwen-image-finetune',
+      model: hf({ files: ['model.safetensors'], base: 'Qwen/Qwen-Image', pipeline: 'text-to-image' }),
+      kind: 'image',
+      runner: 'qwen',
+    })).toMatchObject({ kind: 'image', runner: 'qwen' });
+  });
+
   it('refuses a quantized FLUX.2 repo (needs sibling tokenizer/base repos)', () => {
     expect(() => classifyHfMediaModel({
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic',

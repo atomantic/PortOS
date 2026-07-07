@@ -767,18 +767,20 @@ export const addUserModelEntry = (entry, { kind }) => {
   }
   const reg = loadMediaModels();
   const listKey = kind === 'video' ? (IS_WIN ? 'windows' : 'macos') : 'image';
-  // Conflict-check only the TARGET list, not every list. A shared
-  // media-models.json used across a macOS + Windows peer stores a video model
-  // per-platform; the same repo must remain addable on the other platform's
-  // list even though it already exists on the first — a global scan would
-  // wrongly 409 and leave no self-service way to enable it there.
-  const current = (listKey === 'image' ? reg.image : reg.video?.[listKey]) || [];
-  if (current.some((m) => m?.id === entry.id)) {
+  // Conflict-check against the ACTIVE-on-this-install lists — the current
+  // platform's video list + the image list — via findModelLocation (which
+  // scopes to exactly those). This rejects a collision between the current
+  // video list and the image list (both mutable through the same :id-only
+  // PATCH/DELETE, so a dup would make one row unaddressable), while still
+  // allowing the same custom video id to be added on the OTHER platform's list
+  // of a shared media-models.json (that list isn't scanned, so no false 409).
+  if (findModelLocation(reg, entry.id)) {
     throw new ServerError(
-      `A model with id "${entry.id}" is already in the ${kind} registry for this platform (repo already added?). Remove it first to re-add.`,
+      `A model with id "${entry.id}" is already in this install's registry (repo already added?). Remove it first to re-add.`,
       { status: 409, code: 'MODEL_ALREADY_EXISTS' },
     );
   }
+  const current = (listKey === 'image' ? reg.image : reg.video?.[listKey]) || [];
   persistRegistry(withList(reg, listKey, [...current, entry]));
   console.log(`📝 Added user media model: ${entry.id} (${kind}) → ${entry.repo || '?'}`);
   return entry;

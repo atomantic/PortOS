@@ -151,21 +151,22 @@ export const inspectModelFiles = (model) => {
   };
 };
 
-// A repo is a LoRA ADAPTER (not a base model) when its card declares a
-// `base_model` it adapts, or its id/tags carry the lora marker. The base-model
-// installer must refuse these — a LoRA has the video LoRA installer
-// (/api/loras/install/huggingface) and would otherwise register as a bogus base
-// entry the render path can't load. `peft`/`adapter` library tags are the
-// diffusers signal for an adapter package.
+// A repo is a LoRA ADAPTER (not a base model) when its id/tags carry a LoRA
+// marker or it's a PEFT/adapter package. The base-model installer must refuse
+// these — a LoRA has the video LoRA installer (/api/loras/install/huggingface)
+// and would otherwise register as a bogus base entry the render path can't load.
+//
+// Deliberately does NOT key on `cardData.base_model` alone: full fine-tunes and
+// derived base models legitimately set `base_model` on their card while shipping
+// complete weights, so treating that as an adapter signal would wrongly refuse
+// valid base models. Only adapter-specific signals count — the `base_model`
+// field is used to distinguish an adapter ONLY when a LoRA/PEFT marker is also
+// present (handled by the markers below), never on its own.
 const looksLikeLora = ({ repo, model }) => {
   const blob = `${String(repo || '').toLowerCase()} ${(Array.isArray(model?.tags) ? model.tags : []).join(' ').toLowerCase()}`;
   if (/\blora\b|\blycoris\b|\blocon\b|\bdora\b/.test(blob)) return true;
   const lib = typeof model?.library_name === 'string' ? model.library_name.toLowerCase() : '';
-  if (lib === 'peft') return true;
-  // A base_model reference in the card means "this adapts that model" → adapter.
-  const bm = model?.cardData?.base_model;
-  if (typeof bm === 'string' && bm.trim()) return true;
-  if (Array.isArray(bm) && bm.some((b) => typeof b === 'string' && b.trim())) return true;
+  if (lib === 'peft' || lib === 'adapter-transformers') return true;
   return false;
 };
 
