@@ -266,13 +266,16 @@ export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'simplify', 're
 export const MAX_TOTAL_SPAWNS = 5;
 
 // `cleanupMerged` / `openPr` / `resolveConflicts` / `autoMerge` are the
-// per-app action toggles for the `branch-reconcile` task type (each ON unless
-// explicitly false). They live in the shared task-metadata allowlist — like
-// `prAuthorFilter` / `issueAuthorFilter` — so a per-app override can disable an
-// individual rectification behavior and survive sanitizeTaskMetadata.
+// per-app action toggles for the `branch-reconcile` task type; `autoClose` is
+// the `issue-reconcile` toggle (ON unless explicitly false — OFF forbids the
+// coordinator from closing an issue or filing a follow-up, leaving it to only
+// comment + release the claim). Each lives in the shared task-metadata
+// allowlist — like `prAuthorFilter` / `issueAuthorFilter` — so a per-app
+// override can disable an individual rectification behavior and survive
+// sanitizeTaskMetadata.
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly',
-  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge'
+  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'autoClose'
 ];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated

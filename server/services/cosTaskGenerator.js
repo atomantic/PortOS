@@ -1582,11 +1582,13 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   //     tick retries instead of waiting out a full recheck cadence.
   // The detector keys on the RESOLVED promptTaskType so a claim-work router run
   // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
-  // branch-reconcile is PERPETUAL but is NOT gated by the generic work-detector
-  // registry — its "detector" and its actual work are the SAME scan (the
-  // deterministic reconcile below), so splitting them would double the git/gh
-  // I/O. Its dedicated block further down does the park/clear itself.
-  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL && taskType !== 'branch-reconcile') {
+  // branch-reconcile and issue-reconcile are PERPETUAL but are NOT gated by the
+  // generic work-detector registry — for each, the "detector" and the actual
+  // work are the SAME scan (the deterministic reconcile below), so splitting them
+  // would double the git/gh I/O. Their dedicated blocks further down do the
+  // park/clear themselves.
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL
+      && taskType !== 'branch-reconcile' && taskType !== 'issue-reconcile') {
     const { detectActionableWork } = await import('./perpetualWork.js');
     const detection = await detectActionableWork(promptTaskType, app, {
       issueAuthorFilter: metadata.issueAuthorFilter || 'self'
@@ -1680,6 +1682,59 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.perpetual = true;
     inFlightBranchesBlock = formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions });
     emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
+  }
+
+  // issue-reconcile: deterministic pre-step — scan the app's GitHub repo for
+  // ZOMBIE issues (open + `in-progress` yet with their PR merged and no live
+  // claim anywhere) and hand the set to the coordinator agent. Same perpetual
+  // drain shape as branch-reconcile: the scan IS the work-detector (gh/git only,
+  // no LLM), and the coordinator dispatches only while zombies remain — else it
+  // PARKS on the daily recheckCron. `{zombieIssues}` carries the set into the
+  // prompt. No worktree: the coordinator mutates issue state over `gh` only.
+  let zombieIssuesBlock = '';
+  if (taskType === 'issue-reconcile') {
+    const { reconcile, zombieSignature, formatZombiesForPrompt } = await import('./issueReconcile.js');
+    // The live-claim guard (open PR + local/remote/CoS claim branch, scanned via
+    // for-each-ref inside reconcile) already covers every agent past Phase 2 of
+    // the claim flow — the point at which it creates its claim/worktree branch.
+    // The sub-minute pre-branch window is left to the coordinator's per-zombie
+    // re-verification, so no separate active-agent set is threaded here.
+    const autoClose = metadata.autoClose !== false;
+    const result = await reconcile(app.repoPath).catch((err) => {
+      emitLog('warn', `issue-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
+      return null;
+    });
+    // null = non-GitHub remote OR transient gh failure → skip WITHOUT parking so
+    // the next tick retries (gh/git-only cost), mirroring branch-reconcile.
+    if (!result) return null;
+    if (result.stalled.length) {
+      // In-progress issues with NO merged PR and NO live claim — a different stuck
+      // state (claimed, nothing shipped) that issue-reconcile deliberately does
+      // NOT auto-heal. Surface them so they're not silently ignored.
+      emitLog('info', `🧟 issue-reconcile ${app.name}: ${result.stalled.length} stalled in-progress issue(s) with no merged PR (left for human/branch-reconcile)`, { appId: app.id, analysisType: taskType });
+    }
+    if (result.zombies.length === 0) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null });
+      emitLog('info', `🧟 issue-reconcile parked for ${app.name}: no zombie issues`, { appId: app.id });
+      return null;
+    }
+    // Convergence guard — identical to branch-reconcile's: a productive run closes
+    // or releases zombies (changing the signature) → keep draining; an unchanged
+    // signature (coordinator errored, or a case it punted to a human) → park on
+    // the recheck cadence and CLEAR the signature so the next daily recheck
+    // re-drives unconditionally rather than re-parking forever.
+    const signature = zombieSignature(result.zombies);
+    const lastSignature = await taskSchedule.getPerpetualSignature(taskType, app.id);
+    if (signature === lastSignature) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: result.zombies.length, signature: null });
+      emitLog('info', `🧟 issue-reconcile parked for ${app.name}: ${result.zombies.length} zombie issue(s) unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
+      return null;
+    }
+    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
+    metadata.perpetual = true;
+    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, { fullName: result.fullName, autoClose });
+    emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s)`, { appId: app.id, analysisType: taskType });
   }
 
   // Honor a direct claim-work prompt customization if the user set one;
@@ -1846,6 +1901,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{prData\}/g, () => prDataBlock)
     .replace(/\{inFlightBranches\}/g, () => inFlightBranchesBlock)
+    .replace(/\{zombieIssues\}/g, () => zombieIssuesBlock)
     .replace(/\{repoFullName\}/g, () => prRepoFullName)
     .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
