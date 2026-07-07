@@ -147,11 +147,20 @@ router.post(
       // in visual space) aligns with the render.
       let gpuInit = result.data;
       let gpuOriginal = maskBuffer ? originalBuffer : null;
+      // Dimensions the render + upscale-back target. `result.width/height` are
+      // the (metadata-step) cleaned dims; but when a mask forces the oriented
+      // re-encode below, the oriented buffer's dims can differ (EXIF 6/8 swaps
+      // W/H) — so read them off the ORIENTED buffer, or FLUX renders at the
+      // wrong aspect and the composite misaligns.
+      let sourceDims = result.width && result.height ? { width: result.width, height: result.height } : null;
       if (maskBuffer) {
-        const orientedPng = await sharp(result.data).rotate().png().toBuffer().catch(() => null);
-        if (orientedPng) { gpuInit = orientedPng; gpuOriginal = orientedPng; }
+        const oriented = await sharp(result.data).rotate().png().toBuffer({ resolveWithObject: true }).catch(() => null);
+        if (oriented) {
+          gpuInit = oriented.data;
+          gpuOriginal = oriented.data;
+          sourceDims = { width: oriented.info.width, height: oriented.info.height };
+        }
       }
-      const sourceDims = result.width && result.height ? { width: result.width, height: result.height } : null;
       const queued = await enqueueGpuClean({
         initBuffer: gpuInit,
         sourceDims,
@@ -307,15 +316,21 @@ router.get(
     if (status.status === 'failed' || status.status === 'canceled') {
       throw new ServerError(status.error || `Clean job ${status.status}`, { status: 409, code: 'JOB_FAILED' });
     }
+    // Never read bytes off disk while the job is still queued/running: the
+    // runner writes the render mid-flight (and the completion path upscales it
+    // back to source dims AFTER the initial write), so a read before the
+    // terminal `completed` state could return a partial or pre-upscale frame.
+    // 409 keeps the client polling. (A job that vanished from the queue's 24h
+    // archive reads as `unknown` — fall through and let the disk decide 200 vs
+    // 404, so a completed-then-forgotten render is still fetchable.)
+    if (status.status === 'queued' || status.status === 'running') {
+      throw new ServerError('Clean result not ready yet', { status: 409, code: 'RESULT_NOT_READY', severity: 'warning' });
+    }
     const result = await readGpuCleanResult(jobId);
     if (!result) {
-      // Distinguish "still rendering" (keep polling) from "gone" (past the temp
-      // GC or an unknown id) so the client can stop polling on a true miss.
-      const inFlight = status.status === 'queued' || status.status === 'running';
-      throw new ServerError(
-        inFlight ? 'Clean result not ready yet' : 'Clean result not found',
-        { status: inFlight ? 409 : 404, code: inFlight ? 'RESULT_NOT_READY' : 'NOT_FOUND', severity: 'warning' },
-      );
+      // Completed/unknown but no bytes on disk → gone (past the temp GC or an
+      // unknown id). A true miss so the client stops polling.
+      throw new ServerError('Clean result not found', { status: 404, code: 'NOT_FOUND', severity: 'warning' });
     }
     res.setHeader('Access-Control-Expose-Headers', 'X-Clean-Report');
     res.setHeader('X-Clean-Report', JSON.stringify({

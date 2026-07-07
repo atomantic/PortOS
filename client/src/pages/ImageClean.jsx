@@ -247,7 +247,31 @@ export default function ImageClean() {
       width: dims?.width || null,
       height: dims?.height || null,
     });
-    runClean(file, steps, diffusionMode);
+    // Auto-run the sync pipeline on select. If the GPU sub-mode is active it's
+    // NOT auto-enqueued (see `autoRun`) — the user tunes strength/max-MP then
+    // clicks "Run GPU clean", so the render reads the settings they see.
+    autoRun(file, steps, diffusionMode);
+  };
+
+  // A GPU diffusion run is expensive (GPU-serialized, queued) and has tunable
+  // params (strength / max-MP) — so it only fires from an explicit button, never
+  // as a side effect of toggling a step or switching mode (which would enqueue
+  // with stale params, then silently ignore later slider moves). Sync pipelines
+  // (metadata / denoise / CPU light) stay auto-run for instant feedback.
+  const willUseGpu = (selectedSteps, mode) => !!selectedSteps.diffusion && mode === 'gpu';
+  const autoRun = (file, selectedSteps, mode, opts) => {
+    if (!file) return;
+    if (willUseGpu(selectedSteps, mode)) {
+      // Clear a stale sync result so the After panel shows the "run GPU" prompt
+      // rather than a now-inconsistent preview.
+      if (resultUrlRef.current) { URL.revokeObjectURL(resultUrlRef.current); resultUrlRef.current = null; }
+      setResult(null);
+      setGpuJobId(null);
+      setGpuJob(null);
+      setBusy(false);
+      return;
+    }
+    runClean(file, selectedSteps, mode, opts);
   };
 
   const toggleStep = (key) => {
@@ -255,13 +279,13 @@ export default function ImageClean() {
     const next = { ...steps, [key]: !steps[key] };
     setSteps(next);
     // Re-run immediately against the new selection so the After preview always
-    // reflects the current steps.
-    if (original?.file) runClean(original.file, next, diffusionMode);
+    // reflects the current steps (GPU is gated behind the explicit button).
+    if (original?.file) autoRun(original.file, next, diffusionMode);
   };
 
   const changeDiffusionMode = (mode) => {
     setDiffusionMode(mode);
-    if (original?.file && steps.diffusion) runClean(original.file, steps, mode);
+    if (original?.file && steps.diffusion) autoRun(original.file, steps, mode);
   };
 
   const handleDrag = (e) => {
@@ -538,6 +562,17 @@ export default function ImageClean() {
                       Source is {srcMp.toFixed(1)}MP, above the {budgetMp.toFixed(1)}MP render budget — the render downscales to fit FLUX's attention budget, then upscales back to {original.width}×{original.height}. Expect some fidelity loss.
                     </p>
                   )}
+                  {/* Explicit run trigger — GPU never auto-enqueues, so the
+                      render always reads the strength/max-MP shown here. */}
+                  <button
+                    type="button"
+                    onClick={() => { if (original?.file) runClean(original.file, steps, 'gpu'); }}
+                    disabled={busy || !regen?.available}
+                    className="px-4 py-2 rounded-lg text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors flex items-center gap-2 w-full sm:w-auto"
+                  >
+                    <Zap size={16} />
+                    {busy && gpuJobId ? 'Rendering…' : 'Run GPU clean'}
+                  </button>
                 </div>
               )}
             </div>
@@ -571,7 +606,7 @@ export default function ImageClean() {
                     <Undo2 size={12} /> Undo
                   </button>
                   <button
-                    onClick={() => { painterRef.current?.clear(); if (original?.file) runClean(original.file, steps, diffusionMode, { skipMask: true }); }}
+                    onClick={() => { painterRef.current?.clear(); if (original?.file) autoRun(original.file, steps, diffusionMode, { skipMask: true }); }}
                     className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
                   >
                     <X size={12} /> Clear
