@@ -148,7 +148,7 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 // Unified default interval settings for all task types
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
-  'accessibility', 'branch-cleanup', 'branch-reconcile', 'console-errors', 'dependency-updates', 'documentation',
+  'accessibility', 'branch-cleanup', 'branch-reconcile', 'issue-reconcile', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'claim-work', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
@@ -194,6 +194,21 @@ export const DEFAULT_TASK_INTERVALS = {
   // trigger cleanupAgentWorktree's auto-merge. Off by default — enabling it is the
   // user's explicit consent to let it drive PRs on a schedule.
   'branch-reconcile':    { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', taskMetadata: { useWorktree: false, openPR: false, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true } },
+  // issue-reconcile heals ZOMBIE issues: open + `in-progress` (claimed) yet with
+  // their PR already MERGED and no live claim anywhere — a partial ship left the
+  // claim marker on, so the queue (which skips `in-progress`) never re-picks the
+  // remaining scope. PERPETUAL (drain-until-done): the generator runs the
+  // deterministic gh/git scan every dispatch and dispatches the coordinator agent
+  // only while zombies remain — then PARKS on the daily recheckCron (offset an
+  // hour after branch-reconcile so merged-branch cleanup lands first). The
+  // coordinator applies the partial-ship hybrid per zombie (close + file a scoped
+  // follow-up when the remainder is separable, else comment "done/remaining" +
+  // release the claim). `autoClose` (ON unless explicitly false) is the only
+  // per-app toggle: OFF forbids closing/filing — comment + unlabel only.
+  // useWorktree/openPR are LOCKED off (MANAGED_AGENT_OPTIONS): the coordinator
+  // works over `gh` (no code changes, no worktree). Off by default — enabling it
+  // is the user's explicit consent to let it mutate issue state on a schedule.
+  'issue-reconcile':     { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', taskMetadata: { useWorktree: false, openPR: false, autoClose: true } },
   'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
@@ -290,6 +305,10 @@ export const MANAGED_AGENT_OPTIONS = {
   // of the in-flight branches; a managed worktree would hide those branches from
   // the scan AND could trip cleanupAgentWorktree's auto-merge. Lock both off.
   'branch-reconcile': ['useWorktree', 'openPR'],
+  // issue-reconcile's coordinator works purely over `gh` (issue label/state +
+  // follow-up filing) — it makes no code changes, so it needs neither a worktree
+  // nor a PR. Lock both off so a hand-edited config can't attach one.
+  'issue-reconcile': ['useWorktree', 'openPR'],
   // claim-issue's prompt creates its own claim/issue-<num> worktree (same
   // rationale as plan-task), so CoS must not pre-create one or open the PR.
   'claim-issue': ['useWorktree', 'openPR'],
@@ -1504,6 +1523,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'accessibility': 'Accessibility audit',
   'branch-cleanup': 'Clean up merged branches',
   'branch-reconcile': "Finish this machine's in-flight local branches: clean up merged ones, open PRs, resolve conflicts, drive review, auto-merge when green",
+  'issue-reconcile': "Heal zombie issues: open + in-progress but their PR already merged with no live claim — close + file a scoped follow-up when work remains, or release the claim so the queue re-picks it",
   'dependency-updates': 'Update dependencies',
   'release-check': 'Check for release readiness',
   'error-handling': 'Improve error handling',
