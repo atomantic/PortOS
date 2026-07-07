@@ -94,6 +94,12 @@ export const getUsage = () => request('/usage');
 export const getUsageRaw = () => request('/usage/raw');
 export const resetUsage = () => request('/usage', { method: 'DELETE' });
 
+// Claude Code subscription rate-limit usage (parsed from the CLI `/usage` output).
+// Callers own their own inline error UI, so default to silent to avoid a toast
+// on machines without the `claude` CLI.
+export const getClaudeCodeUsage = ({ refresh = false, ...options } = {}) =>
+  request(`/usage/claude-code${refresh ? '?refresh=1' : ''}`, { silent: true, ...options });
+
 // Backup
 export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
