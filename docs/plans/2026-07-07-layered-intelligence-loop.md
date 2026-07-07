@@ -46,10 +46,13 @@ must not make direct code changes; it returns structured output to a programmati
 handler that runs deterministically outside the model invocation" — is Engine B's
 contract by construction, not a prompt guard.
 
-- Registered as a single global script job (`category: 'layered-intelligence'`,
-  `type: 'script'`) in the code-level `DEFAULT_JOBS` catalog
-  (`server/services/autonomousJobs/defaults.js`), which is materialized into each
-  install's `data/cos/autonomous-jobs.json` on boot and scheduled by
+- Registered as a single global script job in the code-level `DEFAULT_JOBS`
+  catalog (`server/services/autonomousJobs/defaults.js`) with `type: 'script'`,
+  `category: 'layered-intelligence'`, and `scriptHandler: 'layered-intelligence'`
+  — the `scriptHandler` field is what `isScriptJob` gates on and what
+  `SCRIPT_HANDLERS` is keyed by (dispatch is by `scriptHandler`, not `category`;
+  the existing `goal-check-in` job carries both). The catalog is materialized into
+  each install's `data/cos/autonomous-jobs.json` on boot and scheduled by
   `cosJobScheduler`. **Off by default.** It is a user-enabled scheduled
   automation, the sanctioned exception under the AI-provider "no cold-bootstrap
   LLM calls" policy.
@@ -94,7 +97,7 @@ Dedup and pause both derive from tracker state, not a local memory file:
   reasoner (so it self-avoids duplicates), and Layer 3 additionally runs a
   deterministic guard:
   `gh issue list --label layered-intelligence --state all --search <slug>` —
-  if a match exists (open, or closed within a recency window), the proposal is
+  if a match exists (open, or closed within the last 30 days), the proposal is
   suppressed.
 - **Pause.** The reasoner may return `pause: { blockOnIssue, reason }`. The
   handler applies a `layered-intelligence:blocking` label to that issue. **Before
@@ -129,10 +132,25 @@ A deterministic `fileIssue(tracker, { title, body, labels, slug })` dispatched b
 
 - **`gh`** (GitHub) — implemented in v1.
 - **`glab`** (GitLab) — near-identical; included in v1.
-- **jira** — via the existing jira integration (`jiraReports.js` et al.).
+- **jira** — via `createTicket()` in `server/services/jira.js` (`POST
+  /rest/api/2/issue`); dedup by a slug marker in the description, pause via a
+  label + JQL. (`jiraReports.js` is read/report-only — not the filer.)
+- **`plan`** — `resolveWorkTracker` returns `resolved: 'plan'` (the `source:
+  'fallback'` default) for any managed app whose origin is not a recognized
+  forge. These apps have no label/issue substrate, so the loop **appends the
+  proposal to the app's `PLAN.md`** as a slug-tagged `[lil-<slug>]` checklist
+  item (reusing the `reference-watch` append pattern), dedups by scanning
+  `PLAN.md` for the slug, and **does not support pause** (there is no issue to
+  block on — the app is simply re-evaluated next run). The handler branches on
+  `resolved` up front so a `plan` app never hits the forge-only `fileIssue`/
+  label paths.
 
-Dedup-query and pause-labeling have per-tracker equivalents (labels on GitHub/
-GitLab; a component/label + JQL on Jira).
+**Label bootstrapping.** `gh issue create --label <label>` (and the GitLab
+equivalent) fails if the label doesn't exist yet, so the forge filer ensures the
+`layered-intelligence` and `layered-intelligence:blocking` labels exist once
+before first use (`gh label create --force …` / `glab label create`). Dedup-query
+and pause-labeling then have per-tracker equivalents (labels on GitHub/GitLab; a
+description slug marker + JQL on Jira; a PLAN.md slug scan on `plan`).
 
 ## Structured output contract (v1)
 
@@ -156,10 +174,17 @@ result is `parseLLMJSON`'d:
 }
 ```
 
+`proposal` and `pause` are independent and **may both be present in one
+response** — the loop can file the single issue and immediately park the app on
+it. `blockOnIssue: "this"` resolves to the number of the issue just filed from
+`proposal` (so filing must happen before the pause label is applied); an integer
+targets a pre-existing open issue. A `pause` with `blockOnIssue: "this"` but a
+`null` proposal is invalid (nothing to block on) and is treated as no pause.
+
 Handler flow per app: park-check → (if not parked) gather → reason → validate
-JSON → scope-gate → dedup → file ≤1 issue → apply pause label if requested →
-update `lastRunAt`. Invalid/empty JSON is a no-op for that app (logged), never a
-throw that aborts the sweep.
+JSON → scope-gate → dedup → file ≤1 issue → (if `pause`) resolve `blockOnIssue`
+and apply the blocking label → update `lastRunAt`. Invalid/empty JSON is a no-op
+for that app (logged), never a throw that aborts the sweep.
 
 ## Per-app config (`app.layeredIntelligence`, via `updateApp`)
 
@@ -188,7 +213,8 @@ PortOS ships a baseline config: all default sources on; `allowedScopes` includes
   concern per file). Re-exported from `server/services` per the barrel rule if it
   exposes reusable helpers.
 - `server/services/autonomousJobs/scriptHandlers.js` — new `runLayeredIntelligence`
-  handler wired into the `category → handler` map (the sweep + 4 layers).
+  handler registered in the `SCRIPT_HANDLERS` map under the key
+  `'layered-intelligence'` (the sweep + 4 layers).
 - `server/services/apps.js` — `getAppLayeredIntelligenceConfig` /
   `updateAppLayeredIntelligence` accessors. The accessor returns the default
   config (all sources on; PortOS gets `loop-meta`/`portos-self` scopes) when the
