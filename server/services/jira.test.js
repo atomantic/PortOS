@@ -35,7 +35,10 @@ describe('jiraAuthHeader', () => {
 
 describe('createJiraClient expired-token detection', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    // vi.stubGlobal is only reverted by unstubAllGlobals (restoreAllMocks won't
+    // touch it unless unstubGlobals is set in vitest config), so the stubbed
+    // fetch would otherwise leak into later suites in this file.
+    vi.unstubAllGlobals();
   });
 
   // Helper: stub global fetch with a single response so createHttpClient's request()
