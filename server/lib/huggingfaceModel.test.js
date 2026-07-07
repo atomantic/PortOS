@@ -204,6 +204,38 @@ describe('buildCustomModelEntry', () => {
     });
     expect(entry).toMatchObject({ runner: 'flux2', quantization: 'none', source: 'user' });
   });
+
+  it('stamps ERNIE pipeline metadata the runner requires', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'baidu/ERNIE-Image',
+      model: hf({}),
+      classification: { kind: 'image', runner: 'ernie', format: 'safetensors' },
+    });
+    expect(entry).toMatchObject({ runner: 'ernie', pipelineClass: 'ErnieImagePipeline', usePromptEnhancer: true });
+  });
+
+  it('stamps HiDream pipeline + gated text-encoder metadata', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'HiDream-ai/HiDream-I1-Full',
+      model: hf({}),
+      classification: { kind: 'image', runner: 'hidream', format: 'safetensors' },
+    });
+    expect(entry).toMatchObject({
+      runner: 'hidream',
+      pipelineClass: 'HiDreamImagePipeline',
+      textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderClass: 'LlamaForCausalLM',
+    });
+  });
+
+  it('stamps the Qwen pipeline class', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'Qwen/Qwen-Image',
+      model: hf({}),
+      classification: { kind: 'image', runner: 'qwen', format: 'safetensors' },
+    });
+    expect(entry).toMatchObject({ runner: 'qwen', pipelineClass: 'QwenImagePipeline' });
+  });
 });
 
 describe('searchHuggingfaceModels', () => {

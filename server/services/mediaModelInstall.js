@@ -24,6 +24,7 @@ import {
 } from '../lib/huggingfaceModel.js';
 import { addUserModelEntry } from '../lib/mediaModels.js';
 import { getHfToken } from '../lib/hfToken.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Add a media model from a HuggingFace repo. `input.url` is any HF ref shape
 // (URL or org/name@rev). Optional `kind` ('image'|'video'), `runtime` (video),
@@ -31,6 +32,19 @@ import { getHfToken } from '../lib/hfToken.js';
 // `guidance` override the derived defaults. Returns the new registry entry.
 export const addModelFromHuggingface = async (input, { fetchImpl = fetch } = {}) => {
   const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
+  // Refuse a pinned revision (`org/name@rev`, `/tree/<rev>`). The registry
+  // entry stores only `repo`, and the download + render paths pull the default
+  // branch — so classifying against a pinned revision but generating against
+  // `main` would silently render different weights. Rather than persist a
+  // revision the render path ignores, reject it up front (the strict-refusal
+  // guarantee: an add either renders what it classified, or is refused). A user
+  // who needs a specific revision can pin it by hand-editing media-models.json.
+  if (revision) {
+    throw new ServerError(
+      `HuggingFace repo "${repo}" was given a pinned revision ("${revision}"), which the model download/render paths don't honor — they always use the default branch. Add the repo without a revision (the default branch), or pin the revision by editing data/media-models.json directly.`,
+      { status: 422, code: 'HF_REVISION_UNSUPPORTED' },
+    );
+  }
   // Stored/env/CLI token — needed only for gated repos, harmless on public ones.
   const token = (typeof input?.token === 'string' && input.token.trim()) || (await getHfToken()) || '';
   const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl });

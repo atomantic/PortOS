@@ -112,6 +112,26 @@ const IMAGE_DEFAULTS = {
   [RUNNER_FAMILIES.QWEN]: { steps: 30, guidance: 4.0 },
 };
 
+// Static per-runner registry metadata the render path needs beyond `repo` —
+// FIXED per family (identical across the shipped built-ins), so a self-service
+// add can stamp them and the entry renders without hand-editing:
+//   - flux2:   quantization:'none' → runner loads `repo` directly (no tokenizerRepo)
+//   - ernie:   ErnieImagePipeline isn't in diffusers' auto-registry; usePromptEnhancer on
+//   - hidream: HiDreamImagePipeline + the (gated) Llama-3.1 text encoder + its class names
+//   - qwen:    QwenImagePipeline pinned so a registry edit can't fight auto-resolution
+// z-image needs nothing beyond `repo` (autodetected). Mirrors DEFAULT_REGISTRY.
+const RUNNER_METADATA = {
+  [RUNNER_FAMILIES.FLUX2]: { quantization: 'none' },
+  [RUNNER_FAMILIES.ERNIE]: { pipelineClass: 'ErnieImagePipeline', usePromptEnhancer: true },
+  [RUNNER_FAMILIES.HIDREAM]: {
+    pipelineClass: 'HiDreamImagePipeline',
+    textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+    textEncoderClass: 'LlamaForCausalLM',
+    tokenizerClass: 'PreTrainedTokenizerFast',
+  },
+  [RUNNER_FAMILIES.QWEN]: { pipelineClass: 'QwenImagePipeline' },
+};
+
 // Inspect the repo's file list. `.gguf` present (llama.cpp/ggml) is the format
 // we can never load in the image/video pipeline; `.safetensors` is required.
 // Reuses the shared sibling lister from huggingfaceLora.js.
@@ -311,14 +331,15 @@ export const buildCustomModelEntry = ({ repo, model, classification, name, steps
     entry.runtime = classification.runtime;
   } else {
     entry.runner = classification.runner;
-    // flux2 defaults missing `quantization` to 'sdnq', which then REQUIRES a
-    // `tokenizerRepo` (the gated base repo) — a self-service add has neither, so
-    // without this the entry registers but every render 400s with
-    // IMAGE_GEN_FLUX2_MISCONFIGURED. A plain HF repo added here is treated as an
-    // unquantized base (`none`): the runner loads `repo` directly, no tokenizer
-    // sidecar needed. A user who added a quantized community repo can edit the
-    // JSON to set sdnq/int8 + the required sibling repo.
-    if (classification.runner === RUNNER_FAMILIES.FLUX2) entry.quantization = 'none';
+    // Stamp the static per-runner metadata the render path requires beyond
+    // `repo` (flux2 quantization:'none', ernie/hidream/qwen pipelineClass +
+    // hidream's gated text encoder). Without these the entry would register but
+    // 400 at render (IMAGE_GEN_*_MISCONFIGURED) — the strict-refusal guarantee
+    // is "renders what it classified, or is refused," so we must supply them.
+    // For HiDream the text encoder is a GATED Llama repo: the add succeeds but
+    // the first render will prompt the user to accept that license + set an HF
+    // token, same as the shipped built-in.
+    Object.assign(entry, RUNNER_METADATA[classification.runner] || {});
   }
   return entry;
 };

@@ -49,6 +49,14 @@ describe('addModelFromHuggingface', () => {
     expect(addUserModelEntry).not.toHaveBeenCalled();
   });
 
+  it('refuses a pinned revision (render path only pulls the default branch)', async () => {
+    const fetchImpl = mockFetch({ id: 'org/x', siblings: [{ rfilename: 'model.safetensors' }], tags: ['ltx'] });
+    await expect(
+      addModelFromHuggingface({ url: 'org/x@v2.0' }, { fetchImpl }),
+    ).rejects.toThrow(/pinned revision/);
+    expect(addUserModelEntry).not.toHaveBeenCalled();
+  });
+
   it('honors explicit kind + runner overrides', async () => {
     const fetchImpl = mockFetch({
       id: 'someone/custom',
