@@ -34,15 +34,38 @@ export const deleteAllUploads = (options = {}) => request('/uploads?confirm=true
 // custom header. Returns `{ blob, mimeType, report }`. Throws on failure so the
 // page's own catch can toast (no silent flag needed — this never double-toasts).
 //
-// `steps` is `{ metadata?: boolean, denoise?: boolean, diffusion?: 'off'|'light'|'gpu' }`.
+// `steps` is `{ metadata?: boolean, denoise?: boolean, diffusion?: 'off'|'light'|'gpu',
+//   mask?: Blob, feather?: number }`.
 // metadata/denoise default on the server (metadata ON, denoise OFF); diffusion
 // defaults to 'off'. 'light' runs the CPU spatial SynthID-disruption pass;
 // 'gpu' (the FLUX round-trip) is not yet wired here and returns a 501.
+//
+// When a `mask` Blob (a painted preserve-region PNG) is supplied AND a diffusion
+// step runs, the body is framed as an ignore-zone envelope
+// `<uint32 BE maskLen><mask bytes><image bytes>` (no multipart dependency) and
+// `?mask=1&feather=<px>` is added. The server composites the ORIGINAL pixels
+// back into the masked regions (feathered edge) over the diffused result.
 export const cleanImage = async (file, steps = {}) => {
   const params = new URLSearchParams();
   if (typeof steps.metadata === 'boolean') params.set('metadata', steps.metadata ? '1' : '0');
   if (typeof steps.denoise === 'boolean') params.set('denoise', steps.denoise ? '1' : '0');
   if (typeof steps.diffusion === 'string' && steps.diffusion !== 'off') params.set('diffusion', steps.diffusion);
+
+  // Build the request body. With a mask + a diffusion step, prefix the raw image
+  // bytes with the length-framed mask; otherwise send the file directly.
+  let body = file;
+  const diffusionOn = typeof steps.diffusion === 'string' && steps.diffusion !== 'off';
+  if (steps.mask && diffusionOn) {
+    const [maskBytes, imageBytes] = await Promise.all([
+      steps.mask.arrayBuffer(),
+      file.arrayBuffer(),
+    ]);
+    const lenPrefix = new Uint8Array(4);
+    new DataView(lenPrefix.buffer).setUint32(0, maskBytes.byteLength, false);
+    body = new Blob([lenPrefix, maskBytes, imageBytes]);
+    params.set('mask', '1');
+    if (typeof steps.feather === 'number') params.set('feather', String(steps.feather));
+  }
   const qs = params.toString();
 
   // Always send application/octet-stream rather than the browser's reported
@@ -55,7 +78,7 @@ export const cleanImage = async (file, steps = {}) => {
   const response = await fetch(`${API_BASE}/image-clean${qs ? `?${qs}` : ''}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
-    body: file,
+    body,
   }).catch(() => null);
 
   if (!response) throw new Error('Server unreachable — check your connection and try again');

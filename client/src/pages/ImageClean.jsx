@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Eraser, Upload, Download, ShieldCheck, Sparkles } from 'lucide-react';
+import { Eraser, Upload, Download, ShieldCheck, Sparkles, Brush, Square, Undo2, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import IgnoreZonePainter from '../components/media/IgnoreZonePainter';
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
 
@@ -31,6 +32,14 @@ export default function ImageClean() {
   // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy),
   // diffusion OFF (lossy — CPU light pass, the only step that touches SynthID).
   const [steps, setSteps] = useState({ metadata: true, denoise: false, diffusion: false });
+  // Ignore-zone (preserve-region) mask state — only relevant when the diffusion
+  // step is on. `maskTool`/`brushSize`/`feather` drive the painter; `hasMask`
+  // reflects whether any region is painted so the re-clean knows to send it.
+  const [maskTool, setMaskTool] = useState('brush');
+  const [brushSize, setBrushSize] = useState(40);
+  const [feather, setFeather] = useState(3);
+  const [hasMask, setHasMask] = useState(false);
+  const painterRef = useRef(null);
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
@@ -59,6 +68,16 @@ export default function ImageClean() {
       denoise: selectedSteps.denoise,
       diffusion: selectedSteps.diffusion ? 'light' : 'off',
     };
+    // Ignore-zone mask only matters when a diffusion pass runs — export the
+    // painted preserve-region as a PNG Blob and ride it in the request envelope
+    // so the server composites original pixels back into the masked regions.
+    if (selectedSteps.diffusion && painterRef.current?.hasMask) {
+      const maskBlob = await painterRef.current.exportMaskBlob();
+      if (maskBlob) {
+        payload.mask = maskBlob;
+        payload.feather = feather;
+      }
+    }
     const cleaned = await api.cleanImage(file, payload).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
@@ -75,7 +94,7 @@ export default function ImageClean() {
     const report = cleaned.report || {};
     setResult({ ...report, mimeType: cleaned.mimeType, objectUrl });
     toast.success(report.c2paStripped ? 'C2PA chunk removed' : 'Image cleaned');
-  }, []);
+  }, [feather]);
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -279,6 +298,93 @@ export default function ImageClean() {
               ))}
             </div>
           </div>
+
+          {/* Ignore-zone (preserve-region) mask painter — only when diffusion is on */}
+          {steps.diffusion && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Brush size={16} className="text-port-accent" />
+                  <span className="text-sm font-medium text-white">Ignore zone (preserve region)</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setMaskTool('brush')}
+                    className={`px-2 py-1 rounded text-xs flex items-center gap-1 border transition-colors ${maskTool === 'brush' ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border text-gray-400 hover:text-white'}`}
+                  >
+                    <Brush size={12} /> Brush
+                  </button>
+                  <button
+                    onClick={() => setMaskTool('rect')}
+                    className={`px-2 py-1 rounded text-xs flex items-center gap-1 border transition-colors ${maskTool === 'rect' ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border text-gray-400 hover:text-white'}`}
+                  >
+                    <Square size={12} /> Rectangle
+                  </button>
+                  <button
+                    onClick={() => { painterRef.current?.undo(); }}
+                    className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
+                  >
+                    <Undo2 size={12} /> Undo
+                  </button>
+                  <button
+                    onClick={() => { painterRef.current?.clear(); if (original?.file) runClean(original.file, steps); }}
+                    className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
+                  >
+                    <X size={12} /> Clear
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                Paint the regions the diffusion pass should NOT alter (comic dialog, faces, fine text).
+                After the pass, the original pixels are composited back into these regions with a feathered edge.
+                <span className="text-port-warning"> Heads up:</span> a preserved region keeps its original SynthID locally — a deliberate per-region quality-vs-disruption tradeoff.
+              </p>
+              <div className="flex items-center justify-center bg-port-bg/50 rounded p-2">
+                <IgnoreZonePainter
+                  ref={painterRef}
+                  imageSrc={original.previewUrl}
+                  tool={maskTool}
+                  brushSize={brushSize}
+                  onHasMaskChange={setHasMask}
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="flex items-center gap-2 flex-1">
+                  <label htmlFor="brush-size" className="text-xs text-gray-500 whitespace-nowrap">Brush size</label>
+                  <input
+                    id="brush-size"
+                    type="range"
+                    min="8"
+                    max="200"
+                    value={brushSize}
+                    onChange={(e) => setBrushSize(Number(e.target.value))}
+                    className="flex-1 accent-port-accent"
+                  />
+                  <span className="text-xs text-gray-400 w-10 text-right">{brushSize}px</span>
+                </div>
+                <div className="flex items-center gap-2 flex-1">
+                  <label htmlFor="feather" className="text-xs text-gray-500 whitespace-nowrap">Feather</label>
+                  <input
+                    id="feather"
+                    type="range"
+                    min="0"
+                    max="50"
+                    value={feather}
+                    onChange={(e) => setFeather(Number(e.target.value))}
+                    className="flex-1 accent-port-accent"
+                  />
+                  <span className="text-xs text-gray-400 w-10 text-right">{feather}px</span>
+                </div>
+                <button
+                  onClick={() => { if (original?.file) runClean(original.file, steps); }}
+                  disabled={busy || !hasMask}
+                  className="px-3 py-1.5 rounded text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors whitespace-nowrap"
+                >
+                  Apply mask
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">

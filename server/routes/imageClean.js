@@ -12,7 +12,7 @@ import { Router, raw } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { cleanImageBuffer, CLEAN_LEVELS } from '../lib/imageClean.js';
+import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
 import { applyLightRegen, computePixelDelta } from '../services/imageGen/regen.js';
 
 const router = Router();
@@ -53,11 +53,40 @@ const diffusionMode = z.preprocess(
 );
 
 // Pipeline steps ride in the query string, not the body (the body is the image).
+// `mask=1` signals an ignore-zone preserve-region envelope in the body (see the
+// length-prefixed decode below); `feather` is the soft-boundary blur sigma (px)
+// clamped in the lib. The mask only has any effect when a diffusion step runs —
+// it composites the ORIGINAL pixels back over the diffused result.
 const cleanQuerySchema = z.object({
   metadata: queryFlag(true),
   denoise: queryFlag(false),
   diffusion: diffusionMode,
+  mask: queryFlag(false),
+  feather: z.preprocess(
+    (v) => (v === undefined || v === '' ? IGNORE_ZONE_FEATHER_DEFAULT : Number(v)),
+    z.number().min(0).max(50),
+  ),
 });
+
+// Decode the optional ignore-zone envelope. When `?mask=1`, the body is
+// `<uint32 BE maskLen><mask PNG bytes><image bytes>` — a no-dependency framing
+// that keeps the whole payload inside express.raw() without pulling in
+// multer/busboy for a second multipart field. Returns `{ image, mask }` (mask
+// null when absent/malformed — the pipeline just skips the composite, never
+// 500s). The mask is small (a 1-channel PNG), so the 4-byte length prefix is
+// plenty. Guards against a length that overruns the buffer.
+function splitMaskEnvelope(body, hasMask) {
+  if (!Buffer.isBuffer(body) || body.length === 0) return { image: null, mask: null };
+  if (!hasMask) return { image: body, mask: null };
+  if (body.length < 4) return { image: body, mask: null };
+  const maskLen = body.readUInt32BE(0);
+  const maskEnd = 4 + maskLen;
+  // A length that doesn't leave any image bytes (or overruns) is malformed —
+  // fall back to treating the whole body as the image so a bad frame degrades to
+  // "no mask" rather than a hard failure.
+  if (maskLen <= 0 || maskEnd >= body.length) return { image: body, mask: null };
+  return { image: body.subarray(maskEnd), mask: body.subarray(4, maskEnd) };
+}
 
 // 256 MiB raw-byte ceiling — the transport is the only (generous) size bound now
 // that base64 inflation is gone. The decompression-bomb guard (MAX_PIXELS) in
@@ -73,7 +102,7 @@ router.post(
   '/',
   raw({ type: RAW_TYPES, limit: RAW_LIMIT }),
   asyncHandler(async (req, res) => {
-    const { metadata, denoise, diffusion } = validateRequest(cleanQuerySchema, req.query);
+    const { metadata, denoise, diffusion, mask: hasMask, feather } = validateRequest(cleanQuerySchema, req.query);
 
     // The GPU FLUX round-trip needs the non-gallery render seam factored out of
     // the lightbox `/regenerate` flow (async job queue + media-job progress),
@@ -86,13 +115,19 @@ router.post(
       });
     }
 
-    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
+    const { image: buffer, mask: maskBuffer } = splitMaskEnvelope(rawBody, hasMask);
     if (!buffer || buffer.length === 0) {
       throw new ServerError('Request body must be raw image bytes', {
         status: 400,
         code: 'VALIDATION_ERROR',
       });
     }
+
+    // The original bytes are captured BEFORE any cleaning so the ignore-zone
+    // composite can restore true source pixels into the preserved regions (the
+    // whole point is to undo the diffusion inside the mask, not re-diffuse it).
+    const originalBuffer = buffer;
 
     const result = await cleanImageBuffer(buffer, { metadata, denoise });
 
@@ -139,6 +174,37 @@ router.post(
           : 'CPU light pass - best-effort SynthID disruption; does not guarantee removal',
         ...(delta ? { pixelDeltaPct: delta.pixelDeltaPct, psnr: delta.psnr } : {}),
       });
+
+      // Ignore-zone (preserve-region) compositing runs LAST, only after a
+      // diffusion pass has actually redrawn the frame. It restores the ORIGINAL
+      // pixels into the user-painted mask (feathered edge) so comic dialog /
+      // faces / fine text the diffusion garbled are preserved — a deliberate
+      // per-region quality-vs-disruption choice (those regions keep their local
+      // SynthID). A missing/malformed mask or a decode failure degrades to the
+      // un-composited diffused bytes rather than failing the request.
+      if (maskBuffer) {
+        const composited = await compositeIgnoreZone(outData, originalBuffer, maskBuffer, { feather });
+        if (composited) {
+          outData = composited.data;
+          outFormat = 'png';
+          outMime = 'image/png';
+          outWidth = composited.width;
+          outHeight = composited.height;
+          steps.push({
+            step: 'ignore-zone',
+            status: 'applied',
+            lossless: false,
+            detail: `preserve-region composite (feather ${feather}px) - masked pixels keep their original SynthID`,
+          });
+        } else {
+          steps.push({
+            step: 'ignore-zone',
+            status: 'noop',
+            lossless: false,
+            detail: 'mask could not be applied (decode failed) - returned the un-preserved diffused result',
+          });
+        }
+      }
     }
 
     const report = {

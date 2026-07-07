@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import sharp from 'sharp';
 import {
   autoCleanGeneratedImage, stripPngC2PAChunk, stripPngMetadataChunks, cleanImageBuffer,
+  compositeIgnoreZone,
 } from './imageClean.js';
 
 let sandbox;
@@ -395,5 +396,83 @@ describe('cleanImageBuffer (composable steps)', () => {
     expect(result.data).toBe(pngFixture);
     expect(result.sizeAfter).toBe(result.sizeBefore);
     expect(result.width).toBe(32);
+  });
+});
+
+describe('compositeIgnoreZone', () => {
+  // A solid-red 16×16 "original" and a solid-blue 16×16 "diffused" base, plus a
+  // mask whose LEFT half is white (preserve original) and right half black (keep
+  // diffused). After compositing, the left half should read red (original) and
+  // the right half blue (diffused). Feather=0 gives a hard edge so the core of
+  // each half is unambiguous.
+  const W = 16;
+  const H = 16;
+  let redOriginal;
+  let blueBase;
+  let halfMask;
+
+  beforeAll(async () => {
+    redOriginal = await sharp({ create: { width: W, height: H, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toBuffer();
+    blueBase = await sharp({ create: { width: W, height: H, channels: 3, background: { r: 0, g: 0, b: 255 } } }).png().toBuffer();
+    // Left half white (preserve), right half black (diffused).
+    const maskRaw = Buffer.alloc(W * H, 0);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        if (x < W / 2) maskRaw[y * W + x] = 255;
+      }
+    }
+    halfMask = await sharp(maskRaw, { raw: { width: W, height: H, channels: 1 } }).png().toBuffer();
+  });
+
+  const pixelAt = async (buf, x, y) => {
+    const { data } = await sharp(buf).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const idx = (y * W + x) * 3;
+    return { r: data[idx], g: data[idx + 1], b: data[idx + 2] };
+  };
+
+  it('restores original pixels inside the mask and keeps diffused pixels outside (hard edge)', async () => {
+    const out = await compositeIgnoreZone(blueBase, redOriginal, halfMask, { feather: 0 });
+    expect(out).toBeTruthy();
+    expect(out.width).toBe(W);
+    expect(out.height).toBe(H);
+    // Masked (left) core → original red.
+    const left = await pixelAt(out.data, 2, 8);
+    expect(left.r).toBeGreaterThan(200);
+    expect(left.b).toBeLessThan(60);
+    // Unmasked (right) core → diffused blue.
+    const right = await pixelAt(out.data, 14, 8);
+    expect(right.b).toBeGreaterThan(200);
+    expect(right.r).toBeLessThan(60);
+  });
+
+  it('feathers the boundary into a blended zone rather than a hard cut', async () => {
+    const out = await compositeIgnoreZone(blueBase, redOriginal, halfMask, { feather: 4 });
+    expect(out).toBeTruthy();
+    // At the seam (x≈8) the feathered alpha blends red over blue → a purple-ish
+    // pixel with BOTH channels present, unlike either solid core.
+    const seam = await pixelAt(out.data, 8, 8);
+    expect(seam.r).toBeGreaterThan(20);
+    expect(seam.b).toBeGreaterThan(20);
+  });
+
+  it('accepts a mask painted at a different resolution than the base', async () => {
+    // Paint the same left-half mask at 2× the base resolution — it must resize
+    // (fit: fill) to the base dims, not throw.
+    const bigMaskRaw = Buffer.alloc(W * 2 * H * 2, 0);
+    for (let y = 0; y < H * 2; y += 1) {
+      for (let x = 0; x < W * 2; x += 1) {
+        if (x < W) bigMaskRaw[y * W * 2 + x] = 255;
+      }
+    }
+    const bigMask = await sharp(bigMaskRaw, { raw: { width: W * 2, height: H * 2, channels: 1 } }).png().toBuffer();
+    const out = await compositeIgnoreZone(blueBase, redOriginal, bigMask, { feather: 0 });
+    expect(out).toBeTruthy();
+    const left = await pixelAt(out.data, 2, 8);
+    expect(left.r).toBeGreaterThan(200);
+  });
+
+  it('returns null on a non-buffer or undecodable input instead of throwing', async () => {
+    expect(await compositeIgnoreZone(null, redOriginal, halfMask)).toBeNull();
+    expect(await compositeIgnoreZone(blueBase, redOriginal, Buffer.from('not an image'))).toBeNull();
   });
 });
