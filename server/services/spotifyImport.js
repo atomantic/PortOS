@@ -78,7 +78,11 @@ export function spotifyRecordToCandidate(record) {
   // Dedupe on the play instant + track identity. Two plays of the same track at
   // the exact same second are indistinguishable in the export, so collapsing
   // them is correct (and matches the design's "played_at + track id" contract).
-  const identity = uri || title;
+  // Legacy/local records carry no URI — fall back to artist+album+title (or the
+  // show for episodes) so two *different* tracks that happen to share a title at
+  // the same instant don't wrongly collapse into one play.
+  const identity = uri
+    || [artist, isEpisode ? showName : album, title].filter(Boolean).join('|');
   const dedupeKey = `spotify:${identity}:${happenedAt}`;
 
   const summaryParts = isEpisode
@@ -182,13 +186,16 @@ async function readRecordsFromZip(filePath) {
   const reads = [];
   await new Promise((resolve, reject) => {
     let settled = false;
+    const src = createReadStream(filePath);
+    const parser = parseZip();
     const settle = (fn) => (...args) => {
       if (settled) return;
       settled = true;
+      // On failure, tear down the read + parse pipeline so a 200MB upload with an
+      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
+      if (fn === reject) { src.destroy(); parser.destroy?.(); }
       fn(...args);
     };
-    const src = createReadStream(filePath);
-    const parser = parseZip();
     src.on('error', settle(reject));
     src
       .pipe(parser)

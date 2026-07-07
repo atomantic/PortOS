@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Music, Upload, Loader2, CheckCircle2 } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
@@ -15,40 +15,49 @@ export default function SpotifyImportPanel({ onImported }) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
   const [result, setResult] = useState(null);
+  // Monotonic request id — a response only applies if it's still the latest
+  // request, so swapping the file mid-flight can't let a stale response land on
+  // the new selection.
+  const reqIdRef = useRef(0);
 
-  const reset = () => { setFile(null); setPreview(null); setResult(null); };
+  const reset = () => { reqIdRef.current += 1; setFile(null); setPreview(null); setResult(null); };
 
   const pickFile = (e) => {
     const next = e.target.files?.[0] || null;
+    reqIdRef.current += 1; // invalidate any in-flight response for the old file
     setFile(next);
     setPreview(null);
     setResult(null);
   };
 
   const runPreview = () => {
-    if (!file) return;
+    if (!file || busy) return;
+    const rid = ++reqIdRef.current;
     setBusy(true);
     setResult(null);
     api.importSpotifyHistory(file, { preview: true, silent: true })
       .then((res) => {
+        if (rid !== reqIdRef.current) return;
         setPreview(res);
         if (!res.mapped) toast.error('No listening records found in that file.');
       })
-      .catch((err) => toast.error(`Preview failed: ${err.message}`))
-      .finally(() => setBusy(false));
+      .catch((err) => { if (rid === reqIdRef.current) toast.error(`Preview failed: ${err.message}`); })
+      .finally(() => { if (rid === reqIdRef.current) setBusy(false); });
   };
 
   const runImport = () => {
-    if (!file) return;
+    if (!file || busy) return;
+    const rid = ++reqIdRef.current;
     setBusy(true);
     api.importSpotifyHistory(file, { preview: false, silent: true })
       .then((res) => {
+        if (rid !== reqIdRef.current) return;
         setResult(res);
         toast.success(`Imported ${res.recorded} play(s) (${res.skipped} already present).`);
         if (res.recorded > 0) onImported?.();
       })
-      .catch((err) => toast.error(`Import failed: ${err.message}`))
-      .finally(() => setBusy(false));
+      .catch((err) => { if (rid === reqIdRef.current) toast.error(`Import failed: ${err.message}`); })
+      .finally(() => { if (rid === reqIdRef.current) setBusy(false); });
   };
 
   const dateRange = (from, to) => {
@@ -81,10 +90,10 @@ export default function SpotifyImportPanel({ onImported }) {
           </p>
 
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm text-gray-200 hover:border-port-accent">
+            <label className={`inline-flex items-center gap-2 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm text-gray-200 ${busy ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:border-port-accent'}`}>
               <Upload size={14} />
               <span>{file ? 'Change file' : 'Choose file'}</span>
-              <input type="file" accept=".zip,.json,application/zip,application/json" onChange={pickFile} className="hidden" />
+              <input type="file" accept=".zip,.json,application/zip,application/json" onChange={pickFile} disabled={busy} className="hidden" />
             </label>
             {file && <span className="truncate text-xs text-gray-400">{file.name}</span>}
           </div>

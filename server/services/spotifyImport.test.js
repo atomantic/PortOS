@@ -96,6 +96,15 @@ describe('spotifyRecordToCandidate', () => {
     expect(c1.dedupeKey).toBe('spotify:spotify:track:2gjHtqrEnMBmD3lBWJUp2P:2023-05-01T18:30:00.000Z');
   });
 
+  it('gives URI-less records an artist+album+title fallback identity (no title-only collapse)', () => {
+    const base = { endTime: '2022-01-15 09:05', trackName: 'Intro', msPlayed: 1000 };
+    const a = spotifyRecordToCandidate({ ...base, artistName: 'Band A', albumName: 'X' });
+    const b = spotifyRecordToCandidate({ ...base, artistName: 'Band B', albumName: 'Y' });
+    // Same title + same instant, different artists — must NOT share a dedupe key.
+    expect(a.dedupeKey).not.toBe(b.dedupeKey);
+    expect(a.dedupeKey).toContain('Band A');
+  });
+
   it('classifies podcast episodes and uses the show name as summary', () => {
     const c = spotifyRecordToCandidate({
       ts: '2023-06-01T12:00:00Z',

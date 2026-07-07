@@ -66,11 +66,15 @@ router.get('/events', asyncHandler(async (req, res) => {
 // import is idempotent (dedupe on played-at + track), so re-imports are safe.
 // The uploaded temp file is always unlinked, whether the import succeeds or not.
 router.post('/import/spotify', uploadSpotify, asyncHandler(async (req, res) => {
-  const { preview } = validateRequest(importBodySchema, req.body);
   const file = req.file;
   if (!file?.path) throw new ServerError('No file uploaded', { status: 400, code: 'BAD_REQUEST' });
-  const result = await importSpotifyHistory(file, { dryRun: preview })
-    .finally(() => unlink(file.path).catch(() => {}));
+  // Wrap BOTH validation and the import in the cleanup chain — a rejected
+  // `preview` value must still unlink the already-staged temp upload.
+  const run = async () => {
+    const { preview } = validateRequest(importBodySchema, req.body);
+    return importSpotifyHistory(file, { dryRun: preview });
+  };
+  const result = await run().finally(() => unlink(file.path).catch(() => {}));
   res.json(result);
 }));
 
