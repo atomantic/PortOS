@@ -113,7 +113,18 @@ const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 
 // Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
 // Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
+// NOTE: this is a BOOT snapshot — a model added at runtime via the HuggingFace
+// installer (mediaModels.addUserModelEntry hot-reloads the registry cache) is
+// NOT in here. Render-time lookups must go through resolveVideoModel() so a
+// just-added model is renderable without a restart (issue #2124). Kept exported
+// for back-compat with any deep importer.
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
+
+// Resolve a model by id from the LIVE registry (getVideoModels reads the
+// hot-reloadable cache), falling back to the boot snapshot. This is what the
+// render path uses so a runtime-added model resolves without a server restart.
+export const resolveVideoModel = (modelId) =>
+  getVideoModels().find((m) => m.id === modelId) || VIDEO_MODELS[modelId] || null;
 
 export const listVideoModels = () => getVideoModels();
 
@@ -618,7 +629,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // callers (legacy / tests) bypass the queue and would clobber activeProcess
   // on concurrent calls; that's an explicit "don't do that" contract.
 
-  const model = VIDEO_MODELS[modelId];
+  const model = resolveVideoModel(modelId);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   // Only require the legacy mlx_video pythonPath when the chosen runtime
   // actually uses it. ltx2/wan22/hunyuan resolve their own venv path inside
