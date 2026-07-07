@@ -9,6 +9,12 @@ export const getApp = (id) => request(`/apps/${id}`);
 // caller (EditAppDrawer) owns its own .catch fallback, so default to silent.
 export const getAppWorkTracker = (id, options) =>
   request(`/apps/${id}/work-tracker`, { silent: true, ...options });
+// Effective Layered Intelligence config (self-improvement loop) for an app —
+// stored partial merged over the shipped defaults. Read-only; saved through
+// updateApp (the `layeredIntelligence` key routes to the merge helper server-
+// side). Caller owns its own .catch fallback, so default to silent.
+export const getAppLayeredIntelligence = (id, options) =>
+  request(`/apps/${id}/layered-intelligence`, { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)

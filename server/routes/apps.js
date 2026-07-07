@@ -732,6 +732,18 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
   res.json({ appId: app.id, appName: app.name, ...info });
 }));
 
+// GET /api/apps/:id/layered-intelligence - Effective Layered Intelligence config
+// for this app (the self-improvement loop). Merges the app's stored partial
+// config over the shipped defaults so the UI always renders a complete, safe
+// config — including the isPortos-derived scope set. Read-only; the value is
+// saved through PUT /api/apps/:id (layeredIntelligence goes via the dedicated
+// merge helper there). See server/services/layeredIntelligence.js.
+router.get('/:id/layered-intelligence', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const config = await appsService.getAppLayeredIntelligenceConfig(app.id);
+  res.json({ appId: app.id, appName: app.name, isPortos: app.id === PORTOS_APP_ID, config });
+}));
+
 // PUT /api/apps/:id/task-types/all - Toggle all task types for an app
 router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
   const { enabled } = req.body;

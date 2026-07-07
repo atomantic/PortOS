@@ -9,6 +9,7 @@ import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { copyToClipboard } from '../../lib/clipboard';
+import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate } from './LayeredIntelligenceTab';
 
 const WORK_TRACKER_OPTIONS = [
   { value: 'auto', label: 'Auto (detect from git origin)' },
@@ -27,6 +28,7 @@ const TABS = [
   { id: 'ports', label: 'Ports & TLS' },
   { id: 'commands', label: 'Commands' },
   { id: 'workflow', label: 'Workflow' },
+  { id: 'intelligence', label: 'Intelligence' },
   { id: 'jira', label: 'JIRA' },
   { id: 'datadog', label: 'DataDog' }
 ];
@@ -77,6 +79,17 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  // Layered Intelligence (self-improvement loop) config lives in its own slice —
+  // it's saved through a dedicated server merge helper (updateAppLayeredIntelligence)
+  // that patches over the STORED config, not the effective one, so we diff the
+  // edited config against the loaded effective baseline and PATCH only what changed
+  // (see buildLayeredIntelligenceUpdate). `liBaseline` is the effective config the
+  // drawer loaded; `liConfig` is the working copy the tab edits.
+  const [liConfig, setLiConfig] = useState(null);
+  const [liBaseline, setLiBaseline] = useState(null);
+  const [liProviders, setLiProviders] = useState([]);
+  const [liIsPortos, setLiIsPortos] = useState(app.id === PORTOS_APP_ID);
+  const [liLoaded, setLiLoaded] = useState(false);
   const [tlsUpgrading, setTlsUpgrading] = useState(false);
   const [tlsResult, setTlsResult] = useState(null);
   const [tlsError, setTlsError] = useState(null);
@@ -139,6 +152,28 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       .then(setWorkTrackerInfo)
       .catch(() => setWorkTrackerInfo(null));
   }, [app.id]);
+
+  // Load the app's effective Layered Intelligence config + the CLI provider list
+  // (the loop runs an agentic CLI, same as other CoS work). The tab edits a
+  // working copy; on save we diff it against the baseline.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.getAppLayeredIntelligence(app.id),
+      api.getProviders({ silent: true }).catch(() => ({ providers: [] }))
+    ]).then(([li, provData]) => {
+      if (cancelled) return;
+      const cfg = li?.config || null;
+      setLiConfig(cfg);
+      setLiBaseline(cfg);
+      setLiIsPortos(!!li?.isPortos);
+      setLiProviders((provData?.providers || []).filter(p => p.type === 'cli' && p.enabled !== false));
+      setLiLoaded(true);
+    }).catch(() => { if (!cancelled) setLiLoaded(true); });
+    return () => { cancelled = true; };
+  }, [app.id]);
+
+  const updateLiConfig = (patch) => setLiConfig(prev => ({ ...(prev || {}), ...patch }));
 
   useEffect(() => {
     if (!formData.jiraInstanceId) {
@@ -319,6 +354,13 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
         environment: formData.datadogEnvironment || undefined
       } : { enabled: false }
     };
+
+    // Only send layeredIntelligence when the user actually changed something —
+    // the server merges the PATCH over the STORED config, so an unchanged config
+    // must stay absent (persisting the full effective config would freeze this
+    // install against future default changes).
+    const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
+    if (liUpdate) data.layeredIntelligence = liUpdate;
 
     await api.updateApp(app.id, data).catch(err => {
       setError(err.message);
@@ -601,6 +643,16 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                 <span className={`text-sm ${formData.defaultUseWorktree ? 'text-white' : 'text-gray-600'}`} title="When checked, agents open a PR to the default branch. When unchecked with worktree enabled, agents auto-merge to the default branch on completion.">Default to Open PR for new tasks</span>
               </label>
             </div>
+          )}
+
+          {activeTab === 'intelligence' && (
+            <LayeredIntelligenceTab
+              li={liConfig || {}}
+              onChange={updateLiConfig}
+              providers={liProviders}
+              isPortos={liIsPortos}
+              loaded={liLoaded && !!liConfig}
+            />
           )}
 
           {activeTab === 'jira' && (
