@@ -110,6 +110,38 @@ export const workspaceContextParamsSchema = z.object({
   appId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'invalid app id')
 });
 
+// Layered Intelligence per-app config (the self-improvement loop). Off by
+// default; the loop is a user-enabled scheduled automation. `lastRunAt` is
+// server-managed run bookkeeping (cadence, not issue memory) but accepted here
+// so a round-tripped config doesn't 400. See server/services/layeredIntelligence.js.
+export const LAYERED_INTELLIGENCE_SCOPES = ['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self'];
+export const layeredIntelligenceConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMs: z.number().int().min(60_000).optional(),
+  providerId: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  sources: z.object({
+    goals: z.boolean().optional(),
+    cosMetrics: z.boolean().optional(),
+    healthReport: z.boolean().optional(),
+    planMd: z.boolean().optional(),
+    openIssues: z.boolean().optional(),
+    custom: z.array(z.object({
+      type: z.enum(['file']),
+      // A safe repo-relative path — reject absolute paths and `..` traversal so a
+      // custom source can't read files outside the app repo into the LLM prompt.
+      // gatherSources also enforces this at read time (defense in depth).
+      ref: z.string().min(1).max(500)
+        .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
+          message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
+        })
+    })).optional()
+  }).optional(),
+  rules: z.string().max(8000).optional(),
+  allowedScopes: z.array(z.enum(LAYERED_INTELLIGENCE_SCOPES)).optional(),
+  lastRunAt: z.string().nullable().optional()
+});
+
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
@@ -147,7 +179,11 @@ export const appSchema = z.object({
   // — see server/lib/workTracker.js + the `claim-work` router in
   // cosTaskGenerator.js. WORK_TRACKERS is the single source of truth for the
   // value set.
-  workTracker: z.enum(WORK_TRACKERS).optional()
+  workTracker: z.enum(WORK_TRACKERS).optional(),
+  // Layered Intelligence per-app config (the self-improvement loop). Full config
+  // accepted on create/update; the dedicated updateAppLayeredIntelligence merge
+  // (server/services/apps.js) preserves untouched fields on partial PATCHes.
+  layeredIntelligence: layeredIntelligenceConfigSchema.optional()
   // referenceRepos is INTENTIONALLY not part of the create/update API
   // surface. createApp() doesn't persist it and updateApp() (via the
   // omit() in appUpdateSchema) ignores it — the dedicated
