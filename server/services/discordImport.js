@@ -138,7 +138,9 @@ export function discordMessageToCandidate(record, channel = null) {
     summary: shortSummary(summaryText),
     participants: normalizeParticipants(
       (Array.isArray(channel?.recipients) ? channel.recipients : [])
-        .map((r) => (typeof r === 'string' ? { name: r } : { name: r?.username || r?.name })),
+        .map((r) => (typeof r === 'string' ? r : r?.username || r?.name))
+        .filter(Boolean)
+        .map((name) => ({ name })),
     ),
     dedupeKey: `discord:${messageId}`,
     metadata: {
@@ -165,27 +167,28 @@ export function summarizeDiscordCandidates(candidates = []) {
   const list = Array.isArray(candidates) ? candidates : [];
   let earliest = null;
   let latest = null;
-  const channels = new Set();
-  const channelCounts = new Map();
+  // Key BOTH the unique count and the top-channels tally by the same channel
+  // identity (id when present, else the label) so they can't diverge — two
+  // distinct channels that happen to share a display label stay two entries.
+  // The display label is carried alongside the count for rendering.
+  const channelStats = new Map(); // identity → { name, count }
   for (const c of list) {
     if (c.happenedAt) {
       if (!earliest || c.happenedAt < earliest) earliest = c.happenedAt;
       if (!latest || c.happenedAt > latest) latest = c.happenedAt;
     }
-    // Group by channel identity (id when present, else the label) so the unique
-    // count can't diverge from the top-channels tally below.
     const identity = c.metadata?.channelId || c.metadata?.channelName || c.title;
-    channels.add(identity);
-    const label = c.metadata?.channelName || c.title;
-    channelCounts.set(label, (channelCounts.get(label) || 0) + 1);
+    const name = c.metadata?.channelName || c.title;
+    const stat = channelStats.get(identity);
+    if (stat) stat.count += 1;
+    else channelStats.set(identity, { name, count: 1 });
   }
-  const topChannels = [...channelCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([name, count]) => ({ name, count }));
+  const topChannels = [...channelStats.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
   return {
     messages: list.length,
-    uniqueChannels: channels.size,
+    uniqueChannels: channelStats.size,
     from: earliest,
     to: latest,
     topChannels,

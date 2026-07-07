@@ -185,6 +185,21 @@ describe('summarizeDiscordCandidates', () => {
     expect(s.to).toBe('2023-06-01T10:00:00.000Z');
     expect(s.topChannels[0]).toEqual({ name: 'Dev Server — #general', count: 2 });
   });
+  it('keeps two same-labelled but distinct channels as two unique channels', () => {
+    // Two guild channels named "#general" in different guilds → same display
+    // label, different ids. uniqueChannels must not collapse them.
+    const chA = { id: 'a', name: 'general', guild: { id: 'g1', name: 'Alpha' } };
+    const chB = { id: 'b', name: 'general', guild: { id: 'g2', name: 'Beta' } };
+    const candidates = discordActivityCandidates([
+      { record: { ID: '1', Timestamp: '2023-01-01 00:00:00', Contents: 'x' }, channel: chA },
+      { record: { ID: '2', Timestamp: '2023-01-02 00:00:00', Contents: 'y' }, channel: chB },
+    ]);
+    const s = summarizeDiscordCandidates(candidates);
+    expect(s.uniqueChannels).toBe(2);
+    // Labels differ here (guild-prefixed), so two top-channel rows appear.
+    expect(s.topChannels).toHaveLength(2);
+  });
+
   it('handles an empty batch', () => {
     const s = summarizeDiscordCandidates([]);
     expect(s).toMatchObject({ messages: 0, uniqueChannels: 0, from: null, to: null });

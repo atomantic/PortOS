@@ -13,6 +13,7 @@ export default function DiscordImportPanel({ onImported }) {
       noun="message"
       importFn={api.importDiscordHistory}
       onImported={onImported}
+      accept=".zip,.json,.csv,application/zip,application/json,text/csv"
       help={(
         <>
           Request your <span className="text-gray-300">data package</span> from Discord
