@@ -39,7 +39,7 @@ import {
   z,
 } from '../checkInfra.js';
 import {
-  computeVoiceDrift, describeDrift, parseVoiceWells, VOICE_BASELINE_MODES,
+  computeVoiceDrift, describeDrift, describeSeriesDrift, parseVoiceWells, VOICE_BASELINE_MODES,
 } from '../voiceFingerprint.js';
 
 export const proseStyleChecks = [
@@ -1108,7 +1108,7 @@ export const proseStyleChecks = [
       });
       if (drift.gatedOff) return [];
       const cap = cfg.maxFindings ?? 12;
-      return drift.outliers.slice(0, cap).map((o) => ({
+      const perIssue = drift.outliers.slice(0, cap).map((o) => ({
         // A strong outlier (≥2.5σ) reads as real drift, not noise — escalate it a
         // rank above the low floor; a marginal one stays low.
         severity: escalateSeverity(ctx.severityDefault, Math.abs(o.z) >= 2.5 ? 1 : 0),
@@ -1122,6 +1122,26 @@ export const proseStyleChecks = [
         anchorQuote: null,
         issueNumber: o.issue,
       }));
+      // #2248 — series-level "the WHOLE corpus is uniformly off the chosen voice"
+      // findings (only under an exemplar/blended baseline). These have no
+      // issueNumber (a series-wide register mismatch, not a per-issue outlier) and
+      // escalate one rank above the low floor because a corpus-wide mismatch is a
+      // stronger signal than a single-issue wobble. They share the maxFindings cap
+      // with the per-issue outliers, listed first so a series-wide finding is never
+      // starved out by a flood of per-issue ones.
+      const seriesLevel = (drift.seriesFindings || []).map((o) => ({
+        severity: escalateSeverity(ctx.severityDefault, 1),
+        category: 'style',
+        location: `Series-wide — narrative voice (${o.label})`,
+        problem: describeSeriesDrift(o),
+        suggestion:
+          `The whole series sits off the chosen voice on its ${o.label}. `
+          + 'Revise toward the chosen voice across the run, or update the style guide\'s voice '
+          + 'exemplars if this uniform register IS the voice you want.',
+        anchorQuote: null,
+        issueNumber: null,
+      }));
+      return [...seriesLevel, ...perIssue].slice(0, cap);
     },
   },
   {

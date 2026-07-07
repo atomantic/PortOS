@@ -144,6 +144,35 @@ describe('PipelineVoiceFingerprint', () => {
     expect(screen.queryByText('voice')).not.toBeInTheDocument();
   });
 
+  it('surfaces a series-wide mismatch banner for seriesFindings (#2248)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 5 },
+        dialogueRatio: { mean: 0, std: 0, center: 42.5 },
+      },
+      seriesFindings: [
+        { metricKey: 'dialogueRatio', label: 'dialogue ratio', mean: 0, center: 42.5, std: 0, distance: 1, direction: 'low', unit: '%', baselineMode: 'exemplars' },
+      ],
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    expect(screen.getByText(/series-wide voice mismatch/)).toBeInTheDocument();
+    // The banner names the corpus value and the metric (the chosen-voice center
+    // 42.5% also appears in the matrix footer row, so it's not banner-unique).
+    expect(screen.getByText(/sits at 0% on/)).toBeInTheDocument();
+    expect(screen.getByText(/uniformly below the/)).toBeInTheDocument();
+  });
+
+  it('renders no series-wide banner when seriesFindings is empty', async () => {
+    getVoiceFingerprint.mockResolvedValue(MATRIX_PAYLOAD);
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    expect(screen.queryByText(/series-wide voice mismatch/)).not.toBeInTheDocument();
+  });
+
   it('renders an empty state when nothing is drafted', async () => {
     getVoiceFingerprint.mockResolvedValue({
       ...MATRIX_PAYLOAD,

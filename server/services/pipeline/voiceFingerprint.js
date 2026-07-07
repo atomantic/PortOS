@@ -93,6 +93,7 @@ export async function resolveVoiceDriftConfig(settings, seriesOverrides) {
  *   matrix: object,
  *   series: object,
  *   outliers: object[],
+ *   seriesFindings: object[],
  * }>}
  */
 export async function getVoiceFingerprint(seriesId) {
@@ -133,5 +134,8 @@ export async function getVoiceFingerprint(seriesId) {
     matrix: drift.matrix,
     series: drift.series,
     outliers: drift.outliers,
+    // #2248 — series-wide "uniformly off the chosen voice" findings (no per-issue
+    // cell to highlight in the matrix), so the view can surface them as a banner.
+    seriesFindings: drift.seriesFindings || [],
   };
 }

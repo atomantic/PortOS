@@ -9,6 +9,7 @@ import {
   voiceFingerprintMatrix,
   computeVoiceDrift,
   describeDrift,
+  describeSeriesDrift,
   renderFingerprintTable,
   metricLabel,
 } from './voiceFingerprint.js';
@@ -351,6 +352,114 @@ describe('computeVoiceDrift baseline modes (#2179)', () => {
   });
 });
 
+describe('computeVoiceDrift series-level findings (#2248)', () => {
+  // Four IDENTICAL dialogue-free issues → σ≈0 on every metric, so the per-issue
+  // z-score model emits no outlier. dialogueRatio is 0 on every issue.
+  const dialogueFree = manuscriptOf([issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20)]);
+  // A dialogue-heavy chosen voice: 6 quoted spans of 8 words each → ~48 words,
+  // nearly all inside quotes, so the exemplar dialogueRatio is very high. Two
+  // copies clear the 40-word exemplar floor comfortably.
+  const quotedSpan = `"${Array.from({ length: 8 }, (_, j) => `d${j}`).join(' ')}."`;
+  const dialogueExemplarPassage = Array.from({ length: 6 }, () => quotedSpan).join(' ');
+  const dialogueExemplars = [
+    { passage: dialogueExemplarPassage, note: 'chatty' },
+    { passage: dialogueExemplarPassage },
+  ];
+
+  it('drafted mode never emits a series-level finding (center === mean)', () => {
+    const drift = computeVoiceDrift(dialogueFree, { voiceExemplars: dialogueExemplars });
+    expect(drift.baselineMode).toBe('drafted');
+    expect(drift.seriesFindings).toEqual([]);
+  });
+
+  it('flags a uniformly-off-register metric under the exemplar baseline', () => {
+    const drift = computeVoiceDrift(dialogueFree, {
+      baselineMode: 'exemplars',
+      voiceExemplars: dialogueExemplars,
+    });
+    expect(drift.exemplarBaselineUsed).toBe(true);
+    // dialogueRatio: every issue is 0 (σ≈0) but the chosen voice is dialogue-heavy,
+    // so there's no per-issue outlier — it surfaces as a series-level finding.
+    expect(drift.outliers.some((o) => o.metricKey === 'dialogueRatio')).toBe(false);
+    const dlg = drift.seriesFindings.find((f) => f.metricKey === 'dialogueRatio');
+    expect(dlg).toBeTruthy();
+    expect(dlg.mean).toBe(0);
+    expect(dlg.center).toBeGreaterThan(0);
+    expect(dlg.direction).toBe('low'); // the corpus uses LESS dialogue than the voice
+    expect(dlg.distance).toBeGreaterThanOrEqual(0.5);
+    expect(dlg.baselineMode).toBe('exemplars');
+    // No `issue` field — it's a corpus-wide finding, not a per-issue outlier.
+    expect(dlg.issue).toBeUndefined();
+  });
+
+  it('sorts series findings by distance descending', () => {
+    const drift = computeVoiceDrift(dialogueFree, {
+      baselineMode: 'exemplars',
+      voiceExemplars: dialogueExemplars,
+    });
+    const distances = drift.seriesFindings.map((f) => f.distance);
+    const sorted = [...distances].sort((a, b) => b - a);
+    expect(distances).toEqual(sorted);
+  });
+
+  it('respects a custom seriesDistanceThreshold (relative distance maxes at 1)', () => {
+    const drift = computeVoiceDrift(dialogueFree, {
+      baselineMode: 'exemplars',
+      voiceExemplars: dialogueExemplars,
+      seriesDistanceThreshold: 2, // unreachable — relative distance is in [0, 1]
+    });
+    expect(drift.seriesFindings).toEqual([]);
+  });
+
+  it('does not flag a metric that already produces per-issue outliers (σ>0)', () => {
+    // draftedSpread from the baseline-modes block: fragment metric has σ>0, so it
+    // flows through the per-issue path, not the series-level branch.
+    const spread = manuscriptOf([
+      `${issueBlock(3, 20)} ${issueBlock(1, 3)}`,
+      `${issueBlock(3, 20)} ${issueBlock(2, 3)}`,
+      `${issueBlock(3, 20)} ${issueBlock(1, 3)}`,
+      `${issueBlock(3, 20)} ${issueBlock(6, 3)}`,
+    ]);
+    const drift = computeVoiceDrift(spread, {
+      baselineMode: 'exemplars',
+      voiceExemplars: [{ passage: issueBlock(6, 5) }, { passage: issueBlock(6, 5) }],
+    });
+    // fragmentPct has drafted spread, so it never appears as a series-level finding.
+    expect(drift.seriesFindings.some((f) => f.metricKey === 'fragmentPct')).toBe(false);
+  });
+
+  it('gatedOff runs report an empty seriesFindings array', () => {
+    const ms = manuscriptOf([issueBlock(3, 20), issueBlock(3, 20)]);
+    const drift = computeVoiceDrift(ms, { baselineMode: 'exemplars', voiceExemplars: dialogueExemplars });
+    expect(drift.gatedOff).toBe(true);
+    expect(drift.seriesFindings).toEqual([]);
+  });
+
+  it('describeSeriesDrift names the metric, corpus value, chosen-voice center, and direction', () => {
+    const f = {
+      metricKey: 'dialogueRatio', label: 'dialogue ratio',
+      mean: 0, center: 42.5, std: 0, distance: 1, direction: 'low', unit: '%',
+      baselineMode: 'exemplars',
+    };
+    const text = describeSeriesDrift(f);
+    expect(text).toContain('The whole series');
+    expect(text).toContain('0%');
+    expect(text).toContain('42.5%');
+    expect(text).toContain("the style guide's chosen voice");
+    expect(text).toContain('below');
+    expect(text).toContain('narration-driven'); // the "lower" phrase for dialogue ratio
+  });
+
+  it('describeSeriesDrift labels a blended baseline as the blend', () => {
+    const f = {
+      metricKey: 'dialogueRatio', label: 'dialogue ratio',
+      mean: 0, center: 20, std: 0, distance: 1, direction: 'low', unit: '%',
+      baselineMode: 'blended',
+    };
+    expect(describeSeriesDrift(f)).toContain('the blend of the series mean and the chosen voice');
+  });
+});
+
 describe('describeDrift + renderFingerprintTable', () => {
   it('describeDrift names the issue, values, σ, and direction', () => {
     const o = {
@@ -463,5 +572,23 @@ describe('style.voice-drift check (registry wiring)', () => {
     expect(meanFinding).toBeTruthy();
     expect(meanFinding.severity).toBe('medium');
     expect(meanFinding.issueNumber).toBe(8);
+  });
+
+  it('emits a series-wide finding (issueNumber null) for a uniformly off-register metric (#2248)', () => {
+    // Four identical dialogue-free issues → σ≈0 everywhere, no per-issue outlier.
+    const ms = manuscriptOf([issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20)]);
+    const quotedSpan = `"${Array.from({ length: 8 }, (_, j) => `d${j}`).join(' ')}."`;
+    const passage = Array.from({ length: 6 }, () => quotedSpan).join(' ');
+    const series = { styleGuide: { voiceExemplars: [{ passage }, { passage }] } };
+    const findings = runCheck(ms, { baselineMode: 'exemplars' }, 'low', series);
+    const seriesLevel = findings.find((f) => f.problem.includes('The whole series') && f.problem.includes('dialogue ratio'));
+    expect(seriesLevel).toBeTruthy();
+    expect(seriesLevel.issueNumber).toBeNull();
+    expect(seriesLevel.location).toContain('Series-wide');
+    // A corpus-wide mismatch escalates one rank above the low floor.
+    expect(seriesLevel.severity).toBe('medium');
+    // Drafted mode never produces it (center === mean).
+    const drafted = runCheck(ms, { baselineMode: 'drafted' }, 'low', series);
+    expect(drafted.some((f) => f.problem.includes('The whole series'))).toBe(false);
   });
 });
