@@ -214,16 +214,25 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * ConPTY handle), leaking it — so any non-ChildProcess killable always uses
  * its own `.kill()` instead, on every platform.
  *
+ * `signal` applies to the **POSIX** branch only (`SIGTERM` default → the
+ * graceful-then-`SIGKILL`-escalation pattern callers expect). On Windows there
+ * is no real POSIX signal — `taskkill /T /F` force-kills the whole tree
+ * regardless — so the arg is ignored there. A caller that wraps a `.cmd`/`.bat`
+ * shim via `prepareCliSpawn` (its child is a `cmd.exe /c …` parent) MUST use
+ * this rather than `child.kill()`, or on Windows only the `cmd.exe` shim dies
+ * and the real CLI child is orphaned.
+ *
  * @param {import('child_process').ChildProcess} child
+ * @param {NodeJS.Signals} [signal] - POSIX signal to send (default `SIGTERM`); ignored on Windows
  */
-export function killProcessTree(child) {
+export function killProcessTree(child, signal = 'SIGTERM') {
   if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
       .unref();
   } else {
-    child.kill('SIGTERM');
+    child.kill(signal);
   }
 }
 

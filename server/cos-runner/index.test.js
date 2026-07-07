@@ -15,7 +15,7 @@ const RUNNER_SRC = readFileSync(join(__dirname, 'index.js'), 'utf-8');
 describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
   it('imports prepareCliSpawn from the shared bufferedSpawn helper', () => {
     expect(RUNNER_SRC).toMatch(
-      /import\s*\{\s*prepareCliSpawn\s*\}\s*from\s*'\.\.\/lib\/bufferedSpawn\.js';/
+      /import\s*\{[^}]*\bprepareCliSpawn\b[^}]*\}\s*from\s*'\.\.\/lib\/bufferedSpawn\.js';/
     );
   });
 
@@ -39,5 +39,24 @@ describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
     expect(childEnvIdx, 'childEnv must be defined').toBeGreaterThan(-1);
     expect(prepareIdx, 'prepareCliSpawn must run against childEnv').toBeGreaterThan(-1);
     expect(childEnvIdx, 'childEnv must be built before the resolve').toBeLessThan(prepareIdx);
+  });
+});
+
+describe('cos-runner termination — Windows tree-kill for cmd.exe-wrapped shims (#2243)', () => {
+  it('imports killProcessTree from the shared bufferedSpawn helper', () => {
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\bkillProcessTree\b[^}]*\}\s*from\s*'\.\.\/lib\/bufferedSpawn\.js';/
+    );
+  });
+
+  it('terminates agent processes via killProcessTree, not a bare .kill(), so the wrapped child is not orphaned', () => {
+    // Once an agent is spawned as `cmd.exe /c opencode.cmd …` on Windows, a
+    // plain agent.process.kill() signals only cmd.exe and orphans the real CLI.
+    // Every agent-process termination must route through killProcessTree.
+    expect(RUNNER_SRC).toMatch(/killProcessTree\(agent\.process,\s*'SIGTERM'\)/);
+    expect(RUNNER_SRC).toMatch(/killProcessTree\(agent\.process,\s*'SIGKILL'\)/);
+    // Guard against a regression that reverts an agent-process kill to bare .kill().
+    expect(RUNNER_SRC).not.toMatch(/agent\.process\.kill\(/);
+    expect(RUNNER_SRC).not.toMatch(/current\.process\.kill\(/);
   });
 });

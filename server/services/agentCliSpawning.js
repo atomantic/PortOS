@@ -29,7 +29,7 @@ import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/ant
 import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -507,7 +507,8 @@ export async function spawnDirectly({
       providerId: provider.id,
       category: analysis.category
     });
-    claudeProcess.kill('SIGTERM');
+    // killProcessTree so a Windows cmd.exe-wrapped shim's real child isn't orphaned (#2243).
+    killProcessTree(claudeProcess, 'SIGTERM');
   };
 
   // If no output after 3 seconds, transition from initializing to working to show progress

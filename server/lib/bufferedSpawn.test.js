@@ -86,6 +86,16 @@ describe('killProcessTree', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('on non-Windows forwards an explicit signal to the child (e.g. SIGKILL escalation) — #2243', () => {
+    if (IS_WIN32) return; // platform-gated behavior
+    const child = makeFakeChild();
+    killProcessTree(child, 'SIGKILL');
+    // POSIX callers keep their SIGTERM→SIGKILL escalation semantics — the
+    // signal arg must reach child.kill, not be hardcoded to SIGTERM.
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('on Windows spawns taskkill /T /F against the pid and marks the child killed', () => {
     if (!IS_WIN32) return; // can't simulate platform branch from outside
     const child = makeFakeChild({ pid: 999 });
