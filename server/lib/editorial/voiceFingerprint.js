@@ -501,8 +501,17 @@ export function computeVoiceDrift(manuscript, opts = {}) {
       center = effectiveMode === 'blended' ? (mean + target) / 2 : target;
     }
     series[key] = { mean: round2(mean), std: round2(std), center: round2(center) };
-    // A metric with no spread can't have an outlier — and dividing by ~0 σ would
-    // manufacture infinite z-scores. Skip it.
+    // A metric with no drafted spread can't have a per-issue OUTLIER — and dividing
+    // by ~0 σ would manufacture infinite z-scores — so skip it. Note the boundary
+    // this leaves for the exemplar/blended baseline (#2179): when every drafted
+    // issue shares the SAME value on a metric (σ≈0) but that shared value sits far
+    // from the chosen-voice center, this per-issue z-score model emits nothing —
+    // there's no per-issue outlier, the whole corpus is uniformly off. That
+    // "uniformly-off-register" case wants a SERIES-level finding (a different shape
+    // than the per-issue outliers here), tracked as a #2179 follow-up. It does NOT
+    // affect the common case the feature targets: issues that drifted the same
+    // DIRECTION still have natural per-metric variance (σ>0), so they still flag
+    // against the chosen-voice center.
     if (std < 1e-9) continue;
     for (const it of issues) {
       const value = it.metrics[key] ?? 0;

@@ -68,7 +68,11 @@ export default function PipelineVoiceFingerprint() {
   const outlierSet = new Set((data?.outliers || []).map((o) => outlierKey(o.issue, o.metricKey)));
   const hasMatrix = issues.length > 0;
   const baselineMode = data?.baselineMode || 'drafted';
-  const usesChosenVoice = data?.exemplarBaselineUsed === true;
+  // Only claim the chosen-voice baseline once it was actually applied: a gatedOff
+  // run (< minIssues) still reports the configured mode but computes no comparison
+  // and returns `series: {}`, so the footer row + intro copy must fall back to the
+  // plain description rather than promising a baseline that never ran.
+  const usesChosenVoice = data?.exemplarBaselineUsed === true && !data?.gatedOff;
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">

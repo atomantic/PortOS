@@ -106,6 +106,26 @@ describe('PipelineVoiceFingerprint', () => {
     expect(screen.getByText('5 words')).toBeInTheDocument();
   });
 
+  it('does not claim the chosen-voice baseline on a gated-off run (#2179)', async () => {
+    // A gated-off run (< minIssues) still reports the configured mode, but the
+    // baseline was never applied and series is empty — the UI must fall back.
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      gatedOff: true,
+      issueCount: 2,
+      outliers: [],
+      series: {},
+      matrix: { metricKeys: ['sentenceLenMean'], issues: [{ issue: 1, words: 5, sentences: 1, metrics: { sentenceLenMean: 5 } }, { issue: 2, words: 4, sentences: 1, metrics: { sentenceLenMean: 4 } }] },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText(/Drift detection is off/)).toBeInTheDocument());
+    // No chosen-voice copy or footer row when the baseline never ran.
+    expect(screen.queryByText(/chosen voice/)).not.toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
   it('renders an empty state when nothing is drafted', async () => {
     getVoiceFingerprint.mockResolvedValue({
       ...MATRIX_PAYLOAD,
