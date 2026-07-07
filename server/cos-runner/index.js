@@ -46,20 +46,16 @@ const SHUTDOWN_DRAIN_MS = 5000;       // SIGTERM drain window before closing the
 
 // Path + listen constants. These lived adjacent to the command allowlist before
 // it was extracted to ./allowedCommands.js; they must stay here — they're
-// referenced throughout (RUNS_DIR/AGENTS_DIR/ROOT_DIR for spawn cwd + dirs, and
+// referenced throughout (AGENTS_DIR/ROOT_DIR for spawn cwd + dirs, and
 // server.listen(PORT, HOST)) and dropping them crashes the runner on boot.
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
-const RUNS_DIR = PATHS.runs;
 
 const PORT = process.env.PORT || PORTS.COS;
 const HOST = process.env.HOST || '127.0.0.1';
 
 // Active agent processes (in memory)
 const activeAgents = new Map();
-
-// Active devtools runs (in memory)
-const activeRuns = new Map();
 
 // Express app setup
 const app = express();
@@ -79,22 +75,12 @@ function emitToServer(event, data) {
 }
 
 /**
- * Ensure runs directory exists
- */
-async function ensureRunsDir() {
-  if (!existsSync(RUNS_DIR)) {
-    await ensureDir(RUNS_DIR);
-  }
-}
-
-/**
  * Health check endpoint
  */
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     activeAgents: activeAgents.size,
-    activeRuns: activeRuns.size,
     uptime: process.uptime()
   });
 });
@@ -573,211 +559,6 @@ app.get('/agents/:agentId/output', (req, res) => {
   }
 
   res.json({ agentId, output: agent.outputBuffer });
-});
-
-// ============================================
-// DEVTOOLS RUNS - CLI execution for devtools
-// ============================================
-
-/**
- * Execute a CLI run (devtools runner)
- */
-app.post('/run', async (req, res) => {
-  const {
-    runId,
-    command,
-    args = [],
-    prompt,
-    workspacePath,
-    envVars = {},
-    timeout
-  } = req.body;
-
-  if (!runId || !command || !prompt) {
-    return res.status(400).json({ error: 'Missing required fields: runId, command, prompt' });
-  }
-
-  await ensureRunsDir();
-
-  console.log(`🔧 Starting devtools run ${runId}: ${command} ${args.join(' ')}`);
-
-  // Build command args - add prompt at the end
-  const spawnArgs = [...args, prompt];
-
-  // Ensure workspacePath is valid
-  const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
-
-  // Spawn the CLI process
-  const childProcess = spawn(command, spawnArgs, {
-    cwd,
-    shell: false,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })(),
-    windowsHide: true
-  });
-
-  const startTime = Date.now();
-
-  // Store in memory
-  activeRuns.set(runId, {
-    process: childProcess,
-    pid: childProcess.pid,
-    startedAt: startTime,
-    outputBuffer: ''
-  });
-
-  // Handle stdout
-  childProcess.stdout.on('data', (data) => {
-    const text = data.toString();
-    const run = activeRuns.get(runId);
-    if (run) {
-      run.outputBuffer += text;
-    }
-    emitToServer('run:data', { runId, text });
-  });
-
-  // Handle stderr
-  childProcess.stderr.on('data', (data) => {
-    const text = data.toString();
-    const run = activeRuns.get(runId);
-    if (run) {
-      run.outputBuffer += text;
-    }
-    emitToServer('run:data', { runId, text });
-  });
-
-  // Handle errors
-  childProcess.on('error', (err) => {
-    console.error(`❌ Run ${runId} spawn error: ${err.message}`);
-    emitToServer('run:error', { runId, error: err.message });
-    activeRuns.delete(runId);
-  });
-
-  // Handle process exit
-  childProcess.on('close', async (code) => {
-    try {
-    const run = activeRuns.get(runId);
-    const duration = Date.now() - startTime;
-    const output = run?.outputBuffer || '';
-
-    console.log(`${code === 0 ? '✅' : '❌'} Run ${runId} exited with code ${code} (${duration}ms)`);
-
-    // Save output to run directory
-    const runDir = join(RUNS_DIR, runId);
-    if (!existsSync(runDir)) {
-      await ensureDir(runDir);
-    }
-    await writeFile(join(runDir, 'output.txt'), output).catch(err => console.error(`❌ Run ${runId} failed to persist output.txt: ${err.message}`));
-
-    // Persist completion status to disk BEFORE emitting event
-    // This ensures recovery is possible even if the socket event is lost
-    const metadataPath = join(runDir, 'metadata.json');
-    const existingMetadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-    const updatedMetadata = {
-      ...existingMetadata,
-      endTime: new Date().toISOString(),
-      exitCode: code,
-      success: code === 0,
-      duration,
-      outputSize: Buffer.byteLength(output)
-    };
-    await writeFile(metadataPath, JSON.stringify(updatedMetadata, null, 2)).catch(err => console.error(`❌ Run ${runId} failed to persist completion metadata: ${err.message}`));
-
-    // Emit completion event
-    emitToServer('run:complete', {
-      runId,
-      exitCode: code,
-      success: code === 0,
-      duration,
-      outputLength: output.length
-    });
-
-    activeRuns.delete(runId);
-    } catch (err) {
-      console.error(`❌ Run ${runId} close handler error: ${err.message}`);
-      activeRuns.delete(runId);
-    }
-  });
-
-  // Set timeout if specified
-  if (timeout) {
-    setTimeout(() => {
-      if (activeRuns.has(runId)) {
-        console.log(`⏰ Run ${runId} timed out after ${timeout}ms`);
-        childProcess.kill('SIGTERM');
-      }
-    }, timeout);
-  }
-
-  res.json({
-    success: true,
-    runId,
-    pid: childProcess.pid
-  });
-});
-
-/**
- * Get list of active runs
- */
-app.get('/runs', (req, res) => {
-  const runs = [];
-  for (const [runId, run] of activeRuns) {
-    runs.push({
-      id: runId,
-      pid: run.pid,
-      startedAt: run.startedAt,
-      runningTime: Date.now() - run.startedAt
-    });
-  }
-  res.json(runs);
-});
-
-/**
- * Get run output
- */
-app.get('/runs/:runId/output', (req, res) => {
-  const { runId } = req.params;
-  const run = activeRuns.get(runId);
-
-  if (!run) {
-    return res.status(404).json({ error: 'Run not found or not active' });
-  }
-
-  res.json({ runId, output: run.outputBuffer });
-});
-
-/**
- * Check if a run is active
- */
-app.get('/runs/:runId/active', (req, res) => {
-  const { runId } = req.params;
-  res.json({ runId, active: activeRuns.has(runId) });
-});
-
-/**
- * Stop a run
- */
-app.post('/runs/:runId/stop', (req, res) => {
-  const { runId } = req.params;
-  const run = activeRuns.get(runId);
-
-  if (!run) {
-    return res.status(404).json({ error: 'Run not found or not active' });
-  }
-
-  console.log(`🛑 Stopping run ${runId}`);
-
-  run.process.kill('SIGTERM');
-
-  // Force kill after timeout
-  setTimeout(() => {
-    if (activeRuns.has(runId)) {
-      run.process.kill('SIGKILL');
-      activeRuns.delete(runId);
-    }
-  }, SIGKILL_GRACE_MS);
-
-  res.json({ success: true, runId });
 });
 
 /**

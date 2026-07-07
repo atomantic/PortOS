@@ -82,11 +82,6 @@ export function initCosRunnerConnection() {
 
   // Batch orphaned agents event (startup cleanup)
   socket.on('agents:orphaned', (data) => dispatch('agents:orphaned', data));
-
-  // Forward devtools run events to registered handlers
-  socket.on('run:data', (data) => dispatch('run:data', data));
-  socket.on('run:complete', (data) => dispatch('run:complete', data));
-  socket.on('run:error', (data) => dispatch('run:error', data));
 }
 
 /**
@@ -247,95 +242,6 @@ export async function getAgentOutputFromRunner(agentId) {
   if (!response.ok) {
     const error = await readRunnerJson(response);
     throw new Error(error.error || 'Failed to get agent output');
-  }
-  return readRunnerJson(response);
-}
-
-// ============================================
-// DEVTOOLS RUNS - CLI execution via runner
-// ============================================
-
-/**
- * Execute a CLI run via the CoS Runner
- */
-export async function executeCliRunViaRunner(options) {
-  const {
-    runId,
-    command,
-    args,
-    prompt,
-    workspacePath,
-    envVars,
-    timeout
-  } = options;
-
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      runId,
-      command,
-      args,
-      prompt,
-      workspacePath,
-      envVars,
-      timeout
-    }),
-  }, 60000);
-
-  if (!response.ok) {
-    const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to execute run');
-  }
-
-  return readRunnerJson(response);
-}
-
-/**
- * Get list of active runs from runner
- */
-export async function getActiveRunsFromRunner() {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs`, {}, 10000);
-  if (!response.ok) {
-    throw new Error('Failed to get runs');
-  }
-  return readRunnerJson(response);
-}
-
-/**
- * Check if a run is active in the runner
- */
-export async function isRunActiveInRunner(runId) {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/active`, {}, 10000);
-  if (!response.ok) {
-    return false;
-  }
-  const data = await readRunnerJson(response);
-  return data.active;
-}
-
-/**
- * Get run output from runner
- */
-export async function getRunOutputFromRunner(runId) {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/output`, {}, 10000);
-  if (!response.ok) {
-    return null;
-  }
-  const data = await readRunnerJson(response);
-  return data.output;
-}
-
-/**
- * Stop a run via the runner
- */
-export async function stopRunViaRunner(runId) {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/runs/${runId}/stop`, {
-    method: 'POST'
-  }, 30000);
-  if (!response.ok) {
-    const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to stop run');
   }
   return readRunnerJson(response);
 }
