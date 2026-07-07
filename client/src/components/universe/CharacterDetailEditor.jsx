@@ -248,9 +248,21 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
   // column name. Marshal string → { [col]: string } on the way in and back to
   // string on the way out so the section stays server-shape-correct.
   const col0 = section.columns[0].name;
-  const persisted = section.stringList
-    ? rawPersisted.map((s) => ({ [col0]: typeof s === 'string' ? s : '' }))
-    : rawPersisted;
+  // Stamp a CONTENT-derived stable id on each marshalled string-list row so
+  // ListRow's React key (and its `useRowDraft` buffer) survives a delete/reorder
+  // of an earlier row — a plain index key would shift a sibling's draft onto the
+  // wrong secret, the exact footgun the ListRow key comment warns about. The
+  // per-content occurrence counter disambiguates exact-duplicate strings.
+  const stringListRows = () => {
+    const seen = new Map();
+    return rawPersisted.map((s) => {
+      const text = typeof s === 'string' ? s : '';
+      const n = seen.get(text) || 0;
+      seen.set(text, n + 1);
+      return { id: `${section.key}-${n}-${text}`, [col0]: text };
+    });
+  };
+  const persisted = section.stringList ? stringListRows() : rawPersisted;
   const emit = (next) => onPatchList(
     section.field,
     section.stringList

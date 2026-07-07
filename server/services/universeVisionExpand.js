@@ -56,6 +56,16 @@ const LIST_FIELD_SHAPES = {
   handGestures: '{ "name": "<gesture>", "description": "<the hand pose>" }',
 };
 
+// Non-visual character-framework fields (CWQE Phase 10, #2175). They live in the
+// shared STRING_FIELDS / LIST_FIELDS lists (the text/vision expand flows share
+// one source of truth) but a vision model CANNOT infer a character's Ghost, Lie,
+// Want, Need, or secrets from an image — those are narrative, not renderable. So
+// the vision prompt excludes them (they'd only invite hallucinated backstory,
+// and `secrets` has no LIST_FIELD_SHAPES row shape to emit). arcType / sliders
+// are already absent from both shared lists (merged specially in the text flow),
+// so they never reach the vision prompt either.
+const NON_VISUAL_FRAMEWORK_FIELDS = new Set(['ghost', 'wound', 'lie', 'want', 'need', 'secrets']);
+
 /**
  * Build the vision prompt. The model is told to return ONE JSON object keyed by
  * the structured character fields, populating only those it can infer from the
@@ -74,12 +84,16 @@ export function buildVisionExpandPrompt({ name, context, imageCount = 1, blankFi
   // Narrow the ask to the fields that are still blank when we have that list;
   // otherwise offer the full set. Populated fields are no-clobber server-side
   // regardless, so this is purely to focus the model.
+  // Non-visual framework fields (ghost/lie/…/secrets) are never asked of a
+  // vision model — filter them out of both the full-set and blank-narrowed asks.
+  const visualStringFields = STRING_FIELDS.filter((f) => !NON_VISUAL_FRAMEWORK_FIELDS.has(f));
+  const visualListFields = LIST_FIELDS.filter((f) => !NON_VISUAL_FRAMEWORK_FIELDS.has(f));
   const stringTargets = blankFields.length
-    ? STRING_FIELDS.filter((f) => blankFields.includes(f))
-    : STRING_FIELDS;
+    ? visualStringFields.filter((f) => blankFields.includes(f))
+    : visualStringFields;
   const listTargets = blankFields.length
-    ? LIST_FIELDS.filter((f) => blankFields.includes(f))
-    : LIST_FIELDS;
+    ? visualListFields.filter((f) => blankFields.includes(f))
+    : visualListFields;
 
   const stringLines = stringTargets.map((f) => `  "${f}": "<string>"`).join(',\n');
   const listLines = listTargets
