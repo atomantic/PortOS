@@ -144,6 +144,37 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     expect(hops).toEqual([]);
     expect(finalUrl).toBeNull();
   });
+
+  it('with topFrameId, ignores a sub-frame (iframe) document that also has requestId===loaderId', () => {
+    // CDP marks the main resource of EVERY frame with requestId===loaderId, so an
+    // iframe document (F2, its own frameId) looks like a top-level nav. Passing the
+    // top frame's frameId restricts main-frame classification to F1 only — the
+    // slow/cached iframe (F2, no response yet) must NOT gate the pending check.
+    const msgs = [
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', request: { url: 'https://ex.com/a' } } },
+      { method: 'Network.responseReceived', params: { requestId: 'R1', frameId: 'F1', type: 'Document', response: { url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 200 } } },
+      // Sub-frame document: distinct frameId, still requestId===loaderId, no response.
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R2', frameId: 'F2', type: 'Document', request: { url: 'https://widget.example/iframe' } } },
+    ];
+    const { mainRequestIds, pendingMainRequestIds, hops } = pickMainFrameHops(msgs, 'F1');
+    expect(mainRequestIds).toEqual(['R1']);
+    expect(pendingMainRequestIds).toEqual([]);
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
+    // Without the frameId hint, the old classifier over-refuses (F2 is pending).
+    const legacy = pickMainFrameHops(msgs);
+    expect(legacy.pendingMainRequestIds).toEqual(['R2']);
+  });
+
+  it('falls back to requestId===loaderId when no request matches topFrameId', () => {
+    // A frameId-format surprise (topFrameId matches nothing in the stream) must not
+    // regress to refuse-all — retain the legacy classification.
+    const { mainRequestIds, hops } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+    ], 'FRAME-THAT-DOES-NOT-EXIST');
+    expect(mainRequestIds).toEqual(['R1']);
+    expect(hops.map((h) => h.remoteIPAddress)).toEqual(['93.184.216.34']);
+  });
 });
 
 describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
@@ -251,5 +282,19 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       { method: 'Network.webSocketCreated', params: { requestId: 'W1', url: 'wss://realtime.example.com/socket' } },
     ], hostAllow, 'https://ex.com/a');
     expect(reason).toBeNull();
+  });
+
+  it('passes a public page that embeds a slow iframe when the top frameId is pinned', () => {
+    // Top document loads clean from public; an embedded iframe (its own frameId,
+    // requestId===loaderId) is still in flight at settle-end. Without the frameId
+    // pin this over-refuses ("still in flight"); with it, only F1 gates the check.
+    const msgs = [
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', request: { url: 'https://ex.com/article' } } },
+      { method: 'Network.responseReceived', params: { requestId: 'R1', frameId: 'F1', type: 'Document', response: { url: 'https://ex.com/article', remoteIPAddress: '93.184.216.34', status: 200 } } },
+      { method: 'Network.requestWillBeSent', params: { requestId: 'R2', loaderId: 'R2', frameId: 'F2', type: 'Document', request: { url: 'https://widget.example/embed' } } },
+    ];
+    expect(ssrfPinRefusalReason(msgs, allow, 'https://ex.com/article', 'F1')).toBeNull();
+    // Sanity: the legacy classifier (no frameId) over-refuses the same stream.
+    expect(ssrfPinRefusalReason(msgs, allow, 'https://ex.com/article')).toMatch(/still in flight/);
   });
 });
