@@ -25,7 +25,7 @@
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "7ef2b5f7d8f05937d4912b26ad45f42e",
-    "issue-reconcile": "c57a39aaa118173a496f030f5878bfc1",
+    "issue-reconcile": "c87d7adb57de208c069964760c9c6276",
     "pr-reviewer": "add27b67daa6aa2c75717ac96a6bd625",
     "pr-reviewer-security": "2050297d1cdb081a8576a781828ee44f",
     "pr-reviewer-review": "21ccd5d3a6f3eea16c479db9ed9aedaa",
@@ -45,7 +45,7 @@
     "reference-watch": 3,
     "pr-watcher": 1,
     "branch-reconcile": 1,
-    "issue-reconcile": 1,
+    "issue-reconcile": 2,
     "refresh-local-llm-catalog": 1,
     "security": 2,
     "code-quality": 2,
@@ -132,6 +132,9 @@
       "133c221608545a26f328dead099a4d0a",
       "609167c41331e6bbfc6d5f5edc452d4c",
       "9c7508598ee772d1cee8f609f9ed7372"
+    ],
+    "issue-reconcile": [
+      "c57a39aaa118173a496f030f5878bfc1"
     ]
   }
 }
