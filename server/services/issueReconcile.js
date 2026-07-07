@@ -147,8 +147,8 @@ function normalizeGithubIssue(issue) {
     number: issue.number,
     title: issue.title || '',
     url: issue.url || '',
-    labels: Array.isArray(issue.labels) ? issue.labels.map((l) => l.name) : [],
-    assignees: Array.isArray(issue.assignees) ? issue.assignees.map((a) => a.login) : [],
+    labels: Array.isArray(issue.labels) ? issue.labels.map((l) => l.name).filter(Boolean) : [],
+    assignees: Array.isArray(issue.assignees) ? issue.assignees.map((a) => a.login).filter(Boolean) : [],
   };
 }
 
@@ -156,11 +156,12 @@ function normalizeGithubIssue(issue) {
  * Fetch issue/PR facts from GitHub, normalized to the common shape. Returns null
  * on any gh failure (degrade: the caller treats null as "nothing to reconcile /
  * transient"). `fullName` is resolved by the dispatcher, not re-queried here.
- * @param {string} repoPath
+ * Unlike `getGitlabState`, this needs no `repoPath` — `gh` targets the repo via
+ * `--repo <fullName>` rather than resolving from the working directory.
  * @param {string} fullName
  * @returns {Promise<{forge:'github', fullName:string, inProgress:object[], mergedPrs:object[], openPrs:object[]}|null>}
  */
-async function getGithubState(repoPath, fullName) {
+async function getGithubState(fullName) {
   const [issuesRaw, mergedRaw, openRaw] = await Promise.all([
     execGh(['issue', 'list', '--repo', fullName, '--state', 'open',
       '--label', IN_PROGRESS_LABEL, '--limit', String(GH_LIST_LIMIT),
@@ -265,7 +266,7 @@ async function getForgeState(repoPath) {
   // getOriginInfo already classifies GitHub authoritatively (older callers/tests
   // may not carry a `host`), so trust isGithub first; fall back to the canonical
   // host classifier for GitLab (and any future forges hostToWorkTracker adds).
-  if (origin.isGithub) return getGithubState(repoPath, origin.fullName);
+  if (origin.isGithub) return getGithubState(origin.fullName);
   if (hostToWorkTracker(origin.host) === 'gitlab') return getGitlabState(repoPath, origin.fullName);
   return null;
 }

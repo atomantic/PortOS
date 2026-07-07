@@ -19,8 +19,10 @@ export function execGlab(args, cwd) {
     const child = spawn('glab', args, { cwd, shell: false, windowsHide: true });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });
-    // stderr is intentionally ignored — a failed glab call resolves to null via
-    // the exit code, and we never surface glab's stderr to the caller.
+    // We never surface glab's stderr to the caller (a failed call resolves to null
+    // via the exit code), but stderr MUST still be drained — an unread pipe can
+    // fill its buffer and block the child on a chatty warning.
+    child.stderr.on('data', () => {});
     child.on('close', (code) => resolve(code === 0 ? stdout.trim() : null));
     child.on('error', () => resolve(null));
   });

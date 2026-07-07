@@ -22,16 +22,13 @@ vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(async () => '[]') }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
 }));
-// hostToWorkTracker is the canonical host→forge classifier; use the real logic
-// so the GitLab branch is exercised through the same mapping production uses.
-vi.mock('../lib/workTracker.js', () => ({
-  hostToWorkTracker: (host) => {
-    if (!host) return null;
-    if (/(^|\.)gitlab\./.test(host) || host === 'gitlab.com') return 'gitlab';
-    if (/(^|\.)github\./.test(host) || host === 'github.com') return 'github';
-    return null;
-  },
-}));
+// hostToWorkTracker is the canonical host→forge classifier. Import the REAL pure
+// implementation (partial mock) so the GitLab branch is exercised through the
+// exact mapping production uses — no drift-prone re-implementation here.
+vi.mock('../lib/workTracker.js', async (importActual) => {
+  const actual = await importActual();
+  return { hostToWorkTracker: actual.hostToWorkTracker };
+});
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo' },
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
