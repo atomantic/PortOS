@@ -67,6 +67,13 @@ vi.mock('fs/promises', () => ({
 }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
+// Default passthrough for the Windows resolve+wrap helper (#2243) — POSIX
+// behavior. A specific test overrides it with mockReturnValueOnce to assert the
+// spawn wiring uses whatever prepareCliSpawn returns.
+vi.mock('../lib/bufferedSpawn.js', () => ({
+  prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
+}));
+
 // Mock child_process.spawn to return a controllable fake process
 let fakeProcess;
 vi.mock('child_process', () => ({
@@ -78,6 +85,8 @@ vi.mock('child_process', () => ({
 }));
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
+import { spawn } from 'child_process';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 
 // Helper: feed the parser a sequence of stream-json lines
 function runStream(parser, events) {
@@ -341,6 +350,9 @@ describe('stream error containment', () => {
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentLifecycle.js')).finalizeAgent.mockResolvedValue(undefined);
     minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
+    // Reset the resolve+wrap helper to its POSIX passthrough before each test
+    // (afterEach's restoreAllMocks can clear the factory implementation).
+    vi.mocked(prepareCliSpawn).mockImplementation((command, args) => ({ command, args }));
   });
 
   afterEach(() => {
@@ -417,6 +429,37 @@ describe('stream error containment', () => {
       (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
     );
     expect(logged).toBe(true);
+  });
+
+  it('routes the CLI command through prepareCliSpawn and spawns its resolved+wrapped result (#2243)', async () => {
+    // The reported bug: on Windows a bare `opencode`/`claude` .cmd shim can't be
+    // spawned directly under shell:false → ENOENT (-4058) → startup-failure.
+    // spawnDirectly must hand the command through prepareCliSpawn (resolve +
+    // cmd.exe wrap) and spawn WHATEVER it returns — asserted here with a sentinel.
+    vi.mocked(prepareCliSpawn).mockReturnValueOnce({
+      command: 'cmd.exe',
+      args: ['/c', 'C:\\npm\\claude.cmd', '--print'],
+    });
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10)); // let the getClaudeSettingsEnv await settle
+
+    // Called with the logical command + args and the child env (PATH-bearing) so
+    // a provider PATH override is honored.
+    expect(prepareCliSpawn).toHaveBeenCalledWith(
+      minimalArgs.cliConfig.command,
+      minimalArgs.cliConfig.args,
+      expect.objectContaining({ PATH: expect.anything() }),
+    );
+    // spawn() received the resolved+wrapped pair, NOT the bare command.
+    expect(spawn).toHaveBeenCalledWith(
+      'cmd.exe',
+      ['/c', 'C:\\npm\\claude.cmd', '--print'],
+      expect.objectContaining({ shell: false }),
+    );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
   });
 
   describe('initialization timeout — 3-second phase transition', () => {

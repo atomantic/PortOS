@@ -24,6 +24,7 @@ const {
   needsShell,
   resolveWindowsExecutable,
   prepareWindowsSafeSpawn,
+  prepareCliSpawn,
   IS_WIN32,
   WIN_CMD_SHIMS,
   MAX_OUTPUT_BYTES,
@@ -82,6 +83,16 @@ describe('killProcessTree', () => {
     const child = makeFakeChild();
     killProcessTree(child);
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('on non-Windows forwards an explicit signal to the child (e.g. SIGKILL escalation) — #2243', () => {
+    if (IS_WIN32) return; // platform-gated behavior
+    const child = makeFakeChild();
+    killProcessTree(child, 'SIGKILL');
+    // POSIX callers keep their SIGTERM→SIGKILL escalation semantics — the
+    // signal arg must reach child.kill, not be hardcoded to SIGTERM.
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -251,6 +262,53 @@ describe('prepareWindowsSafeSpawn', () => {
     // whitespace, would reach cmd.exe unquoted just like an unquoted arg.
     const result = prepareWindowsSafeSpawn('C:\\Tools&CLIs\\npm\\codex.cmd', ['exec'], true);
     expect(result).toEqual({ command: 'cmd.exe', args: ['/c', 'C:\\Tools^&CLIs\\npm\\codex.cmd', 'exec'] });
+  });
+});
+
+describe('prepareCliSpawn (composed resolve+wrap — the CoS spawn fix, #2243)', () => {
+  // isWin32 is passed explicitly so these tests are deterministic regardless of
+  // the host platform actually running them. A real fakePathDir on PATH lets
+  // resolveWindowsExecutable find the shim.
+  let fakePathDir;
+
+  beforeEach(async () => {
+    fakePathDir = await mkdtemp(join(tmpdir(), 'prepare-cli-spawn-'));
+  });
+
+  afterEach(async () => {
+    await rm(fakePathDir, { recursive: true, force: true });
+  });
+
+  it('resolves a bare .cmd shim on PATH AND wraps it in cmd.exe /c (the end-to-end Windows fix)', async () => {
+    // This is exactly the CoS bug: on Windows a bare `opencode` can neither be
+    // resolved nor spawned directly — prepareCliSpawn turns it into a
+    // launchable `cmd.exe /c <opencode.cmd> ...` pair. The env override is what
+    // the CoS spawners pass (childEnv) so a provider PATH is honored.
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    const result = prepareCliSpawn('opencode', ['run', '-m', 'ollama/qwen2.5:7b-instruct'], { PATH: fakePathDir }, true);
+    expect(result).toEqual({
+      command: 'cmd.exe',
+      args: ['/c', join(fakePathDir, 'opencode.cmd'), 'run', '-m', 'ollama/qwen2.5:7b-instruct'],
+    });
+  });
+
+  it('resolves a bare command to a real .exe and leaves it unwrapped on Windows', async () => {
+    await writeFile(join(fakePathDir, 'opencode.exe'), '');
+    const result = prepareCliSpawn('opencode', ['run'], { PATH: fakePathDir }, true);
+    expect(result).toEqual({ command: join(fakePathDir, 'opencode.exe'), args: ['run'] });
+  });
+
+  it('keeps the bare command when nothing resolves on PATH (Windows fallback)', () => {
+    const result = prepareCliSpawn('opencode', ['run'], { PATH: fakePathDir }, true);
+    expect(result).toEqual({ command: 'opencode', args: ['run'] });
+  });
+
+  it('is a no-op off Windows — passes the bare command + args straight through (POSIX unaffected)', async () => {
+    // Even with a matching .cmd on PATH, the POSIX branch never resolves or
+    // wraps: spawn() resolves `opencode` from PATH itself under shell:false.
+    await writeFile(join(fakePathDir, 'opencode.cmd'), '@echo off\n');
+    const result = prepareCliSpawn('opencode', ['run', '-m', 'ollama/x'], { PATH: fakePathDir }, false);
+    expect(result).toEqual({ command: 'opencode', args: ['run', '-m', 'ollama/x'] });
   });
 });
 

@@ -17,6 +17,7 @@ import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunn
 import { cleanupAgentWorktree, syncRunnerAgents } from './agentLifecycle.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import * as shellService from './shell.js';
@@ -152,10 +153,12 @@ export async function pauseAgent(agentId, reason = null) {
       if (activeAgents.has(agentId)) shellService.killSession(agent.tuiSessionId);
     }, 250);
   } else {
-    agent.process.kill('SIGTERM');
+    // killProcessTree so a Windows cmd.exe-wrapped CLI shim's real child is
+    // taken down, not orphaned (#2243). No behavior change on POSIX.
+    killProcessTree(agent.process, 'SIGTERM');
     const killTimer = setTimeout(() => {
       if (activeAgents.has(agentId)) {
-        agent.process.kill('SIGKILL');
+        killProcessTree(agent.process, 'SIGKILL');
       }
     }, 5000);
     const agentEntry = activeAgents.get(agentId);
@@ -208,13 +211,14 @@ export async function terminateAgent(agentId) {
     }
   }
 
-  // Kill the process
-  agent.process.kill('SIGTERM');
+  // Kill the process — killProcessTree so a Windows cmd.exe-wrapped shim's
+  // real child isn't orphaned (#2243). POSIX behavior unchanged.
+  killProcessTree(agent.process, 'SIGTERM');
 
   // Give it a moment, then force kill if still running
   const killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
-      agent.process.kill('SIGKILL');
+      killProcessTree(agent.process, 'SIGKILL');
       unregisterSpawnedAgent(agent.pid);
       activeAgents.delete(agentId);
     }
@@ -300,8 +304,9 @@ export async function killAgent(agentId) {
     }
   }
 
-  // Kill the process immediately with SIGKILL
-  agent.process.kill('SIGKILL');
+  // Kill the process immediately with SIGKILL — killProcessTree so a Windows
+  // cmd.exe-wrapped shim's real child isn't orphaned (#2243). POSIX unchanged.
+  killProcessTree(agent.process, 'SIGKILL');
 
   unregisterSpawnedAgent(agent.pid);
   activeAgents.delete(agentId);

@@ -16,6 +16,7 @@ import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
@@ -199,12 +200,23 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
+  const childEnv = (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })();
+
+  // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat
+  // shim on Windows) to its real path and wrap a shim as `cmd.exe /c <path>` so
+  // spawn() under shell:false can launch it. Without this, Windows can't find
+  // `opencode.cmd` from the bare name → spawn ENOENT (errno -4058) → empty
+  // output → startup-failure. Mirrors the working "Run Prompt" path
+  // (server/services/runner.js); resolved against childEnv so a provider PATH
+  // override is honored. See issue #2243.
+  const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, spawnArgs, childEnv);
+
   // Spawn the CLI process
-  const claudeProcess = spawn(command, spawnArgs, {
+  const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })(),
+    env: childEnv,
     windowsHide: true
   });
 
@@ -405,13 +417,15 @@ app.post('/terminate/:agentId', (req, res) => {
 
   console.log(`🔪 Terminating agent ${agentId}`);
 
-  agent.process.kill('SIGTERM');
+  // killProcessTree (not .kill) so a Windows cmd.exe-wrapped CLI shim's real
+  // child is taken down too, not orphaned (#2243). No-op difference on POSIX.
+  killProcessTree(agent.process, 'SIGTERM');
 
   // Force kill after timeout; store handle so it can be cancelled if the
   // process exits cleanly before the grace window expires.
   agent.killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
-      agent.process.kill('SIGKILL');
+      killProcessTree(agent.process, 'SIGKILL');
       activeAgents.delete(agentId);
     }
   }, SIGKILL_GRACE_MS);
@@ -432,8 +446,9 @@ app.post('/kill/:agentId', async (req, res) => {
 
   console.log(`💀 Force killing agent ${agentId} (PID: ${agent.pid})`);
 
-  // Use SIGKILL for immediate termination
-  agent.process.kill('SIGKILL');
+  // Use SIGKILL for immediate termination — killProcessTree so a Windows
+  // cmd.exe-wrapped shim's real child isn't orphaned (#2243). POSIX unchanged.
+  killProcessTree(agent.process, 'SIGKILL');
 
   // Clean up immediately
   activeAgents.delete(agentId);
@@ -467,11 +482,12 @@ app.post('/pause/:agentId', async (req, res) => {
   agent.pausedAt = pausedAt;
   agent.pauseReason = reason;
 
-  agent.process.kill('SIGTERM');
+  // killProcessTree so a Windows cmd.exe-wrapped shim's child isn't orphaned (#2243).
+  killProcessTree(agent.process, 'SIGTERM');
   // Store handle so the close handler can clear it when the process exits first.
   agent.killTimer = setTimeout(() => {
     const current = activeAgents.get(agentId);
-    if (current?.paused) current.process.kill('SIGKILL');
+    if (current?.paused) killProcessTree(current.process, 'SIGKILL');
   }, SIGKILL_GRACE_MS);
 
   res.json({ success: true, agentId, pid: agent.pid, pausedAt });
@@ -490,10 +506,11 @@ app.post('/terminate-all', async (req, res) => {
   for (const agentId of agentIds) {
     const agent = activeAgents.get(agentId);
     if (agent) {
-      agent.process.kill('SIGTERM');
+      // killProcessTree so a Windows cmd.exe-wrapped shim's child isn't orphaned (#2243).
+      killProcessTree(agent.process, 'SIGTERM');
       agent.killTimer = setTimeout(() => {
         if (activeAgents.has(agentId)) {
-          agent.process.kill('SIGKILL');
+          killProcessTree(agent.process, 'SIGKILL');
           activeAgents.delete(agentId);
         }
       }, SIGKILL_GRACE_MS);
@@ -843,7 +860,7 @@ process.on('SIGTERM', async () => {
   // Terminate all agents
   for (const [agentId, agent] of activeAgents) {
     console.log(`🔪 Terminating agent ${agentId}`);
-    agent.process.kill('SIGTERM');
+    killProcessTree(agent.process, 'SIGTERM'); // tree-kill so Windows cmd.exe shims aren't orphaned (#2243)
   }
 
   // Wait for agents to terminate
