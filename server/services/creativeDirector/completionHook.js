@@ -146,26 +146,37 @@ export function findPendingSeedFrameJob(jobs, projectId, sceneId) {
 // re-advance. A short bounded poll lets scene-0 pick up the seeded frame
 // without wedging the pipeline if the attach failed (frame simply won't be
 // there and the scene renders text-to-video, per the fire-and-forget contract).
-const SEED_FRAME_ATTACH_POLL_MS = 250;
-const SEED_FRAME_ATTACH_MAX_WAIT_MS = 3000;
+// Poll fast at first (the scene-image hook usually files sourceImageFile
+// within a tick or two of the same 'completed' event), then back off — so a
+// successful attach is picked up almost immediately, while a genuinely failed
+// attach still gives up promptly instead of blocking scene-0 for the full
+// window. Values are the delay BEFORE each successive re-read.
+const SEED_FRAME_ATTACH_POLL_SCHEDULE_MS = [25, 50, 100, 250, 250, 500, 500];
+const SEED_FRAME_ATTACH_MAX_WAIT_MS = SEED_FRAME_ATTACH_POLL_SCHEDULE_MS.reduce((a, b) => a + b, 0);
+
+// Backstop for a seed job that never emits a terminal event (worker crash,
+// queue stall, a pm2 restart that drops the in-memory job). Without it the
+// defer listeners + inflightSeedDefer entry would leak forever and wedge the
+// scene in 'pending'. Generous — a real image render can take a while — but
+// finite so the pipeline always makes progress.
+const SEED_DEFER_BACKSTOP_MS = 5 * 60 * 1000;
 
 async function waitForSeedFrameThenAdvance(projectId, sceneId) {
-  const deadline = Date.now() + SEED_FRAME_ATTACH_MAX_WAIT_MS;
   // Poll until the scene-image hook has filed sourceImageFile, the project
   // leaves a runnable state (paused/failed/deleted), the scene stops being
-  // pending, or we hit the deadline.
-  for (;;) {
+  // pending, or we exhaust the schedule.
+  for (let i = 0; ; i += 1) {
     const fresh = await getProject(projectId).catch(() => null);
     if (!fresh || fresh.status === 'paused' || fresh.status === 'failed') return;
     const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
     // Scene gone, no longer pending (something else advanced it), or the
     // reference frame has landed → stop waiting and let advance() take over.
     if (!scene || scene.status !== 'pending' || scene.sourceImageFile) break;
-    if (Date.now() >= deadline) {
+    if (i >= SEED_FRAME_ATTACH_POLL_SCHEDULE_MS.length) {
       console.log(`⏳ CD scene ${sceneId} on ${projectId}: seed frame did not attach within ${SEED_FRAME_ATTACH_MAX_WAIT_MS}ms — rendering without it (text-to-video).`);
       break;
     }
-    await new Promise((r) => setTimeout(r, SEED_FRAME_ATTACH_POLL_MS));
+    await new Promise((r) => setTimeout(r, SEED_FRAME_ATTACH_POLL_SCHEDULE_MS[i]));
   }
   return advanceAfterSceneSettled(projectId);
 }
@@ -385,6 +396,7 @@ export async function advanceAfterSceneSettled(projectId) {
         const fireOnce = () => {
           if (fired) return;
           fired = true;
+          clearTimeout(backstopTimer);
           mediaJobEvents.off('completed', onSeedSettled);
           mediaJobEvents.off('failed', onSeedSettled);
           mediaJobEvents.off('canceled', onSeedSettled);
@@ -405,6 +417,19 @@ export async function advanceAfterSceneSettled(projectId) {
         mediaJobEvents.on('completed', onSeedSettled);
         mediaJobEvents.on('failed', onSeedSettled);
         mediaJobEvents.on('canceled', onSeedSettled);
+        // Backstop: a seed job that never emits a terminal event (worker
+        // crash, queue stall, restart that drops the in-memory job) would
+        // otherwise leave these listeners + the inflightSeedDefer entry
+        // attached forever, and every future advance for this scene would hit
+        // the "already armed" early-return above — wedging the scene in
+        // 'pending' permanently. Force a fall-through after the backstop so
+        // the scene renders (text-to-video if the frame never landed) rather
+        // than hanging. Unref so the timer can't hold the process open.
+        const backstopTimer = setTimeout(() => {
+          console.log(`⏳ CD scene ${nextPending.sceneId} on ${project.id}: seed frame job ${seedJob.id.slice(0, 8)} never settled within ${SEED_DEFER_BACKSTOP_MS}ms — proceeding without waiting.`);
+          fireOnce();
+        }, SEED_DEFER_BACKSTOP_MS);
+        backstopTimer.unref?.();
         // Close the race where the job settled between the listJobs() read
         // above and attaching the listeners — its terminal event already
         // fired and would never fire again, wedging the scene in 'pending'
@@ -470,4 +495,14 @@ export async function advanceAfterSceneSettled(projectId) {
  */
 export async function startCreativeDirectorProject(projectId) {
   return advanceAfterSceneSettled(projectId);
+}
+
+// Test-only: clear the module-level in-memory dedup sets so suites that leave
+// a seed-frame defer armed (deferred but never fired the settle event) don't
+// bleed the deferKey into a later test that reuses the same projectId.
+export function __resetInflightState() {
+  inflightTreatment.clear();
+  inflightStitch.clear();
+  inflightEvaluator.clear();
+  inflightSeedDefer.clear();
 }

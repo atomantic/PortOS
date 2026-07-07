@@ -66,7 +66,7 @@ vi.mock('fs', async () => {
 });
 
 import * as localMod from './local.js';
-import { advanceAfterSceneSettled, findPendingSeedFrameJob } from './completionHook.js';
+import { advanceAfterSceneSettled, findPendingSeedFrameJob, __resetInflightState } from './completionHook.js';
 
 const baseProject = {
   id: 'cd-1',
@@ -270,6 +270,9 @@ describe('advanceAfterSceneSettled', () => {
     mockSampleEvaluationFrames.mockReset().mockResolvedValue([]);
     mockExistsSync.mockReset().mockReturnValue(false);
     mockListJobs.mockReset().mockReturnValue([]);
+    // Clear the module-level dedup sets so a test that leaves a seed-frame
+    // defer armed can't bleed its deferKey into a later test.
+    __resetInflightState();
   });
 
   it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
@@ -750,6 +753,37 @@ describe('advanceAfterSceneSettled', () => {
 
       expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
       expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
+    });
+
+    it('a second advance while a defer is already armed does not double-register or render', async () => {
+      const project = seedProject('cd-seed-dedup');
+      const framed = seedProject('cd-seed-dedup', {
+        treatment: {
+          scenes: [
+            { sceneId: 'scene-1', order: 0, status: 'pending', sourceImageFile: 'seed.png' },
+            { sceneId: 'scene-2', order: 1, status: 'pending' },
+          ],
+        },
+      });
+      // First two advances see the frameless project (arm + early-return);
+      // after the seed job completes the frame has landed.
+      localMod.getProject
+        .mockResolvedValueOnce(project)
+        .mockResolvedValueOnce(project)
+        .mockResolvedValue(framed);
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id); // arms the defer
+      await advanceAfterSceneSettled(project.id); // should early-return
+      expect(mockRunSceneRender).not.toHaveBeenCalled();
+
+      // A single settle re-advances exactly once (not twice), proving the
+      // second advance didn't register a duplicate listener.
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1', 'completed')]);
+      mockMediaJobEvents.emit('completed', seedJob(project.id, 'scene-1', 'completed'));
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
     });
   });
 
