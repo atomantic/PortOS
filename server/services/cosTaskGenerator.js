@@ -1684,13 +1684,15 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
   }
 
-  // issue-reconcile: deterministic pre-step — scan the app's GitHub repo for
-  // ZOMBIE issues (open + `in-progress` yet with their PR merged and no live
-  // claim anywhere) and hand the set to the coordinator agent. Same perpetual
-  // drain shape as branch-reconcile: the scan IS the work-detector (gh/git only,
-  // no LLM), and the coordinator dispatches only while zombies remain — else it
-  // PARKS on the daily recheckCron. `{zombieIssues}` carries the set into the
-  // prompt. No worktree: the coordinator mutates issue state over `gh` only.
+  // issue-reconcile: deterministic pre-step — scan the app's forge repo (GitHub
+  // via `gh` OR GitLab via `glab`, resolved from the origin host inside reconcile)
+  // for ZOMBIE issues (open + `in-progress` yet with their PR/MR merged and no
+  // live claim anywhere) and hand the set to the coordinator agent. Same perpetual
+  // drain shape as branch-reconcile: the scan IS the work-detector (gh/glab/git
+  // only, no LLM), and the coordinator dispatches only while zombies remain — else
+  // it PARKS on the daily recheckCron. `{zombieIssues}` carries the set (with the
+  // resolved forge) into the prompt. No worktree: the coordinator mutates issue
+  // state over `gh`/`glab` only.
   let zombieIssuesBlock = '';
   if (taskType === 'issue-reconcile') {
     const { reconcile, zombieSignature, formatZombiesForPrompt } = await import('./issueReconcile.js');
@@ -1704,8 +1706,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('warn', `issue-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
       return null;
     });
-    // null = non-GitHub remote OR transient gh failure → skip WITHOUT parking so
-    // the next tick retries (gh/git-only cost), mirroring branch-reconcile.
+    // null = unsupported remote (not GitHub/GitLab) OR transient gh/glab failure →
+    // skip WITHOUT parking so the next tick retries (gh/glab/git-only cost),
+    // mirroring branch-reconcile.
     if (!result) return null;
     if (result.stalled.length) {
       // In-progress issues with NO merged PR and NO live claim — a different stuck
@@ -1733,8 +1736,8 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     await taskSchedule.clearPerpetualPark(taskType, app.id);
     await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
     metadata.perpetual = true;
-    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, { fullName: result.fullName, autoClose });
-    emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s)`, { appId: app.id, analysisType: taskType });
+    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, { fullName: result.fullName, forge: result.forge, autoClose });
+    emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s) on ${result.forge}`, { appId: app.id, analysisType: taskType });
   }
 
   // Honor a direct claim-work prompt customization if the user set one;

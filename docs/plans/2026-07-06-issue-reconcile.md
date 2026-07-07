@@ -77,6 +77,40 @@ from two machines*, so the coordinator dedupes by searching for an existing
 follow-up (`Refs #orig` marker) before filing. v1 pre-step is `gh`-only and parks
 on non-GitHub apps; GitLab/JIRA siblings are deferred (see PLAN.md).
 
+## Part D — forge siblings (#2249)
+
+- **GitLab (shipped #2249).** `issueReconcile.js` is now forge-aware: it resolves
+  the forge from the app's git `origin` host inside `reconcile()` (github.* →
+  GitHub via `gh`, gitlab.* → GitLab via `glab`, anything else → null/skip) and
+  delegates to a per-forge state gatherer. Both gatherers normalize into ONE common
+  issue shape (`{ number, title, url, labels, assignees }`) + change shape
+  (`{ number, headRefName, body, url }`), so the pure classifier, ref matchers, and
+  `zombieSignature` are shared — no forge branching in the classify/merge logic.
+  GitLab maps `iid`→number, MR `source_branch`→head ref (carries `claim/issue-<iid>`),
+  MR `description`→body (carries `Refs #<iid>`). Routing decision: **one task type**,
+  not three — `issue-reconcile` resolves the forge internally (the `claim-work`
+  router splits by tracker only because each tracker has a distinct multi-phase
+  claim *prompt*; here the coordinator prompt is shared and just gets the forge +
+  gh/glab command table injected via `{zombieIssues}`). Coordinator prompt bumped to
+  v2 (forge-aware gh/glab commands); v1 preserved in `PREVIOUS_DEFAULT_PROMPTS`.
+  `glab` exec helper added at `server/services/gitlab.js` (mirrors `execGh`, cwd-aware).
+- **Deferred (both forges).** The merged/open PR/MR list queries degrade to `[]`
+  on failure while only the in-progress ISSUE list is load-bearing (null → skip).
+  This is the intentional v1 GitHub contract, preserved for GitLab parity — but it
+  means a transient MR-list failure could momentarily misclassify (an issue with a
+  live open MR whose list call failed looks like a zombie; a real zombie whose
+  merged-list failed looks stalled). Low-impact because the coordinator
+  re-verifies each zombie live before acting AND the convergence signature only
+  drives, never destroys — but promoting open/merged list failures to
+  transient-null (skip, don't misclassify) is a worthwhile cross-forge hardening.
+  Not done here to keep the two forges behaviorally identical to the reviewed v1.
+- **JIRA (deferred → follow-up #2259).** The JIRA "zombie" analog is status-based,
+  not label-based (a ticket left *In Review*/*Done* with remaining scope + no live
+  claim), and heals through the PortOS JIRA API (`my-sprint-tickets` + ticket status
+  + linked MR/PR → record remaining scope + `POST /api/jira/instances/:id/tickets`)
+  rather than a forge CLI — a materially different mechanic. Split out to keep the
+  GitLab slice mergeable and well-tested.
+
 ## Part C — heal the three current zombies (done)
 
 - **#2220** — separable remainder → **closed**, follow-up **#2241** filed.

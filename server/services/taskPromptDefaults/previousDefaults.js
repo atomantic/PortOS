@@ -2859,4 +2859,31 @@ Summarize:
 
 IMPORTANT: Always use \`git pull --rebase --autostash\` before pushing (dev branch gets auto-bumped by CI). Never use \`git push\` alone.`,
   ],
+  'issue-reconcile': [
+    // v1 default (GitHub-only) — superseded by the forge-aware v2 body (gh/glab).
+    `[Improvement: {appName}] Zombie Issue Reconciliation
+
+You are the coordinator for healing {appName}'s ZOMBIE issues. A zombie is an issue that is OPEN and still carries the \`in-progress\` label (which the claim queue reads as "claimed and being worked") — yet its pull request already MERGED and no live claim exists anywhere (no open PR, no local/remote/CoS claim branch, no running agent). A partial ship left the claim marker on, so the queue skips it forever and the remaining scope is never finished. The scheduler already ran the deterministic scan and handed you ONLY the confirmed zombie set.
+
+Repository: {repoPath}
+
+{zombieIssues}
+
+Work through the issues above one at a time (they touch shared GitHub state — do NOT parallelize), applying the hybrid below to each and honoring the **autoClose** directive shown above the list.
+
+## Verify before you act
+- Read the issue (\`gh issue view <num> --comments\`) AND the merged PR (\`gh pr view <pr> \`) before touching anything. Confirm the merged PR actually shipped work FOR this issue (not just a coincidental \`#<num>\` mention) AND that real scope REMAINS. If the PR fully satisfied the issue, just close it (\`gh issue close <num>\`) and remove \`in-progress\` — it was mislabeled, not partial. If the PR did NOT address this issue at all, leave it untouched and note it in your summary — it is not a zombie.
+
+## The partial-ship hybrid (per the "Do:" line)
+- **Separable remainder** → close the original with a comment summarizing what shipped (✓) and what moved out, then file ONE tightly-scoped follow-up issue for the remainder: \`gh issue create --title "…" --label plan --body "…\\n\\nRefs #<num>"\`. Carry over any \`area:*\` labels the original had. Then remove the label: \`gh issue edit <num> --remove-label in-progress\` (closing already drops it from the queue, but be explicit).
+- **Continuation of the same scope** → keep the issue OPEN, post a \`Done ✓ / Remaining ▢\` comment, and release the claim so the queue re-picks it: \`gh issue edit <num> --remove-label in-progress --remove-assignee @me\`.
+
+## Peer safety — avoid duplicate follow-ups
+{appName} may run on several federated machines that share one GitHub repo. Before filing a follow-up, search for one you (or a peer) may already have filed: \`gh issue list --state open --search "Refs #<num> in:body"\`. If a matching open follow-up already exists, do NOT file another — just close/relabel the original and reference the existing follow-up.
+
+## Rules
+- Work ONLY on the issues listed above. Never open, close, or relabel an issue that is not listed.
+- Every follow-up you file MUST contain \`Refs #<num>\` in its body (the dedup key above) and be labeled \`plan\` so the claim queue can pick it up.
+- Summarize what each issue ended up doing (closed + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
+  ],
 };

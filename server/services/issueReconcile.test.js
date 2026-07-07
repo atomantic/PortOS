@@ -4,11 +4,12 @@
  * - issueNumberFromRef / bodyReferencesIssue / prReferencesIssue — the boundary-
  *   safe reference matchers (no `issue-222` matching inside `issue-2220`).
  * - classifyIssue / classifyIssues — the pure ZOMBIE/LIVE/STALLED state machine.
- * - reconcile / gatherIssueState — end-to-end over mocked gh + git: an
- *   in-progress issue with a merged PR and no live claim is a ZOMBIE; an open PR
- *   or a live claim branch or an active agent keeps it LIVE.
+ * - reconcile / gatherIssueState — end-to-end over mocked gh/glab + git: an
+ *   in-progress issue with a merged PR/MR and no live claim is a ZOMBIE; an open
+ *   PR/MR or a live claim branch or an active agent keeps it LIVE. Runs the SAME
+ *   assertions against both the GitHub (`gh`) and GitLab (`glab`) forge gatherers.
  * - zombieSignature / formatZombiesForPrompt — the convergence signature and the
- *   autoClose-aware prompt body.
+ *   forge- + autoClose-aware prompt body.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -17,9 +18,21 @@ vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 })),
 }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
+vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(async () => '[]') }));
 vi.mock('../lib/gitRemote.js', () => ({
-  getOriginInfo: vi.fn(async () => ({ isGithub: true, fullName: 'atomantic/PortOS' })),
+  getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
+  readOriginRemoteUrl: vi.fn(async () => 'git@github.com:atomantic/PortOS.git'),
 }));
+// hostToWorkTracker is the canonical host→forge classifier. Import the REAL pure
+// implementation (partial mock) so the GitLab branch is exercised through the
+// exact mapping production uses — no drift-prone re-implementation here.
+vi.mock('../lib/workTracker.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    hostToWorkTracker: actual.hostToWorkTracker,
+    hostFromOriginUrl: actual.hostFromOriginUrl,
+  };
+});
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo' },
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
@@ -32,12 +45,14 @@ import {
 } from './issueReconcile.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
-import { getOriginInfo } from '../lib/gitRemote.js';
+import { execGlab } from './gitlab.js';
+import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
-  getOriginInfo.mockResolvedValue({ isGithub: true, fullName: 'atomantic/PortOS' });
+  getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' });
+  readOriginRemoteUrl.mockResolvedValue('git@github.com:atomantic/PortOS.git');
 });
 
 describe('issueNumberFromRef', () => {
@@ -136,6 +151,7 @@ describe('reconcile', () => {
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // no claim refs
 
     const result = await reconcile('/repo');
+    expect(result.forge).toBe('github');
     expect(result.zombies.map((z) => z.number)).toEqual([2220]);
     expect(result.zombies[0].mergedPr.number).toBe(2234);
     expect(result.stalled).toHaveLength(0);
@@ -188,10 +204,22 @@ describe('reconcile', () => {
     expect(result.stalled.map((s) => s.number)).toEqual([2220]);
   });
 
-  it('returns null (skip, do not park) on a non-GitHub remote', async () => {
-    getOriginInfo.mockResolvedValue({ isGithub: false, fullName: null });
+  it('returns null (skip, do not park) when there is no origin / no host', async () => {
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: null, fullName: null });
+    readOriginRemoteUrl.mockResolvedValue(null);
     const result = await reconcile('/repo');
     expect(result).toBeNull();
+  });
+
+  it('returns null (skip) on an unsupported forge (neither GitHub nor GitLab)', async () => {
+    // A parseable non-forge remote (e.g. bitbucket) — has a fullName but no
+    // gh/glab gatherer, so the scan skips without parking.
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: 'bitbucket.org', fullName: 'team/proj' });
+    readOriginRemoteUrl.mockResolvedValue('git@bitbucket.org:team/proj.git');
+    const result = await reconcile('/repo');
+    expect(result).toBeNull();
+    expect(execGh).not.toHaveBeenCalled();
+    expect(execGlab).not.toHaveBeenCalled();
   });
 
   it('returns null (transient) when the issue list query fails', async () => {
@@ -208,6 +236,128 @@ describe('reconcile', () => {
     const result = await reconcile('/repo');
     expect(result).not.toBeNull();
     expect(result.zombies).toHaveLength(0);
+  });
+});
+
+// --- end-to-end gather/reconcile over mocked glab + git (GitLab forge) ---
+
+/** Point the origin at GitLab so getForgeState routes to the glab gatherer. */
+function useGitlabOrigin() {
+  getOriginInfo.mockResolvedValue({ isGithub: false, host: 'gitlab.com', fullName: 'group/proj' });
+}
+
+/**
+ * Wire execGlab's three list calls by argv shape. Inputs use the RAW GitLab JSON
+ * shape (iid / web_url / source_branch / description) so the test also exercises
+ * the GitLab→common normalizers.
+ */
+function mockGlab({ issues = [], merged = [], open = [] }) {
+  execGlab.mockImplementation(async (argv) => {
+    if (argv[0] === 'issue' && argv[1] === 'list') return JSON.stringify(issues);
+    if (argv[0] === 'mr' && argv.includes('merged')) return JSON.stringify(merged);
+    if (argv[0] === 'mr' && argv.includes('opened')) return JSON.stringify(open);
+    return '[]';
+  });
+}
+
+describe('reconcile (GitLab forge)', () => {
+  beforeEach(useGitlabOrigin);
+
+  it('flags an in-progress issue whose MR merged with no live claim as a ZOMBIE', async () => {
+    mockGlab({
+      issues: [{ iid: 42, title: 'GL zombie', labels: ['in-progress', 'area:api'], assignees: [{ username: 'adam' }], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42', web_url: 'm' }],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result.forge).toBe('gitlab');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+    expect(result.zombies[0].mergedPr.number).toBe(7);
+    // GitLab labels/assignees normalize to plain strings.
+    expect(result.zombies[0].labels).toContain('area:api');
+    expect(result.zombies[0].assignees).toEqual(['adam']);
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('matches the MR by its claim/issue-<iid> source branch (head ref)', async () => {
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'no trailer here', web_url: 'm' }],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+  });
+
+  it('a live open MR keeps the issue LIVE (not a zombie)', async () => {
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'x', description: 'Refs #42' }],
+      open: [{ iid: 9, source_branch: 'claim/issue-42', description: '' }],
+    });
+    const result = await reconcile('/repo');
+    expect(result.zombies).toHaveLength(0);
+    expect(result.live.map((l) => l.number)).toEqual([42]);
+  });
+
+  it('a live LOCAL/REMOTE claim branch keeps the GitLab issue LIVE', async () => {
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'x', description: 'Refs #42' }],
+      open: [],
+    });
+    execGit.mockResolvedValue({ stdout: 'refs/remotes/origin/claim/issue-42\nrefs/heads/main\n', exitCode: 0 });
+    const result = await reconcile('/repo');
+    expect(result.zombies).toHaveLength(0);
+    expect(result.live.map((l) => l.number)).toEqual([42]);
+  });
+
+  it('no merged MR and no live claim → STALLED', async () => {
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result.zombies).toHaveLength(0);
+    expect(result.stalled.map((s) => s.number)).toEqual([42]);
+  });
+
+  it('returns null (transient) when the glab issue list query fails', async () => {
+    execGlab.mockImplementation(async (argv) => {
+      if (argv[0] === 'issue') return null; // load-bearing query failed / glab down
+      return '[]';
+    });
+    const result = await reconcile('/repo');
+    expect(result).toBeNull();
+  });
+
+  it('empty in-progress list is a valid answer (no zombies), not a skip', async () => {
+    mockGlab({ issues: [], merged: [], open: [] });
+    const result = await reconcile('/repo');
+    expect(result).not.toBeNull();
+    expect(result.forge).toBe('gitlab');
+    expect(result.zombies).toHaveLength(0);
+  });
+
+  it('scans a nested subgroup remote whose owner/repo does NOT parse (getOriginInfo.fullName=null)', async () => {
+    // Common GitLab layout `group/subgroup/project` — getOriginInfo's strict
+    // owner/repo parse returns null, but the host still classifies as GitLab and
+    // `glab` is cwd-based, so the scan must NOT be skipped. Host is classified off
+    // the origin URL via the real hostFromOriginUrl.
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: null, fullName: null });
+    readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:group/subgroup/project.git');
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42' }],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result).not.toBeNull();
+    expect(result.forge).toBe('gitlab');
+    // Best-effort display name is the full subgroup project path from the URL.
+    expect(result.fullName).toBe('group/subgroup/project');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
   });
 });
 
@@ -263,5 +413,22 @@ describe('formatZombiesForPrompt', () => {
     );
     expect(md).toContain('autoClose is OFF');
     expect(md).toContain('never close an issue or file a follow-up');
+  });
+  it('defaults to the GitHub forge header (gh) when forge is omitted', () => {
+    const md = formatZombiesForPrompt(
+      [{ number: 2220, title: 'CDO', url: 'u', mergedPr: { number: 2234, url: 'p' } }],
+      { fullName: 'atomantic/PortOS', autoClose: true }
+    );
+    expect(md).toContain('GitHub (use `gh`)');
+    expect(md).toContain('merged PR #2234');
+  });
+  it('renders a GitLab header + "MR" wording when forge is gitlab', () => {
+    const md = formatZombiesForPrompt(
+      [{ number: 42, title: 'GL', url: 'u', mergedPr: { number: 7, url: 'm' } }],
+      { fullName: 'group/proj', forge: 'gitlab', autoClose: true }
+    );
+    expect(md).toContain('GitLab (use `glab`)');
+    expect(md).toContain('merged MR #7');
+    expect(md).not.toContain('merged PR');
   });
 });
