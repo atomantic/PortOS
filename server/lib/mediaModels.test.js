@@ -748,3 +748,75 @@ describe('mediaModels registry', () => {
     logSpy.mockRestore();
   });
 });
+
+describe('user model entry mutators (#2124)', () => {
+  const videoEntry = {
+    id: 'hf-test-video', name: 'Test Video', repo: 'test/video',
+    runtime: 'mlx_video', steps: 25, guidance: 3.0, source: 'user',
+  };
+  const imageEntry = {
+    id: 'hf-test-image', name: 'Test Image', repo: 'test/image',
+    runner: 'flux2', steps: 8, guidance: 3.5, source: 'user',
+  };
+
+  it('isUserModelEntry distinguishes user from built-in', async () => {
+    const { isUserModelEntry } = await import('./mediaModels.js');
+    expect(isUserModelEntry({ source: 'user' })).toBe(true);
+    expect(isUserModelEntry({})).toBe(false);
+    expect(isUserModelEntry({ source: 'trained' })).toBe(false);
+  });
+
+  it('adds a user video entry, persists it, and hot-reloads the cache', async () => {
+    const { addUserModelEntry, getVideoModels, loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels(); // prime the cache
+    addUserModelEntry(videoEntry, { kind: 'video' });
+    // Reads back through the (busted + re-read) cache — no restart needed.
+    expect(getVideoModels().some((m) => m.id === 'hf-test-video')).toBe(true);
+    // And it's persisted to disk.
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    const inList = [...onDisk.video.macos, ...onDisk.video.windows].some((m) => m.id === 'hf-test-video');
+    expect(inList).toBe(true);
+  });
+
+  it('adds a user image entry', async () => {
+    const { addUserModelEntry, getImageModels } = await import('./mediaModels.js');
+    addUserModelEntry(imageEntry, { kind: 'image' });
+    expect(getImageModels().some((m) => m.id === 'hf-test-image')).toBe(true);
+  });
+
+  it('refuses a duplicate id', async () => {
+    const { addUserModelEntry } = await import('./mediaModels.js');
+    addUserModelEntry(videoEntry, { kind: 'video' });
+    expect(() => addUserModelEntry(videoEntry, { kind: 'video' })).toThrow(/already/i);
+  });
+
+  it('patches a user entry but refuses built-ins', async () => {
+    const { addUserModelEntry, patchUserModelEntry, getImageModels } = await import('./mediaModels.js');
+    addUserModelEntry(imageEntry, { kind: 'image' });
+    const updated = patchUserModelEntry('hf-test-image', { name: 'Renamed', steps: 12 });
+    expect(updated.name).toBe('Renamed');
+    expect(updated.steps).toBe(12);
+    expect(getImageModels().find((m) => m.id === 'hf-test-image').name).toBe('Renamed');
+    // 'dev' is a shipped built-in
+    expect(() => patchUserModelEntry('dev', { name: 'Hack' })).toThrow(/built-in/i);
+    expect(() => patchUserModelEntry('does-not-exist', { name: 'x' })).toThrow(/Unknown/i);
+  });
+
+  it('removes a user entry but refuses built-ins', async () => {
+    const { addUserModelEntry, removeUserModelEntry, getVideoModels } = await import('./mediaModels.js');
+    addUserModelEntry(videoEntry, { kind: 'video' });
+    expect(removeUserModelEntry('hf-test-video')).toEqual({ ok: true, id: 'hf-test-video' });
+    expect(getVideoModels().some((m) => m.id === 'hf-test-video')).toBe(false);
+    expect(() => removeUserModelEntry('dev')).toThrow(/built-in/i);
+    expect(() => removeUserModelEntry('nope')).toThrow(/Unknown/i);
+  });
+
+  it('reloadMediaModels busts the cache', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const first = loadMediaModels();
+    const second = loadMediaModels();
+    expect(first).toBe(second); // cached identity
+    const reloaded = reloadMediaModels();
+    expect(reloaded).not.toBe(first); // fresh object after bust
+  });
+});

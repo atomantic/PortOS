@@ -1,0 +1,180 @@
+import { describe, it, expect } from 'vitest';
+import {
+  classifyHfMediaModel,
+  inspectModelFiles,
+  customModelIdFromRepo,
+  buildCustomModelEntry,
+  searchHuggingfaceModels,
+} from './huggingfaceModel.js';
+
+// Build a minimal HF `/api/models/{repo}` response.
+const hf = ({ files = [], tags = [], base = null, pipeline = null } = {}) => ({
+  siblings: files.map((rfilename) => ({ rfilename })),
+  tags,
+  cardData: base ? { base_model: base } : {},
+  pipeline_tag: pipeline,
+});
+
+describe('inspectModelFiles', () => {
+  it('detects safetensors and gguf presence', () => {
+    expect(inspectModelFiles(hf({ files: ['model.safetensors', 'config.json'] })))
+      .toMatchObject({ hasSafetensors: true, hasGguf: false });
+    expect(inspectModelFiles(hf({ files: ['model-Q4_K_M.gguf'] })))
+      .toMatchObject({ hasSafetensors: false, hasGguf: true });
+  });
+});
+
+describe('classifyHfMediaModel — strict refusal', () => {
+  it('refuses a GGUF-only repo (no runtime can load it)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'unsloth/LTX-2.3-GGUF',
+      model: hf({ files: ['ltx-2.3-22b-distilled-Q4_K_M.gguf'], tags: ['ltx'] }),
+    })).toThrow(/GGUF/);
+  });
+
+  it('refuses a repo with no safetensors', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'foo/bar',
+      model: hf({ files: ['README.md'] }),
+    })).toThrow(/no .safetensors/i);
+  });
+
+  it('refuses Wan repos (BYO-venv, not self-service)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'Wan-AI/Wan2.2-T2V-A14B',
+      model: hf({ files: ['model.safetensors'], tags: ['wan'] }),
+    })).toThrow(/Wan/);
+  });
+
+  it('refuses HunyuanVideo repos', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'tencent/HunyuanVideo',
+      model: hf({ files: ['model.safetensors'], tags: ['hunyuan'] }),
+    })).toThrow(/Hunyuan/);
+  });
+
+  it('refuses an unclassifiable safetensors repo with no kind hint', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'someone/mystery-weights',
+      model: hf({ files: ['model.safetensors'] }),
+    })).toThrow(/image or video/);
+  });
+});
+
+describe('classifyHfMediaModel — happy paths', () => {
+  it('classifies an LTX safetensors repo as video/mlx_video', () => {
+    expect(classifyHfMediaModel({
+      repo: 'notapalindrome/ltx23-mlx-av-q4',
+      model: hf({ files: ['model.safetensors'], tags: ['ltx-video'] }),
+    })).toEqual({ kind: 'video', runtime: 'mlx_video', format: 'safetensors' });
+  });
+
+  it('honors an explicit ltx2 runtime override', () => {
+    expect(classifyHfMediaModel({
+      repo: 'dgrauet/ltx-2.3-mlx-q8',
+      model: hf({ files: ['model.safetensors'], tags: ['ltx'] }),
+      runtime: 'ltx2',
+    })).toEqual({ kind: 'video', runtime: 'ltx2', format: 'safetensors' });
+  });
+
+  it('detects a FLUX.2 image repo as flux2', () => {
+    expect(classifyHfMediaModel({
+      repo: 'black-forest-labs/FLUX.2-klein-9B',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-image' }),
+    })).toEqual({ kind: 'image', runner: 'flux2', format: 'safetensors' });
+  });
+
+  it('detects a Qwen image repo', () => {
+    expect(classifyHfMediaModel({
+      repo: 'Qwen/Qwen-Image',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-image' }),
+    })).toEqual({ kind: 'image', runner: 'qwen', format: 'safetensors' });
+  });
+
+  it('rejects an invalid explicit runtime', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'x/y',
+      model: hf({ files: ['model.safetensors'], tags: ['ltx'] }),
+      runtime: 'gguf-runtime',
+    })).toThrow(/can't be added self-service/);
+  });
+
+  it('falls back to a caller-supplied kind+runner for an ambiguous image repo', () => {
+    expect(classifyHfMediaModel({
+      repo: 'someone/custom-flux',
+      model: hf({ files: ['model.safetensors'] }),
+      kind: 'image',
+      runner: 'mflux',
+    })).toEqual({ kind: 'image', runner: 'mflux', format: 'safetensors' });
+  });
+});
+
+describe('customModelIdFromRepo', () => {
+  it('slugifies with an hf- prefix', () => {
+    expect(customModelIdFromRepo('notapalindrome/ltx23-mlx-av-q4')).toBe('hf-notapalindrome-ltx23-mlx-av-q4');
+    expect(customModelIdFromRepo('black-forest-labs/FLUX.2-klein-9B')).toBe('hf-black-forest-labs-flux-2-klein-9b');
+  });
+});
+
+describe('buildCustomModelEntry', () => {
+  it('builds a video entry with runtime + user source + defaults', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'notapalindrome/ltx23-mlx-av-q4',
+      model: hf({ tags: ['ltx'] }),
+      classification: { kind: 'video', runtime: 'mlx_video', format: 'safetensors' },
+    });
+    expect(entry).toMatchObject({
+      id: 'hf-notapalindrome-ltx23-mlx-av-q4',
+      repo: 'notapalindrome/ltx23-mlx-av-q4',
+      runtime: 'mlx_video',
+      source: 'user',
+      steps: 25,
+      guidance: 3.0,
+    });
+    expect(entry.runner).toBeUndefined();
+    expect(entry.installedAt).toBeTruthy();
+  });
+
+  it('builds an image entry with runner + honors overrides', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'Qwen/Qwen-Image',
+      model: hf({}),
+      classification: { kind: 'image', runner: 'qwen', format: 'safetensors' },
+      name: 'My Qwen',
+      steps: 40,
+      guidance: 5,
+    });
+    expect(entry).toMatchObject({ runner: 'qwen', name: 'My Qwen', steps: 40, guidance: 5, source: 'user' });
+    expect(entry.runtime).toBeUndefined();
+  });
+});
+
+describe('searchHuggingfaceModels', () => {
+  it('builds the search URL and maps rows', async () => {
+    let calledUrl = null;
+    const fetchImpl = async (url) => {
+      calledUrl = url;
+      return {
+        ok: true,
+        text: async () => JSON.stringify([
+          { id: 'org/a', likes: 5, downloads: 100, pipeline_tag: 'text-to-image' },
+          { modelId: 'org/b', pipeline_tag: 'text-to-video' },
+          { likes: 1 }, // no id → dropped
+        ]),
+      };
+    };
+    const rows = await searchHuggingfaceModels('ltx', { pipeline: 'text-to-video', limit: 5, fetchImpl });
+    expect(calledUrl).toContain('search=ltx');
+    expect(calledUrl).toContain('pipeline_tag=text-to-video');
+    expect(calledUrl).toContain('limit=5');
+    expect(rows).toEqual([
+      { id: 'org/a', likes: 5, downloads: 100, pipeline_tag: 'text-to-image' },
+      { id: 'org/b', likes: 0, downloads: 0, pipeline_tag: 'text-to-video' },
+    ]);
+  });
+
+  it('throws on a non-ok response', async () => {
+    const fetchImpl = async () => ({ ok: false, status: 503, text: async () => '' });
+    await expect(searchHuggingfaceModels('x', { fetchImpl })).rejects.toThrow(/search failed/i);
+  });
+});

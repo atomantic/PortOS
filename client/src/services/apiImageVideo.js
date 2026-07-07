@@ -258,6 +258,57 @@ export const listCachedModels = () => request('/image-video/models');
 export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
 export const deleteLora = (filename) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE' });
 
+// Media-model REGISTRY (the catalog of pickable image/video base models,
+// distinct from listCachedModels which reports on-disk HF cache usage). Returns
+// `{ video: [...], image: [...] }` with a `builtIn` flag per entry so the
+// manager renders built-ins read-only and user-added entries editable.
+export const listMediaModelRegistry = () => request('/image-video/models/registry');
+
+// Search the HuggingFace Hub for candidate base-model repos. `pipeline` scopes
+// to e.g. 'text-to-image'/'text-to-video'. `silent` (default true) because the
+// caller owns its own error UI. Returns `{ items: [{ id, likes, downloads, pipeline_tag }] }`.
+export const searchHfMediaModels = ({ query = '', pipeline, limit, silent = true } = {}) => {
+  const params = new URLSearchParams();
+  if (query) params.set('query', query);
+  if (pipeline) params.set('pipeline', pipeline);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return request(`/image-video/models/search${qs ? `?${qs}` : ''}`, { silent });
+};
+
+// Add a custom base model from a HuggingFace repo. The server strictly refuses
+// GGUF-only / wan / hunyuan / unclassifiable repos, so a rejection carries a
+// typed `.code` (HF_UNSUPPORTED_FORMAT, HF_UNKNOWN_KIND, HF_UNKNOWN_RUNNER, …)
+// the page can surface inline. `kind`/`runtime`/`runner` are optional overrides
+// for a mis-detected repo; `name`/`steps`/`guidance` override derived defaults.
+// `silent` lets the page route the typed errors into its own inline UI.
+export const addMediaModelFromHf = ({ url, kind, runtime, runner, name, steps, guidance, silent = false } = {}) => {
+  const body = { url };
+  if (kind) body.kind = kind;
+  if (runtime) body.runtime = runtime;
+  if (runner) body.runner = runner;
+  if (name) body.name = name;
+  if (steps != null) body.steps = steps;
+  if (guidance != null) body.guidance = guidance;
+  return request('/image-video/models/install/huggingface', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    silent,
+  });
+};
+
+// Edit a user-added model's name/steps/guidance. Built-ins return 403.
+export const patchCustomMediaModel = (id, patch) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+});
+
+// Remove a user-added model entry (weights stay in the HF cache). Built-ins
+// return 403; unknown ids 404.
+export const removeCustomMediaModel = (id) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+});
+
 // LoRA manager — Civitai-aware list/install/patch/delete. Reads sidecar
 // metadata so the manager UI can show trigger words, base model, recommended
 // scale, preview thumbnail. Used by /media/loras and the Image Gen LoRA picker.
