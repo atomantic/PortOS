@@ -19,10 +19,11 @@ function buildManuscript() {
 let settingsStore = {};
 let manuscriptCorpus = buildManuscript();
 
+let seriesStyleGuide = null;
 vi.mock('./series.js', () => ({
   getSeries: vi.fn(async (id) => {
     if (id === 'missing') throw Object.assign(new Error('nope'), { code: 'PIPELINE_SERIES_NOT_FOUND' });
-    return { id, name: 'Test Series' };
+    return { id, name: 'Test Series', styleGuide: seriesStyleGuide };
   }),
 }));
 
@@ -40,6 +41,7 @@ const { getVoiceFingerprint, resolveVoiceDriftConfig, VOICE_DRIFT_CHECK_ID } = a
 beforeEach(() => {
   settingsStore = {};
   manuscriptCorpus = buildManuscript();
+  seriesStyleGuide = null;
 });
 
 describe('resolveVoiceDriftConfig', () => {
@@ -48,6 +50,7 @@ describe('resolveVoiceDriftConfig', () => {
     expect(cfg.sigmaThreshold).toBe(1.5);
     expect(cfg.minIssues).toBe(4);
     expect(cfg.vocabularyWells).toBe('');
+    expect(cfg.baselineMode).toBe('drafted');
   });
 
   it('reads the persisted per-check config slice', async () => {
@@ -126,5 +129,42 @@ describe('getVoiceFingerprint', () => {
 
   it('propagates a NOT_FOUND error for a missing series', async () => {
     await expect(getVoiceFingerprint('missing')).rejects.toMatchObject({ code: 'PIPELINE_SERIES_NOT_FOUND' });
+  });
+
+  it('drafted baseline is the default and reports it (#2179)', async () => {
+    const res = await getVoiceFingerprint('ser-1');
+    expect(res.baselineMode).toBe('drafted');
+    expect(res.exemplarBaselineUsed).toBe(false);
+  });
+
+  it('measures against the style guide chosen voice when configured (#2179)', async () => {
+    settingsStore = {
+      pipelineEditorialChecks: {
+        checks: { [VOICE_DRIFT_CHECK_ID]: { config: { baselineMode: 'exemplars' } } },
+      },
+    };
+    // A metronomic chosen voice — so the VARIED issues drift against it.
+    seriesStyleGuide = { voiceExemplars: [{ passage: METRONOMIC }, { passage: METRONOMIC }] };
+    const res = await getVoiceFingerprint('ser-1');
+    expect(res.baselineMode).toBe('exemplars');
+    expect(res.exemplarBaselineUsed).toBe(true);
+    // The center row differs from the drafted mean on at least one metric.
+    const shifted = res.columns.some((c) => {
+      const s = res.series[c.key];
+      return s && Number.isFinite(s.center) && Math.abs(s.center - s.mean) > 1e-6;
+    });
+    expect(shifted).toBe(true);
+  });
+
+  it('falls back to drafted when configured for exemplars but the style guide has none (#2179)', async () => {
+    settingsStore = {
+      pipelineEditorialChecks: {
+        checks: { [VOICE_DRIFT_CHECK_ID]: { config: { baselineMode: 'exemplars' } } },
+      },
+    };
+    seriesStyleGuide = { voiceExemplars: [] };
+    const res = await getVoiceFingerprint('ser-1');
+    expect(res.baselineMode).toBe('drafted');
+    expect(res.exemplarBaselineUsed).toBe(false);
   });
 });

@@ -44,7 +44,7 @@ export const VOICE_DRIFT_CHECK_ID = 'style.voice-drift';
  * (`style.voice-drift` is statically registered, so `getCheckById` never misses.)
  *
  * @param {object} [settings] pre-loaded settings (optional; fetched when omitted)
- * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string, maxFindings: number }>}
+ * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string, maxFindings: number, baselineMode: string }>}
  */
 export async function resolveVoiceDriftConfig(settings) {
   const s = settings || await getSettings();
@@ -68,6 +68,8 @@ export async function resolveVoiceDriftConfig(settings) {
  *   gatedOff: boolean,
  *   issueCount: number,
  *   threshold: number,
+ *   baselineMode: string,
+ *   exemplarBaselineUsed: boolean,
  *   matrix: object,
  *   series: object,
  *   outliers: object[],
@@ -75,20 +77,25 @@ export async function resolveVoiceDriftConfig(settings) {
  */
 export async function getVoiceFingerprint(seriesId) {
   // Throws when the series is missing — the route maps it to a 404. Runs before any
-  // manuscript I/O so a bad id fails fast.
-  await getSeries(seriesId);
+  // manuscript I/O so a bad id fails fast. Keep the loaded record: the drift baseline
+  // can be the style guide's chosen-voice exemplars (#2179).
+  const series = await getSeries(seriesId);
 
   const [sections, cfg] = await Promise.all([
     collectManuscriptSections(seriesId),
     resolveVoiceDriftConfig(),
   ]);
 
-  // `cfg` is schema-validated, so sigmaThreshold/minIssues/vocabularyWells are
-  // always present (defaults applied by resolveCheckConfig) — no `??` needed.
+  // `cfg` is schema-validated, so sigmaThreshold/minIssues/vocabularyWells/baselineMode
+  // are always present (defaults applied by resolveCheckConfig) — no `??` needed. The
+  // matrix view resolves the SAME config the finding-emitting run does, including the
+  // chosen-voice baseline, so the highlighted outliers agree with the editor's findings.
   const drift = computeVoiceDrift(sectionsCorpus(sections), {
     threshold: cfg.sigmaThreshold,
     minIssues: cfg.minIssues,
     wells: parseVoiceWells(cfg.vocabularyWells),
+    baselineMode: cfg.baselineMode,
+    voiceExemplars: series?.styleGuide?.voiceExemplars,
   });
 
   return {
@@ -99,6 +106,8 @@ export async function getVoiceFingerprint(seriesId) {
     gatedOff: drift.gatedOff,
     issueCount: drift.issueCount,
     threshold: drift.threshold,
+    baselineMode: drift.baselineMode,
+    exemplarBaselineUsed: drift.exemplarBaselineUsed,
     matrix: drift.matrix,
     series: drift.series,
     outliers: drift.outliers,

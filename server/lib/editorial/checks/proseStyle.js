@@ -38,7 +38,9 @@ import {
   styleGuideExpectations,
   z,
 } from '../checkInfra.js';
-import { computeVoiceDrift, describeDrift, parseVoiceWells } from '../voiceFingerprint.js';
+import {
+  computeVoiceDrift, describeDrift, parseVoiceWells, VOICE_BASELINE_MODES,
+} from '../voiceFingerprint.js';
 
 export const proseStyleChecks = [
   {
@@ -1005,10 +1007,13 @@ export const proseStyleChecks = [
   },
   {
     id: 'style.voice-drift',
-    sources: ['manuscript'],
+    // Reads the style guide's voice exemplars too (#2179) so an exemplar edit
+    // re-stales the finding, exactly as its LLM siblings do — the baseline can be
+    // the CHOSEN voice, not just the drafted-issue mean.
+    sources: ['manuscript', 'series.styleGuide'],
     label: 'Statistical voice drift (deterministic)',
     description:
-      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the series mean, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. Gates off below 4 issues drafted — with a tiny series the largest possible σ-distance (√(N−1)) can't reach the default 1.5σ threshold. No LLM cost.",
+      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the baseline, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. With the \"Drift baseline\" set to exemplars/blended it measures against the style guide's voice-exemplar profile (the CHOSEN voice) instead of the mean of what got drafted — so it flags drift from the voice you picked, not from the average of a corpus that may all have drifted together. Gates off below 4 issues drafted — with a tiny series the largest possible σ-distance (√(N−1)) can't reach the default 1.5σ threshold. No LLM cost.",
     scope: 'series',
     kind: 'deterministic',
     category: 'style',
@@ -1032,6 +1037,19 @@ export const proseStyleChecks = [
       // Optional vocabulary "wells" — register categories to track coverage of,
       // as `name: word, word; name2: word` (series-configurable per-check).
       vocabularyWells: z.string().max(2000).default(''),
+      // Which baseline each issue's drift is measured against (#2179):
+      //   drafted   — the mean of the drafted issues (default; original behavior).
+      //   exemplars — the style guide's voice-exemplar profile (the CHOSEN voice),
+      //               so an issue is flagged for drifting from the voice the author
+      //               picked, not from the average of what got drafted.
+      //   blended   — the midpoint of the two.
+      // Preprocessed: any unrecognized value coerces to 'drafted' so a hand-typed
+      // config can't fail the whole check's safeParse (and an exemplars/blended run
+      // with no usable exemplars falls back to drafted at compute time anyway).
+      baselineMode: z.preprocess(
+        (v) => (VOICE_BASELINE_MODES.includes(v) ? v : 'drafted'),
+        z.enum(VOICE_BASELINE_MODES),
+      ).default('drafted'),
     }),
     configFields: [
       {
@@ -1067,6 +1085,12 @@ export const proseStyleChecks = [
         type: 'text',
         help: 'Register categories to track per issue, as "name: word, word; name2: word". Each becomes a tracked metric (coverage per 1k words) so a series can flag an issue that drops its trade/body/musical register.',
       },
+      {
+        key: 'baselineMode',
+        label: 'Drift baseline',
+        type: 'text',
+        help: 'What each issue is measured against: "drafted" (the mean of the drafted issues — the default), "exemplars" (the style guide\'s voice-exemplar profile, so drift is judged against the voice you CHOSE, not the average of what got drafted), or "blended" (the midpoint). Exemplars/blended fall back to drafted when the style guide has too little exemplar prose.',
+      },
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
@@ -1076,6 +1100,11 @@ export const proseStyleChecks = [
         threshold: cfg.sigmaThreshold ?? 1.5,
         minIssues: cfg.minIssues ?? 4,
         wells,
+        // The chosen-voice baseline (#2179): render the drift against the style
+        // guide's voice exemplars when configured. A thin/absent exemplar set makes
+        // computeVoiceDrift fall back to the drafted mean and report it.
+        baselineMode: cfg.baselineMode || 'drafted',
+        voiceExemplars: ctx.series?.styleGuide?.voiceExemplars,
       });
       if (drift.gatedOff) return [];
       const cap = cfg.maxFindings ?? 12;

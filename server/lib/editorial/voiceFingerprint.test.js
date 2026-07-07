@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   VOICE_METRICS,
+  VOICE_BASELINE_MODES,
   parseVoiceWells,
   computeFingerprint,
+  computeExemplarBaseline,
   splitManuscriptByIssue,
   voiceFingerprintMatrix,
   computeVoiceDrift,
@@ -225,6 +227,130 @@ describe('computeVoiceDrift', () => {
   });
 });
 
+describe('computeExemplarBaseline (#2179)', () => {
+  it('combines exemplar passages into one fingerprint', () => {
+    // Two passages, each 4 sentences of 8 words → combined mean 8 words/sentence.
+    const exemplars = [
+      { passage: issueBlock(4, 8), note: 'spare, clipped' },
+      { passage: issueBlock(4, 8) },
+    ];
+    const baseline = computeExemplarBaseline(exemplars);
+    expect(baseline).toBeTruthy();
+    expect(baseline.passages).toBe(2);
+    expect(baseline.metrics.sentenceLenMean).toBe(8);
+    expect(baseline.words).toBeGreaterThanOrEqual(40);
+  });
+
+  it('returns null for no usable passages', () => {
+    expect(computeExemplarBaseline(null)).toBeNull();
+    expect(computeExemplarBaseline([])).toBeNull();
+    expect(computeExemplarBaseline([{ note: 'no passage' }, { passage: '   ' }])).toBeNull();
+  });
+
+  it('returns null when the combined text is below the min-word floor', () => {
+    // A single short passage (< 40 words) is too thin to center against.
+    expect(computeExemplarBaseline([{ passage: issueBlock(1, 5) }])).toBeNull();
+  });
+
+  it('honors configured wells', () => {
+    const wells = parseVoiceWells('trade: forge');
+    const baseline = computeExemplarBaseline(
+      [{ passage: 'the forge burned bright and hot today '.repeat(8) }], // 56 words, ≥ floor
+      { wells },
+    );
+    expect(baseline).toBeTruthy();
+    expect(baseline.metrics['well:trade']).toBeGreaterThan(0);
+  });
+});
+
+describe('computeVoiceDrift baseline modes (#2179)', () => {
+  // Four drafted issues that all share a sentence-length mean of 20 words — so the
+  // drafted mean is 20 and the drafted σ on that metric is 0 (no drafted-mode
+  // drift possible). The style-guide exemplars establish a much SHORTER chosen
+  // voice (mean 5), so every drafted issue is far from the chosen voice.
+  const draftedUniform = manuscriptOf([issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20), issueBlock(4, 20)]);
+  // Give the fragment metric some drafted spread so σ is non-zero and an exemplar
+  // re-center can actually flag: issues vary their fragment counts.
+  const draftedSpread = manuscriptOf([
+    `${issueBlock(3, 20)} ${issueBlock(1, 3)}`,
+    `${issueBlock(3, 20)} ${issueBlock(2, 3)}`,
+    `${issueBlock(3, 20)} ${issueBlock(1, 3)}`,
+    `${issueBlock(3, 20)} ${issueBlock(6, 3)}`,
+  ]);
+  const shortExemplars = [
+    { passage: issueBlock(6, 5), note: 'spare' },
+    { passage: issueBlock(6, 5) },
+  ];
+
+  it('drafted mode is the default and ignores exemplars', () => {
+    const drift = computeVoiceDrift(draftedUniform, { voiceExemplars: shortExemplars });
+    expect(drift.baselineMode).toBe('drafted');
+    expect(drift.exemplarBaselineUsed).toBe(false);
+    // sentence-length σ is 0 across identical issues → no outlier on that metric.
+    expect(drift.outliers.some((o) => o.metricKey === 'sentenceLenMean')).toBe(false);
+  });
+
+  it('exemplars mode re-centers on the chosen voice and reports it', () => {
+    const drift = computeVoiceDrift(draftedSpread, {
+      baselineMode: 'exemplars',
+      voiceExemplars: shortExemplars,
+    });
+    expect(drift.baselineMode).toBe('exemplars');
+    expect(drift.exemplarBaselineUsed).toBe(true);
+    // The chosen-voice sentence-length mean (~5) is the center, not the drafted
+    // mean (~15.75); every drafted issue sits well above it.
+    expect(drift.series.sentenceLenMean.center).toBeCloseTo(5, 1);
+    expect(drift.series.sentenceLenMean.mean).toBeGreaterThan(10);
+    const meanOutliers = drift.outliers.filter((o) => o.metricKey === 'sentenceLenMean');
+    expect(meanOutliers.length).toBeGreaterThan(0);
+    expect(meanOutliers.every((o) => o.direction === 'high')).toBe(true);
+    expect(meanOutliers.every((o) => o.baselineMode === 'exemplars')).toBe(true);
+  });
+
+  it('blended mode centers on the midpoint of drafted mean and chosen voice', () => {
+    const drift = computeVoiceDrift(draftedSpread, {
+      baselineMode: 'blended',
+      voiceExemplars: shortExemplars,
+    });
+    expect(drift.baselineMode).toBe('blended');
+    const s = drift.series.sentenceLenMean;
+    // center = (draftedMean + exemplarMean) / 2.
+    expect(s.center).toBeCloseTo((s.mean + 5) / 2, 1);
+  });
+
+  it('falls back to drafted when the exemplar set is too thin', () => {
+    const drift = computeVoiceDrift(draftedSpread, {
+      baselineMode: 'exemplars',
+      voiceExemplars: [{ passage: issueBlock(1, 4) }], // < 40 words
+    });
+    expect(drift.baselineMode).toBe('drafted');
+    expect(drift.exemplarBaselineUsed).toBe(false);
+  });
+
+  it('falls back to drafted when no exemplars are provided', () => {
+    const drift = computeVoiceDrift(draftedSpread, { baselineMode: 'exemplars' });
+    expect(drift.baselineMode).toBe('drafted');
+    expect(drift.exemplarBaselineUsed).toBe(false);
+  });
+
+  it('coerces an unrecognized baselineMode to drafted', () => {
+    const drift = computeVoiceDrift(draftedSpread, { baselineMode: 'nonsense', voiceExemplars: shortExemplars });
+    expect(drift.baselineMode).toBe('drafted');
+  });
+
+  it('exposes the three valid modes', () => {
+    expect(VOICE_BASELINE_MODES).toEqual(['drafted', 'exemplars', 'blended']);
+  });
+
+  it('gates off below minIssues regardless of baseline mode', () => {
+    const ms = manuscriptOf([issueBlock(3, 20), issueBlock(3, 20)]);
+    const drift = computeVoiceDrift(ms, { baselineMode: 'exemplars', voiceExemplars: shortExemplars });
+    expect(drift.gatedOff).toBe(true);
+    // Effective mode is still reported so the UI can label the (empty) run.
+    expect(drift.baselineMode).toBe('exemplars');
+  });
+});
+
 describe('describeDrift + renderFingerprintTable', () => {
   it('describeDrift names the issue, values, σ, and direction', () => {
     const o = {
@@ -235,8 +361,21 @@ describe('describeDrift + renderFingerprintTable', () => {
     expect(text).toContain('Issue 7');
     expect(text).toContain('0.18');
     expect(text).toContain('0.41');
+    expect(text).toContain('the series mean'); // default (drafted) baseline noun
     expect(text).toContain('metronomic'); // the "lower" phrase for CV
     expect(text).toContain('below');
+  });
+
+  it('describeDrift labels the baseline as the chosen voice in exemplars mode (#2179)', () => {
+    const o = {
+      issue: 7, metricKey: 'sentenceLenMean', label: 'sentence-length mean',
+      value: 20, mean: 15, center: 5, std: 4, z: 3.75, direction: 'high', unit: ' words',
+      baselineMode: 'exemplars',
+    };
+    const text = describeDrift(o);
+    expect(text).toContain("the style guide's chosen voice");
+    expect(text).toContain('5 words'); // the center, not the drafted mean of 15
+    expect(text).not.toContain('the series mean of');
   });
 
   it('renderFingerprintTable renders rows, mean/σ, and marks outliers with *', () => {
@@ -256,10 +395,10 @@ describe('describeDrift + renderFingerprintTable', () => {
 });
 
 describe('style.voice-drift check (registry wiring)', () => {
-  const runCheck = (ms, config = {}, severityDefault = 'low') => {
+  const runCheck = (ms, config = {}, severityDefault = 'low', series = undefined) => {
     const check = getCheck('style.voice-drift');
     expect(check).toBeTruthy();
-    return check.run({ manuscript: ms, config, severityDefault });
+    return check.run({ manuscript: ms, config, severityDefault, series });
   };
 
   it('is registered as a deterministic series check', () => {
@@ -267,6 +406,32 @@ describe('style.voice-drift check (registry wiring)', () => {
     expect(check.scope).toBe('series');
     expect(check.kind).toBe('deterministic');
     expect(check.needsManuscript).toBe(true);
+  });
+
+  it('declares series.styleGuide as a source so exemplar edits re-stale it (#2179)', () => {
+    const check = getCheck('style.voice-drift');
+    expect(check.sources).toContain('series.styleGuide');
+    // The config schema advertises the baselineMode field.
+    const parsed = check.configSchema.parse({ baselineMode: 'exemplars' });
+    expect(parsed.baselineMode).toBe('exemplars');
+    // An unrecognized value is coerced to drafted rather than failing the parse.
+    expect(check.configSchema.parse({ baselineMode: 'bogus' }).baselineMode).toBe('drafted');
+  });
+
+  it('measures against the style guide voice exemplars when configured (#2179)', () => {
+    // Drafted issues cluster tightly at a long sentence-length mean (14/15/15/16
+    // words → drafted σ ≈ 0.71, so the biggest drafted-mode z ≈ 1.41 < 1.5 → no
+    // drafted flag). The chosen voice is much shorter (mean 5), so against the
+    // exemplar baseline every drafted issue is a wild outlier the drafted mean hid.
+    const ms = manuscriptOf([issueBlock(4, 14), issueBlock(4, 15), issueBlock(4, 15), issueBlock(4, 16)]);
+    const series = { styleGuide: { voiceExemplars: [{ passage: issueBlock(6, 5) }, { passage: issueBlock(6, 5) }] } };
+    const drafted = runCheck(ms, { baselineMode: 'drafted' }, 'low', series);
+    const exemplars = runCheck(ms, { baselineMode: 'exemplars' }, 'low', series);
+    // The exemplar baseline surfaces sentence-length drift the drafted mean hides.
+    expect(drafted.some((f) => f.problem.includes('sentence-length mean'))).toBe(false);
+    const meanFinding = exemplars.find((f) => f.problem.includes('sentence-length mean'));
+    expect(meanFinding).toBeTruthy();
+    expect(meanFinding.problem).toContain("the style guide's chosen voice");
   });
 
   it('emits findings anchored to the drifting issue', () => {

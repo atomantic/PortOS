@@ -67,6 +67,8 @@ export default function PipelineVoiceFingerprint() {
   const seriesStats = data?.series || {};
   const outlierSet = new Set((data?.outliers || []).map((o) => outlierKey(o.issue, o.metricKey)));
   const hasMatrix = issues.length > 0;
+  const baselineMode = data?.baselineMode || 'drafted';
+  const usesChosenVoice = data?.exemplarBaselineUsed === true;
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
@@ -94,9 +96,13 @@ export default function PipelineVoiceFingerprint() {
       <p className="text-xs text-gray-500 mb-4 max-w-3xl">
         Every drafted issue's prose fingerprint. Each column is a metric; a cell
         highlighted in <span className="text-port-warning">amber</span> is a
-        statistical outlier — more than {data?.threshold ?? 1.5}σ from the series
-        mean on that metric. The bottom rows are the series mean and standard
-        deviation (σ). This measures the same vectors the deterministic{' '}
+        statistical outlier — more than {data?.threshold ?? 1.5}σ from the{' '}
+        {usesChosenVoice
+          ? "style guide's chosen voice (its voice exemplars)"
+          : 'series mean'}{' '}
+        on that metric. The bottom rows are the series mean and standard
+        deviation (σ){usesChosenVoice ? ', plus the chosen-voice baseline the outliers are measured against' : ''}.
+        This measures the same vectors the deterministic{' '}
         <code className="text-gray-400">style.voice-drift</code> editorial check
         flags; it just shows the whole matrix, not only the flagged outliers.
       </p>
@@ -121,6 +127,8 @@ export default function PipelineVoiceFingerprint() {
             issues={issues}
             seriesStats={seriesStats}
             outlierSet={outlierSet}
+            baselineMode={baselineMode}
+            usesChosenVoice={usesChosenVoice}
           />
           <p className="text-xs text-gray-500 mt-3">
             {issues.length} issue{issues.length === 1 ? '' : 's'} · {columns.length} metrics
@@ -155,8 +163,16 @@ function EmptyState({ gatedOff, issueCount, minIssues }) {
   );
 }
 
-function FingerprintMatrix({ columns, issues, seriesStats, outlierSet }) {
+function FingerprintMatrix({ columns, issues, seriesStats, outlierSet, baselineMode, usesChosenVoice }) {
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  // The baseline an outlier tooltip / footer row names: the chosen voice (or a
+  // blend) when the exemplar baseline is active (#2179), else the series mean.
+  const centerNoun = usesChosenVoice
+    ? (baselineMode === 'blended' ? 'blend of series + chosen voice' : 'chosen voice')
+    : 'series mean';
+  const centerOf = (col) => (usesChosenVoice
+    ? (seriesStats?.[col.key]?.center ?? seriesStats?.[col.key]?.mean)
+    : seriesStats?.[col.key]?.mean);
   // Below minIssues the server gates drift off and returns `series: {}`, so a
   // mean/σ footer would render misleading 0s — only show it once stats exist.
   const hasStats = seriesStats && Object.keys(seriesStats).length > 0;
@@ -196,7 +212,7 @@ function FingerprintMatrix({ columns, issues, seriesStats, outlierSet }) {
                         ? 'bg-port-warning/20 text-port-warning font-semibold'
                         : 'text-gray-300'
                     }`}
-                    title={isOutlier ? `Outlier — series mean ${round2(seriesStats?.[col.key]?.mean)}${col.unit || ''}` : undefined}
+                    title={isOutlier ? `Outlier — ${centerNoun} ${round2(centerOf(col))}${col.unit || ''}` : undefined}
                   >
                     {round2(v)}{col.unit || ''}
                   </td>
@@ -223,6 +239,21 @@ function FingerprintMatrix({ columns, issues, seriesStats, outlierSet }) {
                 </td>
               ))}
             </tr>
+            {usesChosenVoice ? (
+              <tr className="bg-port-card">
+                <td
+                  className="sticky left-0 z-10 bg-port-card text-port-accent px-3 py-1.5"
+                  title={`Outliers are measured against this ${centerNoun}, not the drafted mean.`}
+                >
+                  {baselineMode === 'blended' ? 'blend' : 'voice'}
+                </td>
+                {columns.map((col) => (
+                  <td key={col.key} className="px-2 py-1.5 text-right text-port-accent tabular-nums">
+                    {round2(centerOf(col))}{col.unit || ''}
+                  </td>
+                ))}
+              </tr>
+            ) : null}
           </tfoot>
         ) : null}
       </table>

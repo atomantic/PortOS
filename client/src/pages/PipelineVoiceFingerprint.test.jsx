@@ -87,6 +87,25 @@ describe('PipelineVoiceFingerprint', () => {
     expect(screen.queryByText('σ')).not.toBeInTheDocument();
   });
 
+  it('surfaces the chosen-voice baseline row + copy when exemplars mode is active (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 5 },
+        dialogueRatio: { mean: 15, std: 8, center: 2 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy names the chosen-voice baseline instead of the series mean.
+    expect(screen.getByText(/chosen voice/)).toBeInTheDocument();
+    // A dedicated "voice" baseline footer row renders (label + the centered value).
+    expect(screen.getByText('voice')).toBeInTheDocument();
+    expect(screen.getByText('5 words')).toBeInTheDocument();
+  });
+
   it('renders an empty state when nothing is drafted', async () => {
     getVoiceFingerprint.mockResolvedValue({
       ...MATRIX_PAYLOAD,
