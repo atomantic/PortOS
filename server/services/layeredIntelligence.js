@@ -21,7 +21,7 @@
 
 import { spawn } from 'child_process';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { readFile, writeFile, appendFile } from 'fs/promises';
+import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
@@ -335,20 +335,37 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
   }
   for (const custom of src.custom || []) {
     if (custom?.type === 'file' && typeof custom.ref === 'string' && repo) {
-      // Confine the ref to the app repo: an absolute path or a `../` escape must
-      // not leak arbitrary readable files into the LLM prompt. resolve() +
-      // relative() rejects anything that lands outside repoPath.
-      const abs = resolve(repo, custom.ref);
-      const rel = relative(repo, abs);
-      if (rel.startsWith('..') || isAbsolute(rel)) {
+      const safe = await confineToRepo(repo, custom.ref);
+      if (!safe) {
         console.warn(`⚠️ Layered Intelligence: custom source "${custom.ref}" escapes repo — skipped`);
         continue;
       }
-      const content = await tryReadFile(abs);
+      const content = await tryReadFile(safe);
       if (content) out[`custom:${custom.ref}`] = content.slice(0, 8000);
     }
   }
   return out;
+}
+
+/**
+ * Confine a custom file `ref` to within `repo` so a hostile/hand-edited config
+ * can't read arbitrary files into the LLM prompt. Returns the safe absolute path,
+ * or null when it escapes. Guards BOTH lexical traversal (`..` / absolute) AND
+ * symlink escape — a symlink inside the repo pointing outside is resolved via
+ * realpath and rejected. Missing files return null (nothing to read).
+ */
+export async function confineToRepo(repo, ref) {
+  const abs = resolve(repo, ref);
+  const rel = relative(repo, abs);
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  // Resolve symlinks on both sides; a link inside the repo that points outside
+  // is caught here (lexical check above only sees the link's own path).
+  const realRepo = await realpath(repo).catch(() => null);
+  const realAbs = await realpath(abs).catch(() => null);
+  if (!realRepo || !realAbs) return null;
+  const realRel = relative(realRepo, realAbs);
+  if (realRel.startsWith('..') || isAbsolute(realRel)) return null;
+  return realAbs;
 }
 
 /**

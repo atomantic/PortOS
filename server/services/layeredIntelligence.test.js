@@ -425,6 +425,31 @@ describe('gatherSources custom file confinement', () => {
     );
     expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
   });
+
+  it('refuses a symlink inside the repo that points OUTSIDE it', async () => {
+    const { mkdir, symlink } = await import('fs/promises');
+    const repo = join(dir, 'repo');
+    await mkdir(repo, { recursive: true });
+    const secret = join(dir, 'outside-secret.txt');
+    await writeFile(secret, 'OUTSIDE_SECRET');
+    await symlink(secret, join(repo, 'inside-link'));
+    const out = await gatherSources(
+      { repoPath: repo },
+      { sources: { custom: [{ type: 'file', ref: 'inside-link' }] } }
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
+  });
+
+  it('allows a symlink that resolves to a file INSIDE the repo', async () => {
+    const { symlink } = await import('fs/promises');
+    await writeFile(join(dir, 'real.md'), 'INSIDE');
+    await symlink(join(dir, 'real.md'), join(dir, 'link.md'));
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'file', ref: 'link.md' }] } }
+    );
+    expect(out['custom:link.md']).toBe('INSIDE');
+  });
 });
 
 describe('forge I/O (injected exec)', () => {

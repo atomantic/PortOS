@@ -591,10 +591,22 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     }
   }
 
-  const app = await appsService.updateApp(req.params.id, data);
+  // layeredIntelligence must go through the dedicated merge helper — the generic
+  // updateApp shallow-REPLACES the nested object, so a partial patch like
+  // { layeredIntelligence: { enabled: true } } would wipe stored sources /
+  // allowedScopes / providerId / lastRunAt. Pull it out, apply the rest, then
+  // merge-apply the config so untouched fields are preserved.
+  const { layeredIntelligence: liUpdate, ...rest } = data;
+  const app = await appsService.updateApp(req.params.id, rest);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  }
+
+  if (liUpdate !== undefined) {
+    const merged = await appsService.updateAppLayeredIntelligence(req.params.id, liUpdate);
+    res.json(merged || app);
+    return;
   }
 
   res.json(app);
