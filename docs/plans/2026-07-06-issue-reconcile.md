@@ -104,12 +104,28 @@ on non-GitHub apps; GitLab/JIRA siblings are deferred (see PLAN.md).
   drives, never destroys — but promoting open/merged list failures to
   transient-null (skip, don't misclassify) is a worthwhile cross-forge hardening.
   Not done here to keep the two forges behaviorally identical to the reviewed v1.
-- **JIRA (deferred → follow-up #2259).** The JIRA "zombie" analog is status-based,
-  not label-based (a ticket left *In Review*/*Done* with remaining scope + no live
-  claim), and heals through the PortOS JIRA API (`my-sprint-tickets` + ticket status
-  + linked MR/PR → record remaining scope + `POST /api/jira/instances/:id/tickets`)
-  rather than a forge CLI — a materially different mechanic. Split out to keep the
-  GitLab slice mergeable and well-tested.
+- **JIRA (shipped #2259).** The JIRA "zombie" analog is status-based, not
+  label-based (a ticket left *In Review* with remaining scope + no live claim; JIRA
+  has no `in-progress` label to release), and heals through the PortOS JIRA API
+  (`my-sprint-tickets` + ticket status → record remaining scope + ticket
+  transitions + `POST /api/jira/instances/:id/tickets`) rather than a forge CLI.
+  Implemented by normalizing JIRA sprint tickets into the SAME common issue shape
+  the forge gatherers produce (KEY → `number`, status carried for the convergence
+  signature) so the pure classifier / signature stay shared: an **In-Progress**-
+  category ticket whose status name matches *In Review* → ZOMBIE, a plain
+  In-Progress → STALLED, **To Do** (not started) / **Done** (terminal) → excluded
+  so the scan converges. The live-claim guard scans `claim/<KEY>` / `cos/…/<KEY>/…`
+  refs (local AND remote) by ticket KEY — an MR still open under review keeps its
+  branch, reading LIVE; a merged-and-deleted branch reads as a zombie. Routing
+  mirrors `resolveAppWorkTracker`: JIRA is NEVER auto-selected from the git host —
+  it's chosen only when the app's resolved `workTracker` is `'jira'` with enabled
+  `jira.instanceId`/`projectKey`, threaded into `reconcile()` as a `jira` option
+  (a JIRA-specific gatherer branch, not an origin-host lookup). Added a strict
+  `fetchMyCurrentSprintTickets` (the existing `getMyCurrentSprintTickets` swallows
+  errors to `[]` for the UI; the reconcile scan needs the throw so a transient
+  failure skips-without-parking instead of being misread as an empty sprint).
+  Coordinator prompt bumped to v3 (adds the JIRA arm — transitions + `POST
+  tickets`); v2 preserved in `PREVIOUS_DEFAULT_PROMPTS`.
 
 ## Part C — heal the three current zombies (done)
 

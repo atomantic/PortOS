@@ -7,14 +7,31 @@
  * partial ship left stranded — the claim queue skips `in-progress`, so its
  * remaining scope is never re-picked and never finished.
  *
- * Forge-agnostic: the same scan runs over GitHub (`gh` issues + PRs) and GitLab
- * (`glab` issues + merge requests). The forge is resolved from the app's git
- * `origin` host (github.* → GitHub, gitlab.* → GitLab); any other remote returns
- * null (skip/park). The pure classifier, ref matchers, and convergence signature
- * are shared — only the effectful state gatherer differs per forge, and each
- * normalizes into one common `{ number, title, url, labels, assignees }` issue
- * shape + `{ number, headRefName, body, url }` change shape so the merge/classify
- * logic never branches on forge.
+ * Forge-agnostic: the same scan runs over GitHub (`gh` issues + PRs), GitLab
+ * (`glab` issues + merge requests), and JIRA (the PortOS JIRA API). The GitHub /
+ * GitLab forge is resolved from the app's git `origin` host (github.* → GitHub,
+ * gitlab.* → GitLab); any other remote returns null (skip/park). The pure
+ * classifier, ref matchers, and convergence signature are shared — only the
+ * effectful state gatherer differs per forge, and each normalizes into one common
+ * `{ number, title, url, labels, assignees }` issue shape + `{ number,
+ * headRefName, body, url }` change shape so the merge/classify logic never
+ * branches on forge.
+ *
+ * JIRA is materially different and is NEVER auto-selected from the git host — it
+ * requires explicit per-app config (`app.jira` + `workTracker: 'jira'`), so it is
+ * routed in via the `jira` option (mirroring `resolveAppWorkTracker`) rather than
+ * an origin-host lookup. Its "zombie" is STATUS-based, not label-based: JIRA has no
+ * `in-progress` label to release, so a ticket left **In Review** with no live claim
+ * is the shipped-but-stranded signal (the analog of a merged PR). Only In-Progress-
+ * category tickets are scanned — **To Do** (not started) and **Done** (terminal,
+ * the human closed it out) are excluded so the scan converges.
+ * The live-claim guard is keyed on the ticket KEY (`claim/<KEY>` / `cos/…/<KEY>/…`
+ * refs, local AND remote) so an open MR still under review — whose claim branch is
+ * still present — reads as LIVE, while a merged-and-deleted branch reads as a
+ * zombie. The deterministic scan is status + git-ref only (no forge CLI, no
+ * dev-panel PR lookup); the coordinator reads the ticket + its linked MR/PR live to
+ * confirm remaining scope before healing. JIRA tickets normalize into the SAME
+ * common shape (KEY → `number`, `status` carried for the signature).
  *
  * The scheduler runs the deterministic scan here (gh/glab + git only — no LLM),
  * then hands the zombie set to a coordinator CoS agent that reads each issue + its
@@ -36,6 +53,7 @@
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
+import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { hostToWorkTracker, hostFromOriginUrl } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -65,6 +83,64 @@ export const IN_PROGRESS_LABEL = 'in-progress';
 export function issueNumberFromRef(refName) {
   const m = /(?:^|\/)issue-(\d+)(?=\/|$)/.exec(refName || '');
   return m ? Number(m[1]) : null;
+}
+
+/**
+ * Extract the JIRA ticket KEY a git ref claims, or null. JIRA claim branches use
+ * the ticket KEY directly (no `issue-` prefix), so — unlike the distinctive
+ * `issue-<num>` token — the parser must anchor on the CLAIM CONVENTION itself, not
+ * merely on "a segment shaped like a key". Otherwise an unrelated branch that
+ * happens to end in a key (`wip/PROJ-42`, `feat/PROJ-42`) would register a false
+ * live-claim and suppress a genuine zombie forever. Recognizes exactly the two
+ * conventions the claim-issue-jira flow creates:
+ *   - human / TUI:   `claim/<KEY>`               (KEY immediately after `claim/`)
+ *   - CoS sub-agent: `cos/<task>/<KEY>/<agent>`   (KEY as the segment after `cos/<task>/`)
+ * A KEY looks like `PROJ-1234` (project code + `-` + number) and must be a whole
+ * segment (terminated by `/` or end-of-ref). Remote-tracking refs
+ * (`refs/remotes/origin/claim/<KEY>`) match the same way — the leading
+ * `refs/…/origin/` is just more segments before `claim/`.
+ * @param {string} refName
+ * @returns {string|null}
+ */
+export function ticketKeyFromRef(refName) {
+  const ref = refName || '';
+  const claim = /(?:^|\/)claim\/([A-Z][A-Z0-9]+-\d+)(?=\/|$)/.exec(ref);
+  if (claim) return claim[1];
+  const cos = /(?:^|\/)cos\/[^/]+\/([A-Z][A-Z0-9]+-\d+)(?=\/|$)/.exec(ref);
+  return cos ? cos[1] : null;
+}
+
+/**
+ * Which JIRA tickets the scan even considers: only the **In Progress** status
+ * CATEGORY — the "actively in the pipeline" bucket. This is the JIRA analog of
+ * "OPEN + carries `in-progress`" on GitHub/GitLab:
+ *   - **To Do** category = not started (never claimed) → never a candidate.
+ *   - **Done** category = terminal (the human closed it out, like a CLOSED issue)
+ *     → excluded so the scan CONVERGES; a Done ticket is not re-flagged forever.
+ * The claim-issue-jira flow's success end-state is **In Review** (a sub-status of
+ * the In Progress category — the human merges the MR + moves it to Done), so the
+ * zombie lives entirely inside the In Progress category.
+ * @param {{ statusCategory?:string }} ticket
+ * @returns {boolean}
+ */
+export function isJiraStartedStatus({ statusCategory } = {}) {
+  return statusCategory === 'In Progress';
+}
+
+/**
+ * The JIRA "zombie" is STATUS-based, not label-based (JIRA has no `in-progress`
+ * label to release). Within the In-Progress bucket, an **In Review** / **Code
+ * Review** status is the shipped-but-not-closed signal — the analog of a merged PR
+ * on an issue still carrying `in-progress`: the MR/PR shipped and moved the ticket
+ * to review, but nobody closed it out and (per the live-claim guard) no branch
+ * remains. A non-review In-Progress status (e.g. plain "In Progress") is NOT
+ * shipped → it classifies STALLED, not ZOMBIE. Matched on the status NAME
+ * (`isJiraStartedStatus` already constrained the category to In Progress).
+ * @param {{ status?:string }} ticket
+ * @returns {boolean}
+ */
+export function isJiraShippedStatus({ status } = {}) {
+  return /review/i.test(status || '');
 }
 
 /**
@@ -136,6 +212,31 @@ async function getLiveClaimIssueNums(repoPath) {
     if (num != null) nums.add(num);
   }
   return nums;
+}
+
+/**
+ * Every JIRA ticket KEY that has a LIVE claim ref (local OR remote). JIRA has no
+ * PR/MR list in this deterministic scan (that's a live coordinator lookup), so the
+ * git ref IS the live-claim signal: a `claim/<KEY>` branch (or `cos/…/<KEY>/…`)
+ * still present means some machine is mid-claim OR an MR is still open under review
+ * with its source branch intact — either way the ticket is NOT a zombie even though
+ * its status is already "shipped". A merged-and-deleted branch leaves no ref, so a
+ * genuinely stranded ticket surfaces. Returns a Set of uppercase KEY strings.
+ * @param {string} repoPath
+ * @returns {Promise<Set<string>>}
+ */
+async function getLiveClaimTicketKeys(repoPath) {
+  const { stdout } = await execGit(
+    ['for-each-ref', '--format=%(refname)', 'refs/heads/', 'refs/remotes/'],
+    repoPath,
+    { ignoreExitCode: true }
+  ).catch(() => ({ stdout: '' }));
+  const keys = new Set();
+  for (const line of (stdout || '').split('\n')) {
+    const key = ticketKeyFromRef(line.trim());
+    if (key != null) keys.add(key);
+  }
+  return keys;
 }
 
 /**
@@ -300,40 +401,95 @@ async function getForgeState(repoPath) {
 }
 
 /**
- * Gather the raw facts for every open `in-progress` issue in `repoPath`'s forge
- * repo. Effectful (gh/glab + git). Returns null on an unsupported remote (not
- * GitHub/GitLab) or a transient forge failure so the scheduler can skip without
- * parking.
+ * Fetch the JIRA sprint tickets for the app's configured project, normalized to
+ * the same intermediate `inProgress` shape the forge gatherers produce — so the
+ * common gather/classify path below is forge-agnostic. Unlike the forge gatherers,
+ * there is no separate merged/open change list: JIRA's "shipped" signal is the
+ * ticket STATUS (In Review), so each ticket carries `shipped` (isJiraShippedStatus)
+ * instead of matching against a PR/MR list. Only In-Progress-category tickets are
+ * returned (the analog of the `in-progress`-labeled issue set).
+ *
+ * Returns null on a transient fetch failure (skip, don't park) — `fetchMy…`
+ * (the strict variant) throws rather than swallowing to [], so a JIRA blip can't
+ * be misread as "no tickets" and park.
+ * @param {string} repoPath  (unused — JIRA is app-config-routed, not cwd-routed)
+ * @param {{ instanceId:string, projectKey:string }} jira
+ * @returns {Promise<{forge:'jira', fullName:string, inProgress:object[]}|null>}
+ */
+async function getJiraState(_repoPath, jira) {
+  const tickets = await fetchMyCurrentSprintTickets(jira.instanceId, jira.projectKey)
+    .catch((err) => {
+      console.warn(`⚠️ issue-reconcile JIRA fetch failed for ${jira.projectKey}: ${err.message}`);
+      return null;
+    });
+  if (!Array.isArray(tickets)) return null;
+
+  const inProgress = tickets
+    .filter(isJiraStartedStatus)
+    .map((t) => ({
+      // KEY is the JIRA "number" — the whole shape stays common; it's a string here.
+      number: t.key,
+      title: t.summary || '',
+      url: t.url || '',
+      labels: [],
+      assignees: [],
+      status: t.status || '',
+      shipped: isJiraShippedStatus(t),
+    }));
+
+  return { forge: 'jira', fullName: jira.projectKey, inProgress };
+}
+
+/**
+ * Gather the raw facts for every actionable issue/ticket in the app's tracker.
+ * Effectful (gh/glab/git for the forges; the PortOS JIRA API for JIRA). Returns
+ * null on an unsupported remote (not GitHub/GitLab, no JIRA config) or a transient
+ * failure so the scheduler can skip without parking.
+ *
+ * Routing mirrors `resolveAppWorkTracker`: JIRA is NEVER auto-selected from the git
+ * host — it is chosen only when explicit `jira` config ({ instanceId, projectKey })
+ * is passed in. Otherwise the GitHub/GitLab forge is resolved from the origin host.
  *
  * @param {string} repoPath
- * @param {{ activeAgentIssueNums?: Set<number> }} [ctx] - issue numbers an active
- *   CoS agent is currently claiming (from agent metadata); suppresses zombie
- *   classification for an issue whose agent is still running.
+ * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string } }} [ctx]
+ *   `activeAgentIssueNums` — issue numbers / ticket KEYs an active CoS agent is
+ *   currently claiming (from agent metadata); suppresses zombie classification for
+ *   one whose agent is still running. `jira` — routes to the JIRA gatherer.
  * @returns {Promise<{forge:string, fullName:string, issues:object[]}|null>}
  */
-export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set() } = {}) {
-  const [state, liveClaimNums] = await Promise.all([
-    getForgeState(repoPath),
-    getLiveClaimIssueNums(repoPath),
+export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set(), jira = null } = {}) {
+  const isJira = Boolean(jira?.instanceId && jira?.projectKey);
+  const [state, liveClaimIds] = await Promise.all([
+    isJira ? getJiraState(repoPath, jira) : getForgeState(repoPath),
+    isJira ? getLiveClaimTicketKeys(repoPath) : getLiveClaimIssueNums(repoPath),
   ]);
   if (!state) return null;
 
   const issues = state.inProgress.map((issue) => {
-    const num = issue.number;
-    const mergedPr = state.mergedPrs.find((pr) => prReferencesIssue(pr, num)) || null;
-    const openPr = state.openPrs.find((pr) => prReferencesIssue(pr, num)) || null;
+    const id = issue.number;
+    // "shipped" analog: a merged PR/MR (forges) OR an In-Review status (JIRA).
+    const mergedPr = isJira
+      ? null
+      : (state.mergedPrs.find((pr) => prReferencesIssue(pr, id)) || null);
+    const openPr = isJira
+      ? null
+      : (state.openPrs.find((pr) => prReferencesIssue(pr, id)) || null);
+    const hasMergedPr = isJira ? Boolean(issue.shipped) : Boolean(mergedPr);
     return {
-      number: num,
+      number: id,
       title: issue.title || '',
       url: issue.url || '',
       labels: Array.isArray(issue.labels) ? issue.labels : [],
       assignees: Array.isArray(issue.assignees) ? issue.assignees : [],
+      // JIRA carries its status so the convergence signature (and the prompt) can
+      // reflect it; forges leave it undefined.
+      ...(isJira ? { status: issue.status || '' } : {}),
       mergedPr,
-      hasMergedPr: Boolean(mergedPr),
-      // Live claim = an OPEN PR/MR for this issue, OR a local/remote claim branch,
-      // OR an active CoS agent — any means "still being worked".
-      hasLiveClaim: Boolean(openPr) || liveClaimNums.has(num),
-      hasActiveAgent: activeAgentIssueNums.has(num),
+      hasMergedPr,
+      // Live claim = an OPEN PR/MR (forges) OR a local/remote claim branch (all
+      // trackers), OR an active CoS agent — any means "still being worked".
+      hasLiveClaim: Boolean(openPr) || liveClaimIds.has(id),
+      hasActiveAgent: activeAgentIssueNums.has(id),
     };
   });
   return { forge: state.forge, fullName: state.fullName, issues };
@@ -345,13 +501,13 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
  * I/O to gatherIssueState).
  *
  * @param {string} [repoPath=PATHS.root]
- * @param {{ activeAgentIssueNums?: Set<number> }} [opts]
+ * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string } }} [opts]
  * @returns {Promise<{ forge:string, fullName:string, zombies:object[], stalled:object[], live:object[] }|null>}
- *   null on unsupported remote (not GitHub/GitLab) / transient forge failure
- *   (skip, don't park).
+ *   null on unsupported remote (not GitHub/GitLab, no JIRA config) / transient
+ *   failure (skip, don't park).
  */
-export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set() } = {}) {
-  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums });
+export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null } = {}) {
+  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira });
   if (!gathered) return null;
   const classified = classifyIssues(gathered.issues);
   return {
@@ -370,15 +526,45 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
  * signature. An unchanged signature means the last run left the same zombies in
  * the same state (coordinator errored, or the human hasn't acted on a case it
  * punted) → "no progress → park" instead of re-dispatching an identical run.
- * Order-independent (sorted). Forge-agnostic (issue numbers + merged change #).
+ * Order-independent (sorted). Forge-agnostic: keys each zombie on its id + its
+ * "shipped by" fact — the merged PR/MR number on the forges, or the ticket STATUS
+ * on JIRA (which has no PR number here; a status change IS the progress signal).
  * @param {object[]} zombies
  * @returns {string}
  */
 export function zombieSignature(zombies) {
   return zombies
-    .map((z) => `${z.number}:${z.mergedPr?.number ?? 'none'}`)
+    .map((z) => `${z.number}:${z.mergedPr?.number ?? (z.status || 'none')}`)
     .sort()
     .join('|');
+}
+
+/**
+ * Render the JIRA zombie set into the coordinator prompt body. JIRA is
+ * status-based (no PR number here, no `in-progress` label): each zombie is a
+ * ticket left In Review with no live claim, and healing moves through the PortOS
+ * JIRA API (transitions + `POST tickets`) rather than a forge CLI.
+ */
+function formatJiraZombiesForPrompt(zombies, { fullName, projectKey, instanceId, autoClose }) {
+  const lines = [
+    `Tracker: **JIRA (use the PortOS JIRA API)**. Project: \`${projectKey || fullName}\`` +
+      (instanceId ? ` on instance \`${instanceId}\`` : '') +
+      `. Zombie tickets to reconcile (${zombies.length}):`,
+    '',
+    'A JIRA zombie is a ticket left **In Review** whose MR/PR already merged (or was abandoned) with real scope REMAINING and NO live `claim/<KEY>` branch anywhere. JIRA has no `in-progress` label to release, so the ticket STATUS is the claim marker.',
+    '',
+    autoClose
+      ? '**autoClose is ON** — apply the full partial-ship hybrid: when the remainder is SEPARABLE, transition the original to Done with a `Done ✓ / Remaining ▢` comment and file ONE scoped follow-up ticket (POST /api/jira/instances/<instanceId>/tickets) whose description carries `Refs <KEY>`; when it is a CONTINUATION, transition the ticket BACK to a not-started status (To Do / Selected for Development) with the same comment so the claim queue re-picks it.'
+      : '**autoClose is OFF** — never transition a ticket to Done and never file a follow-up. Only post a `Done ✓ / Remaining ▢` comment and transition the ticket BACK to a not-started status so the queue re-picks it.',
+    '',
+  ];
+  for (const z of zombies) {
+    lines.push(`### ${z.number} — ${z.title}`);
+    if (z.url) lines.push(`- Ticket: ${z.url}`);
+    lines.push(`- Current status: ${z.status || 'In Review'} (shipped — verify the linked MR/PR live before acting)`);
+    lines.push('');
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -387,11 +573,17 @@ export function zombieSignature(zombies) {
  * mechanics + per-forge CLI command table live once in the prompt template. Only
  * the dynamic `forge` + `autoClose` directives are surfaced here (the template
  * can't know them), as header lines rather than repeated per issue.
+ *
+ * JIRA delegates to `formatJiraZombiesForPrompt` — its heal path (status
+ * transitions + `POST tickets`) is materially different from the gh/glab CLI table.
  * @param {object[]} zombies
- * @param {{ fullName:string, forge?:string, autoClose:boolean }} ctx
+ * @param {{ fullName:string, forge?:string, autoClose:boolean, projectKey?:string, instanceId?:string }} ctx
  * @returns {string}
  */
-export function formatZombiesForPrompt(zombies, { fullName, forge = 'github', autoClose }) {
+export function formatZombiesForPrompt(zombies, { fullName, forge = 'github', autoClose, projectKey, instanceId }) {
+  if (forge === 'jira') {
+    return formatJiraZombiesForPrompt(zombies, { fullName, projectKey, instanceId, autoClose });
+  }
   const isGitlab = forge === 'gitlab';
   const change = isGitlab ? 'MR' : 'PR';
   const lines = [
