@@ -235,11 +235,20 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
         { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },
       );
     }
-    // Explicit override wins (already allowlist-validated). Otherwise use the
-    // detected runtime; a repo with no video marker at all defaults to
-    // mlx_video (the safetensors/MLX default).
+    // Explicit override wins (already allowlist-validated).
     if (runtime) return { kind: 'video', runtime, format: 'safetensors' };
-    return { kind: 'video', runtime: detectedVideo?.runtime || 'mlx_video', format: 'safetensors' };
+    // Otherwise require a POSITIVELY-detected addable runtime. A repo that only
+    // looks like video via its pipeline_tag (no LTX/Wan/Hunyuan marker) must NOT
+    // default to mlx_video — that runtime only loads the LTX family, so the
+    // entry would register but 400 at render. Refuse and ask for an explicit
+    // runtime, keeping the "a bad add can't wedge the picker" guarantee.
+    if (!detectedVideo) {
+      throw new ServerError(
+        `Couldn't determine which video runtime loads "${repo}" — only LTX-family repos are auto-detected. Pass an explicit runtime (one of ${ADDABLE_VIDEO_RUNTIMES.join(', ')}) if you know it loads on one of them.`,
+        { status: 422, code: 'HF_UNKNOWN_RUNTIME' },
+      );
+    }
+    return { kind: 'video', runtime: detectedVideo.runtime, format: 'safetensors' };
   }
 
   const resolvedRunner = runner || imageRunner;
@@ -298,7 +307,18 @@ export const buildCustomModelEntry = ({ repo, model, classification, name, steps
     source: 'user',
     installedAt: new Date().toISOString(),
   };
-  if (classification.kind === 'video') entry.runtime = classification.runtime;
-  else entry.runner = classification.runner;
+  if (classification.kind === 'video') {
+    entry.runtime = classification.runtime;
+  } else {
+    entry.runner = classification.runner;
+    // flux2 defaults missing `quantization` to 'sdnq', which then REQUIRES a
+    // `tokenizerRepo` (the gated base repo) — a self-service add has neither, so
+    // without this the entry registers but every render 400s with
+    // IMAGE_GEN_FLUX2_MISCONFIGURED. A plain HF repo added here is treated as an
+    // unquantized base (`none`): the runner loads `repo` directly, no tokenizer
+    // sidecar needed. A user who added a quantized community repo can edit the
+    // JSON to set sdnq/int8 + the required sibling repo.
+    if (classification.runner === RUNNER_FAMILIES.FLUX2) entry.quantization = 'none';
+  }
   return entry;
 };

@@ -137,6 +137,23 @@ describe('classifyHfMediaModel — happy paths', () => {
       runner: 'mflux',
     })).toThrow(/Unknown image runner|mflux/);
   });
+
+  it('refuses a text-to-video repo with no detected runtime (would 400 at render on mlx_video)', () => {
+    // pipeline_tag says video but no LTX/Wan/Hunyuan marker — mlx_video only
+    // loads LTX, so defaulting to it would register an un-renderable entry.
+    expect(() => classifyHfMediaModel({
+      repo: 'someone/mystery-video',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-video' }),
+    })).toThrow(/Couldn't determine which video runtime/);
+  });
+
+  it('accepts an undetected video repo when an explicit runtime is supplied', () => {
+    expect(classifyHfMediaModel({
+      repo: 'someone/mystery-video',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-video' }),
+      runtime: 'mlx_video',
+    })).toEqual({ kind: 'video', runtime: 'mlx_video', format: 'safetensors' });
+  });
 });
 
 describe('customModelIdFromRepo', () => {
@@ -176,6 +193,16 @@ describe('buildCustomModelEntry', () => {
     });
     expect(entry).toMatchObject({ runner: 'qwen', name: 'My Qwen', steps: 40, guidance: 5, source: 'user' });
     expect(entry.runtime).toBeUndefined();
+    expect(entry.quantization).toBeUndefined(); // only flux2 needs it
+  });
+
+  it('stamps quantization:none on a flux2 entry so the runner uses repo directly (no tokenizerRepo 400)', () => {
+    const entry = buildCustomModelEntry({
+      repo: 'black-forest-labs/FLUX.2-klein-9B',
+      model: hf({}),
+      classification: { kind: 'image', runner: 'flux2', format: 'safetensors' },
+    });
+    expect(entry).toMatchObject({ runner: 'flux2', quantization: 'none', source: 'user' });
   });
 });
 
