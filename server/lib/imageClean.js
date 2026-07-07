@@ -237,7 +237,11 @@ const IGNORE_ZONE_FEATHER_MAX = 50;
  */
 export async function compositeIgnoreZone(base, original, mask, { feather = IGNORE_ZONE_FEATHER_DEFAULT, sharpImpl = sharp } = {}) {
   if (!Buffer.isBuffer(base) || !Buffer.isBuffer(original) || !Buffer.isBuffer(mask)) return null;
-  const meta = await sharpImpl(base).metadata().catch(() => null);
+  // Cap every decode at MAX_PIXELS — the mask (and, via the length-framed
+  // envelope, the original) can be independently sized, so the decompression-
+  // bomb guard the main cleaner enforces must extend to this pass too.
+  const opts = { limitInputPixels: MAX_PIXELS };
+  const meta = await sharpImpl(base, opts).metadata().catch(() => null);
   const w = Math.round(Number(meta?.width));
   const h = Math.round(Number(meta?.height));
   if (!(w > 0) || !(h > 0)) return null;
@@ -250,29 +254,36 @@ export async function compositeIgnoreZone(base, original, mask, { feather = IGNO
   const run = async () => {
     // Greyscale + resize the mask to the base dims so the client can paint at any
     // resolution; blur the edge for a soft boundary when feathering is on.
-    let maskPipeline = sharpImpl(mask)
+    let maskPipeline = sharpImpl(mask, opts)
       .resize(w, h, { fit: 'fill', kernel: 'cubic' })
       .greyscale();
     if (sigma >= 0.3) maskPipeline = maskPipeline.blur(sigma);
     const alpha = await maskPipeline.toColourspace('b-w').raw().toBuffer();
 
-    // Resize the original to the base dims too (defensive against an orientation
-    // bake that swapped W/H upstream), strip any existing alpha, then attach the
-    // feathered mask AS the alpha channel so WHITE = fully-preserved original.
-    const originalRgba = await sharpImpl(original)
+    // The user paints the mask on the browser preview, which honours EXIF
+    // orientation — and the diffused `base` is already in that orientation. Bake
+    // the same orientation into the ORIGINAL (`.rotate()`) before sampling its
+    // pixels, or an oriented JPEG/PNG would restore rotated/wrong pixels into
+    // the masked regions. `.ensureAlpha()` (NOT removeAlpha) keeps the original's
+    // own transparency; the mask is then MULTIPLIED into that alpha below so a
+    // transparent source region stays transparent instead of turning opaque.
+    const originalRgba = await sharpImpl(original, opts)
+      .rotate()
       .resize(w, h, { fit: 'fill', kernel: 'cubic' })
-      .removeAlpha()
       .ensureAlpha()
       .raw()
       .toBuffer();
-    // Overwrite the (opaque) alpha channel with the mask so compositing honours it.
-    for (let i = 0; i < w * h; i += 1) originalRgba[i * 4 + 3] = alpha[i];
+    // Fold the feathered mask into the original's alpha: preserved (white) keeps
+    // the source alpha, unmasked (black) → 0 so `base` shows through.
+    for (let i = 0; i < w * h; i += 1) {
+      originalRgba[i * 4 + 3] = Math.round((originalRgba[i * 4 + 3] * alpha[i]) / 255);
+    }
 
     const overlay = await sharpImpl(originalRgba, { raw: { width: w, height: h, channels: 4 } })
       .png()
       .toBuffer();
 
-    const data = await sharpImpl(base)
+    const data = await sharpImpl(base, opts)
       .png()
       .composite([{ input: overlay, blend: 'over' }])
       .png({ compressionLevel: 6 })

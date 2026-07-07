@@ -51,7 +51,11 @@ export default function ImageClean() {
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
   }, []);
 
-  const runClean = useCallback(async (file, selectedSteps) => {
+  // `skipMask` lets a caller (e.g. Clear) force a mask-free re-clean without
+  // depending on the painter ref having flushed its React state yet — clear()
+  // only schedules state, so reading painterRef.hasMask in the same tick would
+  // still see the stale mask. The Clear path passes skipMask:true explicitly.
+  const runClean = useCallback(async (file, selectedSteps, { skipMask = false } = {}) => {
     if (!file) return;
     const myRequestId = ++requestIdRef.current;
     setBusy(true);
@@ -71,7 +75,7 @@ export default function ImageClean() {
     // Ignore-zone mask only matters when a diffusion pass runs — export the
     // painted preserve-region as a PNG Blob and ride it in the request envelope
     // so the server composites original pixels back into the masked regions.
-    if (selectedSteps.diffusion && painterRef.current?.hasMask) {
+    if (!skipMask && selectedSteps.diffusion && painterRef.current?.hasMask) {
       const maskBlob = await painterRef.current.exportMaskBlob();
       if (maskBlob) {
         payload.mask = maskBlob;
@@ -327,7 +331,7 @@ export default function ImageClean() {
                     <Undo2 size={12} /> Undo
                   </button>
                   <button
-                    onClick={() => { painterRef.current?.clear(); if (original?.file) runClean(original.file, steps); }}
+                    onClick={() => { painterRef.current?.clear(); if (original?.file) runClean(original.file, steps, { skipMask: true }); }}
                     className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
                   >
                     <X size={12} /> Clear

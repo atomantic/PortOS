@@ -475,4 +475,20 @@ describe('compositeIgnoreZone', () => {
     expect(await compositeIgnoreZone(null, redOriginal, halfMask)).toBeNull();
     expect(await compositeIgnoreZone(blueBase, redOriginal, Buffer.from('not an image'))).toBeNull();
   });
+
+  it('preserves the original alpha channel in masked regions (transparent source stays transparent)', async () => {
+    // A fully-transparent original: even inside the white mask, the composite
+    // must keep the base showing through (mask alpha × source alpha = 0), not
+    // paint opaque black/undefined pixels over it.
+    const transparent = await sharp({
+      create: { width: W, height: H, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 0 } },
+    }).png().toBuffer();
+    const out = await compositeIgnoreZone(blueBase, transparent, halfMask, { feather: 0 });
+    expect(out).toBeTruthy();
+    // Left (masked) core: the original is transparent, so the diffused blue base
+    // still shows — the source did NOT become opaque red.
+    const left = await pixelAt(out.data, 2, 8);
+    expect(left.b).toBeGreaterThan(200);
+    expect(left.r).toBeLessThan(60);
+  });
 });
