@@ -170,6 +170,11 @@ function runUsageCli() {
       reject(new Error(`Claude Code /usage exited ${code} with no output${stderr ? `: ${stderr.trim()}` : ''}`));
     });
 
+    // If the binary is missing (ENOENT) or the child dies before reading stdin,
+    // writing here emits an 'error' (EPIPE/ENOENT) on the stdin stream. Without
+    // this listener that unhandled stream error crashes the process; the
+    // meaningful rejection still comes from the child 'error' handler above.
+    child.stdin.on('error', () => {});
     child.stdin.write(STDIN_INPUT);
     child.stdin.end();
   });
