@@ -128,7 +128,13 @@ export const layeredIntelligenceConfigSchema = z.object({
     openIssues: z.boolean().optional(),
     custom: z.array(z.object({
       type: z.enum(['file']),
+      // A safe repo-relative path — reject absolute paths and `..` traversal so a
+      // custom source can't read files outside the app repo into the LLM prompt.
+      // gatherSources also enforces this at read time (defense in depth).
       ref: z.string().min(1).max(500)
+        .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
+          message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
+        })
     })).optional()
   }).optional(),
   rules: z.string().max(8000).optional(),

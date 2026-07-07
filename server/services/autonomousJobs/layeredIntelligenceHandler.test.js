@@ -21,7 +21,9 @@ vi.mock('../../lib/workTracker.js', () => ({
 // orchestration (park → gather → reason → decide → act → pause) is isolated.
 const forgeState = {
   existing: [],
+  existingOk: true,
   blocking: [],
+  blockingOk: true,
   fileResult: { success: true, number: 100 },
   filed: [],
   blockingApplied: []
@@ -31,8 +33,9 @@ vi.mock('../layeredIntelligence.js', async (importOriginal) => {
   return {
     ...actual,
     gatherSources: vi.fn().mockResolvedValue({ goals: 'g' }),
-    listForgeIssues: vi.fn(async () => forgeState.existing),
-    listBlockingIssues: vi.fn(async () => forgeState.blocking),
+    // Listers now return { ok, issues }; forgeState.existingOk toggles a failed read.
+    listForgeIssues: vi.fn(async () => ({ ok: forgeState.existingOk, issues: forgeState.existing })),
+    listBlockingIssues: vi.fn(async () => ({ ok: forgeState.blockingOk, issues: forgeState.blocking })),
     fileProposalToForge: vi.fn(async (opts) => { forgeState.filed.push(opts); return forgeState.fileResult; }),
     applyBlockingLabel: vi.fn(async (opts) => { forgeState.blockingApplied.push(opts); return { success: true }; }),
     appendProposalToPlan: vi.fn(async () => ({ success: true, duplicate: false }))
@@ -52,7 +55,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateAppMock.mockResolvedValue({});
   forgeState.existing = [];
+  forgeState.existingOk = true;
   forgeState.blocking = [];
+  forgeState.blockingOk = true;
   forgeState.fileResult = { success: true, number: 100 };
   forgeState.filed = [];
   forgeState.blockingApplied = [];
@@ -157,6 +162,33 @@ describe('processApp', () => {
     const out = await processApp(enabledApp(), { callLLM });
     expect(out.action).toBe('no-op');
     expect(out.reason).toContain('timeout');
+  });
+
+  it('does NOT file when the tracker issue-list read failed (avoids blind duplicate)', async () => {
+    forgeState.existingOk = false;
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('tracker-read-failed');
+    expect(forgeState.filed).toHaveLength(0);
+  });
+
+  it('skips (does not reason) when the blocking-issue read failed', async () => {
+    forgeState.blockingOk = false;
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('skipped');
+    expect(out.reason).toBe('blocking-read-failed');
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it('does NOT pass open issues to the prompt when the openIssues source is off (but still dedups)', async () => {
+    forgeState.existing = [{ slug: 'add-x', state: 'open' }];
+    const app = enabledApp();
+    app.layeredIntelligence.sources = { openIssues: false };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(app, { callLLM });
+    // Dedup still fires against existing issues regardless of the prompt toggle.
+    expect(out.action).toBe('duplicate');
   });
 
   it('does NOT pause a plan-tracked app (no issue to block on)', async () => {

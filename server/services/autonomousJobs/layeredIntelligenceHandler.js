@@ -33,7 +33,8 @@ import {
   extractPlanSlugs
 } from '../layeredIntelligence.js'
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
-import { tryReadFile } from '../../lib/fileUtils.js'
+import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js'
+import { stripCodeFences } from '../../lib/aiProvider.js'
 import { join } from 'path'
 
 /**
@@ -83,13 +84,20 @@ export async function processApp(app, deps = {}) {
     return { app: app.id, action: 'skipped', reason: 'jira-filer-not-implemented' }
   }
 
-  // ---- Park check (forge/jira only; plan has no issue to block on) ----
+  // ---- Park check (forge only; plan has no issue to block on) ----
   if (trackerSupportsPause(tracker.resolved) && filer === 'forge' && forgeCli) {
     const blocking = await listBlockingIssues({ cli: forgeCli, cwd })
-    if (isAppParked(blocking)) {
-      console.log(`⏸️ Layered Intelligence: ${app.name} parked on ${blocking.length} blocking issue(s) — skipping`)
+    // A FAILED read (ok:false) is not "no blocking issues" — skip this app rather
+    // than risk resuming work the user parked, and try again next run.
+    if (!blocking.ok) {
+      console.warn(`⚠️ Layered Intelligence: ${app.name} blocking-issue read failed — skipping this run`)
       await recordRun(app, config, now)
-      return { app: app.id, action: 'parked', blocking: blocking.length }
+      return { app: app.id, action: 'skipped', reason: 'blocking-read-failed' }
+    }
+    if (isAppParked(blocking.issues)) {
+      console.log(`⏸️ Layered Intelligence: ${app.name} parked on ${blocking.issues.length} blocking issue(s) — skipping`)
+      await recordRun(app, config, now)
+      return { app: app.id, action: 'parked', blocking: blocking.issues.length }
     }
   }
 
@@ -97,9 +105,16 @@ export async function processApp(app, deps = {}) {
   const sources = await gatherSources(app, config)
   let openIssues = []
   let existingIssues = []
+  let trackerReadFailed = false
   if (filer === 'forge' && forgeCli) {
-    existingIssues = await listForgeIssues({ cli: forgeCli, cwd })
-    openIssues = existingIssues.filter(i => i.state === 'open')
+    const listed = await listForgeIssues({ cli: forgeCli, cwd })
+    trackerReadFailed = !listed.ok
+    existingIssues = listed.issues
+    // Only surface open issues to the reasoner when the openIssues source is on;
+    // dedup still runs against ALL existing issues regardless of the toggle.
+    if (config.sources?.openIssues !== false) {
+      openIssues = existingIssues.filter(i => i.state === 'open')
+    }
   } else if (filer === 'plan' && cwd) {
     const planContent = await tryReadFile(join(cwd, 'PLAN.md'))
     const planSlugs = extractPlanSlugs(planContent || '')
@@ -129,6 +144,11 @@ export async function processApp(app, deps = {}) {
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
     if (!scopeOk) {
       console.log(`🚫 Layered Intelligence: ${app.name} proposal scope "${proposal.scope}" not allowed — suppressed`)
+    } else if (trackerReadFailed) {
+      // Dedup would be blind against a failed tracker read — never file, or a
+      // transient forge blip files a duplicate. Retry next run (CLAUDE.md sentinel).
+      console.warn(`⚠️ Layered Intelligence: ${app.name} tracker read failed — suppressing proposal to avoid a blind duplicate`)
+      filedAction = 'tracker-read-failed'
     } else if (isProposalDuplicate({ slug: proposal.slug, existingIssues, now })) {
       console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" is a duplicate — suppressed`)
       filedAction = 'duplicate'
@@ -198,15 +218,14 @@ async function resolveLLM(config, injected) {
   }
 }
 
-/** Parse LLM JSON, returning null on failure (a no-op for that app). */
+/**
+ * Parse LLM JSON, returning null on failure (a no-op for that app). Reuses the
+ * shared `stripCodeFences` + `safeJSONParse` helpers rather than a local
+ * try/catch (repo convention: no non-boundary try/catch).
+ */
 function safeParse(text) {
   if (typeof text !== 'string') return null
-  const cleaned = text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim()
-  try {
-    return JSON.parse(cleaned)
-  } catch {
-    return null
-  }
+  return safeJSONParse(stripCodeFences(text), null, { logError: false })
 }
 
 /**

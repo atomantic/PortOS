@@ -20,6 +20,8 @@ import {
   buildPrompt,
   extractPlanSlugs,
   appendProposalToPlan,
+  gatherSources,
+  normalizeIssueState,
   listForgeIssues,
   listBlockingIssues,
   fileProposalToForge,
@@ -374,6 +376,57 @@ describe('appendProposalToPlan', () => {
   });
 });
 
+describe('normalizeIssueState', () => {
+  it('maps GitLab "opened" and GitHub "open" to open', () => {
+    expect(normalizeIssueState('opened')).toBe('open');
+    expect(normalizeIssueState('OPEN')).toBe('open');
+  });
+  it('maps closed/locked to closed', () => {
+    expect(normalizeIssueState('closed')).toBe('closed');
+    expect(normalizeIssueState('locked')).toBe('closed');
+  });
+  it('treats unknown/empty as open (fail-open so dedup does not miss)', () => {
+    expect(normalizeIssueState('')).toBe('open');
+    expect(normalizeIssueState(undefined)).toBe('open');
+  });
+});
+
+describe('gatherSources custom file confinement', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-src-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('reads a safe relative custom file', async () => {
+    await writeFile(join(dir, 'METRICS.md'), 'metric content');
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'file', ref: 'METRICS.md' }] } }
+    );
+    expect(out['custom:METRICS.md']).toBe('metric content');
+  });
+
+  it('refuses a "../" traversal ref (no arbitrary file leak into the prompt)', async () => {
+    // A file one level ABOVE the repo must never be read.
+    await writeFile(join(dir, 'secret.txt'), 'SECRET');
+    const sub = join(dir, 'repo');
+    const { mkdir } = await import('fs/promises');
+    await mkdir(sub, { recursive: true });
+    const out = await gatherSources(
+      { repoPath: sub },
+      { sources: { custom: [{ type: 'file', ref: '../secret.txt' }] } }
+    );
+    expect(Object.keys(out)).not.toContain('custom:../secret.txt');
+  });
+
+  it('refuses an absolute-path ref', async () => {
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'file', ref: '/etc/hosts' }] } }
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
+  });
+});
+
 describe('forge I/O (injected exec)', () => {
   it('listForgeIssues parses gh JSON and extracts slugs', async () => {
     const exec = vi.fn().mockResolvedValue({
@@ -383,21 +436,44 @@ describe('forge I/O (injected exec)', () => {
         { number: 2, title: 'B', body: 'no slug', state: 'CLOSED', closedAt: '2026-07-01T00:00:00Z' }
       ])
     });
-    const issues = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    const { ok, issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(ok).toBe(true);
     expect(issues[0].slug).toBe('slug-a');
     expect(issues[0].state).toBe('open');
     expect(issues[1].closedAt).toBe('2026-07-01T00:00:00Z');
   });
 
-  it('listForgeIssues returns [] on CLI failure', async () => {
-    const exec = vi.fn().mockResolvedValue({ code: 1, stdout: '' });
-    expect(await listForgeIssues({ cli: 'gh', cwd: '/x', exec })).toEqual([]);
+  it('listForgeIssues normalizes GitLab "opened" state to open', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ iid: 7, title: 'G', description: `d ${slugMarker('g-slug')}`, state: 'opened' }])
+    });
+    const { ok, issues } = await listForgeIssues({ cli: 'glab', cwd: '/x', exec });
+    expect(ok).toBe(true);
+    expect(issues[0].number).toBe(7);
+    expect(issues[0].state).toBe('open'); // 'opened' → 'open'
+    expect(issues[0].slug).toBe('g-slug');
   });
 
-  it('listBlockingIssues uses the blocking label', async () => {
+  it('listForgeIssues signals ok:false on CLI failure (tracker unavailable ≠ empty)', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 1, stdout: '' });
+    expect(await listForgeIssues({ cli: 'gh', cwd: '/x', exec })).toEqual({ ok: false, issues: [] });
+  });
+
+  it('listForgeIssues signals ok:true, [] on a successful empty read', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '' });
+    expect(await listForgeIssues({ cli: 'gh', cwd: '/x', exec })).toEqual({ ok: true, issues: [] });
+  });
+
+  it('listForgeIssues signals ok:false on unparseable output', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'not json' });
+    expect(await listForgeIssues({ cli: 'gh', cwd: '/x', exec })).toEqual({ ok: false, issues: [] });
+  });
+
+  it('listBlockingIssues uses the blocking label and normalizes state', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify([{ number: 5, state: 'open' }]) });
     const res = await listBlockingIssues({ cli: 'gh', cwd: '/x', exec });
-    expect(res).toEqual([{ number: 5, title: '', state: 'open' }]);
+    expect(res).toEqual({ ok: true, issues: [{ number: 5, title: '', state: 'open' }] });
     expect(exec.mock.calls[0][1]).toContain(LI_BLOCKING_LABEL);
   });
 

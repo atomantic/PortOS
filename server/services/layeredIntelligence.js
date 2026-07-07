@@ -20,10 +20,10 @@
  */
 
 import { spawn } from 'child_process';
-import { join } from 'path';
+import { join, resolve, relative, isAbsolute } from 'path';
 import { readFile, writeFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { DAY, tryReadFile, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -335,7 +335,16 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
   }
   for (const custom of src.custom || []) {
     if (custom?.type === 'file' && typeof custom.ref === 'string' && repo) {
-      const content = await tryReadFile(join(repo, custom.ref));
+      // Confine the ref to the app repo: an absolute path or a `../` escape must
+      // not leak arbitrary readable files into the LLM prompt. resolve() +
+      // relative() rejects anything that lands outside repoPath.
+      const abs = resolve(repo, custom.ref);
+      const rel = relative(repo, abs);
+      if (rel.startsWith('..') || isAbsolute(rel)) {
+        console.warn(`⚠️ Layered Intelligence: custom source "${custom.ref}" escapes repo — skipped`);
+        continue;
+      }
+      const content = await tryReadFile(abs);
       if (content) out[`custom:${custom.ref}`] = content.slice(0, 8000);
     }
   }
@@ -343,48 +352,69 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
 }
 
 /**
+ * Normalize a forge issue state to `open` / `closed`. GitLab reports `opened`
+ * (and `closed`/`locked`); GitHub reports `open`/`closed`. Anything that isn't a
+ * recognized closed/locked state is treated as open so dedup + park don't miss a
+ * GitLab-`opened` issue. (`merged` never applies to issues.)
+ */
+export function normalizeIssueState(state) {
+  const s = (state || '').toLowerCase();
+  if (s === 'closed' || s === 'locked') return 'closed';
+  return 'open';
+}
+
+/**
  * List existing layered-intelligence issues on a forge (open + recently closed)
- * so the handler can feed them to the reasoner and run the dedup guard. Returns
- * `[{ number, title, body, state, closedAt, slug }]`; `[]` on any failure.
+ * so the handler can feed them to the reasoner and run the dedup guard.
+ *
+ * Returns `{ ok, issues }` — `ok:false` means the tracker read FAILED (CLI error
+ * or unparseable output), which is NOT the same as "no existing issues" (`ok:true,
+ * issues:[]`). The handler must NOT file when the read failed, or a transient
+ * `gh` blip would defeat dedup and file a duplicate (CLAUDE.md sentinel rule).
  */
 export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', LI_LABEL, '--all', '-P', '100', '-F', 'json']
     : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,closedAt'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
-  if (code !== 0 || !stdout.trim()) return [];
-  const parsed = safeJsonArray(stdout);
-  return parsed.map(i => ({
-    number: i.number ?? i.iid ?? null,
-    title: i.title || '',
-    body: i.body || i.description || '',
-    state: (i.state || '').toLowerCase(),
-    closedAt: i.closedAt || i.closed_at || null,
-    slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
-  }));
+  if (code !== 0) return { ok: false, issues: [] };
+  if (!stdout.trim()) return { ok: true, issues: [] };
+  const parsed = safeJSONParse(stdout, null, { logError: false });
+  if (!Array.isArray(parsed)) return { ok: false, issues: [] };
+  return {
+    ok: true,
+    issues: parsed.map(i => ({
+      number: i.number ?? i.iid ?? null,
+      title: i.title || '',
+      body: i.body || i.description || '',
+      state: normalizeIssueState(i.state),
+      closedAt: i.closedAt || i.closed_at || null,
+      slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
+    }))
+  };
 }
 
-/** List OPEN blocking-labeled issues for the app (park check). `[]` on failure. */
+/**
+ * List OPEN blocking-labeled issues for the app (park check). Returns
+ * `{ ok, issues }` with the same failed-vs-empty distinction as listForgeIssues.
+ */
 export async function listBlockingIssues({ cli, cwd, env, exec = runCli } = {}) {
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', LI_BLOCKING_LABEL, '-P', '100', '-F', 'json']
     : ['issue', 'list', '--label', LI_BLOCKING_LABEL, '--state', 'open', '--limit', '100', '--json', 'number,title,state'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
-  if (code !== 0 || !stdout.trim()) return [];
-  return safeJsonArray(stdout).map(i => ({
-    number: i.number ?? i.iid ?? null,
-    title: i.title || '',
-    state: (i.state || 'open').toLowerCase()
-  }));
-}
-
-function safeJsonArray(text) {
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  if (code !== 0) return { ok: false, issues: [] };
+  if (!stdout.trim()) return { ok: true, issues: [] };
+  const parsed = safeJSONParse(stdout, null, { logError: false });
+  if (!Array.isArray(parsed)) return { ok: false, issues: [] };
+  return {
+    ok: true,
+    issues: parsed.map(i => ({
+      number: i.number ?? i.iid ?? null,
+      title: i.title || '',
+      state: normalizeIssueState(i.state)
+    }))
+  };
 }
 
 /**
