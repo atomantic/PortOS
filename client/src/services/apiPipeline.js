@@ -112,6 +112,18 @@ export const generateSeriesConcept = (universeId, opts = {}, requestOptions = {}
     ...requestOptions,
   });
 
+// Voice discovery (#2179): write the same scene beat in several distinct
+// registers so the author picks the series voice by ear. Returns
+// `{ candidates: [{ register, label, passage, note }] }` WITHOUT persisting —
+// the picked passage is committed via the ordinary series PATCH
+// (styleGuide.voiceExemplars).
+export const discoverSeriesVoice = (id, opts = {}, requestOptions = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(id)}/discover-voice`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...requestOptions,
+  });
+
 // Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
 export const SERIES_TITLE_LOGO_MAX = 2000;
 export const SERIES_AUTHOR_MAX = 120;

@@ -16,6 +16,7 @@ import { mergeSeries } from '../../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../../services/recordMergeAI.js';
 import { generateSeriesTitleLogo } from '../../services/pipeline/seriesTitleLogo.js';
 import { generateSeriesConcept } from '../../services/pipeline/seriesGenerate.js';
+import { discoverSeriesVoice } from '../../services/pipeline/seriesVoiceDiscover.js';
 import {
   LENGTH_PROFILE_NAMES,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -452,6 +453,22 @@ const titleLogoGenerateSchema = z.object({
 router.post('/series/:id/generate-title-logo', asyncHandler(async (req, res) => {
   const body = validateRequest(titleLogoGenerateSchema, req.body ?? {});
   const result = await generateSeriesTitleLogo(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Voice discovery (#2179, CWQE Phase 14): write the same scene beat in several
+// distinct registers so the author picks the series voice by ear. Returns the
+// candidate passages WITHOUT persisting — the user's pick is committed via the
+// ordinary series PATCH (styleGuide.voiceExemplars). Reuses the LLM
+// provider/model override shape.
+const voiceDiscoverSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/series/:id/discover-voice', asyncHandler(async (req, res) => {
+  const body = validateRequest(voiceDiscoverSchema, req.body ?? {});
+  const result = await discoverSeriesVoice(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

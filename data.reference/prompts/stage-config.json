@@ -464,6 +464,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-series-voice-discover": {
+      "name": "Pipeline — Discover Series Voice",
+      "description": "Voice discovery (#2179, CWQE Phase 14): writes the SAME short scene beat in several distinct registers (spare / lyric / wry / close-psychic / cinematic) so the author picks the series voice by ear. Returns a {candidates:[{register, passage, note}]} JSON payload; the picked passage lands in the style guide's voiceExemplars, rejected ones can drop into voiceAntiExemplars. Explicit user-triggered action — does NOT persist and does NOT fire on boot.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-comic-panel-image-prompt": {
       "name": "Pipeline — Comic Panel Image Prompt",
       "description": "Refine a single comic panel's description into a richer image-gen-ready prompt. Uses caption / dialogue / sfx context + neighboring-panel continuity to elaborate without re-imagining the scene.",

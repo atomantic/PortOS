@@ -5,7 +5,27 @@ import {
   composeStyleNotes,
   PROSE_CRAFT_DOCTRINE,
   STYLE_GUIDE_LIMITS,
+  VOICE_REGISTERS,
+  VOICE_REGISTER_IDS,
 } from './styleGuide.js';
+
+describe('VOICE_REGISTERS (voice discovery — #2179)', () => {
+  it('exposes a small, non-empty set of registers with stable ids + labels + hints', () => {
+    expect(VOICE_REGISTERS.length).toBeGreaterThanOrEqual(3);
+    for (const r of VOICE_REGISTERS) {
+      expect(typeof r.id).toBe('string');
+      expect(r.id).toMatch(/^[a-z-]+$/);
+      expect(r.label.length).toBeGreaterThan(0);
+      expect(r.hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('has unique register ids that VOICE_REGISTER_IDS mirrors in order', () => {
+    const ids = VOICE_REGISTERS.map((r) => r.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(VOICE_REGISTER_IDS).toEqual(ids);
+  });
+});
 
 describe('sanitizeStyleGuide', () => {
   it('returns null for absent / non-object / empty input (legacy-tolerant)', () => {

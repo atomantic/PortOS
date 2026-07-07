@@ -15,7 +15,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
   PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass, BookMarked,
-  Fingerprint, Plus, Trash2,
+  Fingerprint, Plus, Trash2, Wand2, Check, X,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -27,6 +27,7 @@ import {
   listPipelineIssues,
   listUniverses,
   generateSeriesTitleLogo,
+  discoverSeriesVoice,
   SERIES_TITLE_LOGO_MAX,
 } from '../services/api';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
@@ -402,7 +403,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         />
       </Field>
 
-      <StyleGuideSection series={series} patchSeries={patchSeries} />
+      <StyleGuideSection series={series} patchSeries={patchSeries} onFlushPending={onFlushPending} />
 
       <FactReferenceSection series={series} patchSeries={patchSeries} />
 
@@ -520,11 +521,63 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 // persisted on Save (styleGuide is in ARC_FLUSH_FIELDS). Picking the blank
 // option clears a field to null; the server collapses an all-empty guide to
 // null. Each control is htmlFor/id paired for screen readers + click-to-focus.
-function StyleGuideSection({ series, patchSeries }) {
+function StyleGuideSection({ series, patchSeries, onFlushPending }) {
   const sg = series.styleGuide || {};
   const conv = sg.conventions || {};
   const setSG = (patch) => patchSeries({ styleGuide: pruneEmpty({ ...sg, ...patch }) });
   const setConv = (patch) => setSG({ conventions: pruneEmpty({ ...conv, ...patch }) });
+
+  const exemplars = Array.isArray(sg.voiceExemplars) ? sg.voiceExemplars : [];
+  const antiExemplars = Array.isArray(sg.voiceAntiExemplars) ? sg.voiceAntiExemplars : [];
+  const setExemplars = (next) => setSG({ voiceExemplars: next.length ? next : null });
+  const setAntiExemplars = (next) => setSG({ voiceAntiExemplars: next.length ? next : null });
+
+  // Voice discovery (#2179) — generate ~5 trial passages in distinct registers,
+  // hold them locally, let the user file each one into exemplars / anti-exemplars.
+  const [discovering, setDiscovering] = useState(false);
+  const [candidates, setCandidates] = useState([]);
+  // Track which candidate registers the user has already filed so a second click
+  // doesn't silently duplicate a row (and the button reads "Added").
+  const [filed, setFiled] = useState({});
+
+  const runDiscover = async () => {
+    // The server reads the series from disk — flush dirty premise/style edits so
+    // the trial passages reflect what the user is actually looking at.
+    if (onFlushPending) await onFlushPending();
+    setDiscovering(true);
+    const result = await discoverSeriesVoice(series.id, {}, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Voice discovery failed — try again or pick a different provider.');
+      return null;
+    });
+    setDiscovering(false);
+    if (!result) return;
+    setCandidates(Array.isArray(result.candidates) ? result.candidates : []);
+    setFiled({});
+    if (!result.candidates?.length) toast.error('No usable passages came back — try again.');
+  };
+
+  // Convert a discovery candidate to a `{ passage, note }` exemplar row. The note
+  // records the register so a picked passage carries a self-describing gloss.
+  const toEntry = (cand) => {
+    const note = cand.note || (cand.label ? cand.label.toLowerCase() : '');
+    return note ? { passage: cand.passage, note } : { passage: cand.passage };
+  };
+  const fileExemplar = (cand) => {
+    if (exemplars.length >= STYLE_GUIDE_EXEMPLARS_MAX) {
+      toast.error(`Voice exemplars are capped at ${STYLE_GUIDE_EXEMPLARS_MAX} — remove one first.`);
+      return;
+    }
+    setExemplars([...exemplars, toEntry(cand)]);
+    setFiled((f) => ({ ...f, [cand.register]: 'exemplar' }));
+  };
+  const fileAntiExemplar = (cand) => {
+    if (antiExemplars.length >= STYLE_GUIDE_EXEMPLARS_MAX) {
+      toast.error(`Anti-exemplars are capped at ${STYLE_GUIDE_EXEMPLARS_MAX} — remove one first.`);
+      return;
+    }
+    setAntiExemplars([...antiExemplars, toEntry(cand)]);
+    setFiled((f) => ({ ...f, [cand.register]: 'anti' }));
+  };
 
   return (
     <div className="block">
@@ -594,13 +647,44 @@ function StyleGuideSection({ series, patchSeries }) {
         ))}
       </div>
 
+      <div className="mt-3 pt-3 border-t border-port-border/60">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <h4 className="text-[11px] uppercase tracking-wider text-gray-500">Discover voice</h4>
+            <p className="text-[11px] text-gray-500 -mt-0.5">Write the same scene beat in distinct registers, then file the one you like as an exemplar.</p>
+          </div>
+          <button
+            type="button"
+            onClick={runDiscover}
+            disabled={discovering}
+            className="shrink-0 inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded border border-port-border text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
+          >
+            {discovering ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+            {discovering ? 'Writing…' : 'Discover voice'}
+          </button>
+        </div>
+        {candidates.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {candidates.map((cand) => (
+              <VoiceCandidateCard
+                key={cand.register}
+                candidate={cand}
+                filedAs={filed[cand.register]}
+                onFileExemplar={() => fileExemplar(cand)}
+                onFileAntiExemplar={() => fileAntiExemplar(cand)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
       <VoiceExemplarEditor
         idPrefix="sg-voice-exemplar"
         title="Voice exemplars (the tuning fork)"
         hint="1–3 short passages (~150–300 words) that nail the series' voice. Injected into every draft/revision prompt as “MATCH this voice”. A concrete anchor beats any adjective list."
         notePlaceholder="what this demonstrates (e.g. spare, close-psychic)"
-        entries={Array.isArray(sg.voiceExemplars) ? sg.voiceExemplars : []}
-        onChange={(next) => setSG({ voiceExemplars: next.length ? next : null })}
+        entries={exemplars}
+        onChange={setExemplars}
       />
 
       <VoiceExemplarEditor
@@ -608,9 +692,46 @@ function StyleGuideSection({ series, patchSeries }) {
         title="Anti-exemplars (never drift toward this)"
         hint="Passages in the wrong register, kept as negative examples. Injected as “NEVER drift toward this”."
         notePlaceholder="what's wrong (e.g. too ornate, wrong temperature)"
-        entries={Array.isArray(sg.voiceAntiExemplars) ? sg.voiceAntiExemplars : []}
-        onChange={(next) => setSG({ voiceAntiExemplars: next.length ? next : null })}
+        entries={antiExemplars}
+        onChange={setAntiExemplars}
       />
+    </div>
+  );
+}
+
+// One discovered voice candidate (#2179) — a register-labeled trial passage the
+// user can file into the exemplar or anti-exemplar list. Once filed, the buttons
+// collapse to a confirmation so a second click can't silently duplicate the row.
+function VoiceCandidateCard({ candidate, filedAs, onFileExemplar, onFileAntiExemplar }) {
+  return (
+    <div className="border border-port-border rounded p-2 bg-port-bg/50">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-[11px] font-medium text-port-accent">{candidate.label || candidate.register}</span>
+        {filedAs ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-port-success">
+            <Check size={11} /> {filedAs === 'anti' ? 'Added as anti-exemplar' : 'Added as exemplar'}
+          </span>
+        ) : (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onFileExemplar}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded text-port-success hover:bg-port-success/10"
+            >
+              <Check size={11} /> Exemplar
+            </button>
+            <button
+              type="button"
+              onClick={onFileAntiExemplar}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded text-port-error hover:bg-port-error/10"
+            >
+              <X size={11} /> Anti
+            </button>
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-snug max-h-40 overflow-y-auto">{candidate.passage}</p>
+      {candidate.note && <p className="text-[11px] text-gray-500 mt-1 italic">{candidate.note}</p>}
     </div>
   );
 }
