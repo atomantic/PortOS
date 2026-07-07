@@ -88,6 +88,21 @@ describe('resolveVoiceDriftConfig', () => {
     const cfg = await resolveVoiceDriftConfig(undefined, { [VOICE_DRIFT_CHECK_ID]: 'nope' });
     expect(cfg.baselineMode).toBe('drafted');
   });
+
+  it('keeps the resolved global config when a per-series override is invalid (#1591 parity)', async () => {
+    // Mirror applySeriesCheckConfig: an out-of-range override must NOT collapse the
+    // matrix to bare schema defaults — it keeps the resolved global, so the matrix
+    // view and the finding-emitting run agree even on a bad override.
+    settingsStore = {
+      pipelineEditorialChecks: {
+        checks: { [VOICE_DRIFT_CHECK_ID]: { config: { sigmaThreshold: 2.5 } } },
+      },
+    };
+    const cfg = await resolveVoiceDriftConfig(undefined, {
+      [VOICE_DRIFT_CHECK_ID]: { sigmaThreshold: 999999 }, // > schema max(4) → invalid merge
+    });
+    expect(cfg.sigmaThreshold).toBe(2.5); // resolved global, NOT the default 1.5
+  });
 });
 
 describe('getVoiceFingerprint', () => {

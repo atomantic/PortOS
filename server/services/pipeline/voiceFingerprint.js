@@ -58,16 +58,19 @@ export async function resolveVoiceDriftConfig(settings, seriesOverrides) {
   const s = settings || await getSettings();
   const check = getCheckById(s, VOICE_DRIFT_CHECK_ID);
   const stored = readChecksSlice(s)[VOICE_DRIFT_CHECK_ID]?.config;
+  // Resolve the GLOBAL config first (schema-validated, defaults filled).
+  const global = resolveCheckConfig(check, stored);
   const override = seriesOverrides && typeof seriesOverrides === 'object' && !Array.isArray(seriesOverrides)
     ? seriesOverrides[VOICE_DRIFT_CHECK_ID]
     : null;
-  // Overlay the per-series override on the global stored config before validating,
-  // mirroring applySeriesCheckConfig's `{ ...config, ...override }` merge. A
-  // non-object override is ignored (the spread of a non-object is a no-op).
-  const merged = (override && typeof override === 'object' && !Array.isArray(override))
-    ? { ...(stored || {}), ...override }
-    : stored;
-  return resolveCheckConfig(check, merged);
+  if (!override || typeof override !== 'object' || Array.isArray(override)) return global;
+  // Overlay the per-series override on the RESOLVED global, EXACTLY as
+  // applySeriesCheckConfig does — including its failure mode: if the merged blob
+  // is invalid (e.g. a hand-edited out-of-range value), keep the resolved global
+  // rather than collapsing to bare schema defaults, so the matrix view and the
+  // finding-emitting run stay in lockstep even on a bad override.
+  const parsed = check.configSchema.safeParse({ ...global, ...override });
+  return parsed.success ? parsed.data : global;
 }
 
 /**
