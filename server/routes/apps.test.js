@@ -13,6 +13,7 @@ vi.mock('../services/apps.js', () => ({
   archiveApp: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
   getAppTaskTypeOverrides: vi.fn(),
+  updateAppLayeredIntelligence: vi.fn(),
   toggleAllAppTaskTypes: vi.fn(),
   notifyAppsChanged: vi.fn(),
   PORTOS_APP_ID: 'portos-default'
@@ -259,6 +260,22 @@ describe('Apps Routes', () => {
         .send({ name: 'Test' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('routes a layeredIntelligence update through the dedicated merge helper (not the shallow updateApp)', async () => {
+      appsService.updateApp.mockResolvedValue({ id: 'app-001', name: 'App' });
+      appsService.updateAppLayeredIntelligence.mockResolvedValue({ id: 'app-001', layeredIntelligence: { enabled: true, sources: { goals: true } } });
+
+      const response = await request(app)
+        .put('/api/apps/app-001')
+        .send({ layeredIntelligence: { enabled: true } });
+
+      expect(response.status).toBe(200);
+      // The nested config must NOT be passed to the shallow updateApp (which would wipe it)…
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.not.objectContaining({ layeredIntelligence: expect.anything() }));
+      // …it goes through the preserving merge helper instead.
+      expect(appsService.updateAppLayeredIntelligence).toHaveBeenCalledWith('app-001', { enabled: true });
+      expect(response.body.layeredIntelligence.enabled).toBe(true);
     });
 
     it('writes changed ports back to the ecosystem config (source of truth)', async () => {

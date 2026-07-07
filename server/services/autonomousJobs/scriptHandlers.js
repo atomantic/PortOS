@@ -16,6 +16,7 @@ import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agentState.js'
+import { runLayeredIntelligence } from './layeredIntelligenceHandler.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -139,7 +140,8 @@ const SCRIPT_HANDLERS = {
   'autobiography-prompt': autobiographyCheckAndPrompt,
   'moltworld-exploration': runMoltworldExploration,
   'agent-data-cleanup': agentDataCleanup,
-  'goal-check-in': runGoalCheckIn
+  'goal-check-in': runGoalCheckIn,
+  'layered-intelligence': runLayeredIntelligence
 }
 
 export { runMoltworldExploration, agentDataCleanup, SCRIPT_HANDLERS }

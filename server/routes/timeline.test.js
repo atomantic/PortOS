@@ -16,12 +16,24 @@ vi.mock('../services/spotifyImport.js', () => ({
   })),
 }));
 
+vi.mock('../services/takeoutLocationImport.js', () => ({
+  importTakeoutLocationHistory: vi.fn(async (file, opts) => ({
+    dryRun: Boolean(opts?.dryRun),
+    parsed: 2,
+    mapped: 2,
+    recorded: opts?.dryRun ? 0 : 2,
+    skipped: opts?.dryRun ? 0 : 0,
+    summary: { visits: 2, uniquePlaces: 2, from: null, to: null, topPlaces: [] },
+  })),
+}));
+
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
 }));
 
 import { importSpotifyHistory } from '../services/spotifyImport.js';
+import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -130,5 +142,47 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(400);
     expect(importSpotifyHistory).not.toHaveBeenCalled();
+  });
+
+  it('POST /import/takeout-location parses the upload and calls the importer', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false' },
+      { filename: '2021_MARCH.json', contentType: 'application/json', content: '{}' },
+    );
+    const r = await request(app).post('/api/timeline/import/takeout-location')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.recorded).toBe(2);
+    expect(importTakeoutLocationHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ originalname: '2021_MARCH.json' }),
+      { dryRun: false },
+    );
+  });
+
+  it('takeout-location honors preview=true as a dry run', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'true' },
+      { filename: 'export.zip', contentType: 'application/zip', content: 'PK...' },
+    );
+    const r = await request(app).post('/api/timeline/import/takeout-location')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.dryRun).toBe(true);
+    expect(r.body.recorded).toBe(0);
+    expect(importTakeoutLocationHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+  });
+
+  it('takeout-location 400s on an unrecognized preview token', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'maybe' },
+      { filename: 'x.json', contentType: 'application/json', content: '{}' },
+    );
+    const r = await request(app).post('/api/timeline/import/takeout-location')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(importTakeoutLocationHistory).not.toHaveBeenCalled();
   });
 });

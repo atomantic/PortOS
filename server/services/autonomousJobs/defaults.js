@@ -256,6 +256,22 @@ Phase 4 — Report:
     updatedAt: null
   },
   {
+    id: 'job-layered-intelligence',
+    name: 'Layered Intelligence Loop',
+    description: 'Per-managed-app self-improvement loop. Reads each enabled app\'s goals + telemetry, asks a reasoning model (default: local LLM) for the single most-valuable improvement, and files ONE deduplicated tracker issue (GitHub/GitLab/Jira/PLAN.md) for a coding agent. The model never writes code — every side effect is deterministic. Off by default; enable per app under its config.',
+    category: 'layered-intelligence',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: false,
+    priority: 'MEDIUM',
+    type: 'script',
+    scriptHandler: 'layered-intelligence',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
     id: 'job-wiki-maintenance',
     name: 'Wiki Maintenance',
     description: 'Audit the LLM Wiki for contradictions, orphan pages, missing cross-references, outdated claims, and structural issues.',
