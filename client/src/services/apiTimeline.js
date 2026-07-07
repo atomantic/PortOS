@@ -21,13 +21,22 @@ export const getTimelineEvents = (options = {}) => {
   return request(`/timeline/events${qs ? `?${qs}` : ''}`, { silent: options.silent });
 };
 
-// Bulk-backfill importer (#2160). Upload a Spotify extended-history export (ZIP
-// or a single history JSON). `preview: true` returns parse-only counts + a
-// summary without writing; a real import is idempotent so re-imports are safe.
-// request() detects the FormData body and lets the browser set the boundary.
-export const importSpotifyHistory = (file, { preview = false, ...options } = {}) => {
+// Bulk-backfill importers (#2160). Upload an export file (ZIP or single JSON).
+// `preview: true` returns parse-only counts + a summary without writing; a real
+// import is idempotent so re-imports are safe. request() detects the FormData
+// body and lets the browser set the boundary.
+const importFile = (path, file, { preview = false, ...options } = {}) => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('preview', preview ? 'true' : 'false');
-  return request('/timeline/import/spotify', { method: 'POST', body: formData, ...options });
+  return request(path, { method: 'POST', body: formData, ...options });
 };
+
+// Spotify extended-history export (dedupe on played-at + track).
+export const importSpotifyHistory = (file, options = {}) =>
+  importFile('/timeline/import/spotify', file, options);
+
+// Google Takeout "Location History (Timeline)" semantic place visits (dedupe on
+// visit-start + place identity).
+export const importTakeoutLocationHistory = (file, options = {}) =>
+  importFile('/timeline/import/takeout-location', file, options);
