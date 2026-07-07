@@ -167,6 +167,15 @@ const looksLikeLora = ({ repo, model }) => {
   if (/\blora\b|\blycoris\b|\blocon\b|\bdora\b/.test(blob)) return true;
   const lib = typeof model?.library_name === 'string' ? model.library_name.toLowerCase() : '';
   if (lib === 'peft' || lib === 'adapter-transformers') return true;
+  // File-level signal: the standard PEFT adapter layout ships adapter_config.json
+  // + adapter_model.safetensors. A repo carrying these is an adapter even when
+  // its id/tags/library_name don't advertise it — without this check such a repo
+  // (which typically also sets cardData.base_model) would auto-detect as the base
+  // family and register as a base model whose weights from_pretrained() can't load.
+  const files = modelSiblingFilenames(model).map((f) => f.toLowerCase());
+  if (files.some((f) => /(^|\/)adapter_config\.json$/.test(f) || /(^|\/)adapter_model\.(safetensors|bin)$/.test(f))) {
+    return true;
+  }
   return false;
 };
 

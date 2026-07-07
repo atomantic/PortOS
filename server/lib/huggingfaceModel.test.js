@@ -84,6 +84,15 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/LoRA adapter/);
   });
 
+  it('refuses a PEFT adapter repo detected by its sibling files (no lora tag)', () => {
+    // adapter_config.json + adapter_model.safetensors is the standard PEFT
+    // layout; the repo advertises no lora tag but is still an adapter.
+    expect(() => classifyHfMediaModel({
+      repo: 'someone/qwen-finetune-adapter',
+      model: hf({ files: ['adapter_config.json', 'adapter_model.safetensors'], base: 'Qwen/Qwen-Image', pipeline: 'text-to-image' }),
+    })).toThrow(/LoRA adapter/);
+  });
+
   it('does NOT treat a full base model as a LoRA just because its card sets base_model', () => {
     // Full fine-tunes / derived base models legitimately declare base_model but
     // ship complete weights — they must remain addable (no lora/peft marker).
