@@ -15,7 +15,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
   PanelLeftClose, PanelLeftOpen, Sparkles, BookOpen, FileInput, Compass, BookMarked,
-  Fingerprint, Plus, Trash2, Wand2, Check, X,
+  Fingerprint, Plus, Trash2, Wand2, Check, X, Download,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -249,6 +249,13 @@ export default function PipelineSeries() {
               title="Import an existing manuscript, novel, screenplay, or comic script into this series"
             >
               <FileInput size={12} /> Import
+            </Link>
+            <Link
+              to={`/pipeline/series/${series.id}/export`}
+              className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+              title="Export the compiled manuscript, an ePub, or a print-interior PDF"
+            >
+              <Download size={12} /> Export
             </Link>
             <button
               type="button"

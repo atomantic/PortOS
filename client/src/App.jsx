@@ -111,6 +111,7 @@ const PipelineReverseOutline = lazyWithReload(() => import('./pages/PipelineReve
 const PipelineVoiceFingerprint = lazyWithReload(() => import('./pages/PipelineVoiceFingerprint'));
 const PipelineContinuityBible = lazyWithReload(() => import('./pages/PipelineContinuityBible'));
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
+const PipelineExport = lazyWithReload(() => import('./pages/PipelineExport'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 const Login = lazyWithReload(() => import('./pages/Login'));
 
@@ -363,6 +364,7 @@ export default function App() {
           {/* Splat (not a :param route) so navigating between issues reuses the
               same component instance instead of remounting + refetching. */}
           <Route path="pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
+          <Route path="pipeline/series/:seriesId/export" element={<PipelineExport />} />
           <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
           <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />

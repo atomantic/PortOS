@@ -57,6 +57,7 @@ export * from './creativeDirectorPrompts.js';
 export * as editorial from './editorial/index.js';
 export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
+export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
 export * from './seasonStructure.js';
 export * from './seriesCharacterArc.js';

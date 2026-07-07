@@ -322,6 +322,16 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
   return `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/volume.pdf${qs}`;
 };
 
+// Prose-series export download URLs (#2181). Used as <a href> so the browser
+// streams each artifact straight to disk (no in-app blob handling). All three
+// read the persisted per-series export settings server-side.
+export const proseExportManuscriptUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/manuscript.md`;
+export const proseExportEpubUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/book.epub`;
+export const proseExportPdfUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/interior.pdf`;
+
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
 // Returns { issue, stage, page }.

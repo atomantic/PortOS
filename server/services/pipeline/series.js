@@ -17,6 +17,7 @@ import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
+import { sanitizeProseExportSettings } from '../../lib/proseExportSettings.js';
 import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/editorial/severityConfig.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
@@ -322,6 +323,14 @@ const sanitizeSeries = (raw) => {
     // sanitizeStyleGuide returns null when empty so existing series.json files
     // (which predate this field) migrate forward without a writer pass.
     styleGuide: sanitizeStyleGuide(raw.styleGuide),
+    // Per-series prose-export settings (#2181) — trim size, interior font, and
+    // title-page fields for the compiled-manuscript / ePub / print-interior-PDF
+    // exports. `sanitizeProseExportSettings` returns null when nothing is set so
+    // existing series.json files (which predate this field) migrate forward
+    // without a writer pass; first save backfills. Additive + gracefully
+    // degrading (a pre-feature peer's sanitizeSeries drops it), wire-gated at
+    // pipelineSeries v12 so an older peer can't strip-then-LWW it back.
+    exportSettings: sanitizeProseExportSettings(raw.exportSettings),
     titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
     // Derived cover thumbnail filename (a rendered volume/issue cover). Stamped
     // by the cover filename hooks + the one-time boot backfill via
@@ -575,6 +584,14 @@ export async function updateSeries(id, patch = {}) {
     const mergedLlm = 'llm' in patch
       ? { ...(cur.llm || {}), ...(patch.llm || {}) }
       : cur.llm;
+    // Per-field merge for exportSettings (#2181) so a partial PATCH ({ trimSize })
+    // tunes one knob without erasing the others — mirrors mergedLlm. An explicit
+    // `null` still clears the whole sub-object (defaults apply).
+    const mergedExportSettings = 'exportSettings' in patch
+      ? (patch.exportSettings === null
+        ? null
+        : { ...(cur.exportSettings || {}), ...(patch.exportSettings || {}) })
+      : cur.exportSettings;
     const next = sanitizeSeries({
       ...cur,
       ...('name' in patch ? { name: patch.name } : {}),
@@ -598,6 +615,11 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
       // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
       ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
+      // Per-series prose-export settings (#2181). Per-field merge (see
+      // mergedExportSettings above) — a partial PATCH tunes one knob; `null`
+      // clears (defaults apply); omission preserves.
+      // sanitizeProseExportSettings normalizes an all-default object back to null.
+      ...('exportSettings' in patch ? { exportSettings: mergedExportSettings } : {}),
       ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
       ...('author' in patch ? { author: patch.author } : {}),
       ...('authorId' in patch ? { authorId: patch.authorId } : {}),
@@ -834,7 +856,7 @@ async function cascadeDeleteSideEffects(id) {
 // consult the RAW remote payload to tell the two apart: key absent → preserve
 // local; key present (even null/empty) → honor the intentional clear. Mirrors
 // the `universeId` hierarchy guard. See issue #1361.
-const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig', 'severityWeights', 'blockingSeverities'];
+const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'characterArcs', 'factReference', 'factCritical', 'editorialCheckConfig', 'severityWeights', 'blockingSeverities', 'exportSettings'];
 // Additive sub-fields nested inside `arc`. A peer that predates these (readerMap
 // shipped at schema v2, tickingClock at #1289/v3, foreshadowing at #2172/v10)
 // still sends an `arc` object — just without these keys — so the erasure for
