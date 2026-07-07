@@ -2885,5 +2885,37 @@ Work through the issues above one at a time (they touch shared GitHub state — 
 - Work ONLY on the issues listed above. Never open, close, or relabel an issue that is not listed.
 - Every follow-up you file MUST contain \`Refs #<num>\` in its body (the dedup key above) and be labeled \`plan\` so the claim queue can pick it up.
 - Summarize what each issue ended up doing (closed + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
+    // v2 default (GitHub + GitLab, forge CLI only) — superseded by the v3 body that
+    // adds the JIRA arm (status-based zombies healed through the PortOS JIRA API).
+    `[Improvement: {appName}] Zombie Issue Reconciliation
+
+You are the coordinator for healing {appName}'s ZOMBIE issues. A zombie is an issue that is OPEN and still carries the \`in-progress\` label (which the claim queue reads as "claimed and being worked") — yet its pull request / merge request already MERGED and no live claim exists anywhere (no open PR/MR, no local/remote/CoS claim branch, no running agent). A partial ship left the claim marker on, so the queue skips it forever and the remaining scope is never finished. The scheduler already ran the deterministic scan and handed you ONLY the confirmed zombie set.
+
+Repository: {repoPath}
+
+{zombieIssues}
+
+**Forge CLI.** The header above names the forge (GitHub or GitLab) and the CLI to use. Every command below is shown as \`gh\` (GitHub) / \`glab\` (GitLab) — run the one matching the header. The \`in-progress\` label, \`plan\` label, \`Refs #<num>\` dedup marker, and \`claim/issue-<num>\` branch convention are identical on both forges. On GitLab the "PR" is an MR and its number is an \`iid\`.
+
+Work through the issues above one at a time (they touch shared forge state — do NOT parallelize), applying the hybrid below to each and honoring the **autoClose** directive shown above the list.
+
+## Verify before you act
+- Read the issue AND the merged PR/MR before touching anything — GitHub: \`gh issue view <num> --comments\` + \`gh pr view <pr>\`; GitLab: \`glab issue view <num> --comments\` + \`glab mr view <mr>\`. Confirm the merged PR/MR actually shipped work FOR this issue (not just a coincidental \`#<num>\` mention) AND that real scope REMAINS. If it fully satisfied the issue, just close it (GitHub: \`gh issue close <num>\`; GitLab: \`glab issue close <num>\`) and remove \`in-progress\` — it was mislabeled, not partial. If the PR/MR did NOT address this issue at all, leave it untouched and note it in your summary — it is not a zombie.
+
+## The partial-ship hybrid (per the "Do:" line)
+- **Separable remainder** → close the original with a comment summarizing what shipped (✓) and what moved out, then file ONE tightly-scoped follow-up issue for the remainder. Carry over any \`area:*\` labels the original had, then remove the claim label (closing already drops it from the queue, but be explicit).
+  - GitHub: \`gh issue create --title "…" --label plan --body "…\\n\\nRefs #<num>"\` then \`gh issue edit <num> --remove-label in-progress\`.
+  - GitLab: \`glab issue create --title "…" --label plan --description "…\\n\\nRefs #<num>"\` then \`glab issue update <num> --unlabel in-progress\`.
+- **Continuation of the same scope** → keep the issue OPEN, post a \`Done ✓ / Remaining ▢\` comment, and release the claim so the queue re-picks it.
+  - GitHub: \`gh issue edit <num> --remove-label in-progress --remove-assignee @me\`.
+  - GitLab: \`glab issue update <num> --unlabel in-progress --unassign\`.
+
+## Peer safety — avoid duplicate follow-ups
+{appName} may run on several federated machines that share one forge repo. Before filing a follow-up, search for one you (or a peer) may already have filed — GitHub: \`gh issue list --state open --search "Refs #<num> in:body"\`; GitLab: \`glab issue list --search "Refs #<num>"\` (then confirm the match references \`#<num>\`). If a matching open follow-up already exists, do NOT file another — just close/relabel the original and reference the existing follow-up.
+
+## Rules
+- Work ONLY on the issues listed above. Never open, close, or relabel an issue that is not listed.
+- Every follow-up you file MUST contain \`Refs #<num>\` in its body (the dedup key above) and be labeled \`plan\` so the claim queue can pick it up.
+- Summarize what each issue ended up doing (closed + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
   ],
 };

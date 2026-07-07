@@ -19,6 +19,7 @@ vi.mock('../lib/execGit.js', () => ({
 }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(async () => '[]') }));
+vi.mock('./jira.js', () => ({ fetchMyCurrentSprintTickets: vi.fn(async () => []) }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
   readOriginRemoteUrl: vi.fn(async () => 'git@github.com:atomantic/PortOS.git'),
@@ -39,13 +40,15 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import {
-  issueNumberFromRef, bodyReferencesIssue, prReferencesIssue,
+  issueNumberFromRef, ticketKeyFromRef, bodyReferencesIssue, prReferencesIssue,
+  isJiraStartedStatus, isJiraShippedStatus,
   classifyIssue, classifyIssues, reconcile, gatherIssueState,
   zombieSignature, formatZombiesForPrompt,
 } from './issueReconcile.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
+import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 beforeEach(() => {
@@ -73,6 +76,54 @@ describe('issueNumberFromRef', () => {
     expect(issueNumberFromRef('feat/some-feature')).toBeNull();
     expect(issueNumberFromRef('refs/heads/main')).toBeNull();
     expect(issueNumberFromRef('')).toBeNull();
+  });
+});
+
+describe('ticketKeyFromRef', () => {
+  it('matches the human claim convention (claim/<KEY>)', () => {
+    expect(ticketKeyFromRef('claim/PROJ-1234')).toBe('PROJ-1234');
+  });
+  it('matches the CoS sub-agent convention (cos/<task>/<KEY>/<agent>)', () => {
+    expect(ticketKeyFromRef('cos/issue-reconcile/PROJ-1234/agent-x')).toBe('PROJ-1234');
+  });
+  it('matches a remote-tracking ref', () => {
+    expect(ticketKeyFromRef('refs/remotes/origin/claim/ABC-42')).toBe('ABC-42');
+  });
+  it('returns null for a non-JIRA ref', () => {
+    expect(ticketKeyFromRef('claim/issue-2220')).toBeNull();
+    expect(ticketKeyFromRef('refs/heads/main')).toBeNull();
+    expect(ticketKeyFromRef('feat/some-feature')).toBeNull();
+    expect(ticketKeyFromRef('')).toBeNull();
+  });
+  it('does NOT match a key-shaped segment outside the claim/cos convention (no false live-claim)', () => {
+    // A branch that merely ENDS in a key must not register a live claim — else a
+    // real zombie would be suppressed forever.
+    expect(ticketKeyFromRef('wip/PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('feat/PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('cos/PROJ-42')).toBeNull(); // missing the <task> segment
+  });
+});
+
+describe('isJiraStartedStatus', () => {
+  it('is true only for the In Progress category', () => {
+    expect(isJiraStartedStatus({ statusCategory: 'In Progress' })).toBe(true);
+  });
+  it('is false for To Do (not started) and Done (terminal → converges)', () => {
+    expect(isJiraStartedStatus({ statusCategory: 'To Do' })).toBe(false);
+    expect(isJiraStartedStatus({ statusCategory: 'Done' })).toBe(false);
+    expect(isJiraStartedStatus({})).toBe(false);
+  });
+});
+
+describe('isJiraShippedStatus', () => {
+  it('treats an In Review / Code Review status name as shipped', () => {
+    expect(isJiraShippedStatus({ status: 'In Review' })).toBe(true);
+    expect(isJiraShippedStatus({ status: 'Code Review' })).toBe(true);
+  });
+  it('a plain In Progress status is NOT shipped (→ stalled, not zombie)', () => {
+    expect(isJiraShippedStatus({ status: 'In Progress' })).toBe(false);
+    expect(isJiraShippedStatus({})).toBe(false);
   });
 });
 
@@ -361,6 +412,105 @@ describe('reconcile (GitLab forge)', () => {
   });
 });
 
+// --- end-to-end gather/reconcile over mocked JIRA API + git (JIRA tracker) ---
+
+const JIRA = { instanceId: 'inst1', projectKey: 'PROJ' };
+
+/** Build a raw JIRA sprint ticket in the shape fetchMyCurrentSprintTickets returns. */
+function jiraTicket({ key, status, statusCategory, summary = 't', url = 'u' }) {
+  return { key, summary, status, statusCategory, url };
+}
+
+describe('reconcile (JIRA tracker)', () => {
+  it('flags an In-Review ticket with no live claim branch as a ZOMBIE', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-42', status: 'In Review', statusCategory: 'In Progress', summary: 'JIRA zombie', url: 'https://j/PROJ-42' }),
+    ]);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // no claim refs
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result.forge).toBe('jira');
+    expect(result.fullName).toBe('PROJ');
+    expect(result.zombies.map((z) => z.number)).toEqual(['PROJ-42']);
+    expect(result.zombies[0].status).toBe('In Review');
+    // JIRA never routes to gh/glab.
+    expect(execGh).not.toHaveBeenCalled();
+    expect(execGlab).not.toHaveBeenCalled();
+  });
+
+  it('a live claim/<KEY> branch keeps the In-Review ticket LIVE (not a zombie)', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-42', status: 'In Review', statusCategory: 'In Progress' }),
+    ]);
+    execGit.mockResolvedValue({ stdout: 'refs/remotes/origin/claim/PROJ-42\nrefs/heads/main\n', exitCode: 0 });
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result.zombies).toHaveLength(0);
+    expect(result.live.map((l) => l.number)).toEqual(['PROJ-42']);
+  });
+
+  it('an active CoS agent on the ticket keeps it LIVE', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-42', status: 'In Review', statusCategory: 'In Progress' }),
+    ]);
+    const result = await reconcile('/repo', { jira: JIRA, activeAgentIssueNums: new Set(['PROJ-42']) });
+    expect(result.zombies).toHaveLength(0);
+    expect(result.live.map((l) => l.number)).toEqual(['PROJ-42']);
+  });
+
+  it('a plain In-Progress ticket (not shipped) → STALLED, not a zombie', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-42', status: 'In Progress', statusCategory: 'In Progress' }),
+    ]);
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result.zombies).toHaveLength(0);
+    expect(result.stalled.map((s) => s.number)).toEqual(['PROJ-42']);
+  });
+
+  it('a To Do (not started) ticket is excluded entirely', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-1', status: 'To Do', statusCategory: 'To Do' }),
+    ]);
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result.zombies).toHaveLength(0);
+    expect(result.stalled).toHaveLength(0);
+    expect(result.live).toHaveLength(0);
+  });
+
+  it('a Done (terminal) ticket is excluded so the scan converges', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([
+      jiraTicket({ key: 'PROJ-9', status: 'Done', statusCategory: 'Done' }),
+    ]);
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result.zombies).toHaveLength(0);
+    expect(result.stalled).toHaveLength(0);
+  });
+
+  it('returns null (transient, skip) when the JIRA fetch throws', async () => {
+    fetchMyCurrentSprintTickets.mockRejectedValue(new Error('JIRA down'));
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result).toBeNull();
+  });
+
+  it('empty sprint is a valid answer (no zombies), not a skip', async () => {
+    fetchMyCurrentSprintTickets.mockResolvedValue([]);
+    const result = await reconcile('/repo', { jira: JIRA });
+    expect(result).not.toBeNull();
+    expect(result.forge).toBe('jira');
+    expect(result.zombies).toHaveLength(0);
+  });
+
+  it('does NOT route to JIRA without explicit config (origin-host forge instead)', async () => {
+    // No jira option → falls through to the GitHub forge resolved from the origin.
+    mockGh({
+      issues: [{ number: 2220, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      merged: [{ number: 2234, headRefName: 'x', body: 'Refs #2220' }],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result.forge).toBe('github');
+    expect(fetchMyCurrentSprintTickets).not.toHaveBeenCalled();
+  });
+});
+
 describe('gatherIssueState carries labels/assignees for the follow-up', () => {
   it('surfaces area labels + assignees on the zombie record', async () => {
     mockGh({
@@ -384,6 +534,15 @@ describe('zombieSignature', () => {
   it('changes when a zombie is healed away', () => {
     const before = zombieSignature([{ number: 1, mergedPr: { number: 10 } }, { number: 2, mergedPr: { number: 20 } }]);
     const after = zombieSignature([{ number: 2, mergedPr: { number: 20 } }]);
+    expect(before).not.toBe(after);
+  });
+  it('keys a JIRA zombie on its KEY + status (no merged PR number)', () => {
+    const sig = zombieSignature([{ number: 'PROJ-42', status: 'In Review' }]);
+    expect(sig).toBe('PROJ-42:In Review');
+  });
+  it('a JIRA status change is progress (signature changes)', () => {
+    const before = zombieSignature([{ number: 'PROJ-42', status: 'In Review' }]);
+    const after = zombieSignature([{ number: 'PROJ-42', status: 'Done' }]);
     expect(before).not.toBe(after);
   });
 });
@@ -430,5 +589,26 @@ describe('formatZombiesForPrompt', () => {
     expect(md).toContain('GitLab (use `glab`)');
     expect(md).toContain('merged MR #7');
     expect(md).not.toContain('merged PR');
+  });
+  it('renders a JIRA header + status-based wording when forge is jira', () => {
+    const md = formatZombiesForPrompt(
+      [{ number: 'PROJ-42', title: 'JIRA zombie', url: 'https://j/PROJ-42', status: 'In Review' }],
+      { fullName: 'PROJ', forge: 'jira', autoClose: true, projectKey: 'PROJ', instanceId: 'inst1' }
+    );
+    expect(md).toContain('JIRA (use the PortOS JIRA API)');
+    expect(md).toContain('PROJ-42');
+    expect(md).toContain('Current status: In Review');
+    expect(md).toContain('inst1');
+    // No forge-CLI PR/MR wording.
+    expect(md).not.toContain('merged PR');
+    expect(md).not.toContain('use `gh`');
+  });
+  it('JIRA autoClose:false forbids Done/follow-up — comment + move back only', () => {
+    const md = formatZombiesForPrompt(
+      [{ number: 'PROJ-42', title: 't', url: 'u', status: 'In Review' }],
+      { fullName: 'PROJ', forge: 'jira', autoClose: false, projectKey: 'PROJ', instanceId: 'inst1' }
+    );
+    expect(md).toContain('autoClose is OFF');
+    expect(md).toContain('never transition a ticket to Done');
   });
 });
