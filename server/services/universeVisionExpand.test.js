@@ -68,6 +68,23 @@ describe('buildVisionExpandPrompt', () => {
     expect(p).toMatch(/"handGestures"/);
   });
 
+  it('excludes non-visual character-framework fields from the vision prompt (#2175)', () => {
+    // A vision model cannot infer Ghost/Lie/Want/Need/secrets from an image, and
+    // `secrets` has no list row-shape — asking for them would invite hallucinated
+    // backstory / emit `[ undefined ]`. They must never reach the vision schema,
+    // in either the full-set or blank-narrowed ask.
+    const full = buildVisionExpandPrompt({ imageCount: 1 });
+    for (const f of ['ghost', 'wound', 'lie', 'want', 'need', 'secrets']) {
+      expect(full).not.toMatch(new RegExp(`"${f}"`));
+    }
+    // Even when a framework field is blank (and would otherwise be "targeted"),
+    // it is filtered out — while a real visual field in the same list still shows.
+    const narrowed = buildVisionExpandPrompt({ imageCount: 1, blankFields: ['lie', 'secrets', 'pronouns'] });
+    expect(narrowed).not.toMatch(/"lie"/);
+    expect(narrowed).not.toMatch(/"secrets"/);
+    expect(narrowed).toMatch(/"pronouns"/);
+  });
+
   it('is re-exported on __testing', () => {
     expect(__testing.buildVisionExpandPrompt).toBe(buildVisionExpandPrompt);
   });

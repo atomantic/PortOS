@@ -713,6 +713,20 @@ export function canonCharacterTraitsSummary(canon) {
     if (dislikes) facts.push(`dislikes: ${dislikes}`);
     const speechPattern = cleanStr(c.speechPattern);
     if (speechPattern) facts.push(`speech: ${speechPattern}`);
+    // Authored character-framework fields (CWQE Phase 10, #2175) — the Lie the
+    // character believes, the Want (external goal), the Need (the Truth), and
+    // the declared arc type. Surfacing these lets the consistency / arc checks
+    // reconcile the prose against the PLAN (does the character overcome the Lie,
+    // pursue the Want, arrive at the Need per the declared arc?) instead of
+    // inferring the intended arc from the prose alone.
+    const lie = cleanStr(c.lie).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (lie) facts.push(`believes (Lie): ${lie}`);
+    const want = cleanStr(c.want).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (want) facts.push(`wants: ${want}`);
+    const need = cleanStr(c.need).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (need) facts.push(`needs (Truth): ${need}`);
+    const arcType = cleanStr(c.arcType);
+    if (arcType) facts.push(`declared arc: ${arcType}`);
     if (!facts.length) continue;
     const who = aliases.length ? `${name} (also: ${aliases.join(', ')})` : name;
     rows.push(`- ${who} — ${facts.join('; ')}`);

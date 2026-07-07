@@ -112,3 +112,54 @@ describe('CharacterDetailEditor — Relationships (#1287)', () => {
     expect(screen.getByText(/2 links · 1 opposing/i)).toBeInTheDocument();
   });
 });
+
+describe('CharacterDetailEditor — character framework (#2175)', () => {
+  const openArc = () => fireEvent.click(screen.getByRole('button', { name: /Arc type & sliders/i }));
+
+  it('renders the arc-type select seeded from the entry and patches on change', () => {
+    const onPatch = vi.fn();
+    render(<CharacterDetailEditor entry={{ ...ARIA, arcType: 'positive' }} characters={[ARIA]} onPatch={onPatch} />);
+    openArc();
+    const select = screen.getByLabelText(/Arc type/i);
+    expect(select).toHaveValue('positive');
+    fireEvent.change(select, { target: { value: 'negative' } });
+    expect(onPatch).toHaveBeenCalledWith({ arcType: 'negative' });
+  });
+
+  it('patches a slider value, merging with existing sliders', () => {
+    const onPatch = vi.fn();
+    const entry = { ...ARIA, sliders: { proactivity: 8, likability: null, competence: null } };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openArc();
+    fireEvent.change(screen.getByLabelText(/likability rating 1 to 10/i), { target: { value: '6' } });
+    expect(onPatch).toHaveBeenCalledWith({ sliders: { proactivity: 8, likability: 6, competence: null } });
+  });
+
+  it('clears a set slider back to unset (null)', () => {
+    const onPatch = vi.fn();
+    const entry = { ...ARIA, sliders: { proactivity: 9, likability: null, competence: null } };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openArc();
+    fireEvent.click(screen.getByRole('button', { name: /Clear proactivity/i }));
+    expect(onPatch).toHaveBeenCalledWith({ sliders: { proactivity: null, likability: null, competence: null } });
+  });
+
+  it('marshals the secrets string list to/from row objects', () => {
+    const onPatch = vi.fn();
+    const entry = { ...ARIA, secrets: ['forged the charter'] };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    fireEvent.click(screen.getByRole('button', { name: /Secrets/i }));
+    // Existing secret is rendered in its row input.
+    const input = screen.getByDisplayValue('forged the charter');
+    fireEvent.change(input, { target: { value: 'forged the charter and the seal' } });
+    fireEvent.blur(input);
+    // Commits back as a plain string[] (not row objects).
+    expect(onPatch).toHaveBeenCalledWith({ secrets: ['forged the charter and the seal'] });
+  });
+
+  it('exposes the Ghost→Wound→Lie→Want→Need prose fields', () => {
+    render(<CharacterDetailEditor entry={{ ...ARIA, lie: 'I only matter if I win' }} characters={[ARIA]} onPatch={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Character framework/i }));
+    expect(screen.getByDisplayValue('I only matter if I win')).toBeInTheDocument();
+  });
+});

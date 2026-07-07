@@ -64,6 +64,7 @@ export const ACCEPTED_OLD_MD5 = {
   ],
   'universe-character-expand.md': [
     'ef109eb8e12ddb664c11c790271b5139', // pre-027 shipped
+    '67b6e73ed47f318451a730088b4cff14', // post-027 / pre-171 (character framework)
   ],
 };
 
@@ -71,7 +72,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-prose.md':            '4cb3ef48309f3673570cf80e4d544b54', // post-169 (cross-issue continuity)
   'pipeline-teleplay.md':         '2ea9974ac3803658b2314db1f5818b77', // post-128 (canonical scene list)
   'pipeline-comic-script.md':     '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
-  'universe-character-expand.md': '67b6e73ed47f318451a730088b4cff14',
+  'universe-character-expand.md': '177b6e4e8bdf445308cf8ac423cd5ad8', // post-171 (character framework)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
