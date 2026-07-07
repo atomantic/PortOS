@@ -228,7 +228,13 @@ export async function getClaudeCodeUsage({ refresh = false } = {}) {
     .then((stdout) => {
       const parsed = parseUsageOutput(stdout);
       const data = { ...parsed, fetchedAt: new Date().toISOString() };
-      cache = { data, at: Date.now() };
+      // Only cache a read that actually produced rate-limit lines. A transient
+      // degraded /usage (e.g. the live-limit lines dropped by a hiccup) would
+      // otherwise poison the panel with an empty state for the full 60s TTL; not
+      // caching it lets the next view self-heal. A subscription always has limit
+      // lines — an API-key user legitimately has none, but re-reading on each
+      // view for that minority is cheap (the call is 0-token).
+      if (data.limits.length > 0) cache = { data, at: Date.now() };
       return data;
     })
     .finally(() => { inflight = null; });
