@@ -375,9 +375,13 @@ export async function transitionTicket(instanceId, ticketId, transitionId) {
 }
 
 /**
- * Get tickets assigned to user in current sprint for a project
+ * Fetch tickets assigned to the current user in the active sprint for a project —
+ * STRICT variant that lets fetch errors bubble. Used by the issue-reconcile JIRA
+ * gatherer, which must distinguish a transient API failure (skip, don't park) from
+ * a legitimately empty sprint ([], a valid answer) — the sentinel rule in CLAUDE.md.
+ * The UI-facing `getMyCurrentSprintTickets` wraps this and swallows to [] instead.
  */
-export async function getMyCurrentSprintTickets(instanceId, projectKey) {
+export async function fetchMyCurrentSprintTickets(instanceId, projectKey) {
   const config = await getInstances();
   const instance = config.instances[instanceId];
 
@@ -390,26 +394,34 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
   // JQL to find tickets assigned to current user in active sprint for the project
   const jql = `project = "${escapeJql(projectKey)}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
 
-  try {
-    const response = await client.get('/rest/api/2/search', {
-      params: {
-        jql,
-        fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
-        maxResults: 50
-      }
-    });
+  const response = await client.get('/rest/api/2/search', {
+    params: {
+      jql,
+      fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
+      maxResults: 50
+    }
+  });
 
-    return response.data.issues.map(issue => ({
-      key: issue.key,
-      summary: issue.fields.summary,
-      status: issue.fields.status.name,
-      statusCategory: issue.fields.status.statusCategory?.name,
-      priority: issue.fields.priority?.name,
-      issueType: issue.fields.issuetype?.name,
-      storyPoints: issue.fields.customfield_10106,
-      updated: issue.fields.updated,
-      url: `${instance.baseUrl}/browse/${issue.key}`
-    }));
+  return response.data.issues.map(issue => ({
+    key: issue.key,
+    summary: issue.fields.summary,
+    status: issue.fields.status.name,
+    statusCategory: issue.fields.status.statusCategory?.name,
+    priority: issue.fields.priority?.name,
+    issueType: issue.fields.issuetype?.name,
+    storyPoints: issue.fields.customfield_10106,
+    updated: issue.fields.updated,
+    url: `${instance.baseUrl}/browse/${issue.key}`
+  }));
+}
+
+/**
+ * Get tickets assigned to user in current sprint for a project.
+ * Swallows fetch errors to [] so a JIRA blip never breaks the Kanban UI.
+ */
+export async function getMyCurrentSprintTickets(instanceId, projectKey) {
+  try {
+    return await fetchMyCurrentSprintTickets(instanceId, projectKey);
   } catch (error) {
     console.warn(`⚠️ JIRA sprint fetch failed for project ${projectKey}: ${error.message}`);
     // Return empty array on error to avoid breaking the UI
@@ -661,6 +673,7 @@ export default {
   deleteTicket,
   transitionTicket,
   getMyCurrentSprintTickets,
+  fetchMyCurrentSprintTickets,
   getBoardColumns,
   buildColumnsFromBoardConfig,
   buildColumnsFromStatuses,

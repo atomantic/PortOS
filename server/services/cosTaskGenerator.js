@@ -1702,13 +1702,23 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     // The sub-minute pre-branch window is left to the coordinator's per-zombie
     // re-verification, so no separate active-agent set is threaded here.
     const autoClose = metadata.autoClose !== false;
-    const result = await reconcile(app.repoPath).catch((err) => {
+    // Routing mirrors resolveAppWorkTracker: JIRA is NEVER auto-selected from the
+    // git host — it needs explicit per-app config (workTracker 'jira' + enabled
+    // jira.instanceId/projectKey). When resolved to JIRA, hand the gatherer the
+    // JIRA coordinates so it scans status-based zombies via the PortOS JIRA API;
+    // otherwise reconcile resolves GitHub/GitLab from the origin host as before.
+    const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
+    const wt = await resolveAppWorkTracker(app).catch(() => null);
+    const jira = (wt?.resolved === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
+      ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
+      : null;
+    const result = await reconcile(app.repoPath, { jira }).catch((err) => {
       emitLog('warn', `issue-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
       return null;
     });
-    // null = unsupported remote (not GitHub/GitLab) OR transient gh/glab failure →
-    // skip WITHOUT parking so the next tick retries (gh/glab/git-only cost),
-    // mirroring branch-reconcile.
+    // null = unsupported remote (not GitHub/GitLab, no JIRA config) OR transient
+    // gh/glab/JIRA failure → skip WITHOUT parking so the next tick retries
+    // (gh/glab/git/JIRA-API-only cost), mirroring branch-reconcile.
     if (!result) return null;
     if (result.stalled.length) {
       // In-progress issues with NO merged PR and NO live claim — a different stuck
@@ -1736,7 +1746,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     await taskSchedule.clearPerpetualPark(taskType, app.id);
     await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
     metadata.perpetual = true;
-    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, { fullName: result.fullName, forge: result.forge, autoClose });
+    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, {
+      fullName: result.fullName, forge: result.forge, autoClose,
+      projectKey: jira?.projectKey, instanceId: jira?.instanceId,
+    });
     emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s) on ${result.forge}`, { appId: app.id, analysisType: taskType });
   }
 

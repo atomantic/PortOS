@@ -1268,15 +1268,17 @@ Spawn ONE sub-agent per branch (they are independent — run them in parallel) t
 
   'issue-reconcile': `[Improvement: {appName}] Zombie Issue Reconciliation
 
-You are the coordinator for healing {appName}'s ZOMBIE issues. A zombie is an issue that is OPEN and still carries the \`in-progress\` label (which the claim queue reads as "claimed and being worked") — yet its pull request / merge request already MERGED and no live claim exists anywhere (no open PR/MR, no local/remote/CoS claim branch, no running agent). A partial ship left the claim marker on, so the queue skips it forever and the remaining scope is never finished. The scheduler already ran the deterministic scan and handed you ONLY the confirmed zombie set.
+You are the coordinator for healing {appName}'s ZOMBIE issues. A zombie is a work item the claim queue reads as "claimed and being worked" yet that already SHIPPED with no live claim anywhere (no open PR/MR, no local/remote/CoS claim branch, no running agent) — a partial ship left the claim marker on, so the queue skips it forever and the remaining scope is never finished. On **GitHub/GitLab** the marker is the \`in-progress\` label on an OPEN issue whose PR/MR already MERGED. On **JIRA** there is no label — the marker is the ticket STATUS: a ticket left **In Review** whose MR/PR merged (or was abandoned). The scheduler already ran the deterministic scan and handed you ONLY the confirmed zombie set.
 
 Repository: {repoPath}
 
 {zombieIssues}
 
-**Forge CLI.** The header above names the forge (GitHub or GitLab) and the CLI to use. Every command below is shown as \`gh\` (GitHub) / \`glab\` (GitLab) — run the one matching the header. The \`in-progress\` label, \`plan\` label, \`Refs #<num>\` dedup marker, and \`claim/issue-<num>\` branch convention are identical on both forges. On GitLab the "PR" is an MR and its number is an \`iid\`.
+**Which tracker.** The header above names the tracker (GitHub, GitLab, or JIRA) and how to drive it. Follow the matching arm below — the GitHub/GitLab CLI arm, or the JIRA-API arm. Work through the items one at a time (they touch shared tracker state — do NOT parallelize), applying the hybrid and honoring the **autoClose** directive shown above the list.
 
-Work through the issues above one at a time (they touch shared forge state — do NOT parallelize), applying the hybrid below to each and honoring the **autoClose** directive shown above the list.
+━━━━━━━━━━ GitHub / GitLab arm (forge CLI) ━━━━━━━━━━
+
+Every command is shown as \`gh\` (GitHub) / \`glab\` (GitLab) — run the one matching the header. The \`in-progress\` label, \`plan\` label, \`Refs #<num>\` dedup marker, and \`claim/issue-<num>\` branch convention are identical on both forges. On GitLab the "PR" is an MR and its number is an \`iid\`.
 
 ## Verify before you act
 - Read the issue AND the merged PR/MR before touching anything — GitHub: \`gh issue view <num> --comments\` + \`gh pr view <pr>\`; GitLab: \`glab issue view <num> --comments\` + \`glab mr view <mr>\`. Confirm the merged PR/MR actually shipped work FOR this issue (not just a coincidental \`#<num>\` mention) AND that real scope REMAINS. If it fully satisfied the issue, just close it (GitHub: \`gh issue close <num>\`; GitLab: \`glab issue close <num>\`) and remove \`in-progress\` — it was mislabeled, not partial. If the PR/MR did NOT address this issue at all, leave it untouched and note it in your summary — it is not a zombie.
@@ -1292,10 +1294,25 @@ Work through the issues above one at a time (they touch shared forge state — d
 ## Peer safety — avoid duplicate follow-ups
 {appName} may run on several federated machines that share one forge repo. Before filing a follow-up, search for one you (or a peer) may already have filed — GitHub: \`gh issue list --state open --search "Refs #<num> in:body"\`; GitLab: \`glab issue list --search "Refs #<num>"\` (then confirm the match references \`#<num>\`). If a matching open follow-up already exists, do NOT file another — just close/relabel the original and reference the existing follow-up.
 
-## Rules
-- Work ONLY on the issues listed above. Never open, close, or relabel an issue that is not listed.
-- Every follow-up you file MUST contain \`Refs #<num>\` in its body (the dedup key above) and be labeled \`plan\` so the claim queue can pick it up.
-- Summarize what each issue ended up doing (closed + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
+━━━━━━━━━━ JIRA arm (PortOS JIRA API) ━━━━━━━━━━
+
+Use only if the header names JIRA. There is no forge CLI — every action is a PortOS JIRA API call. All calls are relative to this base URL: ${PORTOS_API_URL}. The header gives the \`<instanceId>\` and \`<projectKey>\`; each zombie's KEY is shown as \`PROJ-1234\`. The \`claim/<KEY>\` branch convention and the \`Refs <KEY>\` dedup marker are the JIRA analogs of \`claim/issue-<num>\` / \`Refs #<num>\`.
+
+## Verify before you act
+- Read the ticket AND its linked MR/PR before touching anything: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>. Find the linked MR/PR (its dev-panel link, or search the repo for a branch/PR referencing \`<KEY>\`) and confirm it actually shipped work FOR this ticket AND that real scope REMAINS. If it fully satisfied the ticket, just transition it to **Done** (no follow-up) — it was left in review, not partial. If nothing shipped for it at all, leave it untouched and note it in your summary — it is not a zombie.
+- To transition: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transitions to list the available transitions, pick the one whose target status matches your intent (case-insensitive), then POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transition with body {"transitionId": "<id>"}.
+
+## The partial-ship hybrid (JIRA)
+- **Separable remainder** → post a \`Done ✓ / Remaining ▢\` comment (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments with body {"comment": "…"}), transition the original to **Done**, then file ONE tightly-scoped follow-up ticket for the remainder: POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets with body {"projectKey": "<projectKey>", "summary": "…", "description": "…\\n\\nRefs <KEY>"}. Carry over the epic/labels where sensible.
+- **Continuation of the same scope** → post the \`Done ✓ / Remaining ▢\` comment, then transition the ticket BACK to a not-started status (To Do / Selected for Development / Backlog — pick the transition that returns it to the To Do column) so the claim queue re-picks it. Do NOT file a follow-up.
+
+## Peer safety — avoid duplicate follow-ups
+{appName} may run on several federated machines that share one JIRA project. Before filing a follow-up ticket, list your sprint tickets (GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/my-sprint-tickets/<projectKey>) and check for one whose description already carries \`Refs <KEY>\`. If a matching follow-up already exists, do NOT file another — just transition the original and reference the existing follow-up.
+
+━━━━━━━━━━ Rules (all trackers) ━━━━━━━━━━
+- Work ONLY on the items listed above. Never open, close, transition, or relabel an item that is not listed.
+- Every follow-up you file MUST carry the \`Refs #<num>\` / \`Refs <KEY>\` dedup marker in its body and (on the forges) be labeled \`plan\` so the claim queue can pick it up.
+- Summarize what each item ended up doing (closed/Done + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
 
   // pr-reviewer is now a pipeline — this prompt is kept as fallback for non-pipeline mode
   'pr-reviewer': `[Improvement: {appName}] PR Review — Security Scan & Code Review Pipeline
