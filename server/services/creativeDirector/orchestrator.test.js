@@ -38,13 +38,35 @@ vi.mock('../videoGen/local.js', () => ({
   sampleEvaluationFrames: (...args) => mockSampleEvaluationFrames(...args),
 }));
 
+// #1929 first-pass seed-frame defer: completionHook now consults the media-job
+// queue for an in-flight seeded reference-frame job before rendering the first
+// pending scene. Mock the queue so tests can control the listJobs snapshot and
+// drive the settle event. `mediaJobEvents` is a real EventEmitter so the defer
+// listener can be exercised end-to-end.
+const { mockListJobs, mockMediaJobEvents } = vi.hoisted(() => {
+  // Minimal EventEmitter-shaped stub (on/off/emit) — enough for the defer
+  // listener the completionHook registers. Kept dependency-free so it can live
+  // in the hoisted block (runs before imports).
+  const handlers = { completed: [], failed: [], canceled: [] };
+  const emitter = {
+    on: (ev, fn) => { (handlers[ev] ||= []).push(fn); },
+    off: (ev, fn) => { handlers[ev] = (handlers[ev] || []).filter((h) => h !== fn); },
+    emit: (ev, payload) => { (handlers[ev] || []).slice().forEach((h) => h(payload)); },
+  };
+  return { mockListJobs: vi.fn(() => []), mockMediaJobEvents: emitter };
+});
+vi.mock('../mediaJobQueue/index.js', () => ({
+  listJobs: (...args) => mockListJobs(...args),
+  mediaJobEvents: mockMediaJobEvents,
+}));
+
 vi.mock('fs', async () => {
   const actual = await vi.importActual('fs');
   return { ...actual, existsSync: (...args) => mockExistsSync(...args) };
 });
 
 import * as localMod from './local.js';
-import { advanceAfterSceneSettled } from './completionHook.js';
+import { advanceAfterSceneSettled, findPendingSeedFrameJob } from './completionHook.js';
 
 const baseProject = {
   id: 'cd-1',
@@ -247,6 +269,7 @@ describe('advanceAfterSceneSettled', () => {
     mockEnqueueEvaluateTask.mockClear();
     mockSampleEvaluationFrames.mockReset().mockResolvedValue([]);
     mockExistsSync.mockReset().mockReturnValue(false);
+    mockListJobs.mockReset().mockReturnValue([]);
   });
 
   it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
@@ -595,5 +618,158 @@ describe('advanceAfterSceneSettled', () => {
     // render the next pending scene.
     expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
     expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-3');
+  });
+
+  // #1929 — defer scene-0 render until its seeded reference frame settles.
+  describe('first-pass seed-frame defer (#1929)', () => {
+    // Each test uses a UNIQUE projectId: the completionHook's in-memory
+    // `inflightSeedDefer` set persists across tests, so a test that defers but
+    // never fires the settle event would otherwise leak its deferKey and wedge
+    // a later same-id test into the "already armed" early-return.
+    const seedProject = (id, overrides = {}) => ({
+      id,
+      status: 'rendering',
+      finalVideoId: null,
+      generateFirstPass: true,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-1', order: 0, status: 'pending' },
+          { sceneId: 'scene-2', order: 1, status: 'pending' },
+        ],
+      },
+      ...overrides,
+    });
+    const seedJob = (projectId, sceneId, status = 'running') => ({
+      id: `${projectId}-job`,
+      kind: 'image',
+      status,
+      params: { creativeDirector: { projectId, sceneId } },
+    });
+
+    it('defers runSceneRender for the first scene while its seed frame job is in-flight', async () => {
+      const project = seedProject('cd-seed-defer');
+      localMod.getProject.mockResolvedValue(project);
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id);
+
+      // The render must NOT fire yet — the seeded reference frame is still
+      // generating.
+      expect(mockRunSceneRender).not.toHaveBeenCalled();
+    });
+
+    it('renders after the seed frame job completes and sourceImageFile lands', async () => {
+      const project = seedProject('cd-seed-completes');
+      const projectWithFrame = seedProject('cd-seed-completes', {
+        treatment: {
+          scenes: [
+            { sceneId: 'scene-1', order: 0, status: 'pending', sourceImageFile: 'seed.png' },
+            { sceneId: 'scene-2', order: 1, status: 'pending' },
+          ],
+        },
+      });
+      // 1st advance: no frame → defers. After the seed job completes, the
+      // scene-image hook has filed sourceImageFile, so every subsequent read
+      // returns the framed project.
+      localMod.getProject
+        .mockResolvedValueOnce(project)
+        .mockResolvedValue(projectWithFrame);
+      // Job is in-flight on the first list check; on the re-check (after
+      // listeners attach) it's still in-flight, so we truly wait for the event.
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id);
+      expect(mockRunSceneRender).not.toHaveBeenCalled();
+
+      // Fire the completion event — the defer listener re-advances.
+      mockMediaJobEvents.emit('completed', seedJob(project.id, 'scene-1', 'completed'));
+      // Let the async poll + re-advance settle.
+      await new Promise((r) => setTimeout(r, 400));
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+      const [, sceneArg] = mockRunSceneRender.mock.calls[0];
+      expect(sceneArg.sceneId).toBe('scene-1');
+      expect(sceneArg.sourceImageFile).toBe('seed.png');
+    });
+
+    it('renders text-to-video when the seed frame job fails (frame never lands)', async () => {
+      const project = seedProject('cd-seed-fails');
+      localMod.getProject.mockResolvedValue(project);
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id);
+      expect(mockRunSceneRender).not.toHaveBeenCalled();
+
+      // Once the job fails it's terminal — the queue no longer reports it as
+      // queued/running, so the re-advance won't re-defer.
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1', 'failed')]);
+      mockMediaJobEvents.emit('failed', seedJob(project.id, 'scene-1', 'failed'));
+      // Poll runs to the deadline (no sourceImageFile ever) then renders.
+      await new Promise((r) => setTimeout(r, 3200));
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+      expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
+    });
+
+    it('does NOT defer when generateFirstPass is off', async () => {
+      const project = seedProject('cd-seed-noflag', { generateFirstPass: false });
+      localMod.getProject.mockResolvedValue(project);
+      // Even if a stray matching job exists, no defer without the flag.
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id);
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+      expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
+    });
+
+    it('does NOT defer when the scene already has a sourceImageFile', async () => {
+      const project = seedProject('cd-seed-hasframe', {
+        treatment: {
+          scenes: [
+            { sceneId: 'scene-1', order: 0, status: 'pending', sourceImageFile: 'existing.png' },
+            { sceneId: 'scene-2', order: 1, status: 'pending' },
+          ],
+        },
+      });
+      localMod.getProject.mockResolvedValue(project);
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]);
+
+      await advanceAfterSceneSettled(project.id);
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT defer when no seed job is in-flight for the scene (renders immediately)', async () => {
+      const project = seedProject('cd-seed-nojob');
+      localMod.getProject.mockResolvedValue(project);
+      // Job list has only a job for a DIFFERENT scene.
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-2')]);
+
+      await advanceAfterSceneSettled(project.id);
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+      expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
+    });
+  });
+
+  describe('findPendingSeedFrameJob (#1929)', () => {
+    const job = (over) => ({ id: 'j1', kind: 'image', status: 'running', params: { creativeDirector: { projectId: 'p1', sceneId: 's1' } }, ...over });
+
+    it('matches a queued/running image job tagged for the project+scene', () => {
+      expect(findPendingSeedFrameJob([job()], 'p1', 's1')?.id).toBe('j1');
+      expect(findPendingSeedFrameJob([job({ status: 'queued' })], 'p1', 's1')?.id).toBe('j1');
+    });
+    it('ignores terminal, wrong-kind, wrong-scene, and untagged jobs', () => {
+      expect(findPendingSeedFrameJob([job({ status: 'completed' })], 'p1', 's1')).toBeNull();
+      expect(findPendingSeedFrameJob([job({ status: 'failed' })], 'p1', 's1')).toBeNull();
+      expect(findPendingSeedFrameJob([job({ kind: 'video' })], 'p1', 's1')).toBeNull();
+      expect(findPendingSeedFrameJob([job()], 'p1', 's2')).toBeNull();
+      expect(findPendingSeedFrameJob([job()], 'p2', 's1')).toBeNull();
+      expect(findPendingSeedFrameJob([{ kind: 'image', status: 'running', params: {} }], 'p1', 's1')).toBeNull();
+    });
+    it('handles a non-array input defensively', () => {
+      expect(findPendingSeedFrameJob(null, 'p1', 's1')).toBeNull();
+    });
   });
 });
