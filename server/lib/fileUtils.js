@@ -95,6 +95,13 @@ export const PATHS = {
   // never surfaces them, and so a future per-render cleanup pass can drop
   // the whole dir without touching the gallery.
   imageRefs: join(INSTALL_ROOT, 'data/image-refs'),
+  // Ephemeral working dir for the Image Cleaner's GPU FLUX round-trip (issue
+  // #2264). The sync-cleaned init bytes and the finished render land here as
+  // `<jobId>-init.png` / `<jobId>-result.png` so the cleaner can render WITHOUT
+  // writing a gallery file + sidecar (the default is not to keep the result).
+  // A sibling of `images/` — never surfaced by the gallery's flat `.png`
+  // enumeration; swept by imageCleanTmpGc.js on an age gate. Not federated.
+  imageCleanTmp: join(INSTALL_ROOT, 'data/image-clean-tmp'),
   loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout:
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
@@ -1096,6 +1103,15 @@ export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 
 /**
+ * Resolve an Image Cleaner temp init/result filename to an absolute path under
+ * `PATHS.imageCleanTmp` (issue #2264). The GPU FLUX round-trip stages the
+ * sync-cleaned init bytes here and renders the result back here, so the runner
+ * must accept this root as a valid `initImagePath` source. Same defense-in-depth
+ * as the gallery/refs resolvers, anchored at the temp root.
+ */
+export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
+
+/**
  * Resolve a shipped visual template filename (e.g. character reference-sheet
  * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
  * successful resolutions because the template assets are shipped and stable
@@ -1145,6 +1161,9 @@ const IMAGE_INPUT_RESOLVERS = [
   ['images', resolveGalleryImage],
   ['imageRefs', resolveImageRef],
   ['visualTemplates', resolveTemplateAsset],
+  // Image Cleaner temp init images (issue #2264) — the GPU FLUX round-trip
+  // stages sync-cleaned bytes here as the img2img init.
+  ['imageCleanTmp', resolveImageCleanTmp],
 ];
 
 export function resolveImageInputPath(rawPath) {

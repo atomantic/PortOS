@@ -14,7 +14,8 @@ import sharp from 'sharp';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
-import { applyLightRegen, computePixelDelta } from '../services/imageGen/regen.js';
+import { applyLightRegen, computePixelDelta, REGEN_STRENGTH_MIN, REGEN_STRENGTH_MAX } from '../services/imageGen/regen.js';
+import { enqueueGpuClean, readGpuCleanResult, getGpuCleanStatus, saveGpuCleanToGallery } from '../services/imageGen/cleanGpu.js';
 
 const router = Router();
 
@@ -38,11 +39,11 @@ const queryFlag = (def) => z.preprocess(
 // Diffusion sub-mode. `off` (default) skips it entirely; `light` runs the
 // CPU-only spatial pass (`applyLightRegen`) that actually perturbs SynthID's
 // resolution-dependent carriers — the no-GPU fallback, always available since
-// sharp is a hard dependency. `gpu` (the FLUX img2img round-trip) is NOT wired
-// on this route yet: it needs the non-gallery render seam factored out of the
-// lightbox `/regenerate` flow (async job queue + progress channel), deferred to
-// a follow-up. Accepting the token but rejecting it with a clear 501 keeps the
-// client contract stable for when that lands. Anything else → the `off` default.
+// sharp is a hard dependency. `gpu` (the FLUX img2img round-trip) is
+// GPU-serialized via mediaJobQueue: the route stages the sync-cleaned bytes,
+// enqueues a job through the shared regen seam, and returns a `jobId` the
+// client tracks via the media-job progress channel (issue #2264). Anything
+// else → the `off` default.
 const diffusionMode = z.preprocess(
   (v) => {
     if (v === undefined || v === '' || v === '0' || v === 'false' || v === 'off') return 'off';
@@ -66,6 +67,18 @@ const cleanQuerySchema = z.object({
   feather: z.preprocess(
     (v) => (v === undefined || v === '' ? IGNORE_ZONE_FEATHER_DEFAULT : Number(v)),
     z.number().min(0).max(50),
+  ),
+  // GPU-diffusion-only knobs (issue #2264), ignored by the sync passes.
+  // `strength` is the img2img denoise, clamped to the same [MIN, MAX] the
+  // lightbox slider is bound to; absent → the conservative arbitrary-upload
+  // default. `maxMp` is the optional per-run render-megapixel budget override.
+  strength: z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : Number(v)),
+    z.number().min(REGEN_STRENGTH_MIN).max(REGEN_STRENGTH_MAX).optional(),
+  ),
+  maxMp: z.preprocess(
+    (v) => (v === undefined || v === '' ? undefined : Number(v)),
+    z.number().min(0.25).max(16).optional(),
   ),
 });
 
@@ -103,18 +116,7 @@ router.post(
   '/',
   raw({ type: RAW_TYPES, limit: RAW_LIMIT }),
   asyncHandler(async (req, res) => {
-    const { metadata, denoise, diffusion, mask: hasMask, feather } = validateRequest(cleanQuerySchema, req.query);
-
-    // The GPU FLUX round-trip needs the non-gallery render seam factored out of
-    // the lightbox `/regenerate` flow (async job queue + media-job progress),
-    // which this slice defers to a follow-up. Reject it explicitly so a client
-    // that asked for it gets an actionable message rather than a silent CPU pass.
-    if (diffusion === 'gpu') {
-      throw new ServerError('GPU FLUX diffusion is not yet available on the Image Cleaner. Use the CPU light pass (diffusion=light) or run a regeneration from the ImageGen lightbox.', {
-        status: 501,
-        code: 'NOT_IMPLEMENTED',
-      });
-    }
+    const { metadata, denoise, diffusion, mask: hasMask, feather, strength, maxMp } = validateRequest(cleanQuerySchema, req.query);
 
     const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
     const { image: buffer, mask: maskBuffer } = splitMaskEnvelope(rawBody, hasMask);
@@ -131,6 +133,43 @@ router.post(
     let originalBuffer = buffer;
 
     const result = await cleanImageBuffer(buffer, { metadata, denoise });
+
+    // GPU FLUX round-trip (issue #2264). Unlike the sync passes, the GPU render
+    // is GPU-serialized through mediaJobQueue and can't run inline — so hand the
+    // already-sync-cleaned bytes to the shared regen seam, enqueue a job, and
+    // return a `jobId` (HTTP 202). The client tracks progress via the media-job
+    // channel, then GETs the finished bytes from the result endpoint. The mask,
+    // when present, is staged with the (oriented) original so the result-fetch
+    // composites the preserved region back over the diffused frame.
+    if (diffusion === 'gpu') {
+      // Orientation parity (same rationale as the light-pass block below): bake
+      // EXIF orientation into the init + preserved-original so the mask (painted
+      // in visual space) aligns with the render.
+      let gpuInit = result.data;
+      let gpuOriginal = maskBuffer ? originalBuffer : null;
+      if (maskBuffer) {
+        const orientedPng = await sharp(result.data).rotate().png().toBuffer().catch(() => null);
+        if (orientedPng) { gpuInit = orientedPng; gpuOriginal = orientedPng; }
+      }
+      const sourceDims = result.width && result.height ? { width: result.width, height: result.height } : null;
+      const queued = await enqueueGpuClean({
+        initBuffer: gpuInit,
+        sourceDims,
+        strength,
+        maxMegapixels: maxMp,
+        originalBuffer: maskBuffer ? gpuOriginal : null,
+        maskBuffer: maskBuffer || null,
+        feather,
+      });
+      console.log(`🧼 Image clean GPU job queued: ${queued.modelId} (strength=${queued.strength}) → job ${queued.jobId.slice(0, 8)}`);
+      return res.status(202).json({
+        mode: 'gpu',
+        ...queued,
+        c2paStripped: result.c2paStripped,
+        c2paPresent: result.c2paPresent,
+        steps: result.steps,
+      });
+    }
 
     // Diffusion (CPU light pass) runs LAST in the pipeline order (metadata →
     // denoise → diffusion), on the already-cleaned bytes. `applyLightRegen` is a
@@ -244,6 +283,63 @@ router.post(
     res.setHeader('X-Clean-Report', JSON.stringify(report));
     res.setHeader('Content-Type', outMime);
     res.send(outData);
+  }),
+);
+
+// Validate a clean job id — the mediaJobQueue mints v4 UUIDs, so anything that
+// isn't UUID-shaped can't be a real job (and keeps the temp-path resolution
+// safe). Reused by the result-fetch + save-to-gallery routes below.
+const jobIdSchema = z.object({
+  jobId: z.string().uuid('Invalid job id'),
+});
+
+// Result-fetch for a GPU FLUX clean job (issue #2264). Returns the finished
+// temp render bytes (with any pending ignore-zone composite applied) as the
+// response body — the default is NOT to keep them in the gallery. 409 while the
+// job is still queued/running (the client keeps polling the media-job channel);
+// 404 once past the temp GC / never produced. The result stays ephemeral: the
+// caller saves it explicitly via POST below if they want to keep it.
+router.get(
+  '/result/:jobId',
+  asyncHandler(async (req, res) => {
+    const { jobId } = validateRequest(jobIdSchema, req.params);
+    const status = getGpuCleanStatus(jobId);
+    if (status.status === 'failed' || status.status === 'canceled') {
+      throw new ServerError(status.error || `Clean job ${status.status}`, { status: 409, code: 'JOB_FAILED' });
+    }
+    const result = await readGpuCleanResult(jobId);
+    if (!result) {
+      // Distinguish "still rendering" (keep polling) from "gone" (past the temp
+      // GC or an unknown id) so the client can stop polling on a true miss.
+      const inFlight = status.status === 'queued' || status.status === 'running';
+      throw new ServerError(
+        inFlight ? 'Clean result not ready yet' : 'Clean result not found',
+        { status: inFlight ? 409 : 404, code: inFlight ? 'RESULT_NOT_READY' : 'NOT_FOUND', severity: 'warning' },
+      );
+    }
+    res.setHeader('Access-Control-Expose-Headers', 'X-Clean-Report');
+    res.setHeader('X-Clean-Report', JSON.stringify({
+      format: 'png',
+      width: result.width,
+      height: result.height,
+      composited: result.composited,
+      mode: 'gpu',
+    }));
+    res.setHeader('Content-Type', 'image/png');
+    res.send(result.data);
+  }),
+);
+
+// Explicit save-to-gallery for a GPU FLUX clean result (issue #2264). The
+// default clean flow never touches the gallery; this promotes the finished
+// temp render to a first-class gallery citizen (reusing saveUploadedGalleryImage
+// so it lists/deletes like any other). Returns the new gallery `{ filename, path }`.
+router.post(
+  '/result/:jobId/save',
+  asyncHandler(async (req, res) => {
+    const { jobId } = validateRequest(jobIdSchema, req.params);
+    const saved = await saveGpuCleanToGallery(jobId);
+    res.status(201).json(saved);
   }),
 );
 

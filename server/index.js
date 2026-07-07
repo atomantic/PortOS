@@ -185,6 +185,7 @@ import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './services/pipeline/seriesAutopilot.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
+import { startImageCleanTmpGc } from './services/imageCleanTmpGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './services/meatspacePostReminder.js';
@@ -609,6 +610,10 @@ startOrphanShellGc();
 // Periodically GC orphan staged init/reference upload images that pile up in
 // data/image-refs on every i2i/edit render and are never cleaned up (issue #1214).
 startImageRefsGc();
+// Periodically GC the Image Cleaner's GPU-clean temp working files (init/render/
+// mask/original) that land in data/image-clean-tmp and are never long-lived
+// (issue #2264). Age-gate only — nothing here is referenced after the fetch.
+startImageCleanTmpGc();
 // Warm the catalog user-type registry from the user-type store (Postgres as of
 // #1001; the settings.json slice under the escape hatch) before any catalog
 // request can land, so user-defined types validate + mint ids immediately on

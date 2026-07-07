@@ -433,7 +433,29 @@ export function buildSidecarMeta({
   };
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null }) {
+/**
+ * Resolve where a render's PNG + sidecar go (issue #2264). Pure so the
+ * gallery-vs-temp branch is unit-testable without spawning a render.
+ *
+ * - No `outputTarget` (the default, every existing caller) → the gallery dir
+ *   with a sidecar written — the lightbox/regenerate/gen behavior, untouched.
+ * - `outputTarget.dir` (the Image Cleaner's temp render) → that dir, and
+ *   `skipSidecar` (defaulting true for a non-gallery dir) suppresses the
+ *   `<jobId>.metadata.json` write + the gallery `completed` index/federate hooks.
+ *
+ * A gallery-dir target always keeps its sidecar even if `skipSidecar` was
+ * passed — a gallery citizen without a sidecar would be an un-remixable orphan.
+ */
+export function resolveOutputPlacement(outputTarget) {
+  const target = outputTarget && typeof outputTarget === 'object' ? outputTarget : null;
+  const outputDir = target?.dir && typeof target.dir === 'string' ? target.dir : PATHS.images;
+  const isGallery = outputDir === PATHS.images;
+  // Non-gallery renders default to no sidecar; a gallery render always writes one.
+  const skipSidecar = isGallery ? false : (target?.skipSidecar !== false);
+  return { outputDir, skipSidecar, isGallery };
+}
+
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
   // Empty prompt is allowed: img2img / edit / unconditional renders are driven
   // by the init image (or run unconditionally), so text isn't required. The
   // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
@@ -462,12 +484,22 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // user can deliberately experiment with off-family weights and see what
   // happens (the runner will surface a shape-mismatch error from diffusers).
 
-  await ensureDir(PATHS.images);
+  // Non-gallery render target (issue #2264): the Image Cleaner's GPU FLUX
+  // round-trip renders to a temp dir with NO sidecar, so a clean pass never
+  // pollutes the gallery by default. See `resolveOutputPlacement` for the exact
+  // branch logic (unit-tested in local.test.js).
+  const { outputDir, skipSidecar } = resolveOutputPlacement(outputTarget);
+
+  await ensureDir(outputDir);
   await ensureDir(PATHS.loras);
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
-  const outputPath = join(PATHS.images, filename);
+  const outputPath = join(outputDir, filename);
+  // The public path a gallery render mounts at (`/data/images/<f>`). A
+  // non-gallery render has no static mount, so the queue reads the finished
+  // bytes off `outputPath` directly (surfaced as `outputPath` in the result).
+  const publicPath = outputDir === PATHS.images ? `/data/images/${filename}` : null;
   const {
     meta,
     actualSeed,
@@ -804,19 +836,37 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // Sidecar: persist a metadata record next to the PNG so the gallery
       // and Remix flow can recover prompt/seed/steps even if mflux's own
       // --metadata sidecar lives at a slightly different filename shape.
-      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
-      await atomicWrite(sidecar, meta).catch(() => {});
-      // Cleaners run BEFORE the SSE complete + completed events so subscribers
-      // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
-      // cleanC2PA is a no-op on local — denoise is the only mode that does
-      // anything here.
-      await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
-      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}`);
-      const result = { filename, seed: actualSeed, path: `/data/images/${filename}` };
+      // A non-gallery target (issue #2264, the Image Cleaner's temp render)
+      // skips this write entirely — the temp bytes are consumed by an explicit
+      // result-fetch, so there's no gallery record to hydrate.
+      const sidecar = join(outputDir, `${jobId}.metadata.json`);
+      if (!skipSidecar) {
+        await atomicWrite(sidecar, meta).catch(() => {});
+        // Cleaners run BEFORE the SSE complete + completed events so subscribers
+        // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
+        // cleanC2PA is a no-op on local — denoise is the only mode that does
+        // anything here.
+        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
+      }
+      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}${skipSidecar ? ' (temp, no sidecar)' : ''}`);
+      // A non-gallery render has no `/data/images` mount — carry the absolute
+      // `outputPath` so the queue/route can read the finished bytes; `path`
+      // stays null so nothing treats it as a gallery URL.
+      const result = { filename, seed: actualSeed, path: publicPath, outputPath };
       broadcastSse(job, { type: 'complete', result });
       // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
-      // (mflux generates a random one if the client didn't pass one).
-      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename, seed: actualSeed });
+      // (mflux generates a random one if the client didn't pass one). Emit the
+      // gallery `completed` (which drives the media-asset index + peer-sync
+      // hooks) ONLY for a gallery target — a temp render must not be indexed or
+      // federated. The queue's own `completed` handler still fires off the
+      // return value below, so the job settles either way.
+      if (!skipSidecar) {
+        imageGenEvents.emit('completed', { generationId: jobId, path: publicPath, filename, seed: actualSeed });
+      } else {
+        // `temp: true` tells the media-asset-index + peer-sync hooks to ignore
+        // this render — there's no gallery file or sidecar to index/federate.
+        imageGenEvents.emit('completed', { generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true });
+      }
     }
     closeJobAfterDelay(jobs, jobId);
   });
