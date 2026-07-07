@@ -755,6 +755,21 @@ describe('advanceAfterSceneSettled', () => {
       expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
     });
 
+    it('does NOT re-arm a defer (infinite-loop guard) when re-advanced with skipSeedDeferSceneId even if a seed job is still in-flight', async () => {
+      // Reproduces the codex-flagged stall: the backstop fires, re-advances,
+      // and the SAME stalled seed job is still queued/running. Without the
+      // skip flag this would re-arm another defer forever. With it, the scene
+      // renders (text-to-video) instead.
+      const project = seedProject('cd-seed-stall');
+      localMod.getProject.mockResolvedValue(project);
+      mockListJobs.mockReturnValue([seedJob(project.id, 'scene-1')]); // still in-flight
+
+      await advanceAfterSceneSettled(project.id, { skipSeedDeferSceneId: 'scene-1' });
+
+      expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+      expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-1');
+    });
+
     it('a second advance while a defer is already armed does not double-register or render', async () => {
       const project = seedProject('cd-seed-dedup');
       const framed = seedProject('cd-seed-dedup', {

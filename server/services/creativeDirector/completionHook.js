@@ -117,6 +117,11 @@ const inflightEvaluator = new Set();
 // listener is already armed doesn't register a duplicate listener (which
 // would re-fire advanceAfterSceneSettled twice on the same job settle).
 const inflightSeedDefer = new Set();
+// #1929: cleanup callbacks for every currently-armed seed-frame defer, keyed
+// by deferKey — lets __resetInflightState() (tests) tear down real listeners +
+// backstop timers, not just the dedup set, so a deferred-but-never-settled test
+// can't leak a live listener that later fires a stray advance.
+const seedDeferCleanups = new Map();
 
 /**
  * #1929 — find the still-in-flight first-pass reference-frame job seeded for
@@ -178,10 +183,18 @@ async function waitForSeedFrameThenAdvance(projectId, sceneId) {
     }
     await new Promise((r) => setTimeout(r, SEED_FRAME_ATTACH_POLL_SCHEDULE_MS[i]));
   }
-  return advanceAfterSceneSettled(projectId);
+  // Force past the seed-defer gate for THIS scene: the job we were waiting on
+  // is terminal (or backstopped), so if a stale/duplicate seed job for the
+  // same scene is still sitting queued/running we must not re-arm another
+  // defer on it — that would loop forever on a stalled queue (codex review).
+  return advanceAfterSceneSettled(projectId, { skipSeedDeferSceneId: sceneId });
 }
 
-export async function advanceAfterSceneSettled(projectId) {
+export async function advanceAfterSceneSettled(projectId, opts = {}) {
+  // #1929: when a seed-frame defer's wait resolves, the re-advance passes the
+  // scene id here so this pass renders it immediately instead of re-arming a
+  // fresh defer on a stale/stalled duplicate seed job (which would loop).
+  const skipSeedDeferSceneId = opts.skipSeedDeferSceneId || null;
   const project = await getProject(projectId);
   if (!project) return;
   if (project.status === 'paused' || project.status === 'failed') return;
@@ -380,7 +393,8 @@ export async function advanceAfterSceneSettled(projectId) {
     // since it's serialized on the same 'completed' event). Later scenes have
     // a natural multi-minute buffer (each renders only after the prior scene's
     // full video render + evaluation), so this only matters for scene-0.
-    if (project.generateFirstPass && !nextPending.sourceImageFile) {
+    if (project.generateFirstPass && !nextPending.sourceImageFile
+        && nextPending.sceneId !== skipSeedDeferSceneId) {
       const seedJob = findPendingSeedFrameJob(
         listJobs({ kind: 'image' }), project.id, nextPending.sceneId,
       );
@@ -392,6 +406,7 @@ export async function advanceAfterSceneSettled(projectId) {
         }
         inflightSeedDefer.add(deferKey);
         console.log(`⏳ CD scene ${nextPending.sceneId} on ${project.id}: deferring render until seeded reference frame job ${seedJob.id.slice(0, 8)} settles.`);
+        const sceneId = nextPending.sceneId;
         let fired = false;
         const fireOnce = () => {
           if (fired) return;
@@ -401,8 +416,9 @@ export async function advanceAfterSceneSettled(projectId) {
           mediaJobEvents.off('failed', onSeedSettled);
           mediaJobEvents.off('canceled', onSeedSettled);
           inflightSeedDefer.delete(deferKey);
-          // Re-advance once the seed job is terminal. On success the
-          // scene-image hook (creativeDirectorSceneImageHook) fires on the
+          seedDeferCleanups.delete(deferKey);
+          // Re-advance once a seed job for this scene is terminal. On success
+          // the scene-image hook (creativeDirectorSceneImageHook) fires on the
           // SAME 'completed' event to file sourceImageFile — but both handlers
           // run async, so the write can still be in flight when we re-read.
           // Poll briefly for sourceImageFile before falling through to
@@ -410,32 +426,48 @@ export async function advanceAfterSceneSettled(projectId) {
           // failure/cancel the frame never lands and the scene renders
           // text-to-video, exactly as the fire-and-forget contract allowed.
           // Runs outside the request lifecycle — never throw.
-          waitForSeedFrameThenAdvance(project.id, nextPending.sceneId)
-            .catch((e) => console.log(`⚠️ CD deferred advance for ${project.id}/${nextPending.sceneId} failed: ${e.message}`));
+          waitForSeedFrameThenAdvance(project.id, sceneId)
+            .catch((e) => console.log(`⚠️ CD deferred advance for ${project.id}/${sceneId} failed: ${e.message}`));
         };
-        const onSeedSettled = (job) => { if (job?.id === seedJob.id) fireOnce(); };
+        // Match by scene TAG, not the single job id we happened to sample: if
+        // a duplicate/re-queued seed job for the same scene completes first and
+        // attaches sourceImageFile, that's just as good — wake on it rather
+        // than waiting for the specific job we first saw (codex review).
+        const onSeedSettled = (job) => {
+          const tag = job?.params?.creativeDirector;
+          if (job?.kind === 'image' && tag?.projectId === project.id && tag?.sceneId === sceneId) fireOnce();
+        };
         mediaJobEvents.on('completed', onSeedSettled);
         mediaJobEvents.on('failed', onSeedSettled);
         mediaJobEvents.on('canceled', onSeedSettled);
         // Backstop: a seed job that never emits a terminal event (worker
         // crash, queue stall, restart that drops the in-memory job) would
         // otherwise leave these listeners + the inflightSeedDefer entry
-        // attached forever, and every future advance for this scene would hit
-        // the "already armed" early-return above — wedging the scene in
-        // 'pending' permanently. Force a fall-through after the backstop so
-        // the scene renders (text-to-video if the frame never landed) rather
-        // than hanging. Unref so the timer can't hold the process open.
+        // attached forever, wedging the scene in 'pending' permanently. Force
+        // a fall-through after the backstop; the re-advance passes
+        // skipSeedDeferSceneId so it renders this scene instead of re-arming a
+        // fresh defer on the same stalled job (which would loop). Unref so the
+        // timer can't hold the process open.
         const backstopTimer = setTimeout(() => {
-          console.log(`⏳ CD scene ${nextPending.sceneId} on ${project.id}: seed frame job ${seedJob.id.slice(0, 8)} never settled within ${SEED_DEFER_BACKSTOP_MS}ms — proceeding without waiting.`);
+          console.log(`⏳ CD scene ${sceneId} on ${project.id}: seed frame job ${seedJob.id.slice(0, 8)} never settled within ${SEED_DEFER_BACKSTOP_MS}ms — proceeding without waiting.`);
           fireOnce();
         }, SEED_DEFER_BACKSTOP_MS);
         backstopTimer.unref?.();
+        // Record a teardown so tests (and future callers) can cancel an armed
+        // defer cleanly — clears the listeners, timer, and dedup entry without
+        // firing the advance.
+        seedDeferCleanups.set(deferKey, () => {
+          clearTimeout(backstopTimer);
+          mediaJobEvents.off('completed', onSeedSettled);
+          mediaJobEvents.off('failed', onSeedSettled);
+          mediaJobEvents.off('canceled', onSeedSettled);
+        });
         // Close the race where the job settled between the listJobs() read
         // above and attaching the listeners — its terminal event already
         // fired and would never fire again, wedging the scene in 'pending'
         // forever. Re-check now that we're listening; if it's already gone,
         // fire immediately.
-        if (!findPendingSeedFrameJob(listJobs({ kind: 'image' }), project.id, nextPending.sceneId)) {
+        if (!findPendingSeedFrameJob(listJobs({ kind: 'image' }), project.id, sceneId)) {
           fireOnce();
         }
         return;
@@ -501,6 +533,11 @@ export async function startCreativeDirectorProject(projectId) {
 // a seed-frame defer armed (deferred but never fired the settle event) don't
 // bleed the deferKey into a later test that reuses the same projectId.
 export function __resetInflightState() {
+  // Tear down any armed seed-frame defers (real listeners + backstop timers),
+  // not just the dedup set — a deferred-but-never-settled test would otherwise
+  // leak a live listener that fires a stray advance into a later test.
+  for (const cleanup of seedDeferCleanups.values()) cleanup();
+  seedDeferCleanups.clear();
   inflightTreatment.clear();
   inflightStitch.clear();
   inflightEvaluator.clear();
