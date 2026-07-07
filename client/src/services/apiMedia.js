@@ -34,12 +34,15 @@ export const deleteAllUploads = (options = {}) => request('/uploads?confirm=true
 // custom header. Returns `{ blob, mimeType, report }`. Throws on failure so the
 // page's own catch can toast (no silent flag needed — this never double-toasts).
 //
-// `steps` is `{ metadata?: boolean, denoise?: boolean }`; both default on the
-// server (metadata ON, denoise OFF) when omitted.
+// `steps` is `{ metadata?: boolean, denoise?: boolean, diffusion?: 'off'|'light'|'gpu' }`.
+// metadata/denoise default on the server (metadata ON, denoise OFF); diffusion
+// defaults to 'off'. 'light' runs the CPU spatial SynthID-disruption pass;
+// 'gpu' (the FLUX round-trip) is not yet wired here and returns a 501.
 export const cleanImage = async (file, steps = {}) => {
   const params = new URLSearchParams();
   if (typeof steps.metadata === 'boolean') params.set('metadata', steps.metadata ? '1' : '0');
   if (typeof steps.denoise === 'boolean') params.set('denoise', steps.denoise ? '1' : '0');
+  if (typeof steps.diffusion === 'string' && steps.diffusion !== 'off') params.set('diffusion', steps.diffusion);
   const qs = params.toString();
 
   // Always send application/octet-stream rather than the browser's reported

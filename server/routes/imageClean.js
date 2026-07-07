@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from '../lib/imageClean.js';
+import { applyLightRegen, computePixelDelta } from '../services/imageGen/regen.js';
 
 const router = Router();
 
@@ -33,10 +34,29 @@ const queryFlag = (def) => z.preprocess(
   z.boolean(),
 );
 
+// Diffusion sub-mode. `off` (default) skips it entirely; `light` runs the
+// CPU-only spatial pass (`applyLightRegen`) that actually perturbs SynthID's
+// resolution-dependent carriers — the no-GPU fallback, always available since
+// sharp is a hard dependency. `gpu` (the FLUX img2img round-trip) is NOT wired
+// on this route yet: it needs the non-gallery render seam factored out of the
+// lightbox `/regenerate` flow (async job queue + progress channel), deferred to
+// a follow-up. Accepting the token but rejecting it with a clear 501 keeps the
+// client contract stable for when that lands. Anything else → the `off` default.
+const diffusionMode = z.preprocess(
+  (v) => {
+    if (v === undefined || v === '' || v === '0' || v === 'false' || v === 'off') return 'off';
+    if (v === 'light' || v === 'cpu' || v === '1' || v === 'true') return 'light';
+    if (v === 'gpu' || v === 'flux') return 'gpu';
+    return 'off';
+  },
+  z.enum(['off', 'light', 'gpu']),
+);
+
 // Pipeline steps ride in the query string, not the body (the body is the image).
 const cleanQuerySchema = z.object({
   metadata: queryFlag(true),
   denoise: queryFlag(false),
+  diffusion: diffusionMode,
 });
 
 // 256 MiB raw-byte ceiling — the transport is the only (generous) size bound now
@@ -53,7 +73,18 @@ router.post(
   '/',
   raw({ type: RAW_TYPES, limit: RAW_LIMIT }),
   asyncHandler(async (req, res) => {
-    const { metadata, denoise } = validateRequest(cleanQuerySchema, req.query);
+    const { metadata, denoise, diffusion } = validateRequest(cleanQuerySchema, req.query);
+
+    // The GPU FLUX round-trip needs the non-gallery render seam factored out of
+    // the lightbox `/regenerate` flow (async job queue + media-job progress),
+    // which this slice defers to a follow-up. Reject it explicitly so a client
+    // that asked for it gets an actionable message rather than a silent CPU pass.
+    if (diffusion === 'gpu') {
+      throw new ServerError('GPU FLUX diffusion is not yet available on the Image Cleaner. Use the CPU light pass (diffusion=light) or run a regeneration from the ImageGen lightbox.', {
+        status: 501,
+        code: 'NOT_IMPLEMENTED',
+      });
+    }
 
     const buffer = Buffer.isBuffer(req.body) ? req.body : null;
     if (!buffer || buffer.length === 0) {
@@ -65,24 +96,69 @@ router.post(
 
     const result = await cleanImageBuffer(buffer, { metadata, denoise });
 
+    // Diffusion (CPU light pass) runs LAST in the pipeline order (metadata →
+    // denoise → diffusion), on the already-cleaned bytes. `applyLightRegen` is a
+    // pure sharp round-trip (resize-squeeze + micro color nudge + high-freq
+    // perturbation) that perturbs SynthID's resolution-dependent carriers — the
+    // only step here that touches SynthID at all, and honestly best-effort. It
+    // always re-encodes to PNG, so the output format/mime flip to PNG when it
+    // runs (regardless of the source format). No gallery/GPU dependency.
+    let outData = result.data;
+    let outFormat = result.format;
+    let outMime = result.mimeType;
+    let outWidth = result.width;
+    let outHeight = result.height;
+    const steps = [...result.steps];
+
+    if (diffusion === 'light') {
+      const light = await applyLightRegen(result.data);
+      if (!light) {
+        throw new ServerError('Invalid or corrupt image', {
+          status: 400,
+          code: 'INVALID_IMAGE',
+        });
+      }
+      // Fidelity metric so the report can show how much the pass actually moved
+      // the pixels (the pixel-delta/PSNR the diffusion research gates on) —
+      // "disrupt", never "remove". Skipped silently on a decode failure.
+      const delta = await computePixelDelta(result.data, light.data).catch(() => null);
+      outData = light.data;
+      outFormat = 'png';
+      outMime = 'image/png';
+      outWidth = light.width;
+      outHeight = light.height;
+      steps.push({
+        step: 'diffusion',
+        status: 'applied',
+        lossless: false,
+        mode: 'light',
+        // ASCII-only: this rides in the X-Clean-Report HTTP header, which is
+        // latin1 — a stray em-dash or delta glyph makes Node reject the send.
+        detail: delta
+          ? `CPU light pass - best-effort SynthID disruption (pixel delta ${delta.pixelDeltaPct}%, PSNR ${delta.psnr}dB); does not guarantee removal`
+          : 'CPU light pass - best-effort SynthID disruption; does not guarantee removal',
+        ...(delta ? { pixelDeltaPct: delta.pixelDeltaPct, psnr: delta.psnr } : {}),
+      });
+    }
+
     const report = {
-      format: result.format,
+      format: outFormat,
       sizeBefore: result.sizeBefore,
-      sizeAfter: result.sizeAfter,
-      width: result.width,
-      height: result.height,
+      sizeAfter: outData.length,
+      width: outWidth,
+      height: outHeight,
       c2paStripped: result.c2paStripped,
       c2paPresent: result.c2paPresent,
-      steps: result.steps,
+      steps,
     };
 
-    console.log(`🧼 Image cleaned: ${result.format} ${result.sizeBefore}B → ${result.sizeAfter}B (c2pa=${result.c2paStripped}, steps=${result.steps.map((s) => s.step).join('+') || 'none'})`);
+    console.log(`🧼 Image cleaned: ${outFormat} ${result.sizeBefore}B → ${outData.length}B (c2pa=${result.c2paStripped}, steps=${steps.map((s) => s.step).join('+') || 'none'})`);
 
     // Expose the report header so a cross-origin / dev-proxied fetch can read it.
     res.setHeader('Access-Control-Expose-Headers', 'X-Clean-Report');
     res.setHeader('X-Clean-Report', JSON.stringify(report));
-    res.setHeader('Content-Type', result.mimeType);
-    res.send(result.data);
+    res.setHeader('Content-Type', outMime);
+    res.send(outData);
   }),
 );
 

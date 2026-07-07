@@ -28,8 +28,9 @@ export default function ImageClean() {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy).
-  const [steps, setSteps] = useState({ metadata: true, denoise: false });
+  // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy),
+  // diffusion OFF (lossy — CPU light pass, the only step that touches SynthID).
+  const [steps, setSteps] = useState({ metadata: true, denoise: false, diffusion: false });
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
@@ -50,7 +51,15 @@ export default function ImageClean() {
       resultUrlRef.current = null;
     }
     setResult(null);
-    const cleaned = await api.cleanImage(file, selectedSteps).catch((err) => {
+    // Map the boolean diffusion toggle to the server's mode enum. Only the CPU
+    // light pass is wired on this route today; the GPU FLUX round-trip is a
+    // deferred follow-up (server returns 501 for diffusion=gpu).
+    const payload = {
+      metadata: selectedSteps.metadata,
+      denoise: selectedSteps.denoise,
+      diffusion: selectedSteps.diffusion ? 'light' : 'off',
+    };
+    const cleaned = await api.cleanImage(file, payload).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
     });
@@ -167,6 +176,11 @@ export default function ImageClean() {
       label: 'Median + sharpen',
       hint: 'Lossy — reduces visible AI-generation artifacts but blurs fine text. Re-encodes the image.',
     },
+    {
+      key: 'diffusion',
+      label: 'Diffusion pass — disrupt SynthID (CPU)',
+      hint: 'Lossy, best-effort — a CPU spatial round-trip (resize-squeeze + color/high-frequency nudge) that perturbs SynthID\'s watermark carriers. Blurs fine text. This is the only step that touches SynthID, and it disrupts — never guarantees removal. GPU FLUX round-trip coming later.',
+    },
   ];
 
   return (
@@ -182,13 +196,14 @@ export default function ImageClean() {
           </p>
           <p className="text-gray-500 text-xs mt-1">
             <span className="text-port-warning">Note:</span>{' '}
-            these passes do NOT defeat SynthID. gpt-image / Imagen / Gemini renders stay detectable by their vendor watermark checkers
-            (e.g.{' '}
+            the metadata and median/sharpen passes do NOT defeat SynthID — gpt-image / Imagen / Gemini renders stay detectable by their
+            vendor watermark checkers (e.g.{' '}
             <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
               openai.com/synthid
             </a>
-            ) — SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. A local diffusion pass that
-            actually disrupts SynthID is tracked as a follow-up (issue #1763).
+            ), since SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. The <strong>diffusion pass</strong>{' '}
+            (CPU) is the only step that perturbs SynthID's carriers — best-effort, and it <em>disrupts</em> rather than guarantees removal (never verified against
+            Google's detector). The higher-reliability GPU FLUX round-trip is a follow-up.
           </p>
         </div>
       </div>
@@ -239,7 +254,7 @@ export default function ImageClean() {
             <div className="flex items-center gap-2 mb-3">
               <Sparkles size={16} className="text-port-accent" />
               <span className="text-sm font-medium text-white">Pipeline steps</span>
-              <span className="text-xs text-gray-500">run in order: metadata → median/sharpen</span>
+              <span className="text-xs text-gray-500">run in order: metadata → median/sharpen → diffusion</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {STEP_DEFS.map(({ key, label, hint }) => (
