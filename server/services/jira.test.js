@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { buildColumnsFromBoardConfig, buildColumnsFromStatuses, isCloudInstance, jiraAuthHeader } from './jira.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { buildColumnsFromBoardConfig, buildColumnsFromStatuses, createJiraClient, isCloudInstance, jiraAuthHeader } from './jira.js';
 
 describe('isCloudInstance', () => {
   it('treats *.atlassian.net hosts as Cloud', () => {
@@ -30,6 +30,62 @@ describe('jiraAuthHeader', () => {
   it('uses Bearer PAT for Server / Data Center instances', () => {
     const header = jiraAuthHeader({ baseUrl: 'https://jira.example.com', email: 'me@x.com', apiToken: 'pat' });
     expect(header).toBe('Bearer pat');
+  });
+});
+
+describe('createJiraClient expired-token detection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Helper: stub global fetch with a single response so createHttpClient's request()
+  // observes exactly what the given JIRA instance type would return on an expired token.
+  const stubFetch = ({ ok, status, contentType, body }) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok,
+      status,
+      headers: { get: name => (name.toLowerCase() === 'content-type' ? contentType : null) },
+      json: async () => body,
+      text: async () => body
+    }));
+  };
+
+  it('maps a Server HTML login page (200 + <!DOCTYPE) to the friendly expiry error', async () => {
+    stubFetch({ ok: true, status: 200, contentType: 'text/html', body: '<!DOCTYPE html><html><body>login</body></html>' });
+    const client = createJiraClient({ baseUrl: 'https://jira.example.com', apiToken: 'pat' });
+    await expect(client.get('/rest/api/2/myself')).rejects.toMatchObject({
+      status: 401,
+      message: expect.stringContaining('token expired or invalid')
+    });
+  });
+
+  it('maps a Cloud JSON 401 to the same friendly expiry error', async () => {
+    stubFetch({
+      ok: false,
+      status: 401,
+      contentType: 'application/json',
+      body: { errorMessages: ['Client must be authenticated to access this resource.'], errors: {} }
+    });
+    const client = createJiraClient({ baseUrl: 'https://example.atlassian.net', email: 'me@x.com', apiToken: 'tok' });
+    await expect(client.get('/rest/api/2/myself')).rejects.toMatchObject({
+      status: 401,
+      message: expect.stringContaining('token expired or invalid')
+    });
+  });
+
+  it('does not trip the HTML heuristic on a Cloud JSON payload that contains "<!DOCTYPE"', async () => {
+    // A Cloud instance returns JSON; even if a field value contained the marker string,
+    // the heuristic is gated off for Cloud so a valid response passes through untouched.
+    stubFetch({ ok: true, status: 200, contentType: 'application/json', body: { note: '<!DOCTYPE lives in this field' } });
+    const client = createJiraClient({ baseUrl: 'https://example.atlassian.net', email: 'me@x.com', apiToken: 'tok' });
+    const res = await client.get('/rest/api/2/myself');
+    expect(res.data).toEqual({ note: '<!DOCTYPE lives in this field' });
+  });
+
+  it('lets non-401 errors bubble unchanged', async () => {
+    stubFetch({ ok: false, status: 500, contentType: 'application/json', body: { errorMessages: ['boom'] } });
+    const client = createJiraClient({ baseUrl: 'https://jira.example.com', apiToken: 'pat' });
+    await expect(client.get('/rest/api/2/myself')).rejects.toMatchObject({ status: 500 });
   });
 });
 
