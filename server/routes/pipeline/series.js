@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest, optionalBooleanMap, llmSchema } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
+import { TRIM_SIZES, INTERIOR_FONTS } from '../../lib/proseExportSettings.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as seasonsSvc from '../../services/pipeline/seasons.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../../services/duplicateDetection.js';
@@ -207,6 +208,20 @@ const blockingSeveritiesSchema = z.object({
   editorial: z.array(blockingSeverityEnum).optional(),
 }).strict();
 
+// Per-series prose-export settings (#2181). All fields optional so a partial
+// PATCH tunes one knob; `null` clears the whole sub-object (defaults apply).
+// Re-bounded by sanitizeProseExportSettings on persist. `trimSize`/`interiorFont`
+// validated against their allow-lists; the title-page fields are free text.
+const exportSettingsSchema = z.object({
+  trimSize: z.enum(Object.keys(TRIM_SIZES)).optional(),
+  interiorFont: z.enum(INTERIOR_FONTS).optional(),
+  titlePageTitle: z.string().trim().max(200).optional(),
+  titlePageSubtitle: z.string().trim().max(300).optional(),
+  titlePageAuthor: z.string().trim().max(120).optional(),
+  copyright: z.string().trim().max(500).optional(),
+  dedication: z.string().trim().max(2000).optional(),
+}).strict();
+
 const seriesCreateSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
@@ -235,6 +250,7 @@ const seriesCreateSchema = z.object({
   factCritical: z.boolean().optional().default(false),
   factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional().default(''),
   styleGuide: styleGuideSchema.nullable().optional(),
+  exportSettings: exportSettingsSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
   authorId: z.string().trim().max(seriesSvc.AUTHOR_ID_MAX).nullable().optional(),
@@ -263,6 +279,7 @@ const seriesPatchSchema = z.object({
   factCritical: z.boolean().optional(),
   factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional(),
   styleGuide: styleGuideSchema.nullable().optional(),
+  exportSettings: exportSettingsSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),
   authorId: z.string().trim().max(seriesSvc.AUTHOR_ID_MAX).nullable().optional(),

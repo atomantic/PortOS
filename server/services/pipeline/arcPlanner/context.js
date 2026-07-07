@@ -185,6 +185,9 @@ export async function collectManuscriptSections(seriesId, { stageOrder = MANUSCR
     if (!pick) continue;
     sections.push({
       issueId: iss.id,
+      // `seasonId` (additive) lets the prose-export packager group issues into
+      // volume breaks; existing corpus/completeness callers ignore it.
+      seasonId: iss.seasonId || null,
       number: iss.number,
       title: iss.title || '',
       stageId: pick.sid,

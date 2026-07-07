@@ -150,7 +150,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // wholly-absent `styleGuide`, not a present-but-sub-field-stripped one). Bump makes
   // the older peer reject the ahead-version series transfer instead. Per-category gate
   // → only series sync pauses with old peers.
-  pipelineSeries: 11,
+  // v12 = `series.exportSettings` added (#2181) — the per-series prose-export
+  // config (trim size, interior font, title-page fields) for the compiled-
+  // manuscript / ePub / print-interior-PDF exports. Top-level additive field
+  // like styleGuide (v4): a ≤v11 peer that re-sanitizes a series through its
+  // exportSettings-unaware `sanitizeSeries` would silently strip it and
+  // last-writer-wins the loss back onto the newer peer
+  // (`preserveAbsentAdditiveFields` restores a wholly-absent `exportSettings`
+  // from a BEHIND-version SAME-schema peer, but a wire-received record from an
+  // OLDER peer must be rejected outright). Bump makes the older peer reject the
+  // ahead-version series transfer instead. Per-category gate → only series sync
+  // pauses with old peers.
+  pipelineSeries: 12,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
