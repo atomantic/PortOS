@@ -23,6 +23,7 @@ import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalys
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
@@ -632,13 +633,21 @@ export async function spawnViaRunner(agentId, task, opts) {
     ? await getClaudeSettingsEnv()
     : {};
 
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with the
+  // models map so the injected `--model ollama/<id>` is accepted (empty/no-op
+  // otherwise). The direct-spawn path (agentCliSpawning.spawnDirectly) and the
+  // "Run Prompt" path (server/services/runner.js) already do this; the runner
+  // path omitted it, so an OpenCode Ollama CoS task on the runner would reject
+  // the model even after the spawn itself succeeds. See issue #2243 / #2190.
+  const opencodeEnv = buildOpencodeEnvVars(provider, model);
+
   const result = await spawnAgentViaRunner({
     agentId,
     taskId: task.id,
     prompt,
     workspacePath,
     model,
-    envVars: { ...claudeSettingsEnv, ...provider.envVars },
+    envVars: { ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });

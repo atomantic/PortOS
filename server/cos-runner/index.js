@@ -16,6 +16,7 @@ import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
@@ -199,12 +200,23 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
+  const childEnv = (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })();
+
+  // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat
+  // shim on Windows) to its real path and wrap a shim as `cmd.exe /c <path>` so
+  // spawn() under shell:false can launch it. Without this, Windows can't find
+  // `opencode.cmd` from the bare name → spawn ENOENT (errno -4058) → empty
+  // output → startup-failure. Mirrors the working "Run Prompt" path
+  // (server/services/runner.js); resolved against childEnv so a provider PATH
+  // override is honored. See issue #2243.
+  const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, spawnArgs, childEnv);
+
   // Spawn the CLI process
-  const claudeProcess = spawn(command, spawnArgs, {
+  const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })(),
+    env: childEnv,
     windowsHide: true
   });
 
