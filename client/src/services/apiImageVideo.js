@@ -298,15 +298,18 @@ export const addMediaModelFromHf = ({ url, kind, runtime, runner, name, steps, g
 };
 
 // Edit a user-added model's name/steps/guidance. Built-ins return 403.
-export const patchCustomMediaModel = (id, patch) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+// `silent` lets a caller with its own error toast suppress the apiCore toast.
+export const patchCustomMediaModel = (id, patch, { silent = false } = {}) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  silent,
 });
 
 // Remove a user-added model entry (weights stay in the HF cache). Built-ins
-// return 403; unknown ids 404.
-export const removeCustomMediaModel = (id) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+// return 403; unknown ids 404. `silent` as above.
+export const removeCustomMediaModel = (id, { silent = false } = {}) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  silent,
 });
 
 // LoRA manager — Civitai-aware list/install/patch/delete. Reads sidecar

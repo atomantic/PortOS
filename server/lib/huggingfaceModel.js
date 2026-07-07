@@ -214,17 +214,22 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
   }
 
   if (resolvedKind === 'video') {
-    // Explicit override wins (already allowlist-validated). Otherwise use the
-    // detected runtime — and if that detected runtime isn't addable (wan22 /
-    // hunyuan need a BYO venv), refuse with the install hint. A repo with no
-    // video marker at all defaults to mlx_video (the safetensors/MLX default).
-    if (runtime) return { kind: 'video', runtime, format: 'safetensors' };
+    // Refuse a repo whose DETECTED runtime isn't addable (wan22 / hunyuan need
+    // a BYO venv) BEFORE honoring any override — the "a bad add can't wedge the
+    // picker" guarantee must hold even when the caller forces
+    // `runtime: 'mlx_video'` on a HunyuanVideo repo (the entry would register
+    // but the runtime couldn't load it). The override only picks between the
+    // *addable* runtimes; it can't launder a known-unsupported repo through.
     if (detectedVideo && !ADDABLE_VIDEO_RUNTIMES.includes(detectedVideo.runtime)) {
       throw new ServerError(
         `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json.`,
         { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },
       );
     }
+    // Explicit override wins (already allowlist-validated). Otherwise use the
+    // detected runtime; a repo with no video marker at all defaults to
+    // mlx_video (the safetensors/MLX default).
+    if (runtime) return { kind: 'video', runtime, format: 'safetensors' };
     return { kind: 'video', runtime: detectedVideo?.runtime || 'mlx_video', format: 'safetensors' };
   }
 

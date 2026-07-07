@@ -113,7 +113,7 @@ export default function MediaModels() {
       steps: Number(editFields.steps),
       guidance: Number(editFields.guidance),
     };
-    await patchCustomMediaModel(id, patch)
+    await patchCustomMediaModel(id, patch, { silent: true })
       .then((updated) => {
         toast.success('Model updated');
         setEditId(null);
@@ -128,7 +128,7 @@ export default function MediaModels() {
 
   const handleRemoveCustom = async (id) => {
     setBusy(id);
-    await removeCustomMediaModel(id)
+    await removeCustomMediaModel(id, { silent: true })
       .then(() => {
         toast.success('Custom model removed');
         setRegistry((r) => ({

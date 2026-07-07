@@ -53,6 +53,18 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/Hunyuan/);
   });
 
+  it('refuses a wan/hunyuan repo even when an addable runtime is forced (no override-laundering)', () => {
+    // The "a bad add can't wedge the picker" guarantee must hold even under an
+    // explicit runtime override — forcing mlx_video on a Hunyuan repo would
+    // register an entry no runtime can load.
+    expect(() => classifyHfMediaModel({
+      repo: 'tencent/HunyuanVideo',
+      model: hf({ files: ['model.safetensors'], tags: ['hunyuan'] }),
+      kind: 'video',
+      runtime: 'mlx_video',
+    })).toThrow(/needs a dedicated venv/);
+  });
+
   it('refuses an unclassifiable safetensors repo with no kind hint', () => {
     expect(() => classifyHfMediaModel({
       repo: 'someone/mystery-weights',
