@@ -554,7 +554,11 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
       // conventions) into the free-text styleNotes the template already renders,
       // so prose/script generation honors house style with no new template
       // variable (and thus no stage-prompt migration). See composeStyleNotes.
-      styleNotes: composeStyleNotes(series),
+      // The Le Guin prose-craft doctrine (#2175) rides along in the same fold,
+      // but only for the prose-writing stages (prose/comicScript/teleplay) — the
+      // `idea` beat-sheet stage is outlining, not drafting, so sentence-level
+      // craft rules would be noise there.
+      styleNotes: composeStyleNotes(series, { proseCraft: ROSTER_BACKED_STAGES.has(stageId) }),
       universeId: series.universeId || '',
       characters: scopedCharacters,
     },

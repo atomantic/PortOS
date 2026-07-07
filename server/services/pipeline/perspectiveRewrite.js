@@ -26,6 +26,7 @@ import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { richCanonDescriptorFragments, flattenCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { filterCanonListForIssue } from '../../lib/storyBible.js';
+import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
@@ -249,7 +250,11 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
   const seriesVars = {
     name: series?.name || 'Untitled series',
     logline: series?.logline || '',
-    styleNotes: series?.styleNotes || '',
+    // POV rewrite is a prose-generating stage, so fold in the structured style
+    // guide, #2179 voice exemplars, and the #2175 Le Guin prose-craft doctrine
+    // via composeStyleNotes — not the raw free-text notes, which would bypass
+    // all three. proseCraft:true matches the prose/comicScript/teleplay stages.
+    styleNotes: composeStyleNotes(series, { proseCraft: true }),
     characters: cast,
   };
   const issueVars = { number: issue.number, title: issue.title };

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizeStyleGuide,
   renderStyleGuide,
+  composeStyleNotes,
+  PROSE_CRAFT_DOCTRINE,
   STYLE_GUIDE_LIMITS,
 } from './styleGuide.js';
 
@@ -161,5 +163,44 @@ describe('renderStyleGuide', () => {
     expect(block).toContain('present tense');
     expect(block).not.toContain('MATCH this voice');
     expect(block).not.toContain('NEVER drift toward this');
+  });
+});
+
+describe('composeStyleNotes', () => {
+  it('returns empty string when neither guide nor notes nor craft is present', () => {
+    expect(composeStyleNotes(null)).toBe('');
+    expect(composeStyleNotes({})).toBe('');
+    expect(composeStyleNotes({ styleNotes: '   ' })).toBe('');
+  });
+
+  it('leads with the rendered guide, trails with free-text notes', () => {
+    const out = composeStyleNotes({
+      styleGuide: sanitizeStyleGuide({ tense: 'past' }),
+      styleNotes: 'Noir and rain.',
+    });
+    expect(out).toContain('past tense');
+    expect(out).toContain('Noir and rain.');
+    expect(out.indexOf('past tense')).toBeLessThan(out.indexOf('Noir and rain.'));
+  });
+
+  it('does NOT append prose-craft doctrine by default (structural stages)', () => {
+    const out = composeStyleNotes({ styleNotes: 'Noir.' });
+    expect(out).toBe('Noir.');
+    expect(out).not.toContain('Le Guin');
+    expect(out).not.toContain('Prose craft');
+  });
+
+  it('appends the Le Guin prose-craft doctrine when proseCraft is set', () => {
+    const out = composeStyleNotes({ styleNotes: 'Noir.' }, { proseCraft: true });
+    expect(out).toContain('Noir.');
+    expect(out).toContain(PROSE_CRAFT_DOCTRINE);
+    expect(out).toContain('ancient wisdom'); // one of the banned clichés
+    // Author notes lead; the baked doctrine trails.
+    expect(out.indexOf('Noir.')).toBeLessThan(out.indexOf('Prose craft'));
+  });
+
+  it('appends craft even with an otherwise-empty series', () => {
+    const out = composeStyleNotes(null, { proseCraft: true });
+    expect(out).toBe(PROSE_CRAFT_DOCTRINE);
   });
 });
