@@ -86,9 +86,18 @@ const detectVideoRuntime = (blob) => {
   return null;
 };
 
-// Image runners are all self-service (mflux + the shared diffusers runner
-// families). Any RUNNER_FAMILIES value is fair game.
-export const ADDABLE_IMAGE_RUNNERS = Object.freeze(Object.values(RUNNER_FAMILIES));
+// Image runners a user MAY target when adding a model — the diffusers-family
+// runners (flux2 / z-image / ernie / hidream / qwen) whose Python entry point
+// loads weights from the entry's `repo` field (`--repo <hf-repo>`). `mflux` is
+// deliberately EXCLUDED: `mflux-generate --model <id>` only accepts the two
+// built-in aliases (`dev`/`schnell`) and ignores the stored repo, so a custom
+// `hf-org-model` mflux id would register but fail at render. A Flux.1 repo the
+// user wants must go through a runner that honors `repo`. Kept as an explicit
+// allowlist (not `Object.values(RUNNER_FAMILIES)`) so a bad add can't wedge the
+// picker with an unrenderable entry.
+export const ADDABLE_IMAGE_RUNNERS = Object.freeze(
+  Object.values(RUNNER_FAMILIES).filter((r) => r !== RUNNER_FAMILIES.MFLUX),
+);
 
 // Default steps/guidance per target so an added entry renders sanely without
 // the user having to know each pipeline's sweet spot. Mirrors the shipped
@@ -238,6 +247,16 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
     throw new ServerError(
       `Couldn't determine which image runner loads "${repo}". Pass an explicit runner (one of ${ADDABLE_IMAGE_RUNNERS.join(', ')}).`,
       { status: 422, code: 'HF_UNKNOWN_RUNNER' },
+    );
+  }
+  // A detected mflux runner (a Flux.1 repo) is refused for the same reason
+  // mflux is off ADDABLE_IMAGE_RUNNERS — `mflux-generate` ignores the repo and
+  // only loads its two built-in aliases, so a custom mflux entry can't render.
+  // (An explicit mflux override was already rejected by the enum check above.)
+  if (!ADDABLE_IMAGE_RUNNERS.includes(resolvedRunner)) {
+    throw new ServerError(
+      `HuggingFace repo "${repo}" looks like a Flux.1 (mflux) model, which can't be added self-service — the mflux runner only loads its built-in dev/schnell models and ignores a custom repo. Use a repo that runs on a diffusers-family runner (${ADDABLE_IMAGE_RUNNERS.join(', ')}).`,
+      { status: 422, code: 'HF_UNSUPPORTED_RUNNER' },
     );
   }
   return { kind: 'image', runner: resolvedRunner, format: 'safetensors' };

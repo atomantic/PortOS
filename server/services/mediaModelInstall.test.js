@@ -55,9 +55,9 @@ describe('addModelFromHuggingface', () => {
       siblings: [{ rfilename: 'model.safetensors' }],
     });
     const result = await addModelFromHuggingface(
-      { url: 'someone/custom', kind: 'image', runner: 'mflux' },
+      { url: 'someone/custom', kind: 'image', runner: 'qwen' },
       { fetchImpl },
     );
-    expect(result.entry).toMatchObject({ runner: 'mflux', source: 'user' });
+    expect(result.entry).toMatchObject({ runner: 'qwen', source: 'user' });
   });
 });

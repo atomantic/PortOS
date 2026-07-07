@@ -1491,3 +1491,28 @@ describe('generateVideo — BYOV missing-python-module failure path (#1833 regre
     expect(evt.error).toMatch(/LTX-2 MLX/);
   });
 });
+
+describe('resolveVideoModel — live registry lookup (#2124 no-restart add)', () => {
+  it('resolves a model id through the live getVideoModels() list', async () => {
+    const { resolveVideoModel } = await import('./local.js');
+    // getVideoModels is mocked to return the catalog; a render-time lookup must
+    // go through it (not a boot snapshot) so a runtime-added model resolves.
+    expect(resolveVideoModel('ltx23_distilled_q4')?.id).toBe('ltx23_distilled_q4');
+  });
+
+  it('returns null for an unknown id', async () => {
+    const { resolveVideoModel } = await import('./local.js');
+    expect(resolveVideoModel('does-not-exist')).toBeNull();
+  });
+
+  it('picks up a model added to the live list after boot (no restart)', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const { resolveVideoModel } = await import('./local.js');
+    // Simulate addUserModelEntry hot-reloading the registry: getVideoModels now
+    // returns an entry that was NOT present when local.js built VIDEO_MODELS.
+    mediaModels.getVideoModels.mockReturnValueOnce([
+      { id: 'hf-newly-added', name: 'New', runtime: 'mlx_video', repo: 'x/y', steps: 25, guidance: 3 },
+    ]);
+    expect(resolveVideoModel('hf-newly-added')?.id).toBe('hf-newly-added');
+  });
+});

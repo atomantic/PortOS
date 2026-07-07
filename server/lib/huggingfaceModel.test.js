@@ -113,11 +113,29 @@ describe('classifyHfMediaModel — happy paths', () => {
 
   it('falls back to a caller-supplied kind+runner for an ambiguous image repo', () => {
     expect(classifyHfMediaModel({
-      repo: 'someone/custom-flux',
+      repo: 'someone/custom-diffusers',
+      model: hf({ files: ['model.safetensors'] }),
+      kind: 'image',
+      runner: 'qwen',
+    })).toEqual({ kind: 'image', runner: 'qwen', format: 'safetensors' });
+  });
+
+  it('refuses a detected mflux (Flux.1) repo — mflux ignores a custom repo', () => {
+    // mflux-generate only loads its built-in dev/schnell aliases, so a custom
+    // repo would register but fail at render — refuse it up front.
+    expect(() => classifyHfMediaModel({
+      repo: 'black-forest-labs/FLUX.1-dev',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-image' }),
+    })).toThrow(/mflux|Flux\.1/);
+  });
+
+  it('rejects an explicit mflux runner override (off the addable allowlist)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'someone/x',
       model: hf({ files: ['model.safetensors'] }),
       kind: 'image',
       runner: 'mflux',
-    })).toEqual({ kind: 'image', runner: 'mflux', format: 'safetensors' });
+    })).toThrow(/Unknown image runner|mflux/);
   });
 });
 
