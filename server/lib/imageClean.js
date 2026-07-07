@@ -206,6 +206,94 @@ const MIME_TYPES = {
   webp: 'image/webp',
 };
 
+// Feather (Gaussian blur sigma, px) applied to the preserve-region mask edge so
+// the composited boundary is soft rather than a hard cut. Bounded: 0 disables
+// feathering (hard edge); sharp rejects a sigma below ~0.3, and a huge sigma on
+// a small mask just washes the whole mask grey — 50px is a generous ceiling.
+export const IGNORE_ZONE_FEATHER_DEFAULT = 3;
+const IGNORE_ZONE_FEATHER_MAX = 50;
+
+/**
+ * Ignore-zone (preserve-region) compositing — pure sharp round-trip, no runner
+ * or GPU dependency. After a lossy SynthID-disruption pass (CPU light or GPU
+ * FLUX) redraws the whole frame — garbling comic dialog, faces, and fine text —
+ * this composites the ORIGINAL pixels back into the user-painted mask regions
+ * with a feathered (Gaussian-blurred) edge so the boundary is soft.
+ *
+ * `base` is the diffused/disrupted buffer; `original` is the pre-diffusion image
+ * whose pixels are preserved inside the mask; `mask` is an image where WHITE
+ * (255) marks preserve-original regions and BLACK (0) keeps the diffused result.
+ * The mask is greyscaled and resized (fit: fill) to the base's dimensions, so a
+ * client can paint it at any convenient resolution.
+ *
+ * Honest tradeoff (surfaced in the UI): SynthID is spatially distributed, so a
+ * region preserved verbatim keeps its ORIGINAL watermark locally — the mask is a
+ * deliberate per-region quality-vs-disruption choice.
+ *
+ * Returns `{ data, width, height }` (always PNG, to carry the alpha-accurate
+ * composite losslessly), or null on any decode failure so the caller can fall
+ * back to the un-composited diffused buffer instead of failing the request.
+ * `sharpImpl` is injectable for tests.
+ */
+export async function compositeIgnoreZone(base, original, mask, { feather = IGNORE_ZONE_FEATHER_DEFAULT, sharpImpl = sharp } = {}) {
+  if (!Buffer.isBuffer(base) || !Buffer.isBuffer(original) || !Buffer.isBuffer(mask)) return null;
+  // Cap every decode at MAX_PIXELS — the mask (and, via the length-framed
+  // envelope, the original) can be independently sized, so the decompression-
+  // bomb guard the main cleaner enforces must extend to this pass too.
+  const opts = { limitInputPixels: MAX_PIXELS };
+  const meta = await sharpImpl(base, opts).metadata().catch(() => null);
+  const w = Math.round(Number(meta?.width));
+  const h = Math.round(Number(meta?.height));
+  if (!(w > 0) || !(h > 0)) return null;
+
+  // Clamp the feather sigma into sharp's valid range. A 0 (or sub-threshold)
+  // request means "hard edge" — skip the blur entirely rather than let sharp
+  // throw on an out-of-range sigma.
+  const sigma = Math.min(IGNORE_ZONE_FEATHER_MAX, Math.max(0, Number(feather) || 0));
+
+  const run = async () => {
+    // Greyscale + resize the mask to the base dims so the client can paint at any
+    // resolution; blur the edge for a soft boundary when feathering is on.
+    let maskPipeline = sharpImpl(mask, opts)
+      .resize(w, h, { fit: 'fill', kernel: 'cubic' })
+      .greyscale();
+    if (sigma >= 0.3) maskPipeline = maskPipeline.blur(sigma);
+    const alpha = await maskPipeline.toColourspace('b-w').raw().toBuffer();
+
+    // The user paints the mask on the browser preview, which honours EXIF
+    // orientation — and the diffused `base` is already in that orientation. Bake
+    // the same orientation into the ORIGINAL (`.rotate()`) before sampling its
+    // pixels, or an oriented JPEG/PNG would restore rotated/wrong pixels into
+    // the masked regions. `.ensureAlpha()` (NOT removeAlpha) keeps the original's
+    // own transparency; the mask is then MULTIPLIED into that alpha below so a
+    // transparent source region stays transparent instead of turning opaque.
+    const originalRgba = await sharpImpl(original, opts)
+      .rotate()
+      .resize(w, h, { fit: 'fill', kernel: 'cubic' })
+      .ensureAlpha()
+      .raw()
+      .toBuffer();
+    // Fold the feathered mask into the original's alpha: preserved (white) keeps
+    // the source alpha, unmasked (black) → 0 so `base` shows through.
+    for (let i = 0; i < w * h; i += 1) {
+      originalRgba[i * 4 + 3] = Math.round((originalRgba[i * 4 + 3] * alpha[i]) / 255);
+    }
+
+    const overlay = await sharpImpl(originalRgba, { raw: { width: w, height: h, channels: 4 } })
+      .png()
+      .toBuffer();
+
+    const data = await sharpImpl(base, opts)
+      .png()
+      .composite([{ input: overlay, blend: 'over' }])
+      .png({ compressionLevel: 6 })
+      .toBuffer();
+    return { data, width: w, height: h };
+  };
+
+  return run().catch(() => null);
+}
+
 function applyDenoise(pipeline) {
   return pipeline.median(3).sharpen();
 }

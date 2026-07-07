@@ -34,12 +34,7 @@ import {
   killAgentViaRunner,
   getAgentStatsFromRunner,
   terminateAllAgentsViaRunner,
-  getAgentOutputFromRunner,
-  executeCliRunViaRunner,
-  getActiveRunsFromRunner,
-  isRunActiveInRunner,
-  getRunOutputFromRunner,
-  stopRunViaRunner
+  getAgentOutputFromRunner
 } from './cosRunnerClient.js';
 
 // The client reads the body via text() and tolerantly JSON.parses it, so a
@@ -377,120 +372,6 @@ describe('cosRunnerClient', () => {
     it('should throw on failure', async () => {
       fetchWithTimeout.mockResolvedValue(mockResponse(false, { error: 'Not found' }));
       await expect(getAgentOutputFromRunner('bad-id')).rejects.toThrow('Not found');
-    });
-  });
-
-  // ===========================================================================
-  // executeCliRunViaRunner
-  // ===========================================================================
-  describe('executeCliRunViaRunner', () => {
-    it('should POST run request and return result', async () => {
-      const runResult = { runId: 'r1', started: true };
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, runResult));
-
-      const result = await executeCliRunViaRunner({
-        runId: 'r1',
-        command: 'npm',
-        args: ['test'],
-        prompt: 'run tests',
-        workspacePath: '/tmp/ws',
-        timeout: 30000
-      });
-
-      expect(result).toEqual(runResult);
-      expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/run'),
-        expect.objectContaining({ method: 'POST' }),
-        60000
-      );
-
-      const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.runId).toBe('r1');
-      expect(callBody.command).toBe('npm');
-      expect(callBody.args).toEqual(['test']);
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, { error: 'No slots' }));
-      await expect(executeCliRunViaRunner({ runId: 'r1' })).rejects.toThrow('No slots');
-    });
-  });
-
-  // ===========================================================================
-  // getActiveRunsFromRunner
-  // ===========================================================================
-  describe('getActiveRunsFromRunner', () => {
-    it('should return active runs', async () => {
-      const runs = [{ id: 'r1' }, { id: 'r2' }];
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, runs));
-      const result = await getActiveRunsFromRunner();
-      expect(result).toEqual(runs);
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, {}));
-      await expect(getActiveRunsFromRunner()).rejects.toThrow('Failed to get runs');
-    });
-  });
-
-  // ===========================================================================
-  // isRunActiveInRunner
-  // ===========================================================================
-  describe('isRunActiveInRunner', () => {
-    it('should return true when run is active', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { active: true }));
-      const result = await isRunActiveInRunner('r1');
-      expect(result).toBe(true);
-    });
-
-    it('should return false when run is not active', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { active: false }));
-      const result = await isRunActiveInRunner('r1');
-      expect(result).toBe(false);
-    });
-
-    it('should return false on non-ok response', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, {}));
-      const result = await isRunActiveInRunner('r1');
-      expect(result).toBe(false);
-    });
-  });
-
-  // ===========================================================================
-  // getRunOutputFromRunner
-  // ===========================================================================
-  describe('getRunOutputFromRunner', () => {
-    it('should return run output', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { output: 'test passed' }));
-      const result = await getRunOutputFromRunner('r1');
-      expect(result).toBe('test passed');
-    });
-
-    it('should return null on non-ok response', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, {}));
-      const result = await getRunOutputFromRunner('r1');
-      expect(result).toBeNull();
-    });
-  });
-
-  // ===========================================================================
-  // stopRunViaRunner
-  // ===========================================================================
-  describe('stopRunViaRunner', () => {
-    it('should POST stop and return result', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { stopped: true }));
-      const result = await stopRunViaRunner('r1');
-      expect(result).toEqual({ stopped: true });
-      expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/runs/r1/stop'),
-        { method: 'POST' },
-        30000
-      );
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, { error: 'Not running' }));
-      await expect(stopRunViaRunner('r1')).rejects.toThrow('Not running');
     });
   });
 });
