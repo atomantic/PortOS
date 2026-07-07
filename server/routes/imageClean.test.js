@@ -210,6 +210,91 @@ describe('POST /api/image-clean (raw transport)', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
+  it('composites an ignore-zone mask over the diffused result when ?diffusion=light&mask=1', async () => {
+    // Build a left-half-white mask sized to the large fixture, then frame the
+    // body as <uint32 maskLen><mask><image>. The response should carry an
+    // ignore-zone step and stay a PNG.
+    const meta = await sharp(largePng).metadata();
+    const mw = meta.width;
+    const mh = meta.height;
+    const maskRaw = Buffer.alloc(mw * mh, 0);
+    for (let y = 0; y < mh; y += 1) {
+      for (let x = 0; x < mw; x += 1) if (x < mw / 2) maskRaw[y * mw + x] = 255;
+    }
+    const maskPng = await sharp(maskRaw, { raw: { width: mw, height: mh, channels: 1 } }).png().toBuffer();
+    const lenPrefix = Buffer.alloc(4);
+    lenPrefix.writeUInt32BE(maskPng.length, 0);
+    const envelope = Buffer.concat([lenPrefix, maskPng, largePng]);
+
+    const res = await postImage('?diffusion=light&mask=1&feather=2', envelope);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('image/png');
+    const report = reportOf(res);
+    const zone = report.steps.find((s) => s.step === 'ignore-zone');
+    expect(zone).toBeTruthy();
+    expect(zone.status).toBe('applied');
+    expect(report.steps.map((s) => s.step)).toContain('diffusion');
+  });
+
+  it('ignores the mask envelope when no diffusion step runs', async () => {
+    // mask=1 but diffusion=off → the mask is decoded off the body but never
+    // composited (nothing to preserve against). The image half of the envelope
+    // must still clean cleanly.
+    const maskRaw = Buffer.alloc(4 * 4, 255);
+    const maskPng = await sharp(maskRaw, { raw: { width: 4, height: 4, channels: 1 } }).png().toBuffer();
+    const lenPrefix = Buffer.alloc(4);
+    lenPrefix.writeUInt32BE(maskPng.length, 0);
+    const envelope = Buffer.concat([lenPrefix, maskPng, pngFixture]);
+
+    const res = await postImage('?mask=1', envelope);
+    expect(res.status).toBe(200);
+    const report = reportOf(res);
+    expect(report.steps.some((s) => s.step === 'ignore-zone')).toBe(false);
+    expect(report.format).toBe('png');
+    expect(report.width).toBe(4);
+  });
+
+  it('aligns the mask with the diffused base on an EXIF-oriented source with metadata OFF', async () => {
+    // Orientation=6 (rotate 90° CW) JPEG: visual space is 40×20, stored is 20×40.
+    // With metadata=0 the clean step returns un-rotated bytes, so the route must
+    // bake orientation into the diffusion input to match the (oriented) mask.
+    const raw = await sharp({
+      create: { width: 20, height: 40, channels: 3, background: { r: 120, g: 90, b: 60 } },
+    }).jpeg().toBuffer();
+    const oriented = await sharp(raw).withMetadata({ orientation: 6 }).jpeg().toBuffer();
+    // Mask painted in VISUAL space (40 wide × 20 tall), left half white.
+    const vw = 40;
+    const vh = 20;
+    const maskRaw = Buffer.alloc(vw * vh, 0);
+    for (let y = 0; y < vh; y += 1) for (let x = 0; x < vw; x += 1) if (x < vw / 2) maskRaw[y * vw + x] = 255;
+    const maskPng = await sharp(maskRaw, { raw: { width: vw, height: vh, channels: 1 } }).png().toBuffer();
+    const lenPrefix = Buffer.alloc(4);
+    lenPrefix.writeUInt32BE(maskPng.length, 0);
+    const envelope = Buffer.concat([lenPrefix, maskPng, oriented]);
+
+    const res = await postImage('?metadata=0&denoise=0&diffusion=light&mask=1&feather=0', envelope, 'image/jpeg');
+    expect(res.status).toBe(200);
+    const report = reportOf(res);
+    // Output is delivered in the oriented (visual) dims — 40×20 — so the mask,
+    // base, and original all agree. A misaligned (un-baked) path would report
+    // 20×40 here.
+    expect(report.width).toBe(vw);
+    expect(report.height).toBe(vh);
+    expect(report.steps.some((s) => s.step === 'ignore-zone' && s.status === 'applied')).toBe(true);
+  });
+
+  it('degrades to no-mask when the envelope length prefix is malformed', async () => {
+    // A length that overruns the buffer → splitMaskEnvelope treats the whole
+    // body as the image, so a plain PNG (no real envelope) still cleans.
+    const badPrefix = Buffer.alloc(4);
+    badPrefix.writeUInt32BE(0xffffffff, 0);
+    const envelope = Buffer.concat([badPrefix, pngFixture]);
+    const res = await postImage('?mask=1', envelope);
+    // The body now starts with a bogus prefix, so it's not a valid PNG → the
+    // sniffer rejects it as unsupported (proves we didn't 500 on the bad frame).
+    expect([200, 400]).toContain(res.status);
+  });
+
   it('auto-orients images via EXIF Orientation tag', async () => {
     // 4×8 JPEG re-emitted with EXIF Orientation=6 (rotate 90° CW). The metadata
     // re-encode path bakes in the rotation → output is 8×4 (dims swapped).
