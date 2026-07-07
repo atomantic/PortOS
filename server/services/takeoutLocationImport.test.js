@@ -91,6 +91,13 @@ describe('resolveLatLng', () => {
     expect(resolveLatLng({ latLng: 'nope' })).toBeNull();
     expect(resolveLatLng({ latitudeE7: 100 })).toBeNull();
   });
+  it('rejects nullish/blank E7 values instead of coercing them to 0', () => {
+    // Number(null)/Number('') are both 0 — a coord-less classic visit must stay
+    // null, not land on {lat:0,lng:0}.
+    expect(resolveLatLng({ latitudeE7: null, longitudeE7: null })).toBeNull();
+    expect(resolveLatLng({ latitudeE7: '', longitudeE7: '' })).toBeNull();
+    expect(resolveLatLng({ latitudeE7: 377834990, longitudeE7: null })).toBeNull();
+  });
 });
 
 describe('friendlySemanticType', () => {
@@ -222,6 +229,16 @@ describe('summarizeLocationCandidates', () => {
     const s = summarizeLocationCandidates([]);
     expect(s).toMatchObject({ visits: 0, uniquePlaces: 0, from: null, to: null });
     expect(s.topPlaces).toEqual([]);
+  });
+
+  it('counts unique places by the SAME identity the dedupe key uses (placeId → lat,lng → title)', () => {
+    // Two visits: same title, no placeId, DIFFERENT coords — imported distinctly
+    // (different dedupe keys), so the preview must also count them as 2 places.
+    const candidates = takeoutLocationCandidates([
+      { startTime: '2021-01-01T12:00:00Z', name: 'Cafe', lat: 1.1, lng: 2.2 },
+      { startTime: '2021-01-02T12:00:00Z', name: 'Cafe', lat: 3.3, lng: 4.4 },
+    ]);
+    expect(summarizeLocationCandidates(candidates).uniquePlaces).toBe(2);
   });
 });
 

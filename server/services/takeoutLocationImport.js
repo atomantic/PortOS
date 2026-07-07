@@ -57,13 +57,26 @@ function roundCoord(n) {
   return Number.isFinite(n) ? Math.round(n * 1e6) / 1e6 : null;
 }
 
+// Coerce a raw value to a finite number, rejecting nullish/blank — `Number(null)`
+// and `Number('')` are both a (misleading) 0, which would otherwise turn a
+// coord-less classic visit into a real {lat:0,lng:0} on the Gulf of Guinea.
+function toFiniteNumber(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Resolve a { lat, lng } pair from the several shapes Takeout uses:
 //   - E7 integers: `latitudeE7` / `longitudeE7` (degrees × 1e7)
 //   - a `latLng` string: "37.421°, -122.084°" or "geo:37.421,-122.084"
 // Returns { lat, lng } (rounded) or null when neither yields two finite numbers.
+// Raw E7 values are coerced here (rejecting nullish/blank) so callers don't have
+// to pre-`Number()` them — which would smuggle a null through as 0.
 export function resolveLatLng({ latitudeE7, longitudeE7, latLng } = {}) {
-  if (Number.isFinite(latitudeE7) && Number.isFinite(longitudeE7)) {
-    return { lat: roundCoord(latitudeE7 / 1e7), lng: roundCoord(longitudeE7 / 1e7) };
+  const latE7 = toFiniteNumber(latitudeE7);
+  const lngE7 = toFiniteNumber(longitudeE7);
+  if (latE7 !== null && lngE7 !== null) {
+    return { lat: roundCoord(latE7 / 1e7), lng: roundCoord(lngE7 / 1e7) };
   }
   if (typeof latLng === 'string' && latLng.trim()) {
     const nums = latLng.replace(/geo:/i, '').match(/-?\d+(?:\.\d+)?/g);
@@ -93,6 +106,17 @@ export function friendlySemanticType(type) {
     .join(' ');
 }
 
+// Stable identity for a place, used BOTH for the dedupe key and the preview's
+// unique-place count so the two never diverge. Prefer the Google placeId; fall
+// back to rounded lat/lng, then to the title — so two *different* places don't
+// collapse when a placeId is absent (on-device exports omit it for un-geocoded
+// stops). `title` is the already-resolved display label.
+export function placeIdentity({ placeId, lat, lng }, title) {
+  if (placeId) return placeId;
+  if (lat !== null && lat !== undefined && lng !== null && lng !== undefined) return `${lat},${lng}`;
+  return title;
+}
+
 // Map ONE normalized visit intermediate to an activity candidate, or null if it
 // lacks a usable start instant. Shared by both export shapes.
 //   visit = { startTime, endTime, name, address, placeId, lat, lng, semanticType }
@@ -109,16 +133,8 @@ export function visitToCandidate(visit) {
     ? Math.max(0, Math.round((new Date(endAt).getTime() - new Date(happenedAt).getTime()) / 1000))
     : null;
 
-  // Dedupe on the visit start + place identity. Prefer the Google placeId; fall
-  // back to rounded lat/lng, then to the title, so two *different* places don't
-  // collapse into one visit when a placeId is absent (on-device exports omit it
-  // for un-geocoded stops).
-  const identity = visit.placeId
-    || (visit.lat !== null && visit.lat !== undefined && visit.lng !== null && visit.lng !== undefined
-      ? `${visit.lat},${visit.lng}`
-      : null)
-    || title;
-  const dedupeKey = `location:${identity}:${happenedAt}`;
+  // Dedupe on the visit start + place identity.
+  const dedupeKey = `location:${placeIdentity(visit, title)}:${happenedAt}`;
 
   // Summary keeps a short human line (address, else the friendly type) — never a
   // full record. Drop the address when it's identical to the title to avoid "X — X".
@@ -148,9 +164,11 @@ function normalizeClassicPlaceVisit(placeVisit) {
   if (!placeVisit || typeof placeVisit !== 'object') return null;
   const loc = placeVisit.location || {};
   const dur = placeVisit.duration || {};
+  // Pass the raw E7 values — resolveLatLng coerces + rejects nullish/blank, so a
+  // coord-less visit stays {lat:null,lng:null} instead of collapsing to 0,0.
   const { lat, lng } = resolveLatLng({
-    latitudeE7: Number(loc.latitudeE7),
-    longitudeE7: Number(loc.longitudeE7),
+    latitudeE7: loc.latitudeE7,
+    longitudeE7: loc.longitudeE7,
   }) || {};
   return {
     startTime: dur.startTimestamp ?? dur.startTimestampMs ?? null,
@@ -224,8 +242,9 @@ export function summarizeLocationCandidates(candidates = []) {
       if (!earliest || c.happenedAt < earliest) earliest = c.happenedAt;
       if (!latest || c.happenedAt > latest) latest = c.happenedAt;
     }
-    const key = c.metadata?.placeId || c.title;
-    places.add(key);
+    // Same identity logic as the dedupe key so preview's unique count can't
+    // diverge from what actually lands (placeId → lat,lng → title).
+    places.add(placeIdentity(c.metadata || {}, c.title));
     placeCounts.set(c.title, (placeCounts.get(c.title) || 0) + 1);
   }
   const topPlaces = [...placeCounts.entries()]
