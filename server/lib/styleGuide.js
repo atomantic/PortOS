@@ -38,6 +38,23 @@ export const STYLE_GUIDE_LIMITS = Object.freeze({
   EXEMPLAR_NOTE_MAX: 200,
 });
 
+// Le Guin prose-craft doctrine (#2175, CWQE Phase 10) — always-on generation-side
+// craft guidance, the prose sibling of the Sanderson's-Laws worldbuilding doctrine
+// baked into `buildExpansionPrompt`. Ursula K. Le Guin's core lesson from *Steering
+// the Craft*: style is not decoration laid over a story — the sound and rhythm of the
+// sentences ARE the reader's experience of the world. Kept as short imperative rules
+// (not essays) per the "prompts stay lean" rule; injected only into the prose/text
+// writing stages (see composeStyleNotes' `proseCraft` option), never the structural
+// arc/episode-seed planning stages where prose-level craft would be noise. This is
+// baked-in doctrine, NOT a per-series field, so it needs no schema/migration.
+export const PROSE_CRAFT_DOCTRINE = Object.freeze([
+  'Prose craft (Le Guin — apply throughout):',
+  '- Style is not ornament — it IS the story: the sound, rhythm, and syntax of the sentences create the world the reader lives in, so shape them deliberately.',
+  '- Prefer strong, specific nouns and verbs to adjective/adverb padding. Cut dead adjective-noun clichés ("ancient wisdom", "piercing gaze", "heavy silence", "cold fury") — replace them with a concrete image or a sharper verb.',
+  '- Let concrete sensory detail carry meaning; do not summarize an emotion the scene can show.',
+  '- Vary sentence length and rhythm on purpose — short for impact, longer to build; never let every sentence fall into the same cadence.',
+].join('\n'));
+
 export const STYLE_GUIDE_TENSES = Object.freeze(['past', 'present']);
 export const STYLE_GUIDE_POV_PERSONS = Object.freeze(['first', 'third-limited', 'third-omniscient', 'second']);
 export const STYLE_GUIDE_AUDIENCES = Object.freeze(['children', 'middle-grade', 'YA', 'adult']);
@@ -227,9 +244,16 @@ export function renderStyleGuide(styleGuide) {
  *
  * The structured guide leads (deterministic house style first), the author's
  * free-text notes trail. Returns `''` when neither is present.
+ *
+ * `opts.proseCraft` (default false) appends the always-on Le Guin prose-craft
+ * doctrine (#2175). It's opt-in per stage: the prose/text writing stages pass
+ * `true` so drafting follows the craft rules; the structural arc/episode-seed
+ * planning stages leave it off, since sentence-level craft guidance is noise
+ * when the model is outlining beats rather than writing prose.
  */
-export function composeStyleNotes(series) {
+export function composeStyleNotes(series, opts = {}) {
   const guide = renderStyleGuide(series?.styleGuide);
   const notes = isStr(series?.styleNotes) ? series.styleNotes.trim() : '';
-  return [guide, notes].filter(Boolean).join('\n\n');
+  const craft = opts.proseCraft ? PROSE_CRAFT_DOCTRINE : '';
+  return [guide, notes, craft].filter(Boolean).join('\n\n');
 }
