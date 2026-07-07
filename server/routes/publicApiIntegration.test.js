@@ -9,11 +9,12 @@
  * else is the production code path.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync, readFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-publicapi-' });
 
@@ -36,21 +37,16 @@ vi.mock('../services/voice/tts-piper.js', () => ({
   listPiperVoices: vi.fn(async () => [{ name: 'en_GB-jenny_dioco-medium' }]),
 }));
 
+// Direct settings.json writes that also drop the getSettings() read cache —
+// see server/lib/settingsTestUtil.js for why the reset is required here
+// (a prior setPassword() warms the cache; a bypass-save() write leaves it stale).
+const { mergeSettingsFile } = bindSettingsFile(tempRoot);
+
 const resetSettings = (extra = {}) => {
   writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(extra, null, 2) + '\n');
   writeFileSync(join(tempRoot, 'auth-sessions.json'), '{"tokens":[]}\n');
 };
-// getSettings() memoizes the parsed file and only refreshes off save()'s
-// `settings:updated` event. This helper writes settings.json directly, so a
-// prior getSettings (e.g. from setPassword) would leave the cache stale on this
-// apiAccess block — drop the cache so the app built next reads the fresh file.
-const setApiAccess = async (apiAccess) => {
-  const raw = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
-  raw.apiAccess = apiAccess;
-  writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(raw, null, 2) + '\n');
-  const { __resetSettingsCache } = await import('../services/settings.js');
-  __resetSettingsCache();
-};
+const setApiAccess = (apiAccess) => mergeSettingsFile({ apiAccess });
 
 const buildApp = async () => {
   const { authGate } = await import('../lib/authGate.js');

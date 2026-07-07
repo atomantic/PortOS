@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync, writeFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from './mockPathsDataRoot.js';
+import { bindSettingsFile } from './settingsTestUtil.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -9,6 +10,11 @@ vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makeProxy(actual);
 });
+
+// Direct settings.json writes that also drop the getSettings() read cache —
+// see server/lib/settingsTestUtil.js for why the reset is required here
+// (a prior setPassword() warms the cache; a bypass-save() write leaves it stale).
+const { mergeSettingsFile } = bindSettingsFile(tempRoot);
 
 const resetSettings = () => {
   writeFileSync(join(tempRoot, 'settings.json'), '{}\n');
@@ -18,18 +24,7 @@ const resetSettings = () => {
 // Merge an apiAccess block into settings.json (preserving any auth secrets a
 // prior setPassword() call wrote). setPassword persists secrets to the same
 // file, so read-modify-write rather than clobbering.
-// getSettings() memoizes the parsed file and only refreshes off the
-// `settings:updated` event that save() emits. This helper writes settings.json
-// directly (bypassing save()), so a prior getSettings — e.g. from setPassword —
-// would leave the cache stale on this apiAccess block. Drop the cache so the
-// subsequent authGate read observes the freshly-written file.
-const writeApiAccess = async (apiAccess) => {
-  const raw = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
-  raw.apiAccess = apiAccess;
-  writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(raw, null, 2) + '\n');
-  const { __resetSettingsCache } = await import('../services/settings.js');
-  __resetSettingsCache();
-};
+const writeApiAccess = (apiAccess) => mergeSettingsFile({ apiAccess });
 
 beforeEach(() => {
   vi.resetModules();
