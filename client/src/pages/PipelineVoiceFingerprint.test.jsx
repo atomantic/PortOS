@@ -87,6 +87,63 @@ describe('PipelineVoiceFingerprint', () => {
     expect(screen.queryByText('σ')).not.toBeInTheDocument();
   });
 
+  it('surfaces the chosen-voice baseline row + copy when exemplars mode is active (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 5 },
+        dialogueRatio: { mean: 15, std: 8, center: 2 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy names the chosen-voice baseline instead of the series mean.
+    expect(screen.getByText(/chosen voice/)).toBeInTheDocument();
+    // A dedicated "voice" baseline footer row renders (label + the centered value).
+    expect(screen.getByText('voice')).toBeInTheDocument();
+    expect(screen.getByText('5 words')).toBeInTheDocument();
+  });
+
+  it('labels blended mode as a blend, not the chosen voice alone (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'blended',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 7.75 },
+        dialogueRatio: { mean: 15, std: 8, center: 8.5 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy calls it a blend, and the footer row is labeled "blend".
+    expect(screen.getByText(/blend of the series mean/)).toBeInTheDocument();
+    expect(screen.getByText('blend')).toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
+  it('does not claim the chosen-voice baseline on a gated-off run (#2179)', async () => {
+    // A gated-off run (< minIssues) still reports the configured mode, but the
+    // baseline was never applied and series is empty — the UI must fall back.
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      gatedOff: true,
+      issueCount: 2,
+      outliers: [],
+      series: {},
+      matrix: { metricKeys: ['sentenceLenMean'], issues: [{ issue: 1, words: 5, sentences: 1, metrics: { sentenceLenMean: 5 } }, { issue: 2, words: 4, sentences: 1, metrics: { sentenceLenMean: 4 } }] },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText(/Drift detection is off/)).toBeInTheDocument());
+    // No chosen-voice copy or footer row when the baseline never ran.
+    expect(screen.queryByText(/chosen voice/)).not.toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
   it('renders an empty state when nothing is drafted', async () => {
     getVoiceFingerprint.mockResolvedValue({
       ...MATRIX_PAYLOAD,

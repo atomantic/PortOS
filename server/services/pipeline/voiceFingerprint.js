@@ -37,20 +37,40 @@ export const VOICE_DRIFT_CHECK_ID = 'style.voice-drift';
 
 /**
  * Resolve the effective `style.voice-drift` config for a series from the persisted
- * per-check settings (threshold / minIssues / vocabularyWells), tolerant of a
- * hand-edited or absent slice. `resolveCheckConfig` validates the stored slice
- * through the check's Zod `configSchema`, so every key comes back populated with
- * its schema default when unset — the caller can trust the fields are present.
- * (`style.voice-drift` is statically registered, so `getCheckById` never misses.)
+ * per-check settings (threshold / minIssues / vocabularyWells / baselineMode),
+ * tolerant of a hand-edited or absent slice. `resolveCheckConfig` validates the
+ * stored slice through the check's Zod `configSchema`, so every key comes back
+ * populated with its schema default when unset — the caller can trust the fields
+ * are present. (`style.voice-drift` is statically registered, so `getCheckById`
+ * never misses.)
+ *
+ * `seriesOverrides` is the series' `editorialCheckConfig` map (#1591): when it
+ * carries an override for this check, it is overlaid on the global stored config
+ * exactly as `applySeriesCheckConfig` does for the finding-emitting run — so the
+ * matrix view and the editor's findings resolve the SAME effective config (a
+ * per-series `baselineMode`/threshold override drives both).
  *
  * @param {object} [settings] pre-loaded settings (optional; fetched when omitted)
- * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string, maxFindings: number }>}
+ * @param {object} [seriesOverrides] the series' editorialCheckConfig map (optional)
+ * @returns {Promise<{ sigmaThreshold: number, minIssues: number, vocabularyWells: string, maxFindings: number, baselineMode: string }>}
  */
-export async function resolveVoiceDriftConfig(settings) {
+export async function resolveVoiceDriftConfig(settings, seriesOverrides) {
   const s = settings || await getSettings();
   const check = getCheckById(s, VOICE_DRIFT_CHECK_ID);
-  const stored = readChecksSlice(s)[VOICE_DRIFT_CHECK_ID] || {};
-  return resolveCheckConfig(check, stored.config);
+  const stored = readChecksSlice(s)[VOICE_DRIFT_CHECK_ID]?.config;
+  // Resolve the GLOBAL config first (schema-validated, defaults filled).
+  const global = resolveCheckConfig(check, stored);
+  const override = seriesOverrides && typeof seriesOverrides === 'object' && !Array.isArray(seriesOverrides)
+    ? seriesOverrides[VOICE_DRIFT_CHECK_ID]
+    : null;
+  if (!override || typeof override !== 'object' || Array.isArray(override)) return global;
+  // Overlay the per-series override on the RESOLVED global, EXACTLY as
+  // applySeriesCheckConfig does — including its failure mode: if the merged blob
+  // is invalid (e.g. a hand-edited out-of-range value), keep the resolved global
+  // rather than collapsing to bare schema defaults, so the matrix view and the
+  // finding-emitting run stay in lockstep even on a bad override.
+  const parsed = check.configSchema.safeParse({ ...global, ...override });
+  return parsed.success ? parsed.data : global;
 }
 
 /**
@@ -68,6 +88,8 @@ export async function resolveVoiceDriftConfig(settings) {
  *   gatedOff: boolean,
  *   issueCount: number,
  *   threshold: number,
+ *   baselineMode: string,
+ *   exemplarBaselineUsed: boolean,
  *   matrix: object,
  *   series: object,
  *   outliers: object[],
@@ -75,20 +97,27 @@ export async function resolveVoiceDriftConfig(settings) {
  */
 export async function getVoiceFingerprint(seriesId) {
   // Throws when the series is missing — the route maps it to a 404. Runs before any
-  // manuscript I/O so a bad id fails fast.
-  await getSeries(seriesId);
+  // manuscript I/O so a bad id fails fast. Keep the loaded record: the drift baseline
+  // can be the style guide's chosen-voice exemplars (#2179).
+  const series = await getSeries(seriesId);
 
   const [sections, cfg] = await Promise.all([
     collectManuscriptSections(seriesId),
-    resolveVoiceDriftConfig(),
+    // Overlay this series' per-check overrides (#1591) so the matrix view resolves
+    // the same effective config the finding-emitting run does.
+    resolveVoiceDriftConfig(undefined, series?.editorialCheckConfig),
   ]);
 
-  // `cfg` is schema-validated, so sigmaThreshold/minIssues/vocabularyWells are
-  // always present (defaults applied by resolveCheckConfig) — no `??` needed.
+  // `cfg` is schema-validated, so sigmaThreshold/minIssues/vocabularyWells/baselineMode
+  // are always present (defaults applied by resolveCheckConfig) — no `??` needed. The
+  // matrix view resolves the SAME config the finding-emitting run does, including the
+  // chosen-voice baseline, so the highlighted outliers agree with the editor's findings.
   const drift = computeVoiceDrift(sectionsCorpus(sections), {
     threshold: cfg.sigmaThreshold,
     minIssues: cfg.minIssues,
     wells: parseVoiceWells(cfg.vocabularyWells),
+    baselineMode: cfg.baselineMode,
+    voiceExemplars: series?.styleGuide?.voiceExemplars,
   });
 
   return {
@@ -99,6 +128,8 @@ export async function getVoiceFingerprint(seriesId) {
     gatedOff: drift.gatedOff,
     issueCount: drift.issueCount,
     threshold: drift.threshold,
+    baselineMode: drift.baselineMode,
+    exemplarBaselineUsed: drift.exemplarBaselineUsed,
     matrix: drift.matrix,
     series: drift.series,
     outliers: drift.outliers,

@@ -284,6 +284,52 @@ export function voiceFingerprintMatrix(manuscript, opts = {}) {
   return { issues, metricKeys, wells: wells.map((w) => w.name) };
 }
 
+// The three drift-baseline modes (#2179, CWQE Phase 14). Which per-metric CENTER
+// each drafted issue's z-score is measured against:
+//   'drafted'   — the mean of the drafted issues (default; the original behavior).
+//   'exemplars' — the style guide's voice EXEMPLARS' combined fingerprint (the
+//                 CHOSEN voice), so an issue is flagged for drifting from the
+//                 voice the author picked, not from the average of what got
+//                 drafted (which itself may all have drifted the same way).
+//   'blended'   — the midpoint of the two, splitting the difference.
+// The spread (σ) is ALWAYS the drafted-issue σ regardless of mode — 1–3 short
+// exemplar passages can't yield a meaningful population σ, and "how much this
+// series naturally varies per metric" is a property of the drafted corpus. So an
+// exemplar/blended run re-centers the target, keeping the drafted spread.
+export const VOICE_BASELINE_MODES = Object.freeze(['drafted', 'exemplars', 'blended']);
+
+// A combined exemplar fingerprint needs at least this many words to be a stable
+// baseline — a one-line "exemplar" is too thin to center against, so below this
+// the baseline is treated as absent (the run falls back to 'drafted').
+const MIN_EXEMPLAR_WORDS = 40;
+
+/**
+ * Combine a style guide's voice exemplar passages into ONE fingerprint — the
+ * statistical profile of the series' CHOSEN voice, used as the drift baseline in
+ * `exemplars` / `blended` mode (#2179). Concatenates the passages (they are the
+ * same register by construction) and fingerprints the whole, so the metric
+ * profile reflects the exemplars' aggregate rhythm/diction. Pure.
+ *
+ * Returns `null` when there are no usable passages or the combined text is below
+ * `MIN_EXEMPLAR_WORDS` (too thin to center against) — callers then fall back to
+ * the drafted-mean baseline.
+ *
+ * @param {Array<{ passage?: string }>} voiceExemplars
+ * @param {{ wells?: Array<{ name: string, words: Set<string> }> }} [opts]
+ * @returns {{ metrics: Record<string, number>, words: number, passages: number } | null}
+ */
+export function computeExemplarBaseline(voiceExemplars, opts = {}) {
+  const wells = Array.isArray(opts.wells) ? opts.wells : [];
+  const passages = (Array.isArray(voiceExemplars) ? voiceExemplars : [])
+    .map((e) => (typeof e?.passage === 'string' ? e.passage.trim() : ''))
+    .filter(Boolean);
+  if (!passages.length) return null;
+  const combined = passages.join('\n\n');
+  const fp = computeFingerprint(combined, { wells });
+  if (fp.words < MIN_EXEMPLAR_WORDS) return null;
+  return { metrics: fp.metrics, words: fp.words, passages: passages.length };
+}
+
 // Human label for a metric key (static descriptor label, or the well name).
 export function metricLabel(key) {
   if (typeof key === 'string' && key.startsWith('well:')) {
@@ -339,14 +385,24 @@ export function describeMetricColumn(key) {
 }
 
 // One-sentence finding text for a drift outlier — names the issue, the metric,
-// the issue value vs the series mean, the σ distance, and the plain-language
-// direction ("prose has gone metronomic").
+// the issue value vs the baseline center, the σ distance, and the plain-language
+// direction ("prose has gone metronomic"). The baseline label reflects which
+// center the outlier was measured against (#2179): the drafted-issue mean, the
+// style guide's chosen-voice exemplars, or a blend of the two — so an
+// exemplar-baseline finding reads "vs the style guide's chosen voice" instead of
+// implying it drifted from the average of what got drafted.
 export function describeDrift(o) {
   const label = metricLabel(o.metricKey);
   const dir = directionPhrase(o.metricKey, o.direction);
   const val = `${o.value}${o.unit || ''}`;
-  const mean = `${round2(o.mean)}${o.unit || ''}`;
-  return `Issue ${o.issue}'s ${label} is ${val} vs the series mean of ${mean} `
+  // `center` is the baseline value; older callers/tests that pass only `mean`
+  // still work (center falls back to mean).
+  const centerVal = Number.isFinite(o.center) ? o.center : o.mean;
+  const center = `${round2(centerVal)}${o.unit || ''}`;
+  const baselineNoun = o.baselineMode === 'exemplars'
+    ? "the style guide's chosen voice"
+    : (o.baselineMode === 'blended' ? "the blend of the series mean and the chosen voice" : 'the series mean');
+  return `Issue ${o.issue}'s ${label} is ${val} vs ${baselineNoun} of ${center} `
     + `(${Math.abs(o.z).toFixed(1)}σ ${o.direction === 'high' ? 'above' : 'below'}) — ${dir}. `
     + 'A statistical outlier against the series voice; confirm it is an earned modulation, not drift.';
 }
@@ -368,21 +424,44 @@ export function describeDrift(o) {
  *
  * For each metric, a series mean/σ is computed across issues; a metric whose σ is
  * ~0 (every issue identical) is skipped — no drift is possible. An issue is an
- * outlier on a metric when its value is more than `threshold`·σ from the mean.
+ * outlier on a metric when its value is more than `threshold`·σ from the CENTER.
  * Outliers are sorted by |z| descending so the most significant drift survives a
  * downstream `maxFindings` cap.
  *
+ * `opts.baselineMode` (#2179) selects what CENTER each issue is measured against:
+ * `'drafted'` (default — the drafted-issue mean), `'exemplars'` (the style
+ * guide's chosen-voice exemplar profile), or `'blended'` (the midpoint). In the
+ * exemplar/blended modes the σ is STILL the drafted-issue σ (see
+ * `VOICE_BASELINE_MODES`) — only the center shifts — so an issue is flagged for
+ * drifting from the *chosen* voice rather than from the average of what got
+ * drafted. When the mode asks for exemplars but `opts.voiceExemplars` yields no
+ * usable baseline, the run silently falls back to `'drafted'` and reports the
+ * effective mode in `baselineMode` + `exemplarBaselineUsed: false`.
+ *
  * @param {string} manuscript
- * @param {{ threshold?: number, minIssues?: number, wells?: Array<{ name: string, words: Set<string> }> }} [opts]
+ * @param {{ threshold?: number, minIssues?: number, wells?: Array<{ name: string, words: Set<string> }>,
+ *   baselineMode?: 'drafted'|'exemplars'|'blended',
+ *   voiceExemplars?: Array<{ passage?: string }> }} [opts]
  * @returns {{ gatedOff: boolean, issueCount: number, threshold: number,
- *   matrix: object, series: Record<string, {mean:number, std:number}>,
+ *   baselineMode: string, exemplarBaselineUsed: boolean,
+ *   matrix: object, series: Record<string, {mean:number, std:number, center:number}>,
  *   outliers: Array<{ issue:number, metricKey:string, label:string, value:number,
- *     mean:number, std:number, z:number, direction:'high'|'low', unit:string }> }}
+ *     mean:number, center:number, std:number, z:number, direction:'high'|'low',
+ *     unit:string, baselineMode:string }> }}
  */
 export function computeVoiceDrift(manuscript, opts = {}) {
   const threshold = Number.isFinite(opts.threshold) && opts.threshold > 0 ? opts.threshold : 1.5;
   const minIssues = Number.isInteger(opts.minIssues) && opts.minIssues >= 3 ? opts.minIssues : 4;
-  const fullMatrix = voiceFingerprintMatrix(manuscript, { wells: opts.wells });
+  const wells = opts.wells;
+  const requestedMode = VOICE_BASELINE_MODES.includes(opts.baselineMode) ? opts.baselineMode : 'drafted';
+  // Compute the exemplar baseline once (only when a non-drafted mode asked for
+  // it). A thin/absent exemplar set → null → fall back to the drafted mean.
+  const exemplarBaseline = requestedMode === 'drafted'
+    ? null
+    : computeExemplarBaseline(opts.voiceExemplars, { wells });
+  const effectiveMode = exemplarBaseline ? requestedMode : 'drafted';
+
+  const fullMatrix = voiceFingerprintMatrix(manuscript, { wells });
   // Drop empty / not-yet-drafted issue sections (a `# Issue N` header with no
   // prose behind it). Counting them would let a stub satisfy `minIssues` and
   // inject an all-zero row that pulls the series mean and flags the unwritten
@@ -393,8 +472,15 @@ export function computeVoiceDrift(manuscript, opts = {}) {
   const matrix = { ...fullMatrix, issues };
   const { metricKeys } = matrix;
 
+  const base = {
+    issueCount: issues.length,
+    threshold,
+    baselineMode: effectiveMode,
+    exemplarBaselineUsed: effectiveMode !== 'drafted',
+  };
+
   if (issues.length < minIssues) {
-    return { gatedOff: true, issueCount: issues.length, threshold, matrix, series: {}, outliers: [] };
+    return { ...base, gatedOff: true, matrix, series: {}, outliers: [] };
   }
 
   const series = {};
@@ -404,13 +490,32 @@ export function computeVoiceDrift(manuscript, opts = {}) {
     const values = issues.map((it) => it.metrics[key] ?? 0);
     const mean = meanOf(values);
     const std = stdOf(values, mean);
-    series[key] = { mean: round2(mean), std: round2(std) };
-    // A metric with no spread can't have an outlier — and dividing by ~0 σ would
-    // manufacture infinite z-scores. Skip it.
+    // The CENTER each issue's z-score is measured against. Drafted mode centers on
+    // the drafted mean; exemplars mode on the chosen-voice profile; blended on the
+    // midpoint. The exemplar value for a metric the exemplars don't carry falls
+    // back to the drafted mean (never NaN). The σ is always the drafted spread.
+    let center = mean;
+    if (exemplarBaseline) {
+      const exemplarVal = exemplarBaseline.metrics[key];
+      const target = Number.isFinite(exemplarVal) ? exemplarVal : mean;
+      center = effectiveMode === 'blended' ? (mean + target) / 2 : target;
+    }
+    series[key] = { mean: round2(mean), std: round2(std), center: round2(center) };
+    // A metric with no drafted spread can't have a per-issue OUTLIER — and dividing
+    // by ~0 σ would manufacture infinite z-scores — so skip it. Note the boundary
+    // this leaves for the exemplar/blended baseline (#2179): when every drafted
+    // issue shares the SAME value on a metric (σ≈0) but that shared value sits far
+    // from the chosen-voice center, this per-issue z-score model emits nothing —
+    // there's no per-issue outlier, the whole corpus is uniformly off. That
+    // "uniformly-off-register" case wants a SERIES-level finding (a different shape
+    // than the per-issue outliers here), tracked as a #2179 follow-up. It does NOT
+    // affect the common case the feature targets: issues that drifted the same
+    // DIRECTION still have natural per-metric variance (σ>0), so they still flag
+    // against the chosen-voice center.
     if (std < 1e-9) continue;
     for (const it of issues) {
       const value = it.metrics[key] ?? 0;
-      const z = (value - mean) / std;
+      const z = (value - center) / std;
       if (Math.abs(z) <= threshold) continue;
       outliers.push({
         issue: it.issue,
@@ -418,16 +523,18 @@ export function computeVoiceDrift(manuscript, opts = {}) {
         label: metricLabel(key),
         value,
         mean,
+        center,
         std,
         z,
         direction: z > 0 ? 'high' : 'low',
         unit: metricUnit(key),
+        baselineMode: effectiveMode,
       });
     }
   }
 
   outliers.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
-  return { gatedOff: false, issueCount: issues.length, threshold, matrix, series, outliers };
+  return { ...base, gatedOff: false, matrix, series, outliers };
 }
 
 /**
@@ -454,6 +561,13 @@ export function renderFingerprintTable(drift) {
   if (series && Object.keys(series).length) {
     rows.push(['mean', ...keys.map((k) => `${series[k]?.mean ?? 0}`)]);
     rows.push(['σ', ...keys.map((k) => `${series[k]?.std ?? 0}`)]);
+    // When drift was measured against a non-drafted baseline (exemplars/blended),
+    // the flagged cells sit against `center`, not `mean` — surface it as its own
+    // row so the starred outliers are readable against the actual baseline.
+    if (drift.exemplarBaselineUsed) {
+      const label = drift.baselineMode === 'blended' ? 'blend' : 'voice';
+      rows.push([label, ...keys.map((k) => `${series[k]?.center ?? series[k]?.mean ?? 0}`)]);
+    }
   }
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => String(r[i]).length)));
   const fmt = (cells) => cells.map((c, i) => String(c).padEnd(widths[i])).join('  ').trimEnd();
