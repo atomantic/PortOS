@@ -20,10 +20,11 @@ let settingsStore = {};
 let manuscriptCorpus = buildManuscript();
 
 let seriesStyleGuide = null;
+let seriesEditorialCheckConfig = null;
 vi.mock('./series.js', () => ({
   getSeries: vi.fn(async (id) => {
     if (id === 'missing') throw Object.assign(new Error('nope'), { code: 'PIPELINE_SERIES_NOT_FOUND' });
-    return { id, name: 'Test Series', styleGuide: seriesStyleGuide };
+    return { id, name: 'Test Series', styleGuide: seriesStyleGuide, editorialCheckConfig: seriesEditorialCheckConfig };
   }),
 }));
 
@@ -42,6 +43,7 @@ beforeEach(() => {
   settingsStore = {};
   manuscriptCorpus = buildManuscript();
   seriesStyleGuide = null;
+  seriesEditorialCheckConfig = null;
 });
 
 describe('resolveVoiceDriftConfig', () => {
@@ -65,6 +67,26 @@ describe('resolveVoiceDriftConfig', () => {
     expect(cfg.sigmaThreshold).toBe(2);
     expect(cfg.minIssues).toBe(3);
     expect(cfg.vocabularyWells).toBe('trade: forge, anvil');
+  });
+
+  it('overlays a per-series editorialCheckConfig override on the global config (#1591)', async () => {
+    settingsStore = {
+      pipelineEditorialChecks: {
+        checks: { [VOICE_DRIFT_CHECK_ID]: { config: { sigmaThreshold: 2, baselineMode: 'drafted' } } },
+      },
+    };
+    // The series override flips baselineMode and threshold; the un-overridden
+    // global sigmaThreshold is replaced, other globals persist.
+    const cfg = await resolveVoiceDriftConfig(undefined, {
+      [VOICE_DRIFT_CHECK_ID]: { baselineMode: 'blended', sigmaThreshold: 1.2 },
+    });
+    expect(cfg.baselineMode).toBe('blended');
+    expect(cfg.sigmaThreshold).toBe(1.2);
+  });
+
+  it('ignores a non-object per-series override', async () => {
+    const cfg = await resolveVoiceDriftConfig(undefined, { [VOICE_DRIFT_CHECK_ID]: 'nope' });
+    expect(cfg.baselineMode).toBe('drafted');
   });
 });
 
@@ -154,6 +176,17 @@ describe('getVoiceFingerprint', () => {
       return s && Number.isFinite(s.center) && Math.abs(s.center - s.mean) > 1e-6;
     });
     expect(shifted).toBe(true);
+  });
+
+  it('applies a per-series editorialCheckConfig override for the baseline (#2179/#1591)', async () => {
+    // Global config leaves baselineMode at the default 'drafted'; the SERIES
+    // override flips it to exemplars — the matrix must honor the override, exactly
+    // as the finding-emitting run does via applySeriesCheckConfig.
+    seriesStyleGuide = { voiceExemplars: [{ passage: METRONOMIC }, { passage: METRONOMIC }] };
+    seriesEditorialCheckConfig = { [VOICE_DRIFT_CHECK_ID]: { baselineMode: 'exemplars' } };
+    const res = await getVoiceFingerprint('ser-1');
+    expect(res.baselineMode).toBe('exemplars');
+    expect(res.exemplarBaselineUsed).toBe(true);
   });
 
   it('falls back to drafted when configured for exemplars but the style guide has none (#2179)', async () => {

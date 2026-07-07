@@ -106,6 +106,24 @@ describe('PipelineVoiceFingerprint', () => {
     expect(screen.getByText('5 words')).toBeInTheDocument();
   });
 
+  it('labels blended mode as a blend, not the chosen voice alone (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'blended',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 7.75 },
+        dialogueRatio: { mean: 15, std: 8, center: 8.5 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy calls it a blend, and the footer row is labeled "blend".
+    expect(screen.getByText(/blend of the series mean/)).toBeInTheDocument();
+    expect(screen.getByText('blend')).toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
   it('does not claim the chosen-voice baseline on a gated-off run (#2179)', async () => {
     // A gated-off run (< minIssues) still reports the configured mode, but the
     // baseline was never applied and series is empty — the UI must fall back.

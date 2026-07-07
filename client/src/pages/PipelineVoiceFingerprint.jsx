@@ -73,6 +73,13 @@ export default function PipelineVoiceFingerprint() {
   // and returns `series: {}`, so the footer row + intro copy must fall back to the
   // plain description rather than promising a baseline that never ran.
   const usesChosenVoice = data?.exemplarBaselineUsed === true && !data?.gatedOff;
+  // The baseline phrase for the intro copy — blended is the midpoint, NOT the
+  // exemplars alone, so it must not be described as "the chosen voice."
+  const baselineNoun = !usesChosenVoice
+    ? 'series mean'
+    : (baselineMode === 'blended'
+      ? "blend of the series mean and the style guide's chosen voice"
+      : "style guide's chosen voice (its voice exemplars)");
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
@@ -101,11 +108,9 @@ export default function PipelineVoiceFingerprint() {
         Every drafted issue's prose fingerprint. Each column is a metric; a cell
         highlighted in <span className="text-port-warning">amber</span> is a
         statistical outlier — more than {data?.threshold ?? 1.5}σ from the{' '}
-        {usesChosenVoice
-          ? "style guide's chosen voice (its voice exemplars)"
-          : 'series mean'}{' '}
+        {baselineNoun}{' '}
         on that metric. The bottom rows are the series mean and standard
-        deviation (σ){usesChosenVoice ? ', plus the chosen-voice baseline the outliers are measured against' : ''}.
+        deviation (σ){usesChosenVoice ? `, plus the ${baselineMode === 'blended' ? 'blended' : 'chosen-voice'} baseline the outliers are measured against` : ''}.
         This measures the same vectors the deterministic{' '}
         <code className="text-gray-400">style.voice-drift</code> editorial check
         flags; it just shows the whole matrix, not only the flagged outliers.
