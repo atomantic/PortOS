@@ -107,12 +107,16 @@ export default function MediaModels() {
   const cancelEdit = () => { setEditId(null); };
 
   const saveEdit = async (id) => {
+    // Only send numeric fields that parse to a finite number — a cleared
+    // input would otherwise become NaN (→ JSON null) or 0 and trip the
+    // server's min(1) validator with a confusing 400. Omitted fields keep
+    // their prior value (PATCH is a partial merge server-side).
+    const steps = Number(editFields.steps);
+    const guidance = Number(editFields.guidance);
+    const patch = { name: editFields.name.trim() };
+    if (Number.isFinite(steps)) patch.steps = steps;
+    if (Number.isFinite(guidance)) patch.guidance = guidance;
     setBusy(id);
-    const patch = {
-      name: editFields.name.trim(),
-      steps: Number(editFields.steps),
-      guidance: Number(editFields.guidance),
-    };
     await patchCustomMediaModel(id, patch, { silent: true })
       .then((updated) => {
         toast.success('Model updated');
