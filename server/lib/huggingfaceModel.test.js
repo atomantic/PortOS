@@ -65,6 +65,21 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/needs a dedicated venv/);
   });
 
+  it('refuses a LoRA adapter repo (belongs in the LoRA manager, not base models)', () => {
+    // base_model in the card is the adapter signal.
+    expect(() => classifyHfMediaModel({
+      repo: 'fal/ltx2.3-audio-reactive-lora',
+      model: hf({ files: ['pytorch_lora_weights.safetensors'], tags: ['lora', 'ltx-video'], base: 'Lightricks/LTX-Video' }),
+    })).toThrow(/LoRA adapter/);
+  });
+
+  it('refuses a quantized FLUX.2 repo (needs sibling tokenizer/base repos)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic',
+      model: hf({ files: ['model.safetensors'], tags: ['sdnq'], pipeline: 'text-to-image' }),
+    })).toThrow(/quantized FLUX\.2/);
+  });
+
   it('refuses an unclassifiable safetensors repo with no kind hint', () => {
     expect(() => classifyHfMediaModel({
       repo: 'someone/mystery-weights',

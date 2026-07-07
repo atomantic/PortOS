@@ -144,6 +144,33 @@ export const inspectModelFiles = (model) => {
   };
 };
 
+// A repo is a LoRA ADAPTER (not a base model) when its card declares a
+// `base_model` it adapts, or its id/tags carry the lora marker. The base-model
+// installer must refuse these — a LoRA has the video LoRA installer
+// (/api/loras/install/huggingface) and would otherwise register as a bogus base
+// entry the render path can't load. `peft`/`adapter` library tags are the
+// diffusers signal for an adapter package.
+const looksLikeLora = ({ repo, model }) => {
+  const blob = `${String(repo || '').toLowerCase()} ${(Array.isArray(model?.tags) ? model.tags : []).join(' ').toLowerCase()}`;
+  if (/\blora\b|\blycoris\b|\blocon\b|\bdora\b/.test(blob)) return true;
+  const lib = typeof model?.library_name === 'string' ? model.library_name.toLowerCase() : '';
+  if (lib === 'peft') return true;
+  // A base_model reference in the card means "this adapts that model" → adapter.
+  const bm = model?.cardData?.base_model;
+  if (typeof bm === 'string' && bm.trim()) return true;
+  if (Array.isArray(bm) && bm.some((b) => typeof b === 'string' && b.trim())) return true;
+  return false;
+};
+
+const assertNotLora = ({ repo, model }) => {
+  if (looksLikeLora({ repo, model })) {
+    throw new ServerError(
+      `HuggingFace repo "${repo}" looks like a LoRA adapter, not a base model — install LoRAs from the LoRA manager (/media/loras), not here.`,
+      { status: 422, code: 'HF_IS_LORA' },
+    );
+  }
+};
+
 // Refuse formats no runtime can load. Throws a typed ServerError; the message
 // is user-facing and points at the supported alternative.
 const assertLoadableFormat = ({ repo, model }) => {
@@ -205,6 +232,7 @@ const isImagePipelineTag = (model) =>
  */
 export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}) => {
   assertLoadableFormat({ repo, model });
+  assertNotLora({ repo, model });
   const blob = classificationBlob({ repo, model });
   // Detect once and reuse across kind-resolution + runtime/runner resolution.
   const detectedVideo = detectVideoRuntime(blob);
@@ -286,6 +314,18 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
     throw new ServerError(
       `HuggingFace repo "${repo}" looks like a Flux.1 (mflux) model, which can't be added self-service — the mflux runner only loads its built-in dev/schnell models and ignores a custom repo. Use a repo that runs on a diffusers-family runner (${ADDABLE_IMAGE_RUNNERS.join(', ')}).`,
       { status: 422, code: 'HF_UNSUPPORTED_RUNNER' },
+    );
+  }
+  // A QUANTIZED FLUX.2 repo (SDNQ / int8 community package) can't be added
+  // self-service: the entry builder stamps `quantization:'none'` (bf16), but
+  // the runner then loads `repo` as a native bf16 pipeline and never passes the
+  // `tokenizerRepo`/`basePipelineRepo` those quant repos require — so it would
+  // register but 400 at render. We can't auto-derive the right sibling repos, so
+  // refuse and point at the bf16 base (which IS addable) or a hand-edit.
+  if (resolvedRunner === RUNNER_FAMILIES.FLUX2 && /\bsdnq\b|\bint8\b|\b4bit\b|\bnf4\b|quantiz/.test(blob)) {
+    throw new ServerError(
+      `HuggingFace repo "${repo}" is a quantized FLUX.2 package (SDNQ/int8), which can't be added self-service — it needs a separate tokenizer/base-pipeline repo this flow can't derive. Add the unquantized bf16 base repo instead, or edit data/media-models.json to set quantization + the required sibling repos.`,
+      { status: 422, code: 'HF_FLUX2_QUANTIZED' },
     );
   }
   return { kind: 'image', runner: resolvedRunner, format: 'safetensors' };
