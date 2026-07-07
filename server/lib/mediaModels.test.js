@@ -790,6 +790,21 @@ describe('user model entry mutators (#2124)', () => {
     expect(() => addUserModelEntry(videoEntry, { kind: 'video' })).toThrow(/already/i);
   });
 
+  it('conflict-checks only the target platform list, not every list', async () => {
+    // A video id present ONLY on the OTHER platform's list must remain addable
+    // on the current platform (shared media-models.json across macOS+Windows).
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    const currentKey = process.platform === 'win32' ? 'windows' : 'macos';
+    const otherKey = currentKey === 'macos' ? 'windows' : 'macos';
+    reg.video[otherKey] = [...(reg.video[otherKey] || []), { ...videoEntry }];
+    writeFileSync(registryFile, JSON.stringify(reg, null, 2) + '\n');
+    vi.resetModules();
+    const m2 = await import('./mediaModels.js');
+    expect(() => m2.addUserModelEntry({ ...videoEntry }, { kind: 'video' })).not.toThrow();
+    expect(m2.getVideoModels().some((x) => x.id === videoEntry.id)).toBe(true);
+  });
+
   it('patches a user entry but refuses built-ins', async () => {
     const { addUserModelEntry, patchUserModelEntry, getImageModels } = await import('./mediaModels.js');
     addUserModelEntry(imageEntry, { kind: 'image' });

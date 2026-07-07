@@ -255,6 +255,19 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
     );
   }
 
+  // Refuse a repo whose DETECTED runtime isn't addable (wan22 / hunyuan need a
+  // BYO venv) UNCONDITIONALLY — before kind resolution and before any override.
+  // The "a bad add can't wedge the picker" guarantee must hold even when the
+  // caller forces `runtime: 'mlx_video'` on a Hunyuan repo OR `kind: 'image'`
+  // (which would otherwise route it into the image branch and skip this check
+  // entirely, persisting a Wan/Hunyuan repo as a bogus image model).
+  if (detectedVideo && !ADDABLE_VIDEO_RUNTIMES.includes(detectedVideo.runtime)) {
+    throw new ServerError(
+      `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json.`,
+      { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },
+    );
+  }
+
   // Resolve kind: explicit override wins, else detect.
   let resolvedKind = kind || null;
   if (!resolvedKind) {
@@ -271,18 +284,6 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
   }
 
   if (resolvedKind === 'video') {
-    // Refuse a repo whose DETECTED runtime isn't addable (wan22 / hunyuan need
-    // a BYO venv) BEFORE honoring any override — the "a bad add can't wedge the
-    // picker" guarantee must hold even when the caller forces
-    // `runtime: 'mlx_video'` on a HunyuanVideo repo (the entry would register
-    // but the runtime couldn't load it). The override only picks between the
-    // *addable* runtimes; it can't launder a known-unsupported repo through.
-    if (detectedVideo && !ADDABLE_VIDEO_RUNTIMES.includes(detectedVideo.runtime)) {
-      throw new ServerError(
-        `HuggingFace repo "${repo}" targets the "${detectedVideo.runtime}" runtime, which needs a dedicated venv (${detectedVideo.installHint}) and can't be added self-service — set it up via the script, then edit data/media-models.json.`,
-        { status: 422, code: 'HF_UNSUPPORTED_RUNTIME' },
-      );
-    }
     // Explicit override wins (already allowlist-validated).
     if (runtime) return { kind: 'video', runtime, format: 'safetensors' };
     // Otherwise require a POSITIVELY-detected addable runtime. A repo that only

@@ -65,6 +65,17 @@ describe('classifyHfMediaModel — strict refusal', () => {
     })).toThrow(/needs a dedicated venv/);
   });
 
+  it('refuses a wan/hunyuan repo even when kind:image is forced (override cannot skip the video guard)', () => {
+    // kind:'image' would route into the image branch and bypass the video-only
+    // refusal — the guard must run unconditionally, before kind resolution.
+    expect(() => classifyHfMediaModel({
+      repo: 'Wan-AI/Wan2.2-T2V-A14B',
+      model: hf({ files: ['model.safetensors'], tags: ['wan'] }),
+      kind: 'image',
+      runner: 'qwen',
+    })).toThrow(/needs a dedicated venv/);
+  });
+
   it('refuses a LoRA adapter repo (belongs in the LoRA manager, not base models)', () => {
     // base_model in the card is the adapter signal.
     expect(() => classifyHfMediaModel({

@@ -762,15 +762,20 @@ export const addUserModelEntry = (entry, { kind }) => {
     throw new ServerError(`Unknown model kind "${kind}" — expected "image" or "video".`, { status: 400, code: 'BAD_MODEL_KIND' });
   }
   const reg = loadMediaModels();
-  if (findModelLocation(reg, entry.id)) {
+  const listKey = kind === 'video' ? (IS_WIN ? 'windows' : 'macos') : 'image';
+  // Conflict-check only the TARGET list, not every list. A shared
+  // media-models.json used across a macOS + Windows peer stores a video model
+  // per-platform; the same repo must remain addable on the other platform's
+  // list even though it already exists on the first — a global scan would
+  // wrongly 409 and leave no self-service way to enable it there.
+  const current = (listKey === 'image' ? reg.image : reg.video?.[listKey]) || [];
+  if (current.some((m) => m?.id === entry.id)) {
     throw new ServerError(
-      `A model with id "${entry.id}" is already in the registry (repo already added?). Remove it first to re-add.`,
+      `A model with id "${entry.id}" is already in the ${kind} registry for this platform (repo already added?). Remove it first to re-add.`,
       { status: 409, code: 'MODEL_ALREADY_EXISTS' },
     );
   }
-  const listKey = kind === 'video' ? (IS_WIN ? 'windows' : 'macos') : 'image';
-  const current = listKey === 'image' ? reg.image : reg.video[listKey];
-  persistRegistry(withList(reg, listKey, [...(current || []), entry]));
+  persistRegistry(withList(reg, listKey, [...current, entry]));
   console.log(`📝 Added user media model: ${entry.id} (${kind}) → ${entry.repo || '?'}`);
   return entry;
 };
