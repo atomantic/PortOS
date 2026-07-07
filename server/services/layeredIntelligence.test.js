@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   defaultLayeredIntelligenceConfig,
   getEffectiveConfig,
@@ -16,6 +19,7 @@ import {
   trackerSupportsPause,
   buildPrompt,
   extractPlanSlugs,
+  appendProposalToPlan,
   listForgeIssues,
   listBlockingIssues,
   fileProposalToForge,
@@ -328,6 +332,45 @@ describe('extractPlanSlugs', () => {
   it('returns [] for non-string / empty', () => {
     expect(extractPlanSlugs(null)).toEqual([]);
     expect(extractPlanSlugs('')).toEqual([]);
+  });
+});
+
+describe('appendProposalToPlan', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-plan-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('creates PLAN.md with a Next Up section when absent', async () => {
+    const res = await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'do it' });
+    expect(res).toEqual({ success: true, duplicate: false });
+    const content = await readFile(join(dir, 'PLAN.md'), 'utf-8');
+    expect(content).toContain('# App — Development Plan');
+    expect(content).toContain('## Next Up');
+    expect(content).toContain('[lil-add-x]');
+  });
+
+  it('is a no-op (duplicate) when the slug tag already exists', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '## Next Up\n- [ ] [lil-add-x] existing\n');
+    const res = await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'b' });
+    expect(res.duplicate).toBe(true);
+  });
+
+  it('inserts under an existing Next Up heading that has NO trailing newline (no duplicate section)', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '# Plan\n\n## Next Up'); // ends at heading, no newline
+    const res = await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'b' });
+    expect(res.duplicate).toBe(false);
+    const content = await readFile(join(dir, 'PLAN.md'), 'utf-8');
+    // Exactly one Next Up section, item on its own line.
+    expect(content.match(/## Next Up/g)).toHaveLength(1);
+    expect(content).toContain('\n- [ ] [lil-add-x]');
+  });
+
+  it('appends a Next Up section when the file exists without one', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '# Plan\n\nSome notes.\n');
+    await appendProposalToPlan({ repoPath: dir, appName: 'App', slug: 'add-x', title: 'Add X', body: 'b' });
+    const content = await readFile(join(dir, 'PLAN.md'), 'utf-8');
+    expect(content).toContain('## Next Up');
+    expect(content).toContain('[lil-add-x]');
   });
 });
 

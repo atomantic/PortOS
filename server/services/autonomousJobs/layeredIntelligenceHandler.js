@@ -13,7 +13,7 @@
  * bad app never aborts the whole sweep. Off by default (AI-provider policy).
  */
 
-import { PORTOS_APP_ID, getActiveApps, updateApp } from '../apps.js'
+import { PORTOS_APP_ID, getActiveApps, updateAppLayeredIntelligence } from '../apps.js'
 import {
   getEffectiveConfig,
   buildPrompt,
@@ -209,10 +209,15 @@ function safeParse(text) {
   }
 }
 
-/** Persist per-app run bookkeeping (lastRunAt) — run cadence, not issue memory. */
+/**
+ * Persist per-app run bookkeeping (lastRunAt) — run cadence, not issue memory.
+ * Routes through updateAppLayeredIntelligence so the write RE-READS the current
+ * stored config and merges ONLY `lastRunAt` over it, rather than writing back the
+ * (possibly seconds-stale) snapshot captured at sweep start — so a user config
+ * edit made mid-sweep isn't clobbered by the run-bookkeeping write.
+ */
 async function recordRun(app, config, now) {
-  const li = { ...(app.layeredIntelligence || {}), lastRunAt: new Date(now).toISOString() }
-  await updateApp(app.id, { layeredIntelligence: li }).catch((err) => {
+  await updateAppLayeredIntelligence(app.id, { lastRunAt: new Date(now).toISOString() }).catch((err) => {
     console.error(`❌ Layered Intelligence: failed to record run for ${app.id}: ${err.message}`)
   })
 }

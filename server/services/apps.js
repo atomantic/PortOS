@@ -440,17 +440,23 @@ export async function getAppLayeredIntelligenceConfig(id) {
 
 /**
  * Update an app's Layered Intelligence config. Shallow-merges `updates` over the
- * stored config (with `sources` merged one level deep) so a partial PATCH
- * doesn't wipe untouched fields. Returns the updated app, or null if unknown.
+ * *stored* config only (with `sources` merged one level deep) so a partial PATCH
+ * doesn't wipe untouched fields. We deliberately merge over the raw stored value,
+ * NOT the effective (defaults-filled) config — persisting the full default set to
+ * disk would freeze this install against future default changes (the config
+ * accessor's "adopt baseline on read" forward-compat property). Untouched fields
+ * stay absent and keep resolving to the shipped default via getEffectiveConfig.
+ * Returns the updated app, or null if unknown.
  */
 export async function updateAppLayeredIntelligence(id, updates = {}) {
   const app = await getAppById(id);
   if (!app) return null;
-  const { getEffectiveConfig } = await import('./layeredIntelligence.js');
-  const current = getEffectiveConfig({ ...app, isPortos: id === PORTOS_APP_ID });
-  const merged = { ...current, ...updates };
+  const stored = (app.layeredIntelligence && typeof app.layeredIntelligence === 'object' && !Array.isArray(app.layeredIntelligence))
+    ? app.layeredIntelligence
+    : {};
+  const merged = { ...stored, ...updates };
   if (updates.sources && typeof updates.sources === 'object') {
-    merged.sources = { ...current.sources, ...updates.sources };
+    merged.sources = { ...(stored.sources && typeof stored.sources === 'object' ? stored.sources : {}), ...updates.sources };
   }
   return updateApp(id, { layeredIntelligence: merged });
 }

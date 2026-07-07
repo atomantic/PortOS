@@ -6,7 +6,8 @@ const updateAppMock = vi.fn().mockResolvedValue({});
 vi.mock('../apps.js', () => ({
   PORTOS_APP_ID: 'portos-default',
   getActiveApps: vi.fn().mockResolvedValue([]),
-  updateApp: (...args) => updateAppMock(...args)
+  // recordRun routes lastRunAt bookkeeping through updateAppLayeredIntelligence.
+  updateAppLayeredIntelligence: (...args) => updateAppMock(...args)
 }));
 
 // resolveAppWorkTracker is async + shells out to git; stub per-test.

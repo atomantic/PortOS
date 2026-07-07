@@ -79,7 +79,9 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
 export function getEffectiveConfig(app) {
   const isPortos = !!app?.isPortos;
   const base = defaultLayeredIntelligenceConfig(isPortos);
-  const stored = (app && typeof app.layeredIntelligence === 'object' && app.layeredIntelligence) || {};
+  const stored = (app?.layeredIntelligence && typeof app.layeredIntelligence === 'object' && !Array.isArray(app.layeredIntelligence))
+    ? app.layeredIntelligence
+    : {};
   const merged = { ...base, ...stored };
   merged.sources = {
     ...base.sources,
@@ -452,9 +454,12 @@ export async function appendProposalToPlan({ repoPath, appName, slug, title, bod
     await writeFile(planPath, content);
     return { success: true, duplicate: false };
   }
-  if (existing.includes('## Next Up')) {
-    // Insert right after the "## Next Up" heading line.
-    const updated = existing.replace(/(##\s+Next Up\s*\n)/, `$1${item}\n`);
+  const nextUpRe = /(##\s+Next Up[^\n]*)(\n?)/;
+  if (nextUpRe.test(existing)) {
+    // Insert right after the "## Next Up" heading line, normalizing the heading's
+    // line ending first so a file that ENDS at `## Next Up` (no trailing newline)
+    // gets the item on its own line rather than a second section appended below.
+    const updated = existing.replace(nextUpRe, `$1\n${item}\n`);
     await writeFile(planPath, updated.endsWith('\n') ? updated : `${updated}\n`);
     return { success: true, duplicate: false };
   }
