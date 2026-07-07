@@ -27,6 +27,17 @@ vi.mock('../services/takeoutLocationImport.js', () => ({
   })),
 }));
 
+vi.mock('../services/discordImport.js', () => ({
+  importDiscordHistory: vi.fn(async (file, opts) => ({
+    dryRun: Boolean(opts?.dryRun),
+    parsed: 4,
+    mapped: 4,
+    recorded: opts?.dryRun ? 0 : 4,
+    skipped: opts?.dryRun ? 0 : 0,
+    summary: { messages: 4, uniqueChannels: 2, from: null, to: null, topChannels: [] },
+  })),
+}));
+
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
@@ -34,6 +45,7 @@ vi.mock('../services/humanActivity.js', () => ({
 
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
+import { importDiscordHistory } from '../services/discordImport.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -184,5 +196,46 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(400);
     expect(importTakeoutLocationHistory).not.toHaveBeenCalled();
+  });
+
+  it('POST /import/discord parses the upload and calls the importer', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false' },
+      { filename: 'package.zip', contentType: 'application/zip', content: 'PK...' },
+    );
+    const r = await request(app).post('/api/timeline/import/discord')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.recorded).toBe(4);
+    expect(importDiscordHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ originalname: 'package.zip' }),
+      { dryRun: false },
+    );
+  });
+
+  it('discord accepts a messages.csv upload', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'true' },
+      { filename: 'messages.csv', contentType: 'text/csv', content: 'ID,Timestamp\n1,2023-01-01 00:00:00\n' },
+    );
+    const r = await request(app).post('/api/timeline/import/discord')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.dryRun).toBe(true);
+    expect(importDiscordHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+  });
+
+  it('discord rejects a disallowed file type with 400', async () => {
+    const { boundary, body } = multipart(
+      {},
+      { filename: 'notes.txt', contentType: 'text/plain', content: 'hi' },
+    );
+    const r = await request(app).post('/api/timeline/import/discord')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(importDiscordHistory).not.toHaveBeenCalled();
   });
 });
