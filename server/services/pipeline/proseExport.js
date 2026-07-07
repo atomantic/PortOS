@@ -37,8 +37,6 @@ import { collectManuscriptSections } from './arcPlanner.js';
 export const ERR_NO_PROSE = 'PIPELINE_PROSE_EXPORT_NO_CONTENT';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-const nowUtc = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
-
 // ---------------------------------------------------------------------------
 // Section gathering — the shared front for all three exports.
 // ---------------------------------------------------------------------------
@@ -53,12 +51,15 @@ const nowUtc = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
  */
 export async function gatherProse(seriesId) {
   const series = await getSeries(seriesId);
-  // MANUSCRIPT_STAGES (the default) already excludes `idea` — so we never
-  // export an outline as if it were finished prose.
-  const sections = await collectManuscriptSections(seriesId);
+  // Prose export = the `prose` stage ONLY. The default stageOrder
+  // (MANUSCRIPT_STAGES) also picks up comicScript/teleplay, which would package
+  // non-prose text (screenplay/comic-script markup) into an ePub/manuscript; a
+  // prose series' authored artifact is its `prose` stage. `idea` is excluded
+  // either way (never export an outline as finished prose).
+  const sections = await collectManuscriptSections(seriesId, { stageOrder: ['prose'] });
   if (!sections.length) {
     throw makeErr(
-      'No drafted prose to export — write or import a manuscript on at least one issue first.',
+      'No drafted prose to export — write or import prose on at least one issue first.',
       ERR_NO_PROSE,
     );
   }
@@ -195,7 +196,7 @@ export function buildChapterXhtml(vol, { multiVolume }) {
 }
 
 // The OPF package document (EPUB 3): metadata + manifest + spine.
-export function buildOpf({ series, settings, volumes, coverImage, bookId }) {
+export function buildOpf({ settings, volumes, coverImage, bookId }) {
   const items = [];
   const spine = [];
   items.push('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>');
@@ -298,7 +299,7 @@ export async function buildEpub(seriesId) {
   const entries = [
     { name: 'mimetype', data: 'application/epub+zip' },
     { name: 'META-INF/container.xml', data: CONTAINER_XML },
-    { name: 'OEBPS/content.opf', data: buildOpf({ series, settings, volumes, coverImage, bookId }) },
+    { name: 'OEBPS/content.opf', data: buildOpf({ settings, volumes, coverImage, bookId }) },
     { name: 'OEBPS/nav.xhtml', data: buildNavXhtml({ settings, volumes }) },
     { name: 'OEBPS/style.css', data: EPUB_CSS },
     ...volumes.map((vol, idx) => ({ name: `OEBPS/vol${idx + 1}.xhtml`, data: buildChapterXhtml(vol, { multiVolume }) })),

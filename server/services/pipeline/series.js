@@ -584,6 +584,14 @@ export async function updateSeries(id, patch = {}) {
     const mergedLlm = 'llm' in patch
       ? { ...(cur.llm || {}), ...(patch.llm || {}) }
       : cur.llm;
+    // Per-field merge for exportSettings (#2181) so a partial PATCH ({ trimSize })
+    // tunes one knob without erasing the others — mirrors mergedLlm. An explicit
+    // `null` still clears the whole sub-object (defaults apply).
+    const mergedExportSettings = 'exportSettings' in patch
+      ? (patch.exportSettings === null
+        ? null
+        : { ...(cur.exportSettings || {}), ...(patch.exportSettings || {}) })
+      : cur.exportSettings;
     const next = sanitizeSeries({
       ...cur,
       ...('name' in patch ? { name: patch.name } : {}),
@@ -607,10 +615,11 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — sanitizeStyleGuide normalizes an empty object back
       // to null (clear); omission preserves. Mirrors the arc/readerMap pattern.
       ...('styleGuide' in patch ? { styleGuide: patch.styleGuide } : {}),
-      // Per-series prose-export settings (#2181). Wholesale replace —
-      // `null`/`{}` clears (defaults apply); omission preserves.
+      // Per-series prose-export settings (#2181). Per-field merge (see
+      // mergedExportSettings above) — a partial PATCH tunes one knob; `null`
+      // clears (defaults apply); omission preserves.
       // sanitizeProseExportSettings normalizes an all-default object back to null.
-      ...('exportSettings' in patch ? { exportSettings: patch.exportSettings } : {}),
+      ...('exportSettings' in patch ? { exportSettings: mergedExportSettings } : {}),
       ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
       ...('author' in patch ? { author: patch.author } : {}),
       ...('authorId' in patch ? { authorId: patch.authorId } : {}),

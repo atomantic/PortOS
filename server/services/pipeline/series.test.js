@@ -138,6 +138,26 @@ describe('pipeline series service', () => {
     expect(tuned.editorialCheckConfig).toEqual({ 'comic.lettering-density': { maxWordsPerBalloon: 18, x: true } });
   });
 
+  it('defaults exportSettings to null and per-field-merges partial PATCHes (#2181)', async () => {
+    const plain = await svc.createSeries({ name: 'Prose Book' });
+    // Absent / all-default → null (no empty husk), like styleGuide.
+    expect(plain.exportSettings).toBeNull();
+
+    // Set two fields.
+    const set = await svc.updateSeries(plain.id, { exportSettings: { trimSize: 'digest', interiorFont: 'courier' } });
+    expect(set.exportSettings).toMatchObject({ trimSize: 'digest', interiorFont: 'courier' });
+
+    // Partial PATCH of ONE field must NOT erase the other (per-field merge).
+    const tuned = await svc.updateSeries(plain.id, { exportSettings: { titlePageTitle: 'My Title' } });
+    expect(tuned.exportSettings.trimSize).toBe('digest');
+    expect(tuned.exportSettings.interiorFont).toBe('courier');
+    expect(tuned.exportSettings.titlePageTitle).toBe('My Title');
+
+    // Explicit null clears the whole sub-object (defaults apply).
+    const cleared = await svc.updateSeries(plain.id, { exportSettings: null });
+    expect(cleared.exportSettings).toBeNull();
+  });
+
   it('sanitizes editorialCheckConfig: drops empty/non-object overrides and non-primitive leaves (#1591)', async () => {
     const s = await svc.createSeries({
       name: 'Messy',

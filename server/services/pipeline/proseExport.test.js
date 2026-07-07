@@ -126,7 +126,6 @@ describe('buildChapterXhtml / buildNavXhtml / buildOpf', () => {
 
   it('builds an OPF manifest + spine covering every volume and marks the cover', () => {
     const opf = buildOpf({
-      series: { id: 's1' },
       settings: { titlePageTitle: 'T', titlePageAuthor: 'A', titlePageSubtitle: '' },
       volumes: [vol, { ...vol, id: 'sB' }],
       coverImage: { name: 'cover.png', mediaType: 'image/png' },
