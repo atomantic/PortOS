@@ -10,6 +10,7 @@
 
 import { Router, raw } from 'express';
 import { z } from 'zod';
+import sharp from 'sharp';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { cleanImageBuffer, CLEAN_LEVELS, compositeIgnoreZone, IGNORE_ZONE_FEATHER_DEFAULT } from '../lib/imageClean.js';
@@ -127,7 +128,7 @@ router.post(
     // The original bytes are captured BEFORE any cleaning so the ignore-zone
     // composite can restore true source pixels into the preserved regions (the
     // whole point is to undo the diffusion inside the mask, not re-diffuse it).
-    const originalBuffer = buffer;
+    let originalBuffer = buffer;
 
     const result = await cleanImageBuffer(buffer, { metadata, denoise });
 
@@ -146,7 +147,25 @@ router.post(
     const steps = [...result.steps];
 
     if (diffusion === 'light') {
-      const light = await applyLightRegen(result.data);
+      // Orientation parity for the ignore-zone composite: the user paints the
+      // mask on the browser preview (EXIF-oriented visual space), but when the
+      // metadata step is OFF `cleanImageBuffer` returns the source bytes with
+      // their orientation tag intact, and `applyLightRegen` reads UN-oriented
+      // dims. Left as-is, the mask (oriented) and the diffused base (stored
+      // space) would misalign under the composite's fit:fill resize on an
+      // Orientation 6/8 source. Bake orientation into BOTH the diffusion input
+      // and the preserved-original buffer so base + original + mask all share
+      // one visual space. No-op for the common already-oriented/no-orientation
+      // cases (a `.rotate()` re-encode with no EXIF tag just re-emits pixels).
+      let diffusionInput = result.data;
+      if (maskBuffer) {
+        const orientedPng = await sharp(result.data).rotate().png().toBuffer().catch(() => null);
+        if (orientedPng) {
+          diffusionInput = orientedPng;
+          originalBuffer = orientedPng;
+        }
+      }
+      const light = await applyLightRegen(diffusionInput);
       if (!light) {
         throw new ServerError('Invalid or corrupt image', {
           status: 400,

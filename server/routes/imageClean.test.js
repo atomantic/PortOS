@@ -254,6 +254,35 @@ describe('POST /api/image-clean (raw transport)', () => {
     expect(report.width).toBe(4);
   });
 
+  it('aligns the mask with the diffused base on an EXIF-oriented source with metadata OFF', async () => {
+    // Orientation=6 (rotate 90° CW) JPEG: visual space is 40×20, stored is 20×40.
+    // With metadata=0 the clean step returns un-rotated bytes, so the route must
+    // bake orientation into the diffusion input to match the (oriented) mask.
+    const raw = await sharp({
+      create: { width: 20, height: 40, channels: 3, background: { r: 120, g: 90, b: 60 } },
+    }).jpeg().toBuffer();
+    const oriented = await sharp(raw).withMetadata({ orientation: 6 }).jpeg().toBuffer();
+    // Mask painted in VISUAL space (40 wide × 20 tall), left half white.
+    const vw = 40;
+    const vh = 20;
+    const maskRaw = Buffer.alloc(vw * vh, 0);
+    for (let y = 0; y < vh; y += 1) for (let x = 0; x < vw; x += 1) if (x < vw / 2) maskRaw[y * vw + x] = 255;
+    const maskPng = await sharp(maskRaw, { raw: { width: vw, height: vh, channels: 1 } }).png().toBuffer();
+    const lenPrefix = Buffer.alloc(4);
+    lenPrefix.writeUInt32BE(maskPng.length, 0);
+    const envelope = Buffer.concat([lenPrefix, maskPng, oriented]);
+
+    const res = await postImage('?metadata=0&denoise=0&diffusion=light&mask=1&feather=0', envelope, 'image/jpeg');
+    expect(res.status).toBe(200);
+    const report = reportOf(res);
+    // Output is delivered in the oriented (visual) dims — 40×20 — so the mask,
+    // base, and original all agree. A misaligned (un-baked) path would report
+    // 20×40 here.
+    expect(report.width).toBe(vw);
+    expect(report.height).toBe(vh);
+    expect(report.steps.some((s) => s.step === 'ignore-zone' && s.status === 'applied')).toBe(true);
+  });
+
   it('degrades to no-mask when the envelope length prefix is malformed', async () => {
     // A length that overruns the buffer → splitMaskEnvelope treats the whole
     // body as the image, so a plain PNG (no real envelope) still cleans.
