@@ -25,6 +25,9 @@ import { getPipelineSeries, getVoiceFingerprint } from '../services/api';
 // A cell is an outlier when the (issue, metricKey) pair is in the drift set.
 // Keyed on `issue:metricKey` so a lookup is O(1) while rendering the grid.
 const outlierKey = (issue, metricKey) => `${issue}:${metricKey}`;
+// Round a metric value to 2dp for display (the matrix cells + the seriesFindings
+// banner, which carries the raw mean/center).
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 export default function PipelineVoiceFingerprint() {
   const { seriesId } = useParams();
@@ -66,6 +69,10 @@ export default function PipelineVoiceFingerprint() {
   const issues = data?.matrix?.issues || [];
   const seriesStats = data?.series || {};
   const outlierSet = new Set((data?.outliers || []).map((o) => outlierKey(o.issue, o.metricKey)));
+  // #2248 — series-wide "the whole corpus is uniformly off the chosen voice"
+  // findings. These have no single cell to highlight (the column is uniform), so
+  // they surface as a banner above the matrix rather than an amber cell.
+  const seriesFindings = data?.seriesFindings || [];
   const hasMatrix = issues.length > 0;
   const baselineMode = data?.baselineMode || 'drafted';
   // Only claim the chosen-voice baseline once it was actually applied: a gatedOff
@@ -131,6 +138,25 @@ export default function PipelineVoiceFingerprint() {
               </span>
             </div>
           ) : null}
+          {seriesFindings.length ? (
+            <div className="mb-4 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-sm">
+              <div className="flex items-center gap-2 text-port-warning font-medium mb-1">
+                <Info size={14} className="shrink-0" />
+                {seriesFindings.length} series-wide voice mismatch
+                {seriesFindings.length === 1 ? '' : 'es'}
+              </div>
+              <ul className="space-y-1 text-gray-300">
+                {seriesFindings.map((f) => (
+                  <li key={f.metricKey}>
+                    The whole series sits at {round2(f.mean)}{f.unit || ''} on{' '}
+                    <span className="text-white">{f.label}</span> vs the chosen voice's{' '}
+                    {round2(f.center)}{f.unit || ''} — uniformly {f.direction === 'high' ? 'above' : 'below'} the
+                    chosen voice (no single issue is an outlier).
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <FingerprintMatrix
             columns={columns}
             issues={issues}
@@ -173,7 +199,6 @@ function EmptyState({ gatedOff, issueCount, minIssues }) {
 }
 
 function FingerprintMatrix({ columns, issues, seriesStats, outlierSet, baselineMode, usesChosenVoice }) {
-  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   // The baseline an outlier tooltip / footer row names: the chosen voice (or a
   // blend) when the exemplar baseline is active (#2179), else the series mean.
   const centerNoun = usesChosenVoice

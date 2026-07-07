@@ -303,6 +303,23 @@ export const VOICE_BASELINE_MODES = Object.freeze(['drafted', 'exemplars', 'blen
 // the baseline is treated as absent (the run falls back to 'drafted').
 const MIN_EXEMPLAR_WORDS = 40;
 
+// Default relative-distance threshold for the SERIES-level "uniformly off the
+// chosen voice" finding (#2248): the whole drafted corpus sits at ~one value on a
+// metric (σ≈0) while the exemplar/blended center sits far away. Because the metric
+// vector mixes wildly different scales (dialogueRatio 0–100, sentence-length CV
+// ~0.4, em-dash rate per-1k), a single ABSOLUTE gap threshold is meaningless — so
+// the finding gates on a SCALE-FREE relative distance `|center − mean| /
+// max(|center|, |mean|)` in [0, 1]. 0.5 means "the corpus and the chosen voice are
+// at least half apart on this metric's own scale" — the dialogue-free-series-vs-
+// dialogue-heavy-voice example (mean 0 vs center 30) has distance 1.0 and flags
+// hard, while a small uniform offset stays quiet.
+const SERIES_DRIFT_DISTANCE = 0.5;
+// Absolute floor so a metric where BOTH the corpus mean and the chosen-voice
+// center round to ~0 can't manufacture a large relative distance from rounding
+// noise (e.g. 0.0 vs 0.1 → relative 1.0). Below this |center − mean| gap the
+// series-level finding is suppressed regardless of relative distance.
+const SERIES_DRIFT_MIN_GAP = 1e-6;
+
 /**
  * Combine a style guide's voice exemplar passages into ONE fingerprint — the
  * statistical profile of the series' CHOSEN voice, used as the drift baseline in
@@ -407,6 +424,27 @@ export function describeDrift(o) {
     + 'A statistical outlier against the series voice; confirm it is an earned modulation, not drift.';
 }
 
+// One-sentence finding text for a SERIES-LEVEL drift (#2248) — the whole drafted
+// corpus sits uniformly at one value on a metric (σ≈0) that is far from the CHOSEN
+// voice's center, so there is no per-issue outlier to name. Reads "the whole
+// series sits at X vs the chosen voice's Y — <direction phrase>", explicitly a
+// corpus-wide observation, not an issue outlier. Only meaningful under an
+// exemplar/blended baseline (in drafted mode center===mean, so nothing flags).
+export function describeSeriesDrift(o) {
+  const label = metricLabel(o.metricKey);
+  const dir = directionPhrase(o.metricKey, o.direction);
+  const unit = o.unit || '';
+  const val = `${round2(o.mean)}${unit}`;
+  const center = `${round2(o.center)}${unit}`;
+  const baselineNoun = o.baselineMode === 'blended'
+    ? 'the blend of the series mean and the chosen voice'
+    : "the style guide's chosen voice";
+  return `The whole series sits at ${val} on ${label} vs ${baselineNoun} of ${center} `
+    + `— the corpus is uniformly ${o.direction === 'high' ? 'above' : 'below'} the chosen voice here (${dir}). `
+    + 'Not a per-issue outlier but a series-wide register mismatch; revise toward the chosen voice across the run, '
+    + 'or update the voice exemplars if this IS the voice you want.';
+}
+
 /**
  * Compute the voice-drift outliers for a stitched manuscript. Pure — returns
  * structured results the `style.voice-drift` check maps to editorial findings (so
@@ -438,20 +476,33 @@ export function describeDrift(o) {
  * usable baseline, the run silently falls back to `'drafted'` and reports the
  * effective mode in `baselineMode` + `exemplarBaselineUsed: false`.
  *
+ * `seriesFindings` (#2248) covers the boundary the per-issue z-score model can't:
+ * under an exemplar/blended baseline, when EVERY drafted issue shares the same
+ * value on a metric (σ≈0) but that shared value sits far from the chosen-voice
+ * center, there is no per-issue outlier — the whole corpus is uniformly
+ * off-register. Each such metric emits ONE series-level finding (no `issue`),
+ * gated on a scale-free relative distance ≥ `opts.seriesDistanceThreshold`.
+ *
  * @param {string} manuscript
  * @param {{ threshold?: number, minIssues?: number, wells?: Array<{ name: string, words: Set<string> }>,
  *   baselineMode?: 'drafted'|'exemplars'|'blended',
+ *   seriesDistanceThreshold?: number,
  *   voiceExemplars?: Array<{ passage?: string }> }} [opts]
  * @returns {{ gatedOff: boolean, issueCount: number, threshold: number,
  *   baselineMode: string, exemplarBaselineUsed: boolean,
  *   matrix: object, series: Record<string, {mean:number, std:number, center:number}>,
  *   outliers: Array<{ issue:number, metricKey:string, label:string, value:number,
  *     mean:number, center:number, std:number, z:number, direction:'high'|'low',
- *     unit:string, baselineMode:string }> }}
+ *     unit:string, baselineMode:string }>,
+ *   seriesFindings: Array<{ metricKey:string, label:string, mean:number, center:number,
+ *     distance:number, direction:'high'|'low', unit:string, baselineMode:string }> }}
  */
 export function computeVoiceDrift(manuscript, opts = {}) {
   const threshold = Number.isFinite(opts.threshold) && opts.threshold > 0 ? opts.threshold : 1.5;
   const minIssues = Number.isInteger(opts.minIssues) && opts.minIssues >= 3 ? opts.minIssues : 4;
+  const seriesDistanceThreshold = Number.isFinite(opts.seriesDistanceThreshold) && opts.seriesDistanceThreshold > 0
+    ? opts.seriesDistanceThreshold
+    : SERIES_DRIFT_DISTANCE;
   const wells = opts.wells;
   const requestedMode = VOICE_BASELINE_MODES.includes(opts.baselineMode) ? opts.baselineMode : 'drafted';
   // Compute the exemplar baseline once (only when a non-drafted mode asked for
@@ -480,11 +531,14 @@ export function computeVoiceDrift(manuscript, opts = {}) {
   };
 
   if (issues.length < minIssues) {
-    return { ...base, gatedOff: true, matrix, series: {}, outliers: [] };
+    return { ...base, gatedOff: true, matrix, series: {}, outliers: [], seriesFindings: [] };
   }
 
   const series = {};
   const outliers = [];
+  // #2248 — series-level "uniformly off the chosen voice" findings (only ever
+  // populated under an active exemplar/blended baseline; see the skip-site branch).
+  const seriesFindings = [];
 
   for (const key of metricKeys) {
     const values = issues.map((it) => it.metrics[key] ?? 0);
@@ -502,17 +556,38 @@ export function computeVoiceDrift(manuscript, opts = {}) {
     }
     series[key] = { mean: round2(mean), std: round2(std), center: round2(center) };
     // A metric with no drafted spread can't have a per-issue OUTLIER — and dividing
-    // by ~0 σ would manufacture infinite z-scores — so skip it. Note the boundary
-    // this leaves for the exemplar/blended baseline (#2179): when every drafted
-    // issue shares the SAME value on a metric (σ≈0) but that shared value sits far
-    // from the chosen-voice center, this per-issue z-score model emits nothing —
-    // there's no per-issue outlier, the whole corpus is uniformly off. That
-    // "uniformly-off-register" case wants a SERIES-level finding (a different shape
-    // than the per-issue outliers here), tracked as a #2179 follow-up. It does NOT
-    // affect the common case the feature targets: issues that drifted the same
-    // DIRECTION still have natural per-metric variance (σ>0), so they still flag
-    // against the chosen-voice center.
-    if (std < 1e-9) continue;
+    // by ~0 σ would manufacture infinite z-scores — so skip the per-issue pass.
+    // But (#2248) under an exemplar/blended baseline this σ≈0 case is exactly the
+    // "uniformly off the chosen voice" boundary: every drafted issue shares the
+    // SAME value on a metric, yet that shared value can sit far from the
+    // chosen-voice center (e.g. a dialogue-free series vs a dialogue-heavy voice).
+    // There's no per-issue outlier, but the whole corpus is off-register — so emit
+    // ONE series-level finding (a different shape: no `issue`), gated on a
+    // scale-free relative distance so it works across the metric vector's very
+    // different scales. Drafted mode never trips this (center === mean → gap 0).
+    // The common case the #2179 feature targets is untouched: issues that drifted
+    // the same DIRECTION still have natural per-metric variance (σ>0), so they flag
+    // per-issue below against the chosen-voice center.
+    if (std < 1e-9) {
+      if (exemplarBaseline) {
+        const gap = Math.abs(center - mean);
+        const denom = Math.max(Math.abs(center), Math.abs(mean));
+        const distance = denom > 0 ? gap / denom : 0;
+        if (gap >= SERIES_DRIFT_MIN_GAP && distance >= seriesDistanceThreshold) {
+          seriesFindings.push({
+            metricKey: key,
+            label: metricLabel(key),
+            mean,
+            center,
+            distance,
+            direction: mean > center ? 'high' : 'low',
+            unit: metricUnit(key),
+            baselineMode: effectiveMode,
+          });
+        }
+      }
+      continue;
+    }
     for (const it of issues) {
       const value = it.metrics[key] ?? 0;
       const z = (value - center) / std;
@@ -534,7 +609,9 @@ export function computeVoiceDrift(manuscript, opts = {}) {
   }
 
   outliers.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
-  return { ...base, gatedOff: false, matrix, series, outliers };
+  // Most-off-register first, so a downstream cap keeps the worst mismatches.
+  seriesFindings.sort((a, b) => b.distance - a.distance);
+  return { ...base, gatedOff: false, matrix, series, outliers, seriesFindings };
 }
 
 /**
