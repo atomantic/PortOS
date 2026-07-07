@@ -117,13 +117,12 @@ export async function discoverSeriesVoice(seriesId, options = {}) {
   });
   // Dedupe by register (a model that emits two `spare` passages should not
   // crowd out a missing one) and keep the canonical register order so the
-  // side-by-side UI is stable across runs.
-  const seen = new Set();
+  // side-by-side UI is stable across runs. The Map itself is the seen-set —
+  // keep the FIRST candidate for a register.
   const byRegister = new Map();
   for (const raw of content.candidates) {
     const cand = normalizeCandidate(raw);
-    if (!cand || seen.has(cand.register)) continue;
-    seen.add(cand.register);
+    if (!cand || byRegister.has(cand.register)) continue;
     byRegister.set(cand.register, cand);
   }
   const candidates = VOICE_REGISTER_IDS
