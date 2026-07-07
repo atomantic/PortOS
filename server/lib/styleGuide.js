@@ -55,6 +55,22 @@ export const PROSE_CRAFT_DOCTRINE = Object.freeze([
   '- Vary sentence length and rhythm on purpose — short for impact, longer to build; never let every sentence fall into the same cadence.',
 ].join('\n'));
 
+// Voice-discovery registers (#2179, CWQE Phase 14) — the distinct prose voices
+// the "Discover voice" flow renders the SAME scene beat in, so the user (or the
+// autonomous judge) can pick the one that fits by ear rather than by adjective.
+// `id` is stable (persisted into the discovery result); `label`/`hint` steer
+// the LLM and the side-by-side UI. Kept small and opinionated — 5 registers is
+// the autonovel "~5 trial passages" default, enough contrast without a wall of
+// near-identical drafts.
+export const VOICE_REGISTERS = Object.freeze([
+  { id: 'spare', label: 'Spare', hint: 'lean, plain, Hemingway-terse — short declaratives, concrete nouns, almost no adjectives' },
+  { id: 'lyric', label: 'Lyric', hint: 'lush and musical — rhythmic, image-dense, sentences that build and breathe' },
+  { id: 'wry', label: 'Wry', hint: 'dry, ironic, quietly funny — understatement and a knowing narrator' },
+  { id: 'close-psychic', label: 'Close-psychic', hint: 'deep interiority — the narration lives inside the POV character\'s thoughts and sensations' },
+  { id: 'cinematic', label: 'Cinematic', hint: 'camera-eye, present and kinetic — blocking, motion, and sensory cuts like a shooting script' },
+]);
+export const VOICE_REGISTER_IDS = Object.freeze(VOICE_REGISTERS.map((r) => r.id));
+
 export const STYLE_GUIDE_TENSES = Object.freeze(['past', 'present']);
 export const STYLE_GUIDE_POV_PERSONS = Object.freeze(['first', 'third-limited', 'third-omniscient', 'second']);
 export const STYLE_GUIDE_AUDIENCES = Object.freeze(['children', 'middle-grade', 'YA', 'adult']);
