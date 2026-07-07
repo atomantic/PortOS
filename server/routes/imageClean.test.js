@@ -115,6 +115,45 @@ describe('POST /api/image-clean (raw transport)', () => {
     expect(report.steps.some((s) => s.step === 'denoise' && s.status === 'applied')).toBe(true);
   });
 
+  it('runs the CPU light diffusion pass when ?diffusion=light and reports a fidelity delta', async () => {
+    // Use the multi-MB fixture — applyLightRegen resize-squeezes then upscales,
+    // which needs real pixel content (a 4×4 solid fixture floor16-collapses to
+    // its own dims and can no-op the squeeze).
+    const res = await postImage('?diffusion=light', largePng);
+    expect(res.status).toBe(200);
+    // The light pass always re-encodes to PNG regardless of source format.
+    expect(res.headers['content-type']).toBe('image/png');
+    const report = reportOf(res);
+    const diff = report.steps.find((s) => s.step === 'diffusion');
+    expect(diff).toBeTruthy();
+    expect(diff.status).toBe('applied');
+    expect(diff.mode).toBe('light');
+    expect(diff.lossless).toBe(false);
+    // Fidelity metric attached so the report never claims "removed".
+    expect(typeof diff.pixelDeltaPct).toBe('number');
+    expect(typeof diff.psnr).toBe('number');
+    expect(report.format).toBe('png');
+  });
+
+  it('runs metadata + denoise + diffusion in pipeline order when all are selected', async () => {
+    const res = await postImage('?metadata=1&denoise=1&diffusion=light', largePng);
+    expect(res.status).toBe(200);
+    const report = reportOf(res);
+    expect(report.steps.map((s) => s.step)).toEqual(['metadata', 'denoise', 'diffusion']);
+  });
+
+  it('rejects GPU diffusion with 501 NOT_IMPLEMENTED (deferred to a follow-up)', async () => {
+    const res = await postImage('?diffusion=gpu', pngFixture);
+    expect(res.status).toBe(501);
+    expect(res.body.code).toBe('NOT_IMPLEMENTED');
+  });
+
+  it('treats an unknown diffusion value as off (no diffusion step)', async () => {
+    const res = await postImage('?diffusion=banana', pngFixture);
+    expect(res.status).toBe(200);
+    expect(reportOf(res).steps.some((s) => s.step === 'diffusion')).toBe(false);
+  });
+
   it('runs no steps and passes bytes through when ?metadata=0&denoise=0', async () => {
     const res = await postImage('?metadata=0&denoise=0', pngWithC2PA);
     expect(res.status).toBe(200);
