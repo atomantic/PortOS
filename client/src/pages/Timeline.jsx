@@ -2,10 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Mail, MailOpen, Send,
-  CalendarDays, Music, Play, MessageSquare, Activity,
+  CalendarDays, Music, Play, MessageSquare, Activity, MapPin,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
+import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -37,12 +38,14 @@ const SOURCE_ICON = {
   signal: MessageSquare,
   spotify: Music,
   youtube: Play,
+  location: MapPin,
 };
 
 function kindIcon(kind, source) {
   if (kind === 'message.sent') return Send;
   if (kind === 'message.received') return MailOpen;
   if (kind === 'calendar.event') return CalendarDays;
+  if (kind === 'place.visit') return MapPin;
   return SOURCE_ICON[source] || Activity;
 }
 
@@ -50,7 +53,8 @@ function KindBadge({ kind }) {
   const label = kind === 'message.sent' ? 'Sent'
     : kind === 'message.received' ? 'Received'
       : kind === 'calendar.event' ? 'Event'
-        : kind;
+        : kind === 'place.visit' ? 'Visit'
+          : kind;
   return (
     <span className="rounded bg-port-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
       {label}
@@ -202,6 +206,7 @@ export default function Timeline() {
       </div>
 
       <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 

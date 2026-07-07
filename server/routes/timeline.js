@@ -7,20 +7,25 @@ import { validateRequest } from '../lib/validation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import * as humanActivity from '../services/humanActivity.js';
 import { importSpotifyHistory } from '../services/spotifyImport.js';
+import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 
 const router = Router();
 
-// Spotify extended-history exports (a ZIP of JSON arrays) are bounded by the
-// account lifetime — 200MB comfortably covers years of listening.
-const uploadSpotify = uploadSingle('file', {
+// Bulk-export uploads (Spotify extended history, Google Takeout location
+// history) are ZIPs of JSON arrays bounded by the account lifetime — 200MB
+// comfortably covers years of history. Both accept the same ZIP-or-JSON shape.
+const zipOrJsonUpload = (label) => uploadSingle('file', {
   limits: { fileSize: 200 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = /\.(zip|json)$/i.test(file.originalname)
       || ['application/zip', 'application/x-zip-compressed', 'application/json', 'text/json'].includes(file.mimetype);
     if (ok) return cb(null, true);
-    cb(new ServerError('Only Spotify export ZIP or JSON files are accepted', { status: 400, code: 'BAD_REQUEST' }));
+    cb(new ServerError(`Only ${label} export ZIP or JSON files are accepted`, { status: 400, code: 'BAD_REQUEST' }));
   },
 });
+
+const uploadSpotify = zipOrJsonUpload('Spotify');
+const uploadTakeoutLocation = zipOrJsonUpload('Google Takeout location');
 
 // `preview` (a multipart text field, so it arrives as a string) toggles a
 // parse-only dry run — count what would be imported without writing. Only map
@@ -65,22 +70,30 @@ router.get('/events', asyncHandler(async (req, res) => {
   res.json({ events });
 }));
 
-// POST /api/timeline/import/spotify — bulk-backfill Spotify extended streaming
-// history (#2160). Accepts the privacy-download ZIP or a single history JSON via
-// multipart upload. `preview=true` parses + summarizes without writing; a real
-// import is idempotent (dedupe on played-at + track), so re-imports are safe.
-// The uploaded temp file is always unlinked, whether the import succeeds or not.
-router.post('/import/spotify', uploadSpotify, asyncHandler(async (req, res) => {
+// Shared handler for the bulk-backfill importers (#2160). Each accepts a ZIP or
+// single JSON via multipart upload; `preview=true` parses + summarizes without
+// writing; a real import is idempotent (dedupe key per source), so re-imports
+// are safe. The uploaded temp file is ALWAYS unlinked, success or not, and BOTH
+// validation and the import run inside the cleanup chain so a rejected `preview`
+// value still unlinks the already-staged temp upload.
+const importHandler = (importFn) => asyncHandler(async (req, res) => {
   const file = req.file;
   if (!file?.path) throw new ServerError('No file uploaded', { status: 400, code: 'BAD_REQUEST' });
-  // Wrap BOTH validation and the import in the cleanup chain — a rejected
-  // `preview` value must still unlink the already-staged temp upload.
   const run = async () => {
     const { preview } = validateRequest(importBodySchema, req.body);
-    return importSpotifyHistory(file, { dryRun: preview });
+    return importFn(file, { dryRun: preview });
   };
   const result = await run().finally(() => unlink(file.path).catch(() => {}));
   res.json(result);
-}));
+});
+
+// POST /api/timeline/import/spotify — bulk-backfill Spotify extended streaming
+// history (dedupe on played-at + track).
+router.post('/import/spotify', uploadSpotify, importHandler(importSpotifyHistory));
+
+// POST /api/timeline/import/takeout-location — bulk-backfill Google Takeout
+// "Location History (Timeline)" semantic place visits → place.visit events
+// (dedupe on visit-start + place identity).
+router.post('/import/takeout-location', uploadTakeoutLocation, importHandler(importTakeoutLocationHistory));
 
 export default router;
