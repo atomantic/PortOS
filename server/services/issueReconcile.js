@@ -36,8 +36,8 @@
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
-import { getOriginInfo } from '../lib/gitRemote.js';
-import { hostToWorkTracker } from '../lib/workTracker.js';
+import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
+import { hostToWorkTracker, hostFromOriginUrl } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -254,20 +254,48 @@ async function getGitlabState(repoPath, fullName) {
 }
 
 /**
+ * Best-effort `group[/subgroup...]/project` display path from a GitLab origin
+ * URL. Only cosmetic (it feeds the prompt header) — `glab` targets the project
+ * from the repo cwd, not this string — so it degrades to the host classifier's
+ * fullName or the raw origin URL rather than blocking the scan.
+ */
+function gitlabProjectPath(originUrl) {
+  if (typeof originUrl !== 'string') return null;
+  // scheme://[user@]host[:port]/<path>  OR  [user@]host:<path>  — capture <path>,
+  // then strip a trailing `.git`.
+  const m = originUrl.trim().match(/^[a-zA-Z][\w+.-]*:\/\/(?:[^/@]+@)?[^/]+\/(.+)$/)
+    || originUrl.trim().match(/^(?:[^@/]+@)?[^/:]+:(.+)$/);
+  return m ? m[1].replace(/\.git$/i, '').replace(/\/$/, '') : null;
+}
+
+/**
  * Resolve the app's forge from its git origin host and fetch the corresponding
- * state. github.* → GitHub, gitlab.* → GitLab; any other remote (or no origin)
+ * state. github.com → GitHub, gitlab.* → GitLab; any other remote (or no origin)
  * returns null so the caller skips without parking.
+ *
+ * GitHub uses `getOriginInfo().isGithub` (authoritative, github.com-only — same
+ * scope as v1). GitLab is classified straight off the origin HOST via the
+ * subgroup-safe `hostFromOriginUrl`, NOT `getOriginInfo().fullName`: the latter's
+ * strict `owner/repo` parse returns null for a nested `group/subgroup/project`
+ * remote (the common GitLab layout), which would silently skip the scan even
+ * though `glab` resolves the project from the cwd regardless.
  * @param {string} repoPath
  * @returns {Promise<object|null>}
  */
 async function getForgeState(repoPath) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  if (!origin?.fullName) return null;
-  // getOriginInfo already classifies GitHub authoritatively (older callers/tests
-  // may not carry a `host`), so trust isGithub first; fall back to the canonical
-  // host classifier for GitLab (and any future forges hostToWorkTracker adds).
-  if (origin.isGithub) return getGithubState(origin.fullName);
-  if (hostToWorkTracker(origin.host) === 'gitlab') return getGitlabState(repoPath, origin.fullName);
+  // GitHub: authoritative, github.com-only, needs a parsed owner/repo for --repo.
+  if (origin?.isGithub && origin.fullName) return getGithubState(origin.fullName);
+
+  // GitLab: classify off the host (subgroup-safe). `glab` is cwd-based, so a
+  // display path is best-effort — prefer getOriginInfo's fullName, else derive the
+  // full project path from the URL, else fall back to the host.
+  const originUrl = await readOriginRemoteUrl(repoPath).catch(() => null);
+  const host = origin?.host || hostFromOriginUrl(originUrl);
+  if (hostToWorkTracker(host) === 'gitlab') {
+    const displayName = origin?.fullName || gitlabProjectPath(originUrl) || host;
+    return getGitlabState(repoPath, displayName);
+  }
   return null;
 }
 

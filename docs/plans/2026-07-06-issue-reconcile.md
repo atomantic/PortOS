@@ -94,7 +94,17 @@ on non-GitHub apps; GitLab/JIRA siblings are deferred (see PLAN.md).
   gh/glab command table injected via `{zombieIssues}`). Coordinator prompt bumped to
   v2 (forge-aware gh/glab commands); v1 preserved in `PREVIOUS_DEFAULT_PROMPTS`.
   `glab` exec helper added at `server/services/gitlab.js` (mirrors `execGh`, cwd-aware).
-- **JIRA (deferred → follow-up #NEW).** The JIRA "zombie" analog is status-based,
+- **Deferred (both forges).** The merged/open PR/MR list queries degrade to `[]`
+  on failure while only the in-progress ISSUE list is load-bearing (null → skip).
+  This is the intentional v1 GitHub contract, preserved for GitLab parity — but it
+  means a transient MR-list failure could momentarily misclassify (an issue with a
+  live open MR whose list call failed looks like a zombie; a real zombie whose
+  merged-list failed looks stalled). Low-impact because the coordinator
+  re-verifies each zombie live before acting AND the convergence signature only
+  drives, never destroys — but promoting open/merged list failures to
+  transient-null (skip, don't misclassify) is a worthwhile cross-forge hardening.
+  Not done here to keep the two forges behaviorally identical to the reviewed v1.
+- **JIRA (deferred → follow-up #2259).** The JIRA "zombie" analog is status-based,
   not label-based (a ticket left *In Review*/*Done* with remaining scope + no live
   claim), and heals through the PortOS JIRA API (`my-sprint-tickets` + ticket status
   + linked MR/PR → record remaining scope + `POST /api/jira/instances/:id/tickets`)

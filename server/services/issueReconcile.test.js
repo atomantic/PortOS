@@ -21,13 +21,17 @@ vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(async () => '[]') }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
+  readOriginRemoteUrl: vi.fn(async () => 'git@github.com:atomantic/PortOS.git'),
 }));
 // hostToWorkTracker is the canonical host→forge classifier. Import the REAL pure
 // implementation (partial mock) so the GitLab branch is exercised through the
 // exact mapping production uses — no drift-prone re-implementation here.
 vi.mock('../lib/workTracker.js', async (importActual) => {
   const actual = await importActual();
-  return { hostToWorkTracker: actual.hostToWorkTracker };
+  return {
+    hostToWorkTracker: actual.hostToWorkTracker,
+    hostFromOriginUrl: actual.hostFromOriginUrl,
+  };
 });
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo' },
@@ -42,12 +46,13 @@ import {
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
-import { getOriginInfo } from '../lib/gitRemote.js';
+import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
   getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' });
+  readOriginRemoteUrl.mockResolvedValue('git@github.com:atomantic/PortOS.git');
 });
 
 describe('issueNumberFromRef', () => {
@@ -199,8 +204,9 @@ describe('reconcile', () => {
     expect(result.stalled.map((s) => s.number)).toEqual([2220]);
   });
 
-  it('returns null (skip, do not park) when the origin has no fullName', async () => {
+  it('returns null (skip, do not park) when there is no origin / no host', async () => {
     getOriginInfo.mockResolvedValue({ isGithub: false, host: null, fullName: null });
+    readOriginRemoteUrl.mockResolvedValue(null);
     const result = await reconcile('/repo');
     expect(result).toBeNull();
   });
@@ -209,6 +215,7 @@ describe('reconcile', () => {
     // A parseable non-forge remote (e.g. bitbucket) — has a fullName but no
     // gh/glab gatherer, so the scan skips without parking.
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'bitbucket.org', fullName: 'team/proj' });
+    readOriginRemoteUrl.mockResolvedValue('git@bitbucket.org:team/proj.git');
     const result = await reconcile('/repo');
     expect(result).toBeNull();
     expect(execGh).not.toHaveBeenCalled();
@@ -331,6 +338,26 @@ describe('reconcile (GitLab forge)', () => {
     expect(result).not.toBeNull();
     expect(result.forge).toBe('gitlab');
     expect(result.zombies).toHaveLength(0);
+  });
+
+  it('scans a nested subgroup remote whose owner/repo does NOT parse (getOriginInfo.fullName=null)', async () => {
+    // Common GitLab layout `group/subgroup/project` — getOriginInfo's strict
+    // owner/repo parse returns null, but the host still classifies as GitLab and
+    // `glab` is cwd-based, so the scan must NOT be skipped. Host is classified off
+    // the origin URL via the real hostFromOriginUrl.
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: null, fullName: null });
+    readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:group/subgroup/project.git');
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42' }],
+      open: [],
+    });
+    const result = await reconcile('/repo');
+    expect(result).not.toBeNull();
+    expect(result.forge).toBe('gitlab');
+    // Best-effort display name is the full subgroup project path from the URL.
+    expect(result.fullName).toBe('group/subgroup/project');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
   });
 });
 
