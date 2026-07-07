@@ -47,11 +47,19 @@ function sameScopes(a, b) {
   return a.every(s => sb.has(s));
 }
 
+// Sanitize a custom-source list to what actually gets persisted: file-type
+// entries with a trimmed, non-blank ref. Used both to compare against the
+// baseline and to build the emitted value, so a half-typed/blank row that
+// sanitizes away doesn't register as a change (and over-persist the config).
+function sanitizeCustom(list) {
+  return (Array.isArray(list) ? list : [])
+    .map(s => ({ type: 'file', ref: String(s?.ref || '').trim() }))
+    .filter(s => s.ref);
+}
+
 function sameCustom(a, b) {
-  const A = Array.isArray(a) ? a : [];
-  const B = Array.isArray(b) ? b : [];
-  if (A.length !== B.length) return false;
-  return A.every((s, i) => s?.type === B[i]?.type && s?.ref === B[i]?.ref);
+  if (a.length !== b.length) return false;
+  return a.every((s, i) => s.type === b[i].type && s.ref === b[i].ref);
 }
 
 /**
@@ -76,14 +84,13 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
 
   const curSources = current.sources || {};
   const baseSources = baseline.sources || {};
+  const curCustom = sanitizeCustom(curSources.custom);
   const toggleChanged = LI_SOURCE_FIELDS.some(f => !!curSources[f.key] !== !!baseSources[f.key]);
-  const customChanged = !sameCustom(curSources.custom, baseSources.custom);
+  const customChanged = !sameCustom(curCustom, sanitizeCustom(baseSources.custom));
   if (toggleChanged || customChanged) {
     update.sources = {
       ...Object.fromEntries(LI_SOURCE_FIELDS.map(f => [f.key, !!curSources[f.key]])),
-      custom: (Array.isArray(curSources.custom) ? curSources.custom : [])
-        .map(s => ({ type: 'file', ref: String(s?.ref || '').trim() }))
-        .filter(s => s.ref)
+      custom: curCustom
     };
   }
 
@@ -101,9 +108,25 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
  * with a partial update. `sources` updates merge one level deep here so a single
  * toggle doesn't wipe the others.
  */
-export default function LayeredIntelligenceTab({ li, onChange, providers, isPortos, loaded }) {
+export default function LayeredIntelligenceTab({ li, onChange, providers, isPortos, loaded, error = false, onRetry }) {
   if (!loaded) {
     return <div className="text-sm text-gray-500">Loading Layered Intelligence config…</div>;
+  }
+  if (error || !li || Object.keys(li).length === 0) {
+    return (
+      <div className="space-y-3">
+        <Banner tone="error" size="md">Couldn&apos;t load the Layered Intelligence config for this app.</Banner>
+        {onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="text-xs px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    );
   }
 
   const sources = li.sources || {};

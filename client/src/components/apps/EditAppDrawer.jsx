@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { GitBranch, GitPullRequest, Lock, Copy } from 'lucide-react';
 import IconPicker from '../IconPicker';
@@ -90,6 +90,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   const [liProviders, setLiProviders] = useState([]);
   const [liIsPortos, setLiIsPortos] = useState(app.id === PORTOS_APP_ID);
   const [liLoaded, setLiLoaded] = useState(false);
+  const [liError, setLiError] = useState(false);
   const [tlsUpgrading, setTlsUpgrading] = useState(false);
   const [tlsResult, setTlsResult] = useState(null);
   const [tlsError, setTlsError] = useState(null);
@@ -155,9 +156,13 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
   // Load the app's effective Layered Intelligence config + the CLI provider list
   // (the loop runs an agentic CLI, same as other CoS work). The tab edits a
-  // working copy; on save we diff it against the baseline.
-  useEffect(() => {
+  // working copy; on save we diff it against the baseline. On failure we set
+  // liError so the tab can show a retry instead of hanging on "Loading…" — the
+  // config fetch is {silent:true}, so there's no toast to surface the failure.
+  const loadLayeredIntelligence = useCallback(() => {
     let cancelled = false;
+    setLiLoaded(false);
+    setLiError(false);
     Promise.all([
       api.getAppLayeredIntelligence(app.id),
       api.getProviders({ silent: true }).catch(() => ({ providers: [] }))
@@ -168,10 +173,17 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       setLiBaseline(cfg);
       setLiIsPortos(!!li?.isPortos);
       setLiProviders((provData?.providers || []).filter(p => p.type === 'cli' && p.enabled !== false));
+      setLiError(!cfg);
       setLiLoaded(true);
-    }).catch(() => { if (!cancelled) setLiLoaded(true); });
+    }).catch(() => {
+      if (cancelled) return;
+      setLiError(true);
+      setLiLoaded(true);
+    });
     return () => { cancelled = true; };
   }, [app.id]);
+
+  useEffect(() => loadLayeredIntelligence(), [loadLayeredIntelligence]);
 
   const updateLiConfig = (patch) => setLiConfig(prev => ({ ...(prev || {}), ...patch }));
 
@@ -651,7 +663,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               onChange={updateLiConfig}
               providers={liProviders}
               isPortos={liIsPortos}
-              loaded={liLoaded && !!liConfig}
+              loaded={liLoaded}
+              error={liError}
+              onRetry={loadLayeredIntelligence}
             />
           )}
 

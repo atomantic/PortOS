@@ -57,6 +57,16 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(update.sources.custom).toEqual([{ type: 'file', ref: 'docs/x.md' }]);
   });
 
+  it('ignores a blank custom-source row that sanitizes back to the baseline (no over-persist)', () => {
+    const withCustom = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'file', ref: 'docs/x.md' }] } };
+    // User clicks "Add file" but leaves the new row blank → sanitizes away → no change.
+    const update = buildLayeredIntelligenceUpdate(withCustom, {
+      ...withCustom,
+      sources: { ...withCustom.sources, custom: [{ type: 'file', ref: 'docs/x.md' }, { type: 'file', ref: '' }] }
+    });
+    expect(update).toBeNull();
+  });
+
   it('detects allowedScopes changes regardless of order', () => {
     // reordered = no change
     expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, allowedScopes: ['app-data-gap', 'app-improvement'] })).toBeNull();
@@ -90,6 +100,19 @@ describe('LayeredIntelligenceTab (render)', () => {
     render(<LayeredIntelligenceTab {...props} isPortos={true} />);
     expect(screen.getByText('Loop meta')).toBeInTheDocument();
     expect(screen.getByText('PortOS self')).toBeInTheDocument();
+  });
+
+  it('shows an error + retry when the config failed to load', () => {
+    const onRetry = vi.fn();
+    render(<LayeredIntelligenceTab {...props} loaded={true} error={true} onRetry={onRetry} />);
+    expect(screen.getByText(/Couldn.t load the Layered Intelligence config/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it('treats an empty config as an error (no fields to render)', () => {
+    render(<LayeredIntelligenceTab {...props} li={{}} loaded={true} />);
+    expect(screen.getByText(/Couldn.t load the Layered Intelligence config/i)).toBeInTheDocument();
   });
 
   it('calls onChange when a source toggle flips', () => {
