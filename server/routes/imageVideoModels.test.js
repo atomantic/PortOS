@@ -6,19 +6,17 @@ import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 // Stub the registry + install service — this suite verifies routing +
 // validation + status-code mapping for the #2124 add/manage endpoints, not the
 // live HuggingFace fetch or on-disk registry write.
+const VIDEO_LIST = [
+  { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', repo: 'notapalindrome/ltx23-mlx-av-q4', runtime: 'mlx_video', steps: 25, guidance: 3 },
+  { id: 'hf-mine', name: 'Mine', repo: 'me/mine', runtime: 'ltx2', steps: 8, guidance: 3, source: 'user' },
+];
+const IMAGE_LIST = [
+  { id: 'dev', name: 'Flux 1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 },
+];
 vi.mock('../lib/mediaModels.js', () => ({
-  loadMediaModels: vi.fn(() => ({
-    video: {
-      macos: [
-        { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', repo: 'notapalindrome/ltx23-mlx-av-q4', runtime: 'mlx_video', steps: 25, guidance: 3 },
-        { id: 'hf-mine', name: 'Mine', repo: 'me/mine', runtime: 'ltx2', steps: 8, guidance: 3, source: 'user' },
-      ],
-      windows: [],
-    },
-    image: [
-      { id: 'dev', name: 'Flux 1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 },
-    ],
-  })),
+  loadMediaModels: vi.fn(() => ({ video: { macos: VIDEO_LIST, windows: [] }, image: IMAGE_LIST })),
+  getVideoModels: vi.fn(() => VIDEO_LIST),
+  getImageModels: vi.fn(() => IMAGE_LIST),
   isUserModelEntry: (e) => e?.source === 'user',
   patchUserModelEntry: vi.fn((id, patch) => ({ id, ...patch, source: 'user' })),
   removeUserModelEntry: vi.fn((id) => ({ ok: true, id })),

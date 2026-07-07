@@ -17,6 +17,8 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, formatBytes, dirSize } from '../lib/fileUtils.js';
 import {
+  getImageModels,
+  getVideoModels,
   isUserModelEntry,
   loadMediaModels,
   patchUserModelEntry,
@@ -124,7 +126,6 @@ router.get('/', asyncHandler(async (_req, res) => {
 // reports the model *catalog* (what can be picked), including entries whose
 // weights aren't downloaded yet.
 router.get('/registry', asyncHandler(async (_req, res) => {
-  const reg = loadMediaModels();
   const flatten = (list, kind) =>
     (Array.isArray(list) ? list : []).map((m) => ({
       id: m.id,
@@ -141,12 +142,14 @@ router.get('/registry', asyncHandler(async (_req, res) => {
       source: m.source || null,
       installedAt: m.installedAt || null,
     }));
+  // Use the CURRENT platform's video list (getVideoModels) rather than
+  // flattening both macos+windows — that matches what's actually pickable here
+  // and avoids showing duplicate rows when a shared media-models.json holds the
+  // same custom id in both platform lists (macOS+Windows peer). Image entries
+  // are single-list.
   res.json({
-    video: [
-      ...flatten(reg.video?.macos, 'video'),
-      ...flatten(reg.video?.windows, 'video'),
-    ],
-    image: flatten(reg.image, 'image'),
+    video: flatten(getVideoModels(), 'video'),
+    image: flatten(getImageModels(), 'image'),
   });
 }));
 

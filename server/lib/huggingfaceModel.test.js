@@ -107,6 +107,23 @@ describe('classifyHfMediaModel — happy paths', () => {
     })).toEqual({ kind: 'video', runtime: 'mlx_video', format: 'safetensors' });
   });
 
+  it('auto-detects a dgrauet LTX repo as the ltx2 runtime (not mlx_video)', () => {
+    expect(classifyHfMediaModel({
+      repo: 'dgrauet/ltx-2.3-mlx-q8',
+      model: hf({ files: ['model.safetensors'], tags: ['ltx'] }),
+    })).toEqual({ kind: 'video', runtime: 'ltx2', format: 'safetensors' });
+  });
+
+  it('detects a Qwen-Image-Edit repo and stamps the edit pipeline + editOnly', () => {
+    const c = classifyHfMediaModel({
+      repo: 'Qwen/Qwen-Image-Edit',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-image' }),
+    });
+    expect(c).toMatchObject({ kind: 'image', runner: 'qwen', editVariant: true });
+    const entry = buildCustomModelEntry({ repo: 'Qwen/Qwen-Image-Edit', model: hf({}), classification: c });
+    expect(entry).toMatchObject({ runner: 'qwen', pipelineClass: 'QwenImageEditPipeline', editOnly: true });
+  });
+
   it('honors an explicit ltx2 runtime override', () => {
     expect(classifyHfMediaModel({
       repo: 'dgrauet/ltx-2.3-mlx-q8',

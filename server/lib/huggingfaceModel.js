@@ -82,7 +82,14 @@ const detectVideoRuntime = (blob) => {
   if (/hunyuan/.test(blob)) {
     return { runtime: 'hunyuan', installHint: 'INSTALL_HUNYUAN=1 bash scripts/setup-image-video.sh' };
   }
-  if (looksLikeLtxVideo(blob)) return { runtime: 'mlx_video' };
+  if (looksLikeLtxVideo(blob)) {
+    // dgrauet's LTX-2 repos run on the `ltx2` BYO-venv runtime (true keyframe
+    // pipeline), not notapalindrome's `mlx_video` — auto-detect that from the
+    // author/marker so an added dgrauet repo routes to the right generator.
+    // Everything else LTX defaults to mlx_video (the shipped default runtime).
+    if (/dgrauet|ltx[\s._-]?pipelines/.test(blob)) return { runtime: 'ltx2' };
+    return { runtime: 'mlx_video' };
+  }
   return null;
 };
 
@@ -329,7 +336,12 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
       { status: 422, code: 'HF_FLUX2_QUANTIZED' },
     );
   }
-  return { kind: 'image', runner: resolvedRunner, format: 'safetensors' };
+  // Qwen-Image-Edit loads QwenImageEditPipeline (not QwenImagePipeline) and
+  // REQUIRES a source image — a text-only render crashes deep in diffusers, so
+  // the built-in carries `editOnly`. Detect the edit repo so the added entry
+  // gets the right pipeline + gate instead of the plain text-to-image config.
+  const editVariant = resolvedRunner === RUNNER_FAMILIES.QWEN && /qwen[\s._-]?image[\s._-]?edit|-edit\b|\bedit\b/.test(blob);
+  return { kind: 'image', runner: resolvedRunner, format: 'safetensors', ...(editVariant ? { editVariant: true } : {}) };
 };
 
 // Derive a stable, collision-resistant registry id from the repo. `org/name`
@@ -381,6 +393,12 @@ export const buildCustomModelEntry = ({ repo, model, classification, name, steps
     // the first render will prompt the user to accept that license + set an HF
     // token, same as the shipped built-in.
     Object.assign(entry, RUNNER_METADATA[classification.runner] || {});
+    // A Qwen-Image-Edit repo needs the edit pipeline + the editOnly gate
+    // (text-only renders crash it), overriding the plain QwenImagePipeline.
+    if (classification.editVariant) {
+      entry.pipelineClass = 'QwenImageEditPipeline';
+      entry.editOnly = true;
+    }
   }
   return entry;
 };

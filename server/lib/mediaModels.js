@@ -725,14 +725,18 @@ const persistRegistry = (reg) => {
 // truth + they round-trip through the shipped-defaults upgrade machinery).
 export const isUserModelEntry = (entry) => entry?.source === 'user';
 
-// Locate a model entry by id across every list (video macos/windows + image),
-// returning `{ entry, list, listKey, idx }` or null. `listKey` ('macos' |
-// 'windows' | 'image') lets the mutators rebuild just the affected list
-// immutably (no deep clone of the whole registry).
+// Locate a model entry by id, returning `{ entry, list, listKey, idx }` or null.
+// Scans the CURRENT platform's video list + the image list — NOT the other
+// platform's video list. The other platform's rows aren't visible to
+// getVideoModels()/the render path on this install, and scanning both would
+// make patch/remove ambiguous when a shared media-models.json (macOS+Windows
+// peer) legitimately holds the same custom id in both platform lists — a
+// remove(id) meant for the Windows row would hit the macOS row first. `listKey`
+// ('macos' | 'windows' | 'image') lets the mutators rebuild just that list.
 const findModelLocation = (reg, id) => {
+  const videoKey = IS_WIN ? 'windows' : 'macos';
   const lists = [
-    ['macos', reg.video?.macos],
-    ['windows', reg.video?.windows],
+    [videoKey, reg.video?.[videoKey]],
     ['image', reg.image],
   ];
   for (const [listKey, list] of lists) {
