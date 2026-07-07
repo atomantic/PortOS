@@ -157,6 +157,22 @@ describe('classifyHfMediaModel — happy paths', () => {
     })).toEqual({ kind: 'image', runner: 'qwen', format: 'safetensors' });
   });
 
+  it('refuses a custom video add on Windows (render path can not load a custom repo)', () => {
+    expect(() => classifyHfMediaModel({
+      repo: 'notapalindrome/ltx23-mlx-av-q4',
+      model: hf({ files: ['model.safetensors'], tags: ['ltx-video'] }),
+      isWindows: true,
+    })).toThrow(/can't be added on Windows/);
+  });
+
+  it('still allows a custom IMAGE add on Windows (cross-platform diffusers venv)', () => {
+    expect(classifyHfMediaModel({
+      repo: 'Qwen/Qwen-Image',
+      model: hf({ files: ['model.safetensors'], pipeline: 'text-to-image' }),
+      isWindows: true,
+    })).toMatchObject({ kind: 'image', runner: 'qwen' });
+  });
+
   it('rejects an invalid explicit runtime', () => {
     expect(() => classifyHfMediaModel({
       repo: 'x/y',

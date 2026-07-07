@@ -232,13 +232,17 @@ const isImagePipelineTag = (model) =>
  * @param {'image'|'video'} [args.kind]     - explicit kind override
  * @param {string} [args.runtime]           - explicit video runtime override
  * @param {string} [args.runner]            - explicit image runner override
+ * @param {boolean} [args.isWindows]        - target platform is Windows (defaults
+ *   to the host). Windows can't self-service-add VIDEO models — its render path
+ *   (generate_win.py) hardcodes its LTX repo and the mlx_video/ltx2 runtimes are
+ *   POSIX-only, so a custom video repo would render wrong weights or fail.
  * @returns {{ kind, runtime?, runner?, format:'safetensors' }}
  *   Throws ServerError (HF_UNSUPPORTED_FORMAT / HF_NO_SAFETENSORS /
  *   HF_UNSUPPORTED_RUNTIME / HF_UNKNOWN_KIND / HF_UNKNOWN_RUNNER /
- *   HF_BAD_KIND / HF_BAD_RUNTIME / HF_BAD_RUNNER) on anything unloadable or
- *   unclassifiable.
+ *   HF_BAD_KIND / HF_BAD_RUNTIME / HF_BAD_RUNNER / HF_VIDEO_WINDOWS_UNSUPPORTED)
+ *   on anything unloadable or unclassifiable.
  */
-export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}) => {
+export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner, isWindows = process.platform === 'win32' } = {}) => {
   assertLoadableFormat({ repo, model });
   assertNotLora({ repo, model });
   const blob = classificationBlob({ repo, model });
@@ -292,6 +296,17 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner } = {}
   }
 
   if (resolvedKind === 'video') {
+    // Windows can't self-service-add a custom VIDEO model: generate_win.py
+    // hardcodes its LTX-Video repo (ignores the entry's `repo`) and the
+    // mlx_video/ltx2 runtimes resolve POSIX-only venv paths — so a Windows add
+    // would render the built-in weights or fail. Refuse up front. (Image adds
+    // run through the cross-platform diffusers venv and stay allowed.)
+    if (isWindows) {
+      throw new ServerError(
+        `Custom video models can't be added on Windows — the Windows video runtime loads a fixed built-in model and can't use a custom HuggingFace repo. Adding custom image models is supported.`,
+        { status: 422, code: 'HF_VIDEO_WINDOWS_UNSUPPORTED' },
+      );
+    }
     // Explicit override wins (already allowlist-validated).
     if (runtime) return { kind: 'video', runtime, format: 'safetensors' };
     // Otherwise require a POSITIVELY-detected addable runtime. A repo that only

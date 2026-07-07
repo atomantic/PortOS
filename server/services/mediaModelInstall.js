@@ -60,6 +60,9 @@ export const addModelFromHuggingface = async (input, { fetchImpl = fetch } = {})
     kind: input?.kind,
     runtime: input?.runtime,
     runner: input?.runner,
+    // Defaults to the host platform; Windows refuses video adds (its render
+    // path can't load a custom repo).
+    isWindows: process.platform === 'win32',
   });
 
   const entry = buildCustomModelEntry({
