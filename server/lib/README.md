@@ -270,4 +270,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `mockPathsDataRoot.js` | Shared Vitest helpers for `PATHS.data → temp dir` and no-peer record creation guards. |
+| `settingsTestUtil.js` | `bindSettingsFile(dataRoot)` → `writeSettingsFile`/`mergeSettingsFile`: direct settings.json disk writes that also drop the `getSettings()` read cache (dynamic-import reset) so a stale cache can't survive a bypass-`save()` write. |
 | `testHelper.js` | Test helpers: `request()` (supertest-style HTTP) + `mockJsonResponse`/`mockTextResponse` (fetch `Response` mocks read via `.text()`). |

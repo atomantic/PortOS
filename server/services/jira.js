@@ -117,21 +117,38 @@ export function createJiraClient(instance) {
     allowSelfSigned: instance.allowSelfSigned
   });
 
-  // Detect expired token (JIRA returns HTML login page instead of JSON)
+  // Expired/invalid token surfaces differently per instance type, so detection is
+  // instance-type-aware alongside jiraAuthHeader — both funnel to one friendly error:
+  //   - Jira Server/DC: 200 response whose body is the HTML login page (not JSON).
+  //   - Jira Cloud: JSON 401 (createHttpClient throws HTTP 401), never an HTML page.
+  const isCloud = isCloudInstance(instance.baseUrl);
+  const expiredTokenError = () => {
+    const err = new Error('JIRA token expired or invalid — regenerate your token (Server: PAT; Cloud: API token).');
+    err.status = 401;
+    return err;
+  };
+
+  // Success path: only Server serves an HTML login page in place of JSON, so gate the
+  // heuristic to Server — a Cloud JSON payload can't accidentally trip on "<!DOCTYPE".
   const checkToken = res => {
-    if (typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
-      const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your token (Server: PAT; Cloud: API token).');
-      err.status = 401;
-      throw err;
+    if (!isCloud && typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
+      throw expiredTokenError();
     }
     return res;
   };
 
+  // Error path: a 401 (Cloud's expired-token signal, and Server's when it 401s rather
+  // than serving HTML) maps to the same friendly error. Other errors bubble unchanged.
+  const mapAuthError = err => {
+    if (err?.status === 401) throw expiredTokenError();
+    throw err;
+  };
+
   return {
-    get: (...args) => base.get(...args).then(checkToken),
-    post: (...args) => base.post(...args).then(checkToken),
-    put: (...args) => base.put(...args).then(checkToken),
-    delete: (...args) => base.delete(...args).then(checkToken)
+    get: (...args) => base.get(...args).then(checkToken, mapAuthError),
+    post: (...args) => base.post(...args).then(checkToken, mapAuthError),
+    put: (...args) => base.put(...args).then(checkToken, mapAuthError),
+    delete: (...args) => base.delete(...args).then(checkToken, mapAuthError)
   };
 }
 
