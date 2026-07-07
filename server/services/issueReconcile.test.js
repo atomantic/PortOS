@@ -95,6 +95,14 @@ describe('ticketKeyFromRef', () => {
     expect(ticketKeyFromRef('feat/some-feature')).toBeNull();
     expect(ticketKeyFromRef('')).toBeNull();
   });
+  it('does NOT match a key-shaped segment outside the claim/cos convention (no false live-claim)', () => {
+    // A branch that merely ENDS in a key must not register a live claim — else a
+    // real zombie would be suppressed forever.
+    expect(ticketKeyFromRef('wip/PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('feat/PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('PROJ-42')).toBeNull();
+    expect(ticketKeyFromRef('cos/PROJ-42')).toBeNull(); // missing the <task> segment
+  });
 });
 
 describe('isJiraStartedStatus', () => {

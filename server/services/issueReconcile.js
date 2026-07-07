@@ -87,20 +87,27 @@ export function issueNumberFromRef(refName) {
 
 /**
  * Extract the JIRA ticket KEY a git ref claims, or null. JIRA claim branches use
- * the ticket KEY directly (no `issue-` prefix), so both conventions carry the raw
- * key as a whole path segment:
- *   - human / TUI:   `claim/<KEY>`               (KEY after `claim/`)
- *   - CoS sub-agent: `cos/<task>/<KEY>/<agent>`   (KEY as the 3rd segment)
- * A KEY looks like `PROJ-1234` (project code + `-` + number). Matching any whole
- * segment that IS a JIRA key covers both conventions and remote-tracking refs
- * (`refs/remotes/origin/claim/<KEY>`) in one pass — the KEY shape is distinctive
- * enough that a non-key segment (`main`, `claim`, `feat`) can't collide.
+ * the ticket KEY directly (no `issue-` prefix), so — unlike the distinctive
+ * `issue-<num>` token — the parser must anchor on the CLAIM CONVENTION itself, not
+ * merely on "a segment shaped like a key". Otherwise an unrelated branch that
+ * happens to end in a key (`wip/PROJ-42`, `feat/PROJ-42`) would register a false
+ * live-claim and suppress a genuine zombie forever. Recognizes exactly the two
+ * conventions the claim-issue-jira flow creates:
+ *   - human / TUI:   `claim/<KEY>`               (KEY immediately after `claim/`)
+ *   - CoS sub-agent: `cos/<task>/<KEY>/<agent>`   (KEY as the segment after `cos/<task>/`)
+ * A KEY looks like `PROJ-1234` (project code + `-` + number) and must be a whole
+ * segment (terminated by `/` or end-of-ref). Remote-tracking refs
+ * (`refs/remotes/origin/claim/<KEY>`) match the same way — the leading
+ * `refs/…/origin/` is just more segments before `claim/`.
  * @param {string} refName
  * @returns {string|null}
  */
 export function ticketKeyFromRef(refName) {
-  const m = /(?:^|\/)([A-Z][A-Z0-9]+-\d+)(?=\/|$)/.exec(refName || '');
-  return m ? m[1] : null;
+  const ref = refName || '';
+  const claim = /(?:^|\/)claim\/([A-Z][A-Z0-9]+-\d+)(?=\/|$)/.exec(ref);
+  if (claim) return claim[1];
+  const cos = /(?:^|\/)cos\/[^/]+\/([A-Z][A-Z0-9]+-\d+)(?=\/|$)/.exec(ref);
+  return cos ? cos[1] : null;
 }
 
 /**
