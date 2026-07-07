@@ -18,7 +18,7 @@ vi.mock('../lib/ports.js', () => ({ PORTS: { API: 5555, API_LOCAL: 5553, UI: 555
 vi.mock('./taskSchedule.js', () => ({ SELF_IMPROVEMENT_TASK_TYPES: [] }));
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn().mockResolvedValue([]) }));
 
-import { getAppLayeredIntelligenceConfig, updateAppLayeredIntelligence, invalidateCache, PORTOS_APP_ID } from './apps.js';
+import { getAppLayeredIntelligenceConfig, updateAppLayeredIntelligence, createApp, getAppById, invalidateCache, PORTOS_APP_ID } from './apps.js';
 
 beforeEach(() => {
   invalidateCache();
@@ -72,5 +72,27 @@ describe('updateAppLayeredIntelligence', () => {
 
   it('returns null for an unknown app', async () => {
     expect(await updateAppLayeredIntelligence('nope', { enabled: true })).toBe(null);
+  });
+});
+
+describe('createApp persists layeredIntelligence', () => {
+  it('stores an explicitly-provided config on create', async () => {
+    const created = await createApp({
+      name: 'New App', repoPath: '/new', type: 'express',
+      layeredIntelligence: { enabled: true, allowedScopes: ['app-improvement'] }
+    });
+    invalidateCache();
+    const fetched = await getAppById(created.id);
+    expect(fetched.layeredIntelligence).toEqual({ enabled: true, allowedScopes: ['app-improvement'] });
+  });
+
+  it('leaves no layeredIntelligence key when omitted (baseline resolves on read)', async () => {
+    const created = await createApp({ name: 'Bare App', repoPath: '/bare', type: 'express' });
+    invalidateCache();
+    const fetched = await getAppById(created.id);
+    expect(fetched.layeredIntelligence).toBeUndefined();
+    // …and the accessor still supplies the baseline default.
+    const cfg = await getAppLayeredIntelligenceConfig(created.id);
+    expect(cfg.enabled).toBe(false);
   });
 });

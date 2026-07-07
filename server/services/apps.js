@@ -324,6 +324,14 @@ export async function createApp(appData) {
     updatedAt: now
   };
 
+  // Persist an explicitly-provided Layered Intelligence config on create; when
+  // omitted the app has no key and the config accessor supplies the baseline on
+  // first read (no per-app seed write). Only set it when present so absent stays
+  // absent — createApp otherwise builds the object field-by-field and would drop it.
+  if (appData.layeredIntelligence && typeof appData.layeredIntelligence === 'object') {
+    app.layeredIntelligence = appData.layeredIntelligence;
+  }
+
   data.apps[id] = app;
   await saveApps(data);
 
