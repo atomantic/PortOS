@@ -422,6 +422,40 @@ export async function getAppWorkTracker(id) {
 }
 
 /**
+ * Get an app's effective Layered Intelligence config (the loop's per-app
+ * settings). Merges the stored `layeredIntelligence` over the defaults so a
+ * partial/absent config still yields a complete, safe config. PortOS gets the
+ * meta/self scopes. Returns null when the app id is unknown.
+ *
+ * `isPortos` is passed to the merge so a missing config picks up the right
+ * default scopes without a per-app seed write — an install adopts the baseline
+ * the first time the loop reads it.
+ */
+export async function getAppLayeredIntelligenceConfig(id) {
+  const app = await getAppById(id);
+  if (!app) return null;
+  const { getEffectiveConfig } = await import('./layeredIntelligence.js');
+  return getEffectiveConfig({ ...app, isPortos: id === PORTOS_APP_ID });
+}
+
+/**
+ * Update an app's Layered Intelligence config. Shallow-merges `updates` over the
+ * stored config (with `sources` merged one level deep) so a partial PATCH
+ * doesn't wipe untouched fields. Returns the updated app, or null if unknown.
+ */
+export async function updateAppLayeredIntelligence(id, updates = {}) {
+  const app = await getAppById(id);
+  if (!app) return null;
+  const { getEffectiveConfig } = await import('./layeredIntelligence.js');
+  const current = getEffectiveConfig({ ...app, isPortos: id === PORTOS_APP_ID });
+  const merged = { ...current, ...updates };
+  if (updates.sources && typeof updates.sources === 'object') {
+    merged.sources = { ...current.sources, ...updates.sources };
+  }
+  return updateApp(id, { layeredIntelligence: merged });
+}
+
+/**
  * Get task type overrides for an app
  */
 export async function getAppTaskTypeOverrides(id) {
