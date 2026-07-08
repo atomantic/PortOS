@@ -1,9 +1,10 @@
 import { request } from './apiCore.js';
 
 // Privacy Center — encrypted PII Vault + Trusted Organizations registry
-// (issues #2140, #2141; UI shell #2142). Every wrapper takes an optional
-// `options` object so callers that own their own error UI (useAsyncAction,
-// custom catch) can pass `{ silent: true }` per the toasting convention.
+// (issues #2140, #2141; UI shell #2142; Digital Twin cross-link #2147). Every
+// wrapper takes an optional `options` object so callers that own their own error
+// UI (useAsyncAction, custom catch) can pass `{ silent: true }` per the toasting
+// convention.
 
 // ── Status (doctor-style readout) ───────────────────────────────────────────
 export const getPrivacyStatus = (options) => request('/privacy/status', options);
@@ -63,3 +64,8 @@ export const setOrgHoldings = (id, holdings, options) => request(`/privacy/orgs/
   body: JSON.stringify({ holdings }),
   ...options,
 });
+
+// ── Digital Twin cross-link (#2147) ─────────────────────────────────────────
+/** Social-account → org links for the Twin's "in org registry" badges. */
+export const getSocialAccountOrgLinks = (options) =>
+  request('/privacy/social-account-links', options);

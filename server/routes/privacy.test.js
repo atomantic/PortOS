@@ -28,6 +28,7 @@ vi.mock('../services/privacyOrgs.js', () => ({
   deleteOrg: vi.fn(async () => ({ ok: true })),
   setOrgHoldings: vi.fn(async (id, holdings) => holdings.map((h) => ({ orgId: id, ...h }))),
   getHoldingsForOrg: vi.fn(async () => [{ orgId: 'o1', vaultRecordId: 'v1', vaultMaskedValue: 'a•••@b.com' }]),
+  getOrgsBySocialAccounts: vi.fn(async () => [{ socialAccountId: 'acct-1', orgId: 'o1', orgName: 'Acme Bank' }]),
 }));
 
 const privacyRoutes = (await import('./privacy.js')).default;
@@ -152,6 +153,22 @@ describe('POST /api/privacy/orgs', () => {
     expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', category: 'nope' })).status).toBe(400);
     expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', trust: 'nope' })).status).toBe(400);
     expect((await request(makeApp()).post('/api/privacy/orgs').send({ name: 'X', extra: 1 })).status).toBe(400);
+  });
+
+  it('accepts the social-account cross-link on create (#2147)', async () => {
+    const res = await request(makeApp()).post('/api/privacy/orgs')
+      .send({ name: 'GitHub', category: 'platform', socialAccountId: 'acct-1' });
+    expect(res.status).toBe(201);
+    expect(orgService.createOrg).toHaveBeenCalledWith({ name: 'GitHub', category: 'platform', socialAccountId: 'acct-1' });
+  });
+});
+
+describe('GET /api/privacy/social-account-links', () => {
+  it('returns the social-account → org reverse index (#2147)', async () => {
+    const res = await request(makeApp()).get('/api/privacy/social-account-links');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ socialAccountId: 'acct-1', orgId: 'o1', orgName: 'Acme Bank' }]);
+    expect(orgService.getOrgsBySocialAccounts).toHaveBeenCalled();
   });
 });
 
