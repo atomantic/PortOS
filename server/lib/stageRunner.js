@@ -246,6 +246,47 @@ async function resolveProviderForStage(stage, { providerOverride, providerDefaul
 }
 
 /**
+ * Resolve the JUDGE provider/model for a WRITER stage — the writer/judge model
+ * split (#2167, CWQE Phase 3). autonovel found this essential: "the model that
+ * evaluates must differ from the model that writes — intentionally different to
+ * avoid self-congratulation." A calibrated quality judge scored by the SAME model
+ * that drafted the text grades itself generous.
+ *
+ * A writer stage config may carry `judgeProvider` (and optional `judgeModel`).
+ * When set, the judge runs on that provider/model. When UNSET, the judge falls
+ * back to the writer stage's own resolved provider/model — a working default that
+ * still scores the draft, while the UI encourages the user to configure a
+ * different (harsher) judge model.
+ *
+ * Returns `{ provider, model }` (model may be null → provider's own default).
+ * The caller passes these as `providerOverride`/`modelOverride` to
+ * `runStagedLLM('pipeline-judge-issue', …)` so the judge PROMPT runs against the
+ * resolved judge provider rather than its own stage-config default.
+ */
+export async function resolveJudgeForStage(stage, options = {}) {
+  // An explicit per-call `providerOverride` is a deliberate "judge with THIS
+  // provider right now" demand — it beats a stage-level judge pin (mirrors how
+  // resolveProviderForStage lets providerOverride beat stage.provider).
+  if (!options.providerOverride && stage?.judgeProvider) {
+    const pinned = await getProviderById(stage.judgeProvider).catch(() => null);
+    if (pinned?.enabled) {
+      return { provider: pinned, model: resolveModel(pinned, stage.judgeModel || null) };
+    }
+    throw new ServerError(
+      `Judge provider "${stage.judgeProvider}" is not available — re-pick a judge provider in the stage settings`,
+      { status: 503, code: 'STAGE_JUDGE_PROVIDER_UNAVAILABLE' }
+    );
+  }
+  // No judge pin (or an explicit override): default to the writer stage's own
+  // resolved provider/model. Reuses the exact writer-resolution precedence so the
+  // judge lands on the same provider the draft ran on (self-judge fallback) until
+  // a distinct judge is configured — the UI encourages picking a harsher model.
+  const provider = await resolveProviderForStage(stage, options);
+  const model = resolveModel(provider, resolveModelHint(stage, options));
+  return { provider, model };
+}
+
+/**
  * Extract the first balanced object/array from an LLM response. Some
  * providers prepend explanation prose; the prompt asks for JSON only but
  * we have to be defensive. Walks the same fence-stripped text as

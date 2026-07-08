@@ -811,6 +811,18 @@ describe('validation.js', () => {
       expect('timeout' in out).toBe(false);
     });
 
+    it('preserves the writer/judge split fields (#2167) instead of stripping them', () => {
+      const out = stageConfigUpdateSchema.parse({ judgeProvider: 'codex', judgeModel: 'heavy' });
+      expect(out.judgeProvider).toBe('codex');
+      expect(out.judgeModel).toBe('heavy');
+    });
+
+    it('accepts null judgeProvider/judgeModel as a cleared pin', () => {
+      const out = stageConfigUpdateSchema.parse({ judgeProvider: null, judgeModel: null });
+      expect(out.judgeProvider).toBeNull();
+      expect(out.judgeModel).toBeNull();
+    });
+
     it('rejects non-digit numeric strings (1e3 / 1.5 / 0x10) to mirror client parseTimeoutMs', () => {
       // The client's digit-only regex rejects these; the server preprocess
       // also leaves non-digit strings as-is so the inner z.number() fails.

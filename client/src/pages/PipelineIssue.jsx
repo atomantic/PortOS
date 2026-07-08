@@ -31,6 +31,7 @@ import ComicPagesStage from '../components/pipeline/stages/ComicPagesStage';
 import StoryboardsStage from '../components/pipeline/stages/StoryboardsStage';
 import EpisodeVideoStage from '../components/pipeline/stages/EpisodeVideoStage';
 import AudioStage from '../components/pipeline/stages/AudioStage';
+import IssueJudgePanel from '../components/pipeline/IssueJudgePanel';
 import SeriesLlmPicker from '../components/pipeline/SeriesLlmPicker';
 import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
 import CatalogCastPanel from '../components/CatalogCastPanel';
@@ -419,6 +420,11 @@ export default function PipelineIssue() {
         ) : (
           <div className="text-gray-500 text-sm">Unknown stage.</div>
         )}
+        {/* Calibrated quality judge (#2167) — qualityScore = judge − slop. Renders
+            only for text stages with drafted content (the panel self-gates). */}
+        {['prose', 'comicScript', 'teleplay'].includes(stageId) ? (
+          <IssueJudgePanel issue={issue} stageId={stageId} />
+        ) : null}
         {/* Frames log for debugging during auto-run — collapsed but available. */}
         {frames.length > 0 ? (
           <details className="mt-6 text-xs text-gray-600">

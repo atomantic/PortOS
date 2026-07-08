@@ -395,6 +395,16 @@ vi.mock('../services/pipeline/editorialAnalysis.js', () => ({
   analyzeIssue: (...a) => analyzeIssueMock(...a),
   getIssueAnalysis: (...a) => getIssueAnalysisMock(...a),
 }));
+// Quality judge (#2167) — spy the service so route tests assert dispatch/
+// validation without hitting an LLM provider.
+const getSeriesJudgeMock = vi.fn(async () => ({ coverage: { judged: 0, total: 0, stale: 0 }, scores: [], weakest: [] }));
+const judgeIssueMock = vi.fn(async () => ({ status: 'complete', overall: 6, slopPenalty: 1, qualityScore: 5, dimensions: {} }));
+const getIssueJudgeMock = vi.fn(async () => null);
+vi.mock('../services/pipeline/pipelineJudge.js', () => ({
+  getSeriesJudge: (...a) => getSeriesJudgeMock(...a),
+  judgeIssue: (...a) => judgeIssueMock(...a),
+  getIssueJudge: (...a) => getIssueJudgeMock(...a),
+}));
 const startSeriesAnalysisMock = vi.fn(async () => ({ runId: 'ed-run-1', alreadyRunning: false }));
 vi.mock('../services/pipeline/editorialAnalysisRunner.js', () => ({
   startSeriesAnalysis: (...a) => startSeriesAnalysisMock(...a),
@@ -3061,6 +3071,58 @@ describe('editorial roadmap routes', () => {
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app).get(`/api/pipeline/issues/${iss.body.id}/editorial`);
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBe('none');
+  });
+});
+
+describe('quality judge routes (#2167)', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it('GET /series/:id/judge returns 404 for an unknown series', async () => {
+    const r = await request(makeApp()).get('/api/pipeline/series/ser-nope/judge');
+    expect(r.status).toBe(404);
+    expect(getSeriesJudgeMock).not.toHaveBeenCalled();
+  });
+
+  it('GET /series/:id/judge dispatches the aggregate for a known series', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/judge`);
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveProperty('coverage');
+    expect(getSeriesJudgeMock).toHaveBeenCalledWith(ser.body.id);
+  });
+
+  it('POST /issues/:id/judge validates body and dispatches', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+
+    const bad = await request(app).post(`/api/pipeline/issues/${iss.body.id}/judge`).send({ stageId: 'nonsense' });
+    expect(bad.status).toBe(400);
+
+    const ok = await request(app).post(`/api/pipeline/issues/${iss.body.id}/judge`).send({ stageId: 'prose', force: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe('complete');
+    expect(judgeIssueMock).toHaveBeenCalledWith(iss.body.id, { stageId: 'prose', force: true });
+  });
+
+  it('POST /issues/:id/judge returns 404 for an unknown issue', async () => {
+    const r = await request(makeApp()).post('/api/pipeline/issues/iss-nope/judge').send({});
+    expect(r.status).toBe(404);
+    expect(judgeIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('GET /issues/:id/judge returns a none-status stub when never judged', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app).get(`/api/pipeline/issues/${iss.body.id}/judge`);
     expect(r.status).toBe(200);
     expect(r.body.status).toBe('none');
   });
