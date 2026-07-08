@@ -142,6 +142,9 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Identity', aliases: ['twin-test'] },
   { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Identity', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
   { id: 'nav.twin.voice', path: '/digital-twin/voice', label: 'Voice', section: 'Identity', aliases: ['twin-voice', 'voice-style', 'spoken-written'], keywords: ['speech', 'spoken', 'written', 'transcript', 'style', 'comparison', 'communication'] },
+  { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', aliases: ['privacy', 'privacy-center', 'my-data'], keywords: ['pii', 'privacy', 'personal data', 'identity facts', 'who has my data'] },
+  { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', aliases: ['vault', 'pii-vault', 'privacy-vault'], keywords: ['pii', 'vault', 'encrypted', 'ssn', 'address', 'passport', 'identity'] },
+  { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', aliases: ['organizations', 'orgs', 'trusted-orgs'], keywords: ['organizations', 'banks', 'utilities', 'who holds my data', 'registry', 'holdings'] },
 
   { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'Health', aliases: ['meatspace'] },
   { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'Health', aliases: ['meatspace-health', 'body-health'], keywords: ['health', 'vitals', 'wellbeing', 'biometrics'] },
