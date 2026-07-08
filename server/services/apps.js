@@ -466,6 +466,9 @@ export async function updateAppLayeredIntelligence(id, updates = {}) {
   if (updates.sources && typeof updates.sources === 'object') {
     merged.sources = { ...(stored.sources && typeof stored.sources === 'object' ? stored.sources : {}), ...updates.sources };
   }
+  if (updates.handoff && typeof updates.handoff === 'object') {
+    merged.handoff = { ...(stored.handoff && typeof stored.handoff === 'object' ? stored.handoff : {}), ...updates.handoff };
+  }
   return updateApp(id, { layeredIntelligence: merged });
 }
 

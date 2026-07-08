@@ -25,6 +25,8 @@ import {
   isScopeAllowed,
   isProposalDuplicate,
   checkSemanticDuplicate,
+  isHandoffEligible,
+  buildHandoffTask,
   filerForTracker,
   trackerSupportsPause,
   resolveBlockOnIssue,
@@ -65,6 +67,7 @@ export function isAppDue(config, lastRunAt, now = Date.now()) {
 export async function processApp(app, deps = {}) {
   const {
     callLLM,
+    enqueueHandoff = defaultEnqueueHandoff,
     now = Date.now()
   } = deps
 
@@ -161,6 +164,7 @@ export async function processApp(app, deps = {}) {
   let filedNumber = null  // forge: integer issue number
   let filedKey = null     // jira: string ticket key (PROJ-123)
   let filedAction = 'no-op'
+  let handedOff = false
   if (proposal) {
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
     if (!scopeOk) {
@@ -184,6 +188,21 @@ export async function processApp(app, deps = {}) {
         filedAction = 'filed'
         const ref = filedKey || (filedNumber ? `#${filedNumber}` : '')
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
+        // ---- Optional Engine-A hand-off: enqueue a coding agent for a
+        // trivial+safe fix (approval-gated) rather than only filing it. Only
+        // fires when the app opted in (config.handoff.enabled) and we have a
+        // concrete filed ref for the agent to work — plan-tracked apps (no
+        // number/key) fall through to file-only. A plain forge PLAN item is
+        // still drained by the normal claim-work scheduler.
+        const issueRef = filedKey || filedNumber
+        if (isHandoffEligible({ proposal, config, filed: issueRef })) {
+          const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef }))
+            .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
+          if (task && !task.duplicate) {
+            handedOff = true
+            console.log(`🤝 Layered Intelligence: ${app.name} handed off ${ref} to a coding agent (task ${task.id})`)
+          }
+        }
       } else {
         console.error(`❌ Layered Intelligence: ${app.name} failed to file proposal: ${filed.error || 'unknown'}`)
       }
@@ -209,7 +228,19 @@ export async function processApp(app, deps = {}) {
   }
 
   await recordRun(app, config, now)
-  return { app: app.id, action: filedAction, filedNumber, filedKey, paused }
+  return { app: app.id, action: filedAction, filedNumber, filedKey, paused, handedOff }
+}
+
+/**
+ * Default hand-off enqueue: create an approval-gated internal CoS task so an
+ * Engine-A coding agent picks up the filed proposal. Dynamically imports cos.js
+ * (heavy — PM2/file/store graph) so the pure handler stays light, matching this
+ * file's lazy-import pattern for the provider + embeddings deps. Injectable via
+ * the processApp `enqueueHandoff` dep so tests never touch the real task store.
+ */
+async function defaultEnqueueHandoff(taskData) {
+  const { addTask } = await import('../cos.js')
+  return addTask(taskData, 'internal')
 }
 
 /**

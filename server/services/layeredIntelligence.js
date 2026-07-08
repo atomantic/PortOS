@@ -68,6 +68,15 @@ export const PROPOSAL_SCOPES = ['app-improvement', 'app-data-gap', 'loop-meta', 
 // itself (they extend / improve the loop, which lives in the PortOS repo).
 export const PORTOS_ONLY_SCOPES = ['loop-meta', 'portos-self'];
 
+// The reasoner's honest effort/risk estimate for a proposal. Only a `trivial`
+// proposal is ever eligible for the optional Engine-A hand-off (below); anything
+// unrecognized normalizes to null (unknown → not trivial → never auto-handed-off).
+export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
+
+// The single complexity level that (with `safe: true` and hand-off enabled)
+// lets the loop enqueue a coding agent instead of only filing the issue.
+export const HANDOFF_COMPLEXITY = 'trivial';
+
 /**
  * The default per-app config. PortOS (isPortos) additionally gets the meta/self
  * scopes so the loop can extend itself; every other app is capped at its own
@@ -91,7 +100,12 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
     rules: '',
     allowedScopes: isPortos
       ? ['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self']
-      : ['app-improvement', 'app-data-gap']
+      : ['app-improvement', 'app-data-gap'],
+    // Engine-A hand-off. When enabled, a proposal the reasoner marks trivial+safe
+    // is ALSO enqueued as a CoS coding-agent task (approval-gated) instead of only
+    // being filed for later human triage. Off by default — letting an agent write
+    // code from the loop unattended is an extra opt-in on top of enabling the loop.
+    handoff: { enabled: false }
   };
 }
 
@@ -111,6 +125,12 @@ export function getEffectiveConfig(app) {
   merged.sources = {
     ...base.sources,
     ...(stored.sources && typeof stored.sources === 'object' ? stored.sources : {})
+  };
+  // Merge handoff one level deep (like sources) so a partial `{ handoff: {} }`
+  // doesn't wipe the default `enabled`.
+  merged.handoff = {
+    ...base.handoff,
+    ...(stored.handoff && typeof stored.handoff === 'object' && !Array.isArray(stored.handoff) ? stored.handoff : {})
   };
   if (!Array.isArray(merged.sources.custom)) merged.sources.custom = [];
   if (!Array.isArray(merged.allowedScopes)) merged.allowedScopes = base.allowedScopes;
@@ -143,6 +163,7 @@ export function summarizeLoopStatus({ app, isPortos = false, now = Date.now() } 
     intervalMs: config.intervalMs,
     providerId: config.providerId || null,
     model: config.model || null,
+    handoffEnabled: !!config.handoff?.enabled,
     hasRules: !!(typeof config.rules === 'string' && config.rules.trim()),
     lastRunAt,
     nextDueAt,
@@ -312,7 +333,12 @@ export function validateReasonerResponse(parsed) {
         slug,
         title,
         body: typeof p.body === 'string' ? p.body : '',
-        value: typeof p.value === 'string' ? p.value : ''
+        value: typeof p.value === 'string' ? p.value : '',
+        // Hand-off signals. `complexity` normalizes to a known level or null
+        // (unknown → never trivial → never auto-handed-off); `safe` is a strict
+        // boolean so only an explicit `true` opens the hand-off path.
+        complexity: PROPOSAL_COMPLEXITIES.includes(p.complexity) ? p.complexity : null,
+        safe: p.safe === true
       };
     }
   }
@@ -340,6 +366,56 @@ export function resolveBlockOnIssue(pause, filedIssueNumber) {
   if (!pause) return null;
   if (pause.blockOnIssue === 'this') return filedIssueNumber ?? null;
   return Number.isInteger(pause.blockOnIssue) ? pause.blockOnIssue : null;
+}
+
+/**
+ * Whether a filed proposal qualifies for the optional Engine-A hand-off — i.e.
+ * the loop should enqueue a coding agent to implement it now, not just file it.
+ * Requires ALL of: hand-off enabled in the app's config, an issue actually filed
+ * (a concrete `filed` ref for the agent to work), and the reasoner marking the
+ * proposal both trivial AND safe. Any missing/false signal falls through to
+ * file-only. Pure — the handler feeds it the filed ref.
+ */
+export function isHandoffEligible({ proposal, config, filed } = {}) {
+  if (filed == null || filed === '' || filed === false) return false;
+  if (!config?.handoff?.enabled) return false;
+  if (!proposal || typeof proposal !== 'object') return false;
+  return proposal.complexity === HANDOFF_COMPLEXITY && proposal.safe === true;
+}
+
+/**
+ * Build the CoS task payload that hands a filed proposal to an Engine-A coding
+ * agent. Deterministic (no I/O) so it's unit-tested; the handler passes the
+ * result to `addTask(..., 'internal')`. The task is APPROVAL-GATED — an agent
+ * writing code straight from the loop shouldn't run unattended (mirrors
+ * autoFixer's every code-editing task). The description leads with a stable
+ * `LI hand-off:` prefix so addTask's per-app dedup suppresses a re-enqueue while
+ * the same proposal's task is still pending/in-flight.
+ */
+export function buildHandoffTask({ app, proposal, issueRef } = {}) {
+  const ref = typeof issueRef === 'number' ? `#${issueRef}` : String(issueRef ?? '').trim();
+  const context = [
+    '# Layered Intelligence hand-off',
+    '',
+    `The Layered Intelligence loop identified a TRIVIAL, SAFE improvement for **${app?.name || app?.id || 'this app'}** and filed it as ${ref}.`,
+    '',
+    '## Task',
+    `Implement the change described in ${ref} end-to-end: read the issue, make the fix, run the app's tests, and open a PR that closes ${ref}.`,
+    'If — once you dig in — the change turns out to be non-trivial or carries any regression/data-loss risk, STOP and leave a comment on the issue explaining why instead of forcing it. Filing was the safe fallback; a half-done risky change is worse than none.',
+    '',
+    '## Proposal',
+    `- **Title:** ${proposal?.title || ''}`,
+    `- **Value:** ${proposal?.value || '(not provided)'}`,
+    '',
+    proposal?.body || ''
+  ].join('\n');
+  return {
+    description: `LI hand-off: ${proposal?.title || ref}`,
+    priority: 'MEDIUM',
+    context,
+    app: app?.id,
+    approvalRequired: true
+  };
 }
 
 /**
@@ -378,8 +454,12 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? openIssues.map(i => `- #${i.number ?? '?'} [${i.slug || extractSlugFromBody(i.body) || 'no-slug'}] ${i.title || ''}`).join('\n')
     : '(none)';
 
-  return `You are the Layered Intelligence reasoner for the app "${app.name}". Analyze the app's goals and telemetry and decide the SINGLE highest-value improvement to propose this run — signal, not noise. You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
+  const handoffNote = config.handoff?.enabled
+    ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
+    : '';
 
+  return `You are the Layered Intelligence reasoner for the app "${app.name}". Analyze the app's goals and telemetry and decide the SINGLE highest-value improvement to propose this run — signal, not noise. You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
+${handoffNote}
 Rules & guidance from the operator:
 ${config.rules?.trim() || '(none)'}
 
@@ -400,7 +480,9 @@ Respond with JSON only (no markdown fences):
     "slug": "kebab-stable-id",
     "title": "short imperative title",
     "body": "markdown detail for the coding agent",
-    "value": "why this is the single highest-value item now"
+    "value": "why this is the single highest-value item now",
+    "complexity": "trivial | moderate | complex",   // honest effort/risk estimate
+    "safe": false            // true ONLY if a coding agent could implement it end-to-end with no regression/data-loss risk
   },
   "pause": {                 // null if not pausing
     "blockOnIssue": "this" or <existing issue number>,

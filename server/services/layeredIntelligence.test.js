@@ -21,6 +21,9 @@ import {
   SEMANTIC_DEDUP_MAX_CANDIDATES,
   isAppParked,
   validateReasonerResponse,
+  isHandoffEligible,
+  buildHandoffTask,
+  HANDOFF_COMPLEXITY,
   resolveBlockOnIssue,
   filerForTracker,
   trackerSupportsPause,
@@ -72,6 +75,11 @@ describe('defaultLayeredIntelligenceConfig', () => {
     expect(c.allowedScopes).toContain('loop-meta');
     expect(c.allowedScopes).toContain('portos-self');
   });
+
+  it('ships the Engine-A hand-off off by default', () => {
+    expect(defaultLayeredIntelligenceConfig(false).handoff).toEqual({ enabled: false });
+    expect(defaultLayeredIntelligenceConfig(true).handoff).toEqual({ enabled: false });
+  });
 });
 
 describe('getEffectiveConfig', () => {
@@ -100,6 +108,13 @@ describe('getEffectiveConfig', () => {
     const c = getEffectiveConfig({ layeredIntelligence: { sources: { custom: 'bad' }, allowedScopes: 'nope' } });
     expect(c.sources.custom).toEqual([]);
     expect(Array.isArray(c.allowedScopes)).toBe(true);
+  });
+
+  it('merges handoff one level deep (partial does not wipe default enabled)', () => {
+    expect(getEffectiveConfig({ layeredIntelligence: { handoff: {} } }).handoff).toEqual({ enabled: false });
+    expect(getEffectiveConfig({ layeredIntelligence: { handoff: { enabled: true } } }).handoff).toEqual({ enabled: true });
+    // A junk (non-object) handoff falls back to the default.
+    expect(getEffectiveConfig({ layeredIntelligence: { handoff: 'nope' } }).handoff).toEqual({ enabled: false });
   });
 });
 
@@ -145,6 +160,16 @@ describe('summarizeLoopStatus (overview page shape)', () => {
     });
     expect(s.hasRules).toBe(true);
     expect(JSON.stringify(s)).not.toContain('never add deps');
+  });
+
+  it('surfaces the hand-off enabled flag', () => {
+    const off = summarizeLoopStatus({ app: { id: 'h0', name: 'Off' }, now: NOW });
+    expect(off.handoffEnabled).toBe(false);
+    const on = summarizeLoopStatus({
+      app: { id: 'h1', name: 'On', layeredIntelligence: { enabled: true, handoff: { enabled: true } } },
+      now: NOW
+    });
+    expect(on.handoffEnabled).toBe(true);
   });
 
   it('surfaces PortOS scopes + custom source count', () => {
@@ -334,6 +359,68 @@ describe('validateReasonerResponse', () => {
     expect(validateReasonerResponse('nope')).toEqual({ analysis: '', proposal: null, pause: null });
     expect(validateReasonerResponse({ proposal: [], pause: [] })).toEqual({ analysis: '', proposal: null, pause: null });
   });
+
+  it('normalizes proposal complexity + safe (defaults: null / false)', () => {
+    const bare = validateReasonerResponse({ proposal: { scope: 'app-improvement', slug: 'x', title: 'X' } });
+    expect(bare.proposal.complexity).toBe(null);
+    expect(bare.proposal.safe).toBe(false);
+
+    const trivial = validateReasonerResponse({ proposal: { scope: 'app-improvement', slug: 'x', title: 'X', complexity: 'trivial', safe: true } });
+    expect(trivial.proposal.complexity).toBe('trivial');
+    expect(trivial.proposal.safe).toBe(true);
+
+    // Unknown complexity → null; a non-strict-true safe → false.
+    const junk = validateReasonerResponse({ proposal: { scope: 'app-improvement', slug: 'x', title: 'X', complexity: 'epic', safe: 'yes' } });
+    expect(junk.proposal.complexity).toBe(null);
+    expect(junk.proposal.safe).toBe(false);
+  });
+});
+
+describe('isHandoffEligible', () => {
+  const trivialSafe = { complexity: HANDOFF_COMPLEXITY, safe: true };
+  const on = { handoff: { enabled: true } };
+
+  it('is eligible only when enabled + filed ref + trivial + safe', () => {
+    expect(isHandoffEligible({ proposal: trivialSafe, config: on, filed: 42 })).toBe(true);
+    expect(isHandoffEligible({ proposal: trivialSafe, config: on, filed: 'PROJ-7' })).toBe(true);
+  });
+
+  it('is NOT eligible when hand-off is disabled', () => {
+    expect(isHandoffEligible({ proposal: trivialSafe, config: { handoff: { enabled: false } }, filed: 42 })).toBe(false);
+    expect(isHandoffEligible({ proposal: trivialSafe, config: {}, filed: 42 })).toBe(false);
+  });
+
+  it('is NOT eligible without a concrete filed ref (plan-tracked apps)', () => {
+    expect(isHandoffEligible({ proposal: trivialSafe, config: on, filed: null })).toBe(false);
+    expect(isHandoffEligible({ proposal: trivialSafe, config: on, filed: '' })).toBe(false);
+    expect(isHandoffEligible({ proposal: trivialSafe, config: on, filed: false })).toBe(false);
+  });
+
+  it('is NOT eligible unless BOTH trivial AND safe', () => {
+    expect(isHandoffEligible({ proposal: { complexity: 'moderate', safe: true }, config: on, filed: 1 })).toBe(false);
+    expect(isHandoffEligible({ proposal: { complexity: 'trivial', safe: false }, config: on, filed: 1 })).toBe(false);
+    expect(isHandoffEligible({ proposal: null, config: on, filed: 1 })).toBe(false);
+  });
+});
+
+describe('buildHandoffTask', () => {
+  const app = { id: 'app-1', name: 'App One' };
+  const proposal = { title: 'Fix the typo', body: 'change X to Y', value: 'clarity', slug: 'fix-typo' };
+
+  it('builds an approval-gated internal task scoped to the app', () => {
+    const t = buildHandoffTask({ app, proposal, issueRef: 42 });
+    expect(t.approvalRequired).toBe(true);
+    expect(t.app).toBe('app-1');
+    expect(t.priority).toBe('MEDIUM');
+    expect(t.description).toBe('LI hand-off: Fix the typo');
+  });
+
+  it('references the filed issue in the context (# for forge number, raw key for jira)', () => {
+    expect(buildHandoffTask({ app, proposal, issueRef: 42 }).context).toContain('#42');
+    const jira = buildHandoffTask({ app, proposal, issueRef: 'PROJ-7' }).context;
+    expect(jira).toContain('PROJ-7');
+    expect(jira).toContain('change X to Y'); // carries the proposal body
+  });
 });
 
 describe('resolveBlockOnIssue', () => {
@@ -407,6 +494,14 @@ describe('buildPrompt', () => {
     expect(out).toContain('existing-thing');
     expect(out).toContain('ship faster');
     expect(out).toContain('JSON only');
+  });
+
+  it('mentions the hand-off only when it is enabled', () => {
+    const off = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
+    expect(off).not.toContain('Hand-off:');
+    const on = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '', handoff: { enabled: true } } });
+    expect(on).toContain('Hand-off:');
+    expect(on).toContain('"complexity":"trivial"');
   });
 });
 

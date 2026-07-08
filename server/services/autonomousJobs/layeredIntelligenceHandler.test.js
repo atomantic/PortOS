@@ -236,6 +236,57 @@ describe('processApp', () => {
     expect(out.action).toBe('duplicate');
   });
 
+  it('hands a trivial+safe filed proposal to a coding agent when hand-off is enabled', async () => {
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 'sys-1' });
+    const app = enabledApp();
+    app.layeredIntelligence.handoff = { enabled: true };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'fix-x', title: 'Fix X', body: 'do it', complexity: 'trivial', safe: true } });
+    const out = await processApp(app, { callLLM, enqueueHandoff });
+    expect(out.action).toBe('filed');
+    expect(out.handedOff).toBe(true);
+    expect(enqueueHandoff).toHaveBeenCalledTimes(1);
+    expect(enqueueHandoff.mock.calls[0][0]).toMatchObject({ approvalRequired: true, app: 'app-1' });
+  });
+
+  it('does NOT hand off when the app has not opted in (files only)', async () => {
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 'sys-1' });
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'fix-x', title: 'Fix X', complexity: 'trivial', safe: true } });
+    const out = await processApp(enabledApp(), { callLLM, enqueueHandoff });
+    expect(out.action).toBe('filed');
+    expect(out.handedOff).toBe(false);
+    expect(enqueueHandoff).not.toHaveBeenCalled();
+  });
+
+  it('does NOT hand off a non-trivial proposal even with hand-off enabled', async () => {
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 'sys-1' });
+    const app = enabledApp();
+    app.layeredIntelligence.handoff = { enabled: true };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'fix-x', title: 'Fix X', complexity: 'moderate', safe: true } });
+    const out = await processApp(app, { callLLM, enqueueHandoff });
+    expect(out.handedOff).toBe(false);
+    expect(enqueueHandoff).not.toHaveBeenCalled();
+  });
+
+  it('does not mark handedOff when the enqueue is rejected as a duplicate', async () => {
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 'sys-1', duplicate: true });
+    const app = enabledApp();
+    app.layeredIntelligence.handoff = { enabled: true };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'fix-x', title: 'Fix X', complexity: 'trivial', safe: true } });
+    const out = await processApp(app, { callLLM, enqueueHandoff });
+    expect(out.action).toBe('filed');
+    expect(out.handedOff).toBe(false);
+  });
+
+  it('files (never throws) when the hand-off enqueue rejects', async () => {
+    const enqueueHandoff = vi.fn().mockRejectedValue(new Error('store down'));
+    const app = enabledApp();
+    app.layeredIntelligence.handoff = { enabled: true };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'fix-x', title: 'Fix X', complexity: 'trivial', safe: true } });
+    const out = await processApp(app, { callLLM, enqueueHandoff });
+    expect(out.action).toBe('filed');
+    expect(out.handedOff).toBe(false);
+  });
+
   it('does NOT pause a plan-tracked app (no issue to block on)', async () => {
     resolveTrackerMock.mockResolvedValue({ resolved: 'plan', forge: null });
     const callLLM = reasoner({

@@ -32,6 +32,13 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(update).toEqual({ intervalMs: 3600000 });
   });
 
+  it('emits the hand-off toggle only when it changes', () => {
+    const withHandoff = { ...baseline, handoff: { enabled: false } };
+    expect(buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff })).toBeNull();
+    const update = buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff, handoff: { enabled: true } });
+    expect(update).toEqual({ handoff: { enabled: true } });
+  });
+
   it('normalizes empty provider/model to null and only emits when changed', () => {
     // '' provider equals the null baseline → no change
     expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: '', model: '' })).toBeNull();
