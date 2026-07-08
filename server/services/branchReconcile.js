@@ -16,6 +16,7 @@
  * can't distinguish machines; local-branch existence can.
  */
 
+import { stat } from 'node:fs/promises';
 import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
@@ -26,6 +27,27 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 // Never reconciled — these are long-lived shared branches, not disposable work.
 // The resolved default branch is added on top at runtime.
 export const PROTECTED_BRANCHES = ['main', 'master', 'release'];
+
+// A `claim-*` worktree is normally protected as a human `/claim` session that
+// self-cleans in the /claim Phase-7 flow. But when that flow never runs (the
+// agent finished WITHOUT committing), the branch is left as a bare pointer at an
+// already-merged commit and the worktree lingers forever — making branch-reconcile
+// park with "cleaned 0" every run (the exact confusion behind this guard). Reap
+// such a claim worktree once it is older than this AND its branch is merged AND
+// its worktree is clean. That trio is only ever true for an ABANDONED claim: a
+// claim with real work in progress is never merged+clean (uncommitted edits →
+// dirty → WIP; committed work → not an ancestor of default → not MERGED).
+//
+// Because a reaped worktree is merged+clean, the reap loses NOTHING recoverable —
+// no commits beyond the default branch, no uncommitted edits — and re-running
+// `/claim` recreates it in seconds. So even a false positive (a human who claimed
+// an issue, left the branch untouched at the default commit, and returns to a
+// *paused* session) costs only a re-claim, never work. The window is set very
+// conservatively at a full week anyway — mtime alone can't prove abandonment, so
+// we err far toward preservation: a paused session returned-to within 7 days keeps
+// its worktree, while a genuinely-leaked one (which persists indefinitely) is
+// reaped on the daily recheck once it crosses the threshold.
+export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;
@@ -99,18 +121,26 @@ async function getOpenPrsByHead(repoPath) {
  * Pure — the dangerous-to-remove cases the deterministic cleanup must respect
  * (mirrors the guards the existing worktree reaper honors):
  *   - locked            → the user explicitly `git worktree lock`ed it
- *   - human `/claim`    → a `claim-<slug>` worktree self-cleaned by the /claim flow
+ *   - human `/claim`    → a `claim-<slug>` worktree self-cleaned by the /claim flow,
+ *                         UNLESS it is an abandoned one older than `staleClaimIdleMs`
+ *                         (`ageMs` supplied) — those are reaped (see STALE_CLAIM_IDLE_MS)
  *   - active CoS agent  → an agent (`agent-<id>`) is currently running in it
  * Sibling worktrees (`next-issue-*`, etc.) whose basename is none of these fall
  * through to null and are cleaned normally.
  *
- * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string> }} input
+ * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds }) {
+export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS }) {
   if (locked) return 'worktree-locked';
   const basename = (path || '').split('/').pop() || '';
-  if (isHumanClaimWorktree(basename)) return 'worktree-human-claim';
+  if (isHumanClaimWorktree(basename)) {
+    // Reap an abandoned claim (age known AND past the idle window); keep protecting
+    // a recent one so a live human /claim session — or its Phase-7 self-clean — wins.
+    // Unknown age (ageMs omitted) stays protected: fail safe toward not-deleting.
+    if (typeof ageMs === 'number' && ageMs >= staleClaimIdleMs) return null;
+    return 'worktree-human-claim';
+  }
   if (activeAgentIds?.has(basename)) return 'worktree-active-agent';
   return null;
 }
@@ -124,6 +154,20 @@ async function isWorktreeDirty(worktreePath) {
   const { stdout } = await execGit(['status', '--porcelain'], worktreePath, { ignoreExitCode: true })
     .catch(() => ({ stdout: '' }));
   return classifyWorktreeDirt(stdout).hasRealChanges;
+}
+
+/**
+ * Age of a worktree directory (ms since its last structural mtime), or null when
+ * it can't be stat'd. The worktree root's mtime is set when `git worktree add`
+ * lays down its top-level entries and doesn't move for deep-file edits, so for an
+ * abandoned claim (no top-level churn after creation) it tracks "time since the
+ * worktree was created" — exactly the staleness signal STALE_CLAIM_IDLE_MS needs.
+ * @param {string} worktreePath
+ * @returns {Promise<number|null>}
+ */
+async function worktreeAgeMs(worktreePath) {
+  const st = await stat(worktreePath).catch(() => null);
+  return st ? Math.max(0, Date.now() - st.mtimeMs) : null;
 }
 
 /**
@@ -161,6 +205,7 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
     const wt = worktreeByBranch.get(b.name) || null;
     const worktreePath = wt?.path || null;
     const worktreeLocked = Boolean(wt?.locked);
+    const worktreeAge = worktreePath ? await worktreeAgeMs(worktreePath) : null;
     const worktreeDirty = worktreePath ? await isWorktreeDirty(worktreePath) : false;
     // getBranches' `merged` is ancestor-based (misses squash/rebase); confirm
     // the harder cases via isBranchMergedInto (covers squash + rebase). Short
@@ -173,6 +218,7 @@ export async function gatherBranchState(repoPath, { defaultBranch }) {
       hasWorktree: Boolean(worktreePath),
       worktreePath,
       worktreeLocked,
+      worktreeAgeMs: worktreeAge,
       worktreeDirty,
       openPr: prsByHead.get(b.name) || null
     });
@@ -206,10 +252,12 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       continue;
     }
     if (b.worktreePath) {
-      // Never tear down a worktree that's locked, a human /claim session, or an
-      // active CoS agent workspace — even if its branch is merged and clean.
+      // Never tear down a worktree that's locked, a RECENT human /claim session, or
+      // an active CoS agent workspace — even if its branch is merged and clean. An
+      // abandoned claim worktree (merged + clean + older than STALE_CLAIM_IDLE_MS)
+      // falls through and IS reaped; that's the "cleaned 0 forever" leak this fixes.
       const protectedReason = worktreeProtectionReason({
-        path: b.worktreePath, locked: b.worktreeLocked, activeAgentIds
+        path: b.worktreePath, locked: b.worktreeLocked, activeAgentIds, ageMs: b.worktreeAgeMs
       });
       if (protectedReason) {
         skipped.push({ branch: b.branch, reason: protectedReason });

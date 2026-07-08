@@ -1698,7 +1698,14 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       // Definitive idle: nothing in-flight to drive. Park on the recheck cadence
       // and clear the progress signature so a fresh set later dispatches.
       await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-in-flight-branches', actionableCount: 0, signature: null });
-      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length})`, { appId: app.id });
+      // Surface merged branches held back by a protection guard (locked / recent
+      // human-claim / active-agent / dirty) so a lingering worktree isn't an
+      // invisible "cleaned 0" — the exact confusion behind the stale-claim reaper.
+      const heldBack = (result.skipped || []).filter((s) => s.reason?.startsWith('worktree-'));
+      const heldSuffix = heldBack.length
+        ? `, ${heldBack.length} merged branch(es) held back (${[...new Set(heldBack.map((s) => s.reason))].join(', ')})`
+        : '';
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length}${heldSuffix})`, { appId: app.id });
       return null;
     }
     // Convergence guard — kills the back-to-back re-dispatch loop WITHOUT stalling

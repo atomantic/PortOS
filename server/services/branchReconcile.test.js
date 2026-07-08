@@ -139,6 +139,30 @@ describe('cleanupMerged', () => {
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });
+
+  it('reaps an ABANDONED claim worktree (merged + clean + stale age)', async () => {
+    git.isBranchMergedInto.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    const res = await cleanupMerged('/repo', 'main', [
+      // 10 days old — comfortably past the 7-day STALE_CLAIM_IDLE_MS default
+      { branch: 'claim/issue-1933', worktreePath: '/repo/data/cos/worktrees/claim-issue-1933', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 }
+    ]);
+    expect(res.cleaned).toEqual(['claim/issue-1933']);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
+  });
+
+  it('still protects a RECENT claim worktree even when merged + clean', async () => {
+    git.isBranchMergedInto.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
+    const res = await cleanupMerged('/repo', 'main', [
+      { branch: 'claim/issue-9999', worktreePath: '/repo/data/cos/worktrees/claim-issue-9999', worktreeAgeMs: 60 * 1000 } // 1 min old
+    ]);
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([{ branch: 'claim/issue-9999', reason: 'worktree-human-claim' }]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
+  });
 });
 
 describe('worktreeProtectionReason', () => {
@@ -147,6 +171,18 @@ describe('worktreeProtectionReason', () => {
     expect(worktreeProtectionReason({ path: '/x/claim-foo' })).toBe('worktree-human-claim');
     expect(worktreeProtectionReason({ path: '/x/agent-1', activeAgentIds: new Set(['agent-1']) })).toBe('worktree-active-agent');
     expect(worktreeProtectionReason({ path: '/repo/next-issue-2199', activeAgentIds: new Set(['agent-1']) })).toBeNull();
+  });
+
+  it('reaps an abandoned claim (stale age) but protects a recent one and unknown age', () => {
+    const staleClaimIdleMs = 24 * 60 * 60 * 1000;
+    // recent human /claim session (2h old) — still protected
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: 2 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-human-claim');
+    // abandoned claim (3d old, merged+clean) — reaped
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBeNull();
+    // unknown age → fail safe toward protecting
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', ageMs: null, staleClaimIdleMs })).toBe('worktree-human-claim');
+    // locked always wins even when stale
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', locked: true, ageMs: 3 * 24 * 60 * 60 * 1000, staleClaimIdleMs })).toBe('worktree-locked');
   });
 });
 
