@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
+import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES } from './creativeDirectorPresets.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { emptyToUndefined } from './zodCompat.js';
@@ -50,6 +50,24 @@ export const creativeDirectorCastMemberSchema = z.object({
   summary: z.string().max(500).optional(),
 });
 
+// Production directive (CDO Phase 2, #2184) — the brief the planner agent turns
+// into a plan. `goal` is the free-text intent ("produce a 6-issue noir comic in
+// universe X with covers and a teaser trailer"); `deliverables` is the checklist
+// of requested outputs; `constraints` scopes the run (target universe/series
+// ids, output formats, and a daily-action budget cap). Kept permissive on the
+// constraint values — the plan advance loop gates each tool call at dispatch, so
+// the directive is context for the planner, not an enforcement surface itself.
+export const creativeDirectorDirectiveSchema = z.object({
+  goal: z.string().min(1).max(5000),
+  deliverables: z.array(z.string().min(1).max(200)).max(20).default([]),
+  constraints: z.object({
+    universeId: z.string().max(120).nullable().optional(),
+    seriesId: z.string().max(120).nullable().optional(),
+    formats: z.array(z.string().min(1).max(64)).max(20).optional(),
+    budgetCap: z.number().int().min(0).max(100000).nullable().optional(),
+  }).default({}),
+});
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -76,6 +94,11 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // used by the stitch step to mix in audio-stage music. Bare CD projects
   // (no pipeline origin) leave this null.
   sourceIssueId: z.string().min(1).max(64).nullable().optional(),
+  // Production directive (CDO Phase 2, #2184). When present the project is
+  // PLAN-driven: the planner agent turns this brief into a validated step list
+  // the generalized advance loop executes through the gated creative tool
+  // registry. Absent → the legacy video treatment/scene flow (unchanged).
+  directive: creativeDirectorDirectiveSchema.nullable().optional(),
 });
 
 // Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
@@ -194,6 +217,39 @@ export const creativeDirectorSceneUpdateSchema = z.object({
     accepted: z.boolean(),
     sampledAt: z.string().optional(),
   }).nullable().optional(),
+}).strict();
+
+// ---------------------------------------------------------------------------
+// Production plans (CDO Phase 2, #2184).
+//
+// A plan is the validated step list the planner agent (`cd-plan`) writes for a
+// directive-driven project. Each step names a creative-tool-registry tool
+// (`toolName`) + its args, plus a `dependsOn[]` DAG edge list; the generalized
+// advance loop executes steps sequentially (deps respected) through the gated
+// `dispatchCreativeTool` chokepoint. `toolName` is validated as a bounded string
+// here — the registry is a services module (lib can't import it), so the advance
+// loop rejects an unknown tool at dispatch time (Unknown creative tool).
+// ---------------------------------------------------------------------------
+
+export const creativeDirectorPlanStepSchema = z.object({
+  stepId: z.string().min(1).max(64),
+  toolName: z.string().min(1).max(64),
+  // Free-form tool args — each tool re-validates against its own Zod schema at
+  // dispatch, so the plan gate stays permissive (an over-strict gate here would
+  // duplicate every tool's schema and drift from it).
+  args: z.record(z.any()).default({}),
+  // DAG edges: stepIds that must reach a terminal-success state before this step
+  // runs. Empty = runnable immediately (subject to sequential ordering).
+  dependsOn: z.array(z.string().min(1).max(64)).max(50).default([]),
+  // Runtime fields — the agent may omit them on a fresh plan; the sanitizer
+  // (applyPlan) defaults status→pending, retryCount→0, result→null.
+  status: z.enum(PLAN_STEP_STATUSES).optional(),
+  retryCount: z.number().int().min(0).max(10).optional(),
+  result: z.record(z.any()).nullable().optional(),
+}).strict();
+
+export const creativeDirectorPlanSchema = z.object({
+  steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
 }).strict();
 
 // ---------------------------------------------------------------------------

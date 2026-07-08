@@ -84,6 +84,13 @@
       "returnsJson": false,
       "variables": []
     },
+    "cd-plan": {
+      "name": "Creative Director — Production Plan",
+      "description": "Turn a production directive into a validated plan: an ordered list of creative-tool-registry tool calls (with dependsOn ordering) the generalized advance loop executes step-by-step.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "app-detection": {
       "name": "App Detection",
       "description": "Analyze a project directory and detect its configuration",
