@@ -33,9 +33,21 @@
  * offset-less values.
  *
  * Idempotent: WhatsApp lines carry no message id, so the dedupe key is a stable
- * content hash of (chat, instant, sender, body). Re-importing the same or an
- * overlapping export is a no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. No
- * AI-provider calls; parsing is deterministic and LLM-free.
+ * content hash of (instant, sender, body). Re-importing the same or an overlapping
+ * export is a no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. No AI-provider
+ * calls; parsing is deterministic and LLM-free.
+ *
+ * The importer also takes an OPTIONAL `chatLabel`: a stable, user-supplied name for
+ * the conversation (e.g. "Family group"). WhatsApp exports carry no stable chat id
+ * — the filename is unstable (zip vs extracted `_chat.txt`, renames) — so absent a
+ * label the dedupe key is deliberately NOT chat-scoped, which means two DIFFERENT
+ * chats that happen to contain a same-named sender sending an identical body at the
+ * same timestamp granularity collapse into one event. Supplying `chatLabel`
+ * prefixes the hash with that stable scope, so those cross-chat collisions no longer
+ * merge — while a blank label preserves the byte-identical legacy key (backward
+ * compatible). Because the label participates in the key, a chat must be labelled
+ * CONSISTENTLY across re-imports (an unlabelled import and a labelled one of the same
+ * chat are distinct identities); the label also becomes the display chat title.
  */
 import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
@@ -151,12 +163,22 @@ export function normalizeName(name) {
   return typeof name === 'string' ? name.trim().toLowerCase() : '';
 }
 
+// Normalize a user-supplied chat label into a stable dedupe scope: trimmed +
+// lower-cased so "Family Group" and " family group " scope to the same chat, or ''
+// for a non-string / empty value (→ the legacy, un-scoped dedupe key). Reuses the
+// same normalization as `normalizeName` so the label is stable across casing/space.
+export function normalizeChatScope(label) {
+  return normalizeName(label);
+}
+
 // Map ONE raw WhatsApp message to an activity candidate, or null if it's a system
 // notice, lacks a sender, or has an unresolvable timestamp. `timezone` anchors the
 // offset-less local wall-clock; `chatTitle` labels the conversation. `yourName`
 // (optional) classifies direction: a sender matching it → `message.sent`, others
 // → `message.received`; when absent, the event stays a neutral `message`.
-export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = null, timezone = null, yourName = null } = {}) {
+// `chatScope` (optional) is a stable user-supplied chat name folded into the dedupe
+// key so distinct chats don't collide; absent → the legacy un-scoped key.
+export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = null, timezone = null, yourName = null, chatScope = null } = {}) {
   if (!msg || msg.isSystem || !msg.sender) return null;
   const { year, month, day } = resolveYmd(msg, order);
   const iso = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -182,17 +204,21 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
   // but Android lines have none (second defaults to 0), so two identical Android
   // messages within the same clock-MINUTE collapse to one event.
   //
-  // Accepted residual (reviewed, deliberately not "fixed" by re-adding a chat
-  // identity): if two DIFFERENT chats both contain a same-named sender sending the
-  // same body at the same timestamp granularity, they collapse to one event. A
-  // stable chat scope would avoid this, but none exists in a WhatsApp export — the
-  // filename is unstable (zip vs extracted `_chat.txt`, renames) and the sender set
-  // shifts between a chat's successive full-history exports, so either would
-  // REINTRODUCE whole-conversation double-counting, a worse and more common bug
-  // than a rare cross-chat single-message collision. Tracked as a #2160 follow-up
-  // if a robust chat key ever becomes warranted.
+  // Cross-chat collision residual: without a chat scope, two DIFFERENT chats that
+  // each contain a same-named sender sending the same body at the same timestamp
+  // granularity collapse to one event. The filename-derived chatTitle can't be the
+  // scope (it's unstable across zip-vs-extracted uploads and renames). The optional
+  // `chatScope` (a stable, user-supplied chat name) closes this: when present it is
+  // prefixed into the hash ahead of the ISO instant, separated by a NUL (`\u0000`)
+  // that can't occur in a normalized display name, so the two chats key apart with
+  // no delimiter ambiguity. When absent the hash input is byte-identical to the
+  // legacy key, so unlabelled imports (and their idempotency) are unchanged.
+  const scope = normalizeChatScope(chatScope);
+  const hashInput = scope
+    ? `${scope}\u0000${happenedAt} ${msg.sender} ${bodyText}`
+    : `${happenedAt} ${msg.sender} ${bodyText}`;
   const dedupeKey = createHash('sha1')
-    .update(`${happenedAt} ${msg.sender} ${bodyText}`)
+    .update(hashInput)
     .digest('hex')
     .slice(0, 24);
 
@@ -214,6 +240,7 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
     dedupeKey: `whatsapp:${dedupeKey}`,
     metadata: {
       chatTitle: chatTitle || null,
+      chatScope: scope || null,
       sender: msg.sender,
       hasMedia,
       dateOrder: order,
@@ -223,12 +250,13 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
 }
 
 // Map a full parsed chat to candidates: detect the date order once, then map +
-// filter every message under it. `yourName` (optional) classifies direction.
-export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null, yourName = null } = {}) {
+// filter every message under it. `yourName` (optional) classifies direction;
+// `chatScope` (optional) scopes the dedupe key to a stable user-supplied chat name.
+export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null, yourName = null, chatScope = null } = {}) {
   if (!Array.isArray(messages)) return [];
   const order = detectDateOrder(messages);
   return messages
-    .map((msg) => whatsappMessageToCandidate(msg, { order, chatTitle, timezone, yourName }))
+    .map((msg) => whatsappMessageToCandidate(msg, { order, chatTitle, timezone, yourName, chatScope }))
     .filter(Boolean);
 }
 
@@ -346,12 +374,16 @@ export async function readWhatsappText(file) {
 // Returns counts + a preview summary. `dryRun` parses and summarizes WITHOUT
 // writing so the UI can show what will be imported before committing. Because
 // `recordEvents` is idempotent, committing (or re-committing) is always safe.
-export async function importWhatsappHistory(file, { dryRun = false, yourName = null } = {}) {
+export async function importWhatsappHistory(file, { dryRun = false, yourName = null, chatLabel = null } = {}) {
   const text = await readWhatsappText(file);
   const messages = parseWhatsappChat(text);
   const timezone = await getUserTimezone();
-  const chatTitle = deriveChatTitle(file?.originalname);
-  const candidates = whatsappActivityCandidates(messages, { chatTitle, timezone, yourName });
+  // A user-supplied chat label (when given) is both the stable dedupe scope AND the
+  // display title, overriding the unstable filename-derived one; absent → fall back
+  // to the filename-derived title with no dedupe scope (legacy behavior).
+  const label = typeof chatLabel === 'string' ? chatLabel.trim() : '';
+  const chatTitle = label || deriveChatTitle(file?.originalname);
+  const candidates = whatsappActivityCandidates(messages, { chatTitle, timezone, yourName, chatScope: label });
   const summary = summarizeWhatsappCandidates(candidates);
   if (dryRun) {
     console.log(`💬 WhatsApp import preview: ${candidates.length} message(s) from ${messages.length} line-record(s)`);
