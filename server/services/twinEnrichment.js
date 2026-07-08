@@ -210,11 +210,15 @@ export function classifyObservedChronotype(histogram) {
   let meanAngle = Math.atan2(sumY, sumX);
   if (meanAngle < 0) meanAngle += 2 * Math.PI;
   const centerHour = Math.round((meanAngle / (2 * Math.PI)) * 24) % 24;
-  // Center-of-mass hour → type. Daytime activity clusters, so a center before
-  // ~11:00 skews morning, after ~15:00 skews evening, between is intermediate.
+  // Center-of-mass hour → type. The circular mean wraps a late-night cluster to
+  // a LOW hour (a night owl active 22:00–02:00 centers near 0), so the
+  // small-hours band (<6) must classify as evening, NOT morning — otherwise the
+  // wrap that the circular mean exists to handle is undone here. Bands: evening
+  // = center ≥15:00 or in the small hours (<6:00); morning = 6:00–10:59;
+  // intermediate = 11:00–14:59.
   let type;
-  if (centerHour < 11) type = 'morning';
-  else if (centerHour >= 15) type = 'evening';
+  if (centerHour >= 15 || centerHour < 6) type = 'evening';
+  else if (centerHour < 11) type = 'morning';
   else type = 'intermediate';
   return { type, centerHour, sampleSize: total };
 }

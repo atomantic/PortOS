@@ -171,14 +171,20 @@ describe('classifyObservedChronotype', () => {
     const hist = chronotypeHistogram(events, 'UTC');
     expect(classifyObservedChronotype(hist).type).toBe('evening');
   });
-  it('uses a circular mean so a midnight-wrapped night-owl is not averaged to noon', () => {
-    // Active 22:00–02:00 — a linear mean would land near noon (wrong); circular
-    // mean keeps the center in the late/early band, never 'morning' midday.
+  it('uses a circular mean so a midnight-wrapped night-owl classifies as evening, not morning', () => {
+    // Active 22:00–02:00 — a linear mean would land near noon (wrong); the
+    // circular mean wraps the center near midnight, and the small-hours band
+    // must then read as evening (a night owl), never 'morning'.
     const events = [22, 23, 0, 1, 2, 23].map((h) => at(h));
     const hist = chronotypeHistogram(events, 'UTC');
     const { type, centerHour } = classifyObservedChronotype(hist);
     expect(centerHour).not.toBeGreaterThan(3); // wrapped near midnight, not ~12
-    expect(type).not.toBe('intermediate');
+    expect(type).toBe('evening');
+  });
+  it('classifies a small-hours center (night owl) as evening', () => {
+    const events = [23, 0, 0, 1, 1, 2].map((h) => at(h));
+    const { type } = classifyObservedChronotype(chronotypeHistogram(events, 'UTC'));
+    expect(type).toBe('evening');
   });
 });
 

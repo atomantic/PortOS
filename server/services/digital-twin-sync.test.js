@@ -8,6 +8,7 @@ import {
   mergeConfidence,
   mergeSocialAccounts,
   mergeAutobiographyStories,
+  mergeTasteObserved,
   safeMdName,
 } from './digital-twin-sync.js';
 
@@ -36,6 +37,42 @@ describe('mergeObjectLWW', () => {
     expect(mergeObjectLWW(remote, local, 'derivedAt').merged.observedType).toBe('evening');
     // A peer that sends no observed evidence can't blank the local record.
     expect(mergeObjectLWW(local, null, 'derivedAt')).toEqual({ merged: local, changed: false });
+  });
+});
+
+describe('mergeTasteObserved (#2156 — preserve user AI interpretation across LWW)', () => {
+  const body = (derivedAt, extra = {}) => ({ source: 'observed', derivedAt, ...extra });
+  const interp = (generatedAt, text = 'x') => ({ text, generatedAt });
+
+  it('LWW on derivedAt for the rollup body', () => {
+    const local = body('2026-07-01T00:00:00Z', { total: 1 });
+    const remote = body('2026-07-05T00:00:00Z', { total: 9 });
+    expect(mergeTasteObserved(local, remote).merged.total).toBe(9);
+  });
+
+  it('keeps the local interpretation when a newer remote recompute carries none', () => {
+    // The exact drop bug: peer recompute wins the body but must NOT lose the
+    // user's interpretation.
+    const local = body('2026-07-01T00:00:00Z', { interpretation: interp('2026-07-02T00:00:00Z', 'mine') });
+    const remote = body('2026-07-05T00:00:00Z'); // newer body, no interpretation
+    const { merged, changed } = mergeTasteObserved(local, remote);
+    expect(merged.derivedAt).toBe('2026-07-05T00:00:00Z'); // remote body won
+    expect(merged.interpretation.text).toBe('mine');       // interpretation survived
+    expect(changed).toBe(true);
+  });
+
+  it('takes the newer interpretation regardless of which body won', () => {
+    const local = body('2026-07-05T00:00:00Z', { interpretation: interp('2026-07-01T00:00:00Z', 'old') });
+    const remote = body('2026-07-01T00:00:00Z', { interpretation: interp('2026-07-06T00:00:00Z', 'new') });
+    const merged = mergeTasteObserved(local, remote).merged;
+    expect(merged.derivedAt).toBe('2026-07-05T00:00:00Z'); // local body won (newer)
+    expect(merged.interpretation.text).toBe('new');        // remote interpretation is newer
+  });
+
+  it('is a no-op when neither side has an interpretation and the body is unchanged', () => {
+    const local = body('2026-07-05T00:00:00Z');
+    const remote = body('2026-07-01T00:00:00Z');
+    expect(mergeTasteObserved(local, remote).changed).toBe(false);
   });
 });
 

@@ -142,6 +142,29 @@ export function unionByKey(localArr, remoteArr, keyField, timestampField = null)
   return { merged: Array.from(map.values()), changed };
 }
 
+/**
+ * Merge observed taste evidence (#2156). The rollup BODY is LWW on `derivedAt`
+ * (newest observation wins wholesale), but the AI `interpretation` block is the
+ * one piece of EXPLICIT user-triggered content on the record — so it's
+ * preserved separately: whichever side carries the newest interpretation (by
+ * its own `generatedAt`) is kept regardless of which body won. Without this, an
+ * unattended LLM-free daily recompute on another peer (newer `derivedAt`, no
+ * interpretation) would silently drop the user's interpretation cross-machine.
+ */
+export function mergeTasteObserved(local, remote) {
+  const { merged, changed } = mergeObjectLWW(local, remote, 'derivedAt');
+  const li = isPlainObject(local) && isPlainObject(local.interpretation) ? local.interpretation : null;
+  const ri = isPlainObject(remote) && isPlainObject(remote.interpretation) ? remote.interpretation : null;
+  const newest = (ri?.generatedAt || '') > (li?.generatedAt || '') ? ri : li;
+  if (!newest) return { merged, changed };
+  const surviving = isPlainObject(merged) ? merged.interpretation : null;
+  if (surviving === newest) return { merged, changed };
+  // Only overlay when the newest interpretation is strictly newer than whatever
+  // survived on the winning body (or the body has none).
+  if ((surviving?.generatedAt || '') >= newest.generatedAt) return { merged, changed };
+  return { merged: { ...merged, interpretation: newest }, changed: true };
+}
+
 const TASTE_STATUS_RANK = { pending: 0, in_progress: 1, completed: 2 };
 function pickStatus(a, b) {
   return (TASTE_STATUS_RANK[b] ?? -1) > (TASTE_STATUS_RANK[a] ?? -1) ? b : a;
@@ -509,8 +532,9 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
   count += await applyMerge(FEEDBACK_FILE, remoteData.feedback, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
   count += await applyTaste(remoteData.taste);
-  // Observed evidence (Phase 7): regenerated derived records — newest wins.
-  count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, (l, r) => mergeObjectLWW(l, r, 'derivedAt'));
+  // Observed evidence (Phase 7): regenerated derived records — body is LWW on
+  // derivedAt; taste also preserves the newest user-triggered AI interpretation.
+  count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, mergeTasteObserved);
   count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, (l, r) => mergeObjectLWW(l, r, 'derivedAt'));
   // Meta BEFORE documents: applyMeta()'s loadMeta() rebuilds meta from a disk
   // .md scan when no meta.json exists, creating DEFAULT document entries. If the
