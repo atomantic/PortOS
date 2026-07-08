@@ -252,25 +252,38 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
           <div className="space-y-2">
             {custom.map((src, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={src.ref || ''}
-                  onChange={e => setCustom(custom.map((s, j) => j === i ? { ...s, ref: e.target.value } : s))}
-                  className={INPUT_CLASS}
-                  placeholder="repo-relative path, e.g. docs/metrics.md"
-                  aria-label={`Custom file source ${i + 1}`}
-                />
+                {src.type === 'file' || !src.type ? (
+                  <input
+                    type="text"
+                    value={src.ref || ''}
+                    onChange={e => setCustom(custom.map((s, j) => j === i ? { ...s, ref: e.target.value } : s))}
+                    className={INPUT_CLASS}
+                    placeholder="repo-relative path, e.g. docs/metrics.md"
+                    aria-label={`Custom file source ${i + 1}`}
+                  />
+                ) : (
+                  // http/cmd sources are settable via the API but not yet creatable in this
+                  // UI (see the follow-up issue). Render them read-only and clearly labeled so
+                  // they read as a real configured source, not a blank file row an operator
+                  // deletes by mistake — the whole point of preserving them through save.
+                  <div className={`${INPUT_CLASS} flex items-center gap-2 overflow-hidden`}>
+                    <span className="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent">{src.type}</span>
+                    <span className="truncate text-gray-300" title={src.type === 'http' ? src.url : src.cmd}>
+                      {src.label ? `${src.label} — ` : ''}{src.type === 'http' ? src.url : src.cmd}
+                    </span>
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setCustom(custom.filter((_, j) => j !== i))}
                   className="p-2 text-gray-500 hover:text-port-error shrink-0"
-                  aria-label={`Remove custom source ${i + 1}`}
+                  aria-label={`Remove custom ${src.type || 'file'} source ${i + 1}`}
                 >
                   <Trash2 size={14} />
                 </button>
               </div>
             ))}
-            <p className="text-xs text-gray-500">Paths must be repo-relative — no leading <code>/</code> and no <code>..</code> segments.</p>
+            <p className="text-xs text-gray-500">Paths must be repo-relative — no leading <code>/</code> and no <code>..</code> segments. <span className="text-gray-600">Read-only <code>http</code>/<code>cmd</code> sources are configured via the API.</span></p>
           </div>
         )}
       </div>

@@ -142,4 +142,17 @@ describe('LayeredIntelligenceTab (render)', () => {
     fireEvent.click(screen.getByLabelText(/Enable the self-improvement loop/i));
     expect(onChange).toHaveBeenCalledWith({ enabled: true });
   });
+
+  it('renders API-set http/cmd sources read-only (not as blank deletable file inputs)', () => {
+    const li = { ...baseline, sources: { ...baseline.sources, custom: [
+      { type: 'http', url: 'https://ci/coverage', label: 'CI' },
+      { type: 'cmd', cmd: 'git log --oneline -20' }
+    ] } };
+    render(<LayeredIntelligenceTab {...props} li={li} isPortos={false} />);
+    // The url/cmd text is shown so the operator recognizes the source...
+    expect(screen.getByText(/https:\/\/ci\/coverage/)).toBeInTheDocument();
+    expect(screen.getByText(/git log --oneline -20/)).toBeInTheDocument();
+    // ...and neither renders as an editable file-path input (which would read as a blank row).
+    expect(screen.queryByLabelText(/Custom file source/i)).not.toBeInTheDocument();
+  });
 });
