@@ -23,6 +23,7 @@ export * from './apiPersonalities.js';
 export * from './apiAccounts.js';
 export * from './apiSchedules.js';
 export * from './apiMessages.js';
+export * from './apiSpotify.js';
 export * from './apiCalendar.js';
 export * from './apiGoals.js';
 export * from './apiReview.js';

@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, spotifyConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -157,6 +157,11 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed enabled/interval can't reach disk and break the sync scheduler.
   if (req.body?.imessage !== undefined) {
     validateRequest(imessageConfigSchema.partial(), req.body.imessage);
+  }
+  // Spotify ingestion config (#2152) — validate the slice when present so a
+  // malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.spotify !== undefined) {
+    validateRequest(spotifyConfigSchema.partial(), req.body.spotify);
   }
   // LoRA training config (caption provider + training defaults) — validate
   // the slice when present so a malformed save can't write bad bounds the
