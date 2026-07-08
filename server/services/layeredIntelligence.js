@@ -709,7 +709,7 @@ export function normalizeIssueState(state) {
 export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', LI_LABEL, '--all', '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,closedAt'];
+    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,closedAt,url'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -723,6 +723,10 @@ export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
       body: i.body || i.description || '',
       state: normalizeIssueState(i.state),
       closedAt: i.closedAt || i.closed_at || null,
+      // gh reports `url`; glab reports `web_url`. Null when neither is present so
+      // the overview's proposal links degrade to a plain count rather than a
+      // dead href.
+      url: i.url || i.web_url || null,
       slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
     }))
   };
@@ -939,4 +943,91 @@ export function extractPlanSlugs(planContent) {
   let m;
   while ((m = re.exec(planContent))) slugs.push(m[1].toLowerCase());
   return slugs;
+}
+
+// ---------------------------------------------------------------------------
+// Filed-proposal counts + links (issue #2293). The base overview endpoint stays
+// deterministic + I/O-free; THIS function does the per-app forge/Jira/PLAN read
+// behind an explicit "refresh counts" action so the count/link surface is opt-in.
+// ---------------------------------------------------------------------------
+
+// A ceiling on the number of proposal issues surfaced back to the UI per app so a
+// repo with a large layered-intelligence backlog can't return an unbounded list;
+// the count itself is still the full total, only the linked list is capped.
+export const PROPOSAL_LINKS_MAX = 25;
+
+/**
+ * Normalize a forge/Jira lister's `{ ok, issues }` into the overview's
+ * filed-proposal summary shape: `{ ok, tracker, open, closed, total, issues }`,
+ * where each surfaced issue is `{ number, title, state, url }` (link-ready).
+ * A FAILED read (`ok:false`) surfaces as `{ ok:false, reason:'read-failed' }`
+ * rather than a misleading `total:0` — the CLAUDE.md sentinel rule (a failed
+ * fetch must not collapse into "legitimately zero").
+ */
+export function normalizeProposalSummary(listed, tracker) {
+  if (!listed?.ok) {
+    return { ok: false, tracker, reason: 'read-failed', open: 0, closed: 0, total: 0, issues: [] };
+  }
+  const all = Array.isArray(listed.issues) ? listed.issues : [];
+  const open = all.filter(i => i.state === 'open').length;
+  const issues = all.slice(0, PROPOSAL_LINKS_MAX).map(i => ({
+    number: i.number ?? null,
+    title: i.title || '',
+    state: i.state,
+    url: i.url || null
+  }));
+  return { ok: true, tracker, open, closed: all.length - open, total: all.length, issues };
+}
+
+/**
+ * Summarize the filed layered-intelligence proposals for ONE app — count + links,
+ * resolved through whatever tracker the app files to. I/O function (shells out to
+ * gh/glab or hits the Jira REST service); the listers it delegates to are
+ * catch-safe so this never throws — a failed read surfaces as `ok:false`.
+ *
+ * `tracker` is the app's resolved work tracker (`resolveAppWorkTracker(app)`),
+ * passed in so the caller can resolve every app's tracker concurrently. Deps are
+ * injectable so tests drive the dispatch without a live forge/Jira/filesystem.
+ */
+export async function summarizeFiledProposals({ app, tracker, deps = {} } = {}) {
+  const {
+    listForge = listForgeIssues,
+    listJira = listJiraIssues,
+    readPlan = tryReadFile
+  } = deps;
+  const resolved = tracker?.resolved || 'plan';
+  const filer = filerForTracker(resolved);
+  const cwd = app?.repoPath;
+
+  if (filer === 'forge') {
+    if (!tracker?.forge || !cwd) {
+      return { ok: false, tracker: resolved, reason: 'no-repo', open: 0, closed: 0, total: 0, issues: [] };
+    }
+    const listed = await listForge({ cli: tracker.forge, cwd });
+    return normalizeProposalSummary(listed, resolved);
+  }
+
+  if (filer === 'jira') {
+    // Jira coordinates come from the app's explicit per-app config (never
+    // auto-detected), mirroring the sweep handler's gate.
+    const jira = (app?.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
+      ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
+      : null;
+    if (!jira) {
+      return { ok: false, tracker: 'jira', reason: 'jira-not-configured', open: 0, closed: 0, total: 0, issues: [] };
+    }
+    const listed = await listJira({ instanceId: jira.instanceId, projectKey: jira.projectKey });
+    // Jira issues carry a key (PROJ-123) but no browse URL from the lister, so
+    // they surface as counts without per-item links.
+    return normalizeProposalSummary(listed, 'jira');
+  }
+
+  // plan tracker — count slug-tagged checklist items in PLAN.md. All PLAN items
+  // are "open" (the plan filer has no closed-state), and have no per-item URL.
+  if (!cwd) {
+    return { ok: false, tracker: 'plan', reason: 'no-repo', open: 0, closed: 0, total: 0, issues: [] };
+  }
+  const planContent = await readPlan(join(cwd, 'PLAN.md'));
+  const slugs = extractPlanSlugs(planContent || '');
+  return { ok: true, tracker: 'plan', open: slugs.length, closed: 0, total: slugs.length, issues: [] };
 }

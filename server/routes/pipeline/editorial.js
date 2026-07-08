@@ -28,6 +28,7 @@ import {
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js';
+import * as pipelineJudge from '../../services/pipeline/pipelineJudge.js';
 import * as editorialRunner from '../../services/pipeline/editorialAnalysisRunner.js';
 import * as readerPanel from '../../services/pipeline/readerPanel.js';
 import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js';
@@ -42,6 +43,17 @@ const router = Router();
 // Editorial reader-emotion analysis — provider/model optional (falls through
 // to the active or stage-pinned provider); `force` re-analyzes unchanged issues.
 const editorialAnalyzeSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+});
+
+// Calibrated LLM issue quality judge (#2167, CWQE Phase 3). Provider/model
+// optional (writer/judge split resolves from the writer stage's judgeProvider by
+// default); `stageId` forces a particular drafted stage; `force` re-judges
+// unchanged content. Runs ONLY from this explicit action (AI-provider policy).
+const judgeIssueSchema = z.object({
+  stageId: z.enum(['prose', 'comicScript', 'teleplay']).optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
   force: z.boolean().optional(),
@@ -105,6 +117,28 @@ router.get('/series/:id/editorial/analyze/status', (req, res) => {
 router.post('/series/:id/editorial/analyze/cancel', asyncHandler(async (req, res) => {
   const canceled = editorialRunner.cancelSeriesAnalysis(req.params.id);
   res.json({ canceled });
+}));
+
+// Series quality-judge roadmap: every judged issue's qualityScore + the
+// weakest-first ranking Phases 5/7 consume as revision priorities.
+router.get('/series/:id/judge', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await pipelineJudge.getSeriesJudge(req.params.id));
+}));
+
+// One issue's stored judge score (score chip + dimension breakdown), with a
+// `stale` flag when the draft changed since it was judged.
+router.get('/issues/:id/judge', asyncHandler(async (req, res) => {
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const judge = await pipelineJudge.getIssueJudge(req.params.id);
+  res.json(judge || { issueId: req.params.id, status: 'none' });
+}));
+
+// Judge ONE issue (synchronous — returns the finished snapshot).
+router.post('/issues/:id/judge', asyncHandler(async (req, res) => {
+  const body = validateRequest(judgeIssueSchema, req.body ?? {});
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await pipelineJudge.judgeIssue(req.params.id, body));
 }));
 
 // ---------------------------------------------------------------------------

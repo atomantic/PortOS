@@ -20,6 +20,13 @@ export const getAppLayeredIntelligence = (id, options) =>
 // lastRunAt, nextDueAt, due, allowedScopes, sources, ... }] }. Read-only.
 export const getLayeredIntelligenceOverview = (options) =>
   request('/apps/layered-intelligence/overview', options);
+// Opt-in filed-proposal counts + links for the overview page: does per-app
+// forge/Jira/PLAN I/O (gh/glab shell-outs), so it's fired on demand rather than
+// baked into the base overview. Returns { apps: [{ id, name, ok, tracker, open,
+// closed, total, issues: [{ number, title, state, url }], reason? }] }. Caller
+// owns its own error UI, so default to silent.
+export const getLayeredIntelligenceProposals = (options) =>
+  request('/apps/layered-intelligence/proposals', { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)

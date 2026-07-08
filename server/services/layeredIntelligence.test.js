@@ -51,7 +51,10 @@ import {
   LI_BLOCKING_LABEL,
   LI_JIRA_BLOCKING_LABEL,
   LI_JOB_ID,
-  summarizeLoopStatus
+  summarizeLoopStatus,
+  summarizeFiledProposals,
+  normalizeProposalSummary,
+  PROPOSAL_LINKS_MAX
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -1027,5 +1030,108 @@ describe('checkSemanticDuplicate — I/O wrapper', () => {
   it('respects the threshold constant default', () => {
     expect(SEMANTIC_DEDUP_THRESHOLD).toBeGreaterThan(0);
     expect(SEMANTIC_DEDUP_THRESHOLD).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('listForgeIssues url surfacing (issue #2293)', () => {
+  it('surfaces gh `url` on each issue', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ number: 12, title: 'A', body: 'x', state: 'OPEN', url: 'https://github.com/o/r/issues/12' }])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].url).toBe('https://github.com/o/r/issues/12');
+  });
+
+  it('maps GitLab `web_url` to url', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ iid: 9, title: 'G', description: 'd', state: 'opened', web_url: 'https://gitlab.com/o/r/-/issues/9' }])
+    });
+    const { issues } = await listForgeIssues({ cli: 'glab', cwd: '/x', exec });
+    expect(issues[0].url).toBe('https://gitlab.com/o/r/-/issues/9');
+  });
+
+  it('defaults url to null when neither field is present', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify([{ number: 1, title: 'A', body: 'x', state: 'OPEN' }]) });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].url).toBeNull();
+  });
+});
+
+describe('normalizeProposalSummary (issue #2293)', () => {
+  it('distinguishes a failed read from a legitimately empty one', () => {
+    expect(normalizeProposalSummary({ ok: false }, 'github')).toMatchObject({ ok: false, reason: 'read-failed', total: 0 });
+    expect(normalizeProposalSummary({ ok: true, issues: [] }, 'github')).toMatchObject({ ok: true, total: 0, open: 0, closed: 0 });
+  });
+
+  it('counts open vs closed and surfaces link-ready issues', () => {
+    const listed = { ok: true, issues: [
+      { number: 1, title: 'A', state: 'open', url: 'u1' },
+      { number: 2, title: 'B', state: 'closed', url: 'u2' }
+    ] };
+    const s = normalizeProposalSummary(listed, 'github');
+    expect(s).toMatchObject({ ok: true, total: 2, open: 1, closed: 1 });
+    expect(s.issues).toEqual([
+      { number: 1, title: 'A', state: 'open', url: 'u1' },
+      { number: 2, title: 'B', state: 'closed', url: 'u2' }
+    ]);
+  });
+
+  it('caps the surfaced link list at PROPOSAL_LINKS_MAX but keeps the full total', () => {
+    const issues = Array.from({ length: PROPOSAL_LINKS_MAX + 10 }, (_, i) => ({ number: i, title: `t${i}`, state: 'open', url: `u${i}` }));
+    const s = normalizeProposalSummary({ ok: true, issues }, 'github');
+    expect(s.total).toBe(PROPOSAL_LINKS_MAX + 10);
+    expect(s.issues.length).toBe(PROPOSAL_LINKS_MAX);
+  });
+});
+
+describe('summarizeFiledProposals (issue #2293)', () => {
+  it('forge: delegates to the forge lister and normalizes', async () => {
+    const listForge = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 3, title: 'X', state: 'open', url: 'u' }] });
+    const s = await summarizeFiledProposals({
+      app: { id: 'a', repoPath: '/repo' },
+      tracker: { resolved: 'github', forge: 'gh' },
+      deps: { listForge }
+    });
+    expect(listForge).toHaveBeenCalledWith({ cli: 'gh', cwd: '/repo' });
+    expect(s).toMatchObject({ ok: true, tracker: 'github', total: 1, open: 1 });
+  });
+
+  it('forge: reports no-repo when the app has no repoPath', async () => {
+    const s = await summarizeFiledProposals({ app: { id: 'a' }, tracker: { resolved: 'github', forge: 'gh' } });
+    expect(s).toMatchObject({ ok: false, reason: 'no-repo', total: 0 });
+  });
+
+  it('jira: reports jira-not-configured without an instance/project', async () => {
+    const s = await summarizeFiledProposals({ app: { id: 'a', repoPath: '/r' }, tracker: { resolved: 'jira', forge: null } });
+    expect(s).toMatchObject({ ok: false, tracker: 'jira', reason: 'jira-not-configured' });
+  });
+
+  it('jira: delegates to the jira lister when configured', async () => {
+    const listJira = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 'PROJ-1', title: 'J', state: 'open' }] });
+    const s = await summarizeFiledProposals({
+      app: { id: 'a', repoPath: '/r', jira: { enabled: true, instanceId: 'i1', projectKey: 'PROJ' } },
+      tracker: { resolved: 'jira', forge: null },
+      deps: { listJira }
+    });
+    expect(listJira).toHaveBeenCalledWith({ instanceId: 'i1', projectKey: 'PROJ' });
+    expect(s).toMatchObject({ ok: true, tracker: 'jira', total: 1, open: 1 });
+    expect(s.issues[0].url).toBeNull(); // jira issues surface without per-item links
+  });
+
+  it('plan: counts slug tags in PLAN.md (all open, no links)', async () => {
+    const readPlan = vi.fn().mockResolvedValue('- [ ] [lil-foo] a\n- [ ] [lil-bar] b\n');
+    const s = await summarizeFiledProposals({
+      app: { id: 'a', repoPath: '/r' },
+      tracker: { resolved: 'plan', forge: null },
+      deps: { readPlan }
+    });
+    expect(s).toMatchObject({ ok: true, tracker: 'plan', total: 2, open: 2, closed: 0, issues: [] });
+  });
+
+  it('plan: reports no-repo without a repoPath', async () => {
+    const s = await summarizeFiledProposals({ app: { id: 'a' }, tracker: { resolved: 'plan', forge: null } });
+    expect(s).toMatchObject({ ok: false, tracker: 'plan', reason: 'no-repo' });
   });
 });
