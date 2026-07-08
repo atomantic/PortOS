@@ -151,6 +151,22 @@ describe('eventGoalMatches', () => {
     expect(eventGoalMatches(ev({ title: 'random chatter' }), rules)).toEqual([]);
   });
 
+  it('matches single-token keywords on whole words, not substrings', () => {
+    // A short tag "art" must NOT match "start"/"artisan" via substring.
+    const artRules = buildMappingRules([
+      { id: 'art', title: 'Studio', category: 'creative', status: 'active', tags: ['art'] },
+    ]);
+    expect(eventGoalMatches(ev({ title: 'start the artisan run' }), artRules)).toEqual([]);
+    expect(eventGoalMatches(ev({ title: 'made some art today' }), artRules)).toEqual(['art']);
+  });
+
+  it('still substring-matches multi-word phrase keywords', () => {
+    const phraseRules = buildMappingRules([
+      { id: 'pull', title: 'Fitness', category: 'health', status: 'active', tags: ['pull ups'] },
+    ]);
+    expect(eventGoalMatches(ev({ title: 'did pull ups at the gym' }), phraseRules)).toEqual(['pull']);
+  });
+
   it('can match multiple goals at once (de-duplicated)', () => {
     const out = eventGoalMatches(ev({ title: 'musical robot jam', summary: 'humanoid' }), rules);
     expect(out.sort()).toEqual(['music', 'robot']);
@@ -261,6 +277,16 @@ describe('computeScorecard (rollup math)', () => {
     expect(empty.totals.totalSeconds).toBe(0);
     expect(empty.totals.alignedShare).toBe(0);
     expect(empty.goals.every((g) => g.alignedSeconds === 0)).toBe(true);
+  });
+
+  it('reports flat (not down) for a zero-activity week even after active prior weeks', () => {
+    const trend = [
+      { weekStart: '2026-06-22', alignedSeconds: 50, unalignedSeconds: 50, totalSeconds: 100 }, // 50%
+      { weekStart: '2026-06-29', alignedSeconds: 60, unalignedSeconds: 40, totalSeconds: 100 }, // 60%
+      { weekStart: '2026-07-06', alignedSeconds: 0, unalignedSeconds: 0, totalSeconds: 0 },
+    ];
+    const sc = computeScorecard({ weekStart: '2026-07-06', events: [], rules, timezone: UTC, trend });
+    expect(sc.trendDirection).toBe('flat');
   });
 });
 

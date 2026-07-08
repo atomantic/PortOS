@@ -31,7 +31,7 @@ import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 import { localDayRangeUtc, localDayKey, listEvents } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { buildMarkers } from '../lib/markedSection.js';
-import { getProviderById } from './providers.js';
+import { getProviderById, getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');
@@ -184,11 +184,15 @@ function eventText(event) {
 export function eventGoalMatches(event, rules = []) {
   if (!event) return [];
   const text = eventText(event);
+  // Whole-word set for single-token keywords so a short tag/category can't
+  // substring-match unrelated text ("go" in "going", "art" in "start"). Phrase
+  // keywords (containing a space) still substring-match against the full text.
+  const words = new Set(text.split(/[^a-z0-9]+/).filter(Boolean));
   const personIds = new Set((event.participants || []).map((p) => p?.personId).filter(Boolean).map(String));
   const subcal = event?.metadata?.subcalendarId != null ? String(event.metadata.subcalendarId) : null;
   const matched = [];
   for (const rule of rules) {
-    const byKeyword = rule.keywords.some((k) => k && text.includes(k));
+    const byKeyword = rule.keywords.some((k) => k && (k.includes(' ') ? text.includes(k) : words.has(k)));
     const byPerson = rule.personIds.some((id) => personIds.has(String(id)));
     const byCalendar = subcal != null && rule.subcalendarIds.some((id) => String(id) === subcal);
     if (byKeyword || byPerson || byCalendar) matched.push(rule.id);
@@ -307,7 +311,9 @@ export function computeScorecard({ weekStart, events = [], rules = [], timezone 
   const currentShare = totalSeconds > 0 ? alignedSeconds / totalSeconds : 0;
   const priorMean = priorShares.length ? priorShares.reduce((a, b) => a + b, 0) / priorShares.length : null;
   let direction = 'flat';
-  if (priorMean != null) {
+  // A zero-activity week has no aligned share to compare — a blank week isn't a
+  // "decline" in goal alignment, so leave it neutral rather than reporting 'down'.
+  if (priorMean != null && totalSeconds > 0) {
     if (currentShare > priorMean + 0.05) direction = 'up';
     else if (currentShare < priorMean - 0.05) direction = 'down';
   }
@@ -520,9 +526,11 @@ export async function refreshScorecardNarrative(providerId, model) {
 
   const settings = await getSettings();
   const resolvedProviderId = providerId || settings.provider;
-  if (!resolvedProviderId) return { available: false, reason: 'no_provider' };
-
-  const provider = await getProviderById(resolvedProviderId).catch(() => null);
+  // Prefer an explicit/configured provider; fall back to the active provider
+  // (mirrors the cross-domain narrative) so "enabled" alone is enough to run.
+  const provider = resolvedProviderId
+    ? await getProviderById(resolvedProviderId).catch(() => null)
+    : await getActiveProvider().catch(() => null);
   if (!provider || provider.enabled === false) return { available: false, reason: 'no_provider' };
 
   const selectedModel = model || settings.model || provider.defaultModel;

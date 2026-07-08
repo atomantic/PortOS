@@ -7,6 +7,8 @@ import {
   getGoalScorecardRules,
   saveGoalScorecardRules,
   getGoalScorecardSettings,
+  updateGoalScorecardSettings,
+  getProviders,
 } from '../../services/api';
 import { timeAgo } from '../../utils/formatters';
 
@@ -117,21 +119,36 @@ function RulesEditor({ onClose }) {
 export default function GoalScorecardTab() {
   const [data, setData] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [providers, setProviders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [computing, setComputing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [showRules, setShowRules] = useState(false);
 
   const load = useCallback(() => {
-    Promise.allSettled([getGoalScorecard(), getGoalScorecardSettings()])
-      .then(([sc, st]) => {
+    Promise.allSettled([getGoalScorecard(), getGoalScorecardSettings(), getProviders({ silent: true })])
+      .then(([sc, st, pr]) => {
         setData(sc.status === 'fulfilled' ? sc.value : null);
         setSettings(st.status === 'fulfilled' ? st.value : null);
+        const p = pr.status === 'fulfilled' ? pr.value : null;
+        setProviders(p?.providers || (Array.isArray(p) ? p : []));
       })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Persist a scorecard settings change (enable toggle / provider pick) — the
+  // narrative opt-in. Optimistic local update, reverts on failure.
+  const saveSettings = (partial) => {
+    setSavingSettings(true);
+    setSettings((prev) => ({ ...prev, ...partial }));
+    updateGoalScorecardSettings(partial)
+      .then((res) => setSettings(res))
+      .catch(() => load())
+      .finally(() => setSavingSettings(false));
+  };
 
   const handleCompute = () => {
     setComputing(true);
@@ -181,7 +198,9 @@ export default function GoalScorecardTab() {
 
   const { totals, goals = [], trend = [], trendDirection } = data;
   const alignedPct = Math.round((totals?.alignedShare ?? 0) * 100);
-  const narrativeEnabled = Boolean(settings?.enabled && settings?.provider);
+  // Enabling is the opt-in; a specific provider is optional (server falls back
+  // to the active provider), matching the cross-domain narrative.
+  const narrativeEnabled = Boolean(settings?.enabled);
   const topGoalHours = goals.find((g) => g.alignedSeconds > 0)?.alignedHours ?? 0;
 
   return (
@@ -278,17 +297,44 @@ export default function GoalScorecardTab() {
 
       {/* Optional LLM narrative */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2"><Sparkles size={14} className="text-port-accent" /> Narrative</h3>
-          <button
-            onClick={handleNarrative}
-            disabled={generating || !narrativeEnabled || totals?.totalSeconds === 0}
-            title={narrativeEnabled ? '' : 'Enable a provider in scorecard settings to generate a narrative'}
-            className="flex items-center gap-2 px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw size={14} className={generating ? 'animate-spin' : ''} />
-            {generating ? 'Generating…' : data.narrative ? 'Regenerate' : 'Generate'}
-          </button>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer" htmlFor="scorecard-narrative-enabled">
+              <input
+                id="scorecard-narrative-enabled"
+                type="checkbox"
+                checked={narrativeEnabled}
+                disabled={savingSettings}
+                onChange={(e) => saveSettings({ enabled: e.target.checked })}
+                className="accent-port-accent"
+              />
+              AI narrative
+            </label>
+            {narrativeEnabled && (
+              <select
+                aria-label="Narrative provider"
+                value={settings?.provider || ''}
+                disabled={savingSettings}
+                onChange={(e) => saveSettings({ provider: e.target.value || null })}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200 focus:border-port-accent/60 focus:outline-none"
+              >
+                <option value="">Active provider</option>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={handleNarrative}
+              disabled={generating || !narrativeEnabled || totals?.totalSeconds === 0}
+              title={narrativeEnabled ? '' : 'Enable AI narrative to generate a summary'}
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-accent text-white rounded-lg text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw size={14} className={generating ? 'animate-spin' : ''} />
+              {generating ? 'Generating…' : data.narrative ? 'Regenerate' : 'Generate'}
+            </button>
+          </div>
         </div>
         {data.narrative ? (
           <div className="prose prose-sm prose-invert max-w-none">
@@ -303,7 +349,7 @@ export default function GoalScorecardTab() {
           <p className="text-xs text-gray-500">
             {narrativeEnabled
               ? 'Generate an optional plain-language summary of this week’s goal alignment. The numeric scorecard above is always AI-free.'
-              : 'Optional AI narrative is off. Enable a provider in scorecard settings to summarize the week in plain language. The numeric scorecard is always AI-free.'}
+              : 'Optional AI narrative is off. Toggle “AI narrative” above to summarize the week in plain language. The numeric scorecard is always AI-free.'}
           </p>
         )}
       </div>
