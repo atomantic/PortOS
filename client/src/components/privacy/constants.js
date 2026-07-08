@@ -56,6 +56,24 @@ export const ORG_HOLDING_STATUSES = [
   { id: 'unknown', label: 'Unknown' },
 ];
 
+// Change-of-address event kinds (issue #2143) — mirrors PRIVACY_CHANGE_KINDS.
+export const CHANGE_KINDS = [
+  { id: 'address_change', label: 'Address change' },
+  { id: 'phone_change', label: 'Phone change' },
+  { id: 'email_change', label: 'Email change' },
+  { id: 'name_change', label: 'Name change' },
+  { id: 'other', label: 'Other' },
+];
+
+// Which vault type each change kind operates on — drives the Declare drawer's
+// record picker and the derived default kind.
+export const KIND_FOR_TYPE = {
+  address: 'address_change',
+  phone: 'phone_change',
+  email: 'email_change',
+  legal_name: 'name_change',
+};
+
 // Tailwind tone classes per trust level (pre-composed — the JIT needs whole tokens).
 export const TRUST_TONE = {
   trusted: 'bg-port-success/15 text-port-success border-port-success/30',

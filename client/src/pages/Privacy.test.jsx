@@ -31,6 +31,25 @@ vi.mock('../services/api', () => ({
   deletePrivacyOrg: vi.fn().mockResolvedValue({ ok: true }),
   getOrgHoldings: vi.fn().mockResolvedValue([]),
   setOrgHoldings: vi.fn(),
+  getPrivacyChanges: vi.fn().mockResolvedValue([
+    {
+      id: 'ev-1', vaultRecordId: 'rec-1', replacementRecordId: 'rec-9', kind: 'address_change',
+      declaredAt: '2026-07-04T00:00:00Z', note: '',
+      oldRecord: { type: 'address', label: 'Home address', maskedValue: '•••, Portland OR' },
+      replacementRecord: { type: 'address', label: 'New home', maskedValue: '•••, Seattle WA' },
+      progress: { pending: 1, updated: 0, removed: 0, total: 1 },
+    },
+  ]),
+  getPrivacyChange: vi.fn().mockResolvedValue({
+    event: { id: 'ev-1', kind: 'address_change' },
+    oldRecord: { type: 'address', maskedValue: '•••, Portland OR' },
+    replacementRecord: { type: 'address', maskedValue: '•••, Seattle WA' },
+    progress: { pending: [{ orgId: 'org-1', orgName: 'Acme Bank', website: null, contactEmail: 'ops@acme.example' }], updated: [], removed: [] },
+  }),
+  declarePrivacyChange: vi.fn(),
+  markChangeOrgUpdated: vi.fn(),
+  markChangeOrgRemoved: vi.fn(),
+  draftChangeUpdateEmail: vi.fn(),
 }));
 
 import Privacy from './Privacy';
@@ -78,6 +97,15 @@ describe('Privacy Center', () => {
     await waitFor(() => expect(screen.getByText('Acme Bank')).toBeInTheDocument());
     // "Trusted" appears both as a filter chip and the org's trust badge.
     expect(screen.getAllByText('Trusted').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders the Changes tab with a declared change and its progress', async () => {
+    renderAt('/privacy/changes');
+    // Masked old → new values render; the change kind badge shows.
+    await waitFor(() => expect(screen.getByText('•••, Portland OR')).toBeInTheDocument());
+    expect(screen.getByText('•••, Seattle WA')).toBeInTheDocument();
+    expect(screen.getByText('Address change')).toBeInTheDocument();
+    expect(screen.getByText(/handled/i)).toBeInTheDocument();
   });
 
   it('stale :tab param falls back to Overview', async () => {

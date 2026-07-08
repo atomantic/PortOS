@@ -42,11 +42,21 @@ vi.mock('../services/privacyScan.js', () => ({
   runScanPass: vi.fn(async (opts) => ({ scanned: 2, verdicts: { found: 1, not_found: 1 }, skipped: 0, brokers: 20, _opts: opts })),
 }));
 
+vi.mock('../services/privacyChanges.js', () => ({
+  declareChange: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-000000000003', ...input })),
+  listChangeEvents: vi.fn(async () => [{ id: 'ev1', kind: 'address_change', progress: { pending: 1, updated: 0, removed: 0, total: 1 } }]),
+  getChange: vi.fn(async () => ({ event: { id: 'ev1' }, progress: { pending: [], updated: [], removed: [] } })),
+  markOrgUpdated: vi.fn(async () => ({ pending: [], updated: [{ orgId: 'o1' }], removed: [] })),
+  markOrgRemoved: vi.fn(async () => ({ pending: [], updated: [], removed: [{ orgId: 'o1' }] })),
+  draftUpdateEmail: vi.fn(async () => ({ draftId: 'draft-1', status: 'draft' })),
+}));
+
 const privacyRoutes = (await import('./privacy.js')).default;
 const service = await import('../services/privacyVault.js');
 const orgService = await import('../services/privacyOrgs.js');
 const brokerService = await import('../services/privacyBrokers.js');
 const scanService = await import('../services/privacyScan.js');
+const changeService = await import('../services/privacyChanges.js');
 
 const VALID_UUID = 'c0ffee00-0000-4000-8000-000000000001';
 
@@ -242,6 +252,67 @@ describe('PUT /api/privacy/orgs/:id/holdings', () => {
     expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`).send({ holdings: [] })).status).toBe(200);
     expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`)
       .send({ holdings: [{ vaultRecordId: VALID_UUID, status: 'nope' }] })).status).toBe(400);
+  });
+});
+
+// ─── Change-of-address events + inventory workflow (issue #2143) ────────────
+
+describe('GET /api/privacy/changes', () => {
+  it('lists change events with progress', async () => {
+    const res = await request(makeApp()).get('/api/privacy/changes');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: 'ev1', kind: 'address_change' });
+    expect(changeService.listChangeEvents).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/privacy/changes', () => {
+  it('declares a change from a valid inline-replacement body', async () => {
+    const body = { vaultRecordId: VALID_UUID, replacement: { label: 'New', value: '742 New Ave' }, kind: 'address_change' };
+    const res = await request(makeApp()).post('/api/privacy/changes').send(body);
+    expect(res.status).toBe(201);
+    expect(changeService.declareChange).toHaveBeenCalledWith(body);
+  });
+
+  it('rejects a non-uuid record, both-replacement-forms, and unknown keys', async () => {
+    expect((await request(makeApp()).post('/api/privacy/changes').send({ vaultRecordId: 'nope' })).status).toBe(400);
+    expect((await request(makeApp()).post('/api/privacy/changes')
+      .send({ vaultRecordId: VALID_UUID, replacement: { label: 'x', value: 'y' }, replacementRecordId: VALID_UUID })).status).toBe(400);
+    expect((await request(makeApp()).post('/api/privacy/changes')
+      .send({ vaultRecordId: VALID_UUID, extra: 1 })).status).toBe(400);
+  });
+
+  it('accepts a removal-only change (no replacement) and a linked replacementRecordId', async () => {
+    expect((await request(makeApp()).post('/api/privacy/changes').send({ vaultRecordId: VALID_UUID, kind: 'other' })).status).toBe(201);
+    expect((await request(makeApp()).post('/api/privacy/changes')
+      .send({ vaultRecordId: VALID_UUID, replacementRecordId: VALID_UUID })).status).toBe(201);
+  });
+});
+
+describe('GET /api/privacy/changes/:id', () => {
+  it('returns the event + inventory and validates the uuid', async () => {
+    expect((await request(makeApp()).get(`/api/privacy/changes/${VALID_UUID}`)).status).toBe(200);
+    expect(changeService.getChange).toHaveBeenCalledWith(VALID_UUID);
+    expect((await request(makeApp()).get('/api/privacy/changes/not-a-uuid')).status).toBe(400);
+  });
+});
+
+describe('per-org change actions', () => {
+  const base = `/api/privacy/changes/${VALID_UUID}/orgs/${VALID_UUID}`;
+
+  it('marks an org updated / removed', async () => {
+    expect((await request(makeApp()).post(`${base}/updated`)).status).toBe(200);
+    expect(changeService.markOrgUpdated).toHaveBeenCalledWith(VALID_UUID, VALID_UUID);
+    expect((await request(makeApp()).post(`${base}/removed`)).status).toBe(200);
+    expect(changeService.markOrgRemoved).toHaveBeenCalledWith(VALID_UUID, VALID_UUID);
+  });
+
+  it('drafts an update email (201) and validates both uuids', async () => {
+    const res = await request(makeApp()).post(`${base}/draft-email`);
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ draftId: 'draft-1', status: 'draft' });
+    expect((await request(makeApp()).post(`/api/privacy/changes/nope/orgs/${VALID_UUID}/updated`)).status).toBe(400);
+    expect((await request(makeApp()).post(`/api/privacy/changes/${VALID_UUID}/orgs/nope/updated`)).status).toBe(400);
   });
 });
 

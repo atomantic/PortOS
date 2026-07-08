@@ -65,6 +65,23 @@ export const setOrgHoldings = (id, holdings, options) => request(`/privacy/orgs/
   ...options,
 });
 
+// ── Change-of-address events + inventory (#2143) ────────────────────────────
+export const getPrivacyChanges = (options) => request('/privacy/changes', options);
+export const getPrivacyChange = (id, options) => request(`/privacy/changes/${id}`, options);
+// Declare a change: { vaultRecordId, replacement?|replacementRecordId?, kind?, note? }.
+export const declarePrivacyChange = (data, options) => request('/privacy/changes', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options,
+});
+export const markChangeOrgUpdated = (id, orgId, options) =>
+  request(`/privacy/changes/${id}/orgs/${orgId}/updated`, { method: 'POST', ...options });
+export const markChangeOrgRemoved = (id, orgId, options) =>
+  request(`/privacy/changes/${id}/orgs/${orgId}/removed`, { method: 'POST', ...options });
+// Drafts a "please update my records" email into the Comms queue (unapproved).
+export const draftChangeUpdateEmail = (id, orgId, options) =>
+  request(`/privacy/changes/${id}/orgs/${orgId}/draft-email`, { method: 'POST', ...options });
+
 // ── Digital Twin cross-link (#2147) ─────────────────────────────────────────
 /** Social-account → org links for the Twin's "in org registry" badges. */
 export const getSocialAccountOrgLinks = (options) =>
