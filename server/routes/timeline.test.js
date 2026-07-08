@@ -49,6 +49,17 @@ vi.mock('../services/whatsappImport.js', () => ({
   })),
 }));
 
+vi.mock('../services/browserHistoryImport.js', () => ({
+  importBrowserHistory: vi.fn(async (file, opts) => ({
+    dryRun: Boolean(opts?.dryRun),
+    parsed: 4,
+    mapped: 2,
+    recorded: opts?.dryRun ? 0 : 2,
+    skipped: opts?.dryRun ? 0 : 2,
+    summary: { visits: 2, uniqueHosts: 2, from: null, to: null, topHosts: [] },
+  })),
+}));
+
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
@@ -58,6 +69,7 @@ import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
+import { importBrowserHistory } from '../services/browserHistoryImport.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -314,5 +326,43 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(400);
     expect(importWhatsappHistory).not.toHaveBeenCalled();
+  });
+
+  it('POST /import/browser parses a History.json upload and calls the importer', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false' },
+      { filename: 'History.json', contentType: 'application/json', content: '{"Browser History":[]}' },
+    );
+    const r = await request(app).post('/api/timeline/import/browser')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ recorded: 2, mapped: 2 });
+    expect(importBrowserHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false });
+  });
+
+  it('browser honors preview=true as a dry run', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'true' },
+      { filename: 'Takeout.zip', contentType: 'application/zip', content: 'PK\x03\x04zip' },
+    );
+    const r = await request(app).post('/api/timeline/import/browser')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ dryRun: true, recorded: 0 });
+    expect(importBrowserHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+  });
+
+  it('browser rejects a disallowed file type with 400', async () => {
+    const { boundary, body } = multipart(
+      {},
+      { filename: 'history.txt', contentType: 'text/plain', content: 'nope' },
+    );
+    const r = await request(app).post('/api/timeline/import/browser')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(importBrowserHistory).not.toHaveBeenCalled();
   });
 });

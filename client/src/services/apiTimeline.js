@@ -57,3 +57,9 @@ export const importDiscordHistory = (file, options = {}) =>
 // received; absent → neutral `message` events.
 export const importWhatsappHistory = (file, { yourName, ...options } = {}) =>
   importFile('/timeline/import/whatsapp', file, { ...options, fields: { yourName } });
+
+// Google Takeout Chrome browser history (`History.json`, standalone or zipped) —
+// each visit becomes a `web.visit` event (dedupe on a content hash of
+// visit-instant + URL). Subframe (iframe) loads are dropped server-side.
+export const importBrowserHistory = (file, options = {}) =>
+  importFile('/timeline/import/browser', file, options);
