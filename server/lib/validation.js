@@ -148,7 +148,11 @@ export const layeredIntelligenceConfigSchema = z.object({
       }),
       z.object({
         type: z.literal('http'),
-        url: z.string().url().max(2000),
+        // Require an http(s) scheme — the guarded fetch (fetchPublicBinary) only
+        // fetches http/https, so accepting ftp:/file:/mailto: here would persist a
+        // source that gatherSources silently omits every sweep (accepted-but-dead).
+        url: z.string().url().max(2000)
+          .refine(u => /^https?:\/\//i.test(u), { message: 'url must be an http(s) URL' }),
         label: z.string().max(120).optional()
       }),
       z.object({

@@ -315,6 +315,16 @@ describe('validation.js', () => {
       expect(appSchema.safeParse(app).success).toBe(false);
     });
 
+    it('should reject a non-http(s) scheme for an http custom source', () => {
+      for (const url of ['ftp://host/x', 'file:///etc/passwd', 'mailto:a@b.com']) {
+        const app = {
+          name: 'Test', repoPath: '/path',
+          layeredIntelligence: { sources: { custom: [{ type: 'http', url }] } }
+        };
+        expect(appSchema.safeParse(app).success).toBe(false);
+      }
+    });
+
     it('should reject an unrecognized custom source type', () => {
       const app = {
         name: 'Test', repoPath: '/path',
