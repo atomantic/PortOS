@@ -8,6 +8,7 @@ import PageHeader from '../components/PageHeader';
 import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
 import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
 import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
+import WhatsappImportPanel from '../components/timeline/WhatsappImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -210,6 +211,7 @@ export default function Timeline() {
       <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      <WhatsappImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 

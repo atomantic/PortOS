@@ -45,3 +45,8 @@ export const importTakeoutLocationHistory = (file, options = {}) =>
 // (dedupe on the globally-unique Discord message snowflake id).
 export const importDiscordHistory = (file, options = {}) =>
   importFile('/timeline/import/discord', file, options);
+
+// WhatsApp "Export chat" transcript (`_chat.txt`, standalone or zipped) — every
+// message becomes a neutral timeline event (dedupe on a content hash).
+export const importWhatsappHistory = (file, options = {}) =>
+  importFile('/timeline/import/whatsapp', file, options);
