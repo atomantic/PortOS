@@ -21,6 +21,10 @@ import {
   privacyOrgListQuerySchema,
   privacyOrgIdParamsSchema,
   privacyOrgHoldingsSetSchema,
+  privacyBrokerListQuerySchema,
+  privacyBrokerCaseListQuerySchema,
+  privacyBrokerRefreshSchema,
+  privacyScanStartSchema,
 } from '../lib/privacyValidation.js';
 import {
   createVaultRecord,
@@ -40,6 +44,13 @@ import {
   setOrgHoldings,
   getHoldingsForOrg,
 } from '../services/privacyOrgs.js';
+import {
+  listBrokers,
+  refreshBrokers,
+  listBrokerCases,
+  getScanStatus,
+} from '../services/privacyBrokers.js';
+import { runScanPass } from '../services/privacyScan.js';
 
 const router = Router();
 
@@ -121,6 +132,35 @@ router.put('/orgs/:id/holdings', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacyOrgIdParamsSchema, req.params);
   const { holdings } = validateRequest(privacyOrgHoldingsSetSchema, req.body);
   res.json(await setOrgHoldings(id, holdings));
+}));
+
+// ─── Data-broker database + exposure scan + case ledger (issue #2144) ───────
+
+router.get('/brokers', asyncHandler(async (req, res) => {
+  const { enabled } = validateRequest(privacyBrokerListQuerySchema, req.query);
+  res.json(await listBrokers({ enabled }));
+}));
+
+// User-triggered refresh (never at boot) — pulls BADBOOL + CA registry, never
+// clobbers curated rows.
+router.post('/brokers/refresh', asyncHandler(async (req, res) => {
+  validateRequest(privacyBrokerRefreshSchema, req.body ?? {});
+  res.json(await refreshBrokers());
+}));
+
+router.get('/broker-cases', asyncHandler(async (req, res) => {
+  const { state } = validateRequest(privacyBrokerCaseListQuerySchema, req.query);
+  res.json(await listBrokerCases({ state }));
+}));
+
+router.get('/scan/status', asyncHandler(async (_req, res) => {
+  res.json(await getScanStatus());
+}));
+
+// User-triggered read-only exposure scan pass over enabled brokers.
+router.post('/scan', asyncHandler(async (req, res) => {
+  const { concurrency } = validateRequest(privacyScanStartSchema, req.body ?? {});
+  res.json(await runScanPass(concurrency ? { concurrency } : {}));
 }));
 
 export default router;

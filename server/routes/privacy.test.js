@@ -30,9 +30,22 @@ vi.mock('../services/privacyOrgs.js', () => ({
   getHoldingsForOrg: vi.fn(async () => [{ orgId: 'o1', vaultRecordId: 'v1', vaultMaskedValue: 'a•••@b.com' }]),
 }));
 
+vi.mock('../services/privacyBrokers.js', () => ({
+  listBrokers: vi.fn(async () => [{ id: 'spokeo', name: 'Spokeo', enabled: true }]),
+  refreshBrokers: vi.fn(async () => ({ fetched: 3, added: 2, sources: { badbool: 2, caRegistry: 1 } })),
+  listBrokerCases: vi.fn(async () => [{ id: 'case-1', brokerId: 'spokeo', state: 'found' }]),
+  getScanStatus: vi.fn(async () => ({ enabledBrokers: 20, caseCounts: { found: 1 }, dueForRecheck: 3 })),
+}));
+
+vi.mock('../services/privacyScan.js', () => ({
+  runScanPass: vi.fn(async (opts) => ({ scanned: 2, verdicts: { found: 1, not_found: 1 }, skipped: 0, brokers: 20, _opts: opts })),
+}));
+
 const privacyRoutes = (await import('./privacy.js')).default;
 const service = await import('../services/privacyVault.js');
 const orgService = await import('../services/privacyOrgs.js');
+const brokerService = await import('../services/privacyBrokers.js');
+const scanService = await import('../services/privacyScan.js');
 
 const VALID_UUID = 'c0ffee00-0000-4000-8000-000000000001';
 
@@ -212,5 +225,66 @@ describe('PUT /api/privacy/orgs/:id/holdings', () => {
     expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`).send({ holdings: [] })).status).toBe(200);
     expect((await request(makeApp()).put(`/api/privacy/orgs/${VALID_UUID}/holdings`)
       .send({ holdings: [{ vaultRecordId: VALID_UUID, status: 'nope' }] })).status).toBe(400);
+  });
+});
+
+// ─── Data-broker database + scan + case ledger (issue #2144) ────────────────
+
+describe('GET /api/privacy/brokers', () => {
+  it('lists brokers and coerces the enabled query flag to a boolean', async () => {
+    const res = await request(makeApp()).get('/api/privacy/brokers?enabled=true');
+    expect(res.status).toBe(200);
+    expect(brokerService.listBrokers).toHaveBeenCalledWith({ enabled: true });
+    expect(res.body[0].id).toBe('spokeo');
+  });
+
+  it('lists all brokers when no filter is given', async () => {
+    const res = await request(makeApp()).get('/api/privacy/brokers');
+    expect(res.status).toBe(200);
+    expect(brokerService.listBrokers).toHaveBeenCalledWith({ enabled: undefined });
+  });
+});
+
+describe('POST /api/privacy/brokers/refresh', () => {
+  it('runs the user-triggered refresh', async () => {
+    const res = await request(makeApp()).post('/api/privacy/brokers/refresh').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ added: 2 });
+    expect(brokerService.refreshBrokers).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/privacy/broker-cases', () => {
+  it('lists cases and filters by state', async () => {
+    const res = await request(makeApp()).get('/api/privacy/broker-cases?state=found');
+    expect(res.status).toBe(200);
+    expect(brokerService.listBrokerCases).toHaveBeenCalledWith({ state: 'found' });
+  });
+
+  it('rejects an unknown case state', async () => {
+    expect((await request(makeApp()).get('/api/privacy/broker-cases?state=bogus')).status).toBe(400);
+  });
+});
+
+describe('GET /api/privacy/scan/status', () => {
+  it('returns the scan status readout', async () => {
+    const res = await request(makeApp()).get('/api/privacy/scan/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ enabledBrokers: 20, dueForRecheck: 3 });
+  });
+});
+
+describe('POST /api/privacy/scan', () => {
+  it('starts a scan pass and returns the summary', async () => {
+    const res = await request(makeApp()).post('/api/privacy/scan').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ scanned: 2, verdicts: { found: 1, not_found: 1 } });
+    expect(scanService.runScanPass).toHaveBeenCalled();
+  });
+
+  it('passes a valid concurrency knob through and rejects an out-of-range one', async () => {
+    await request(makeApp()).post('/api/privacy/scan').send({ concurrency: 4 });
+    expect(scanService.runScanPass).toHaveBeenCalledWith({ concurrency: 4 });
+    expect((await request(makeApp()).post('/api/privacy/scan').send({ concurrency: 99 })).status).toBe(400);
   });
 });
