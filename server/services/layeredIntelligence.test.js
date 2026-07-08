@@ -21,6 +21,8 @@ import {
   extractPlanSlugs,
   appendProposalToPlan,
   gatherSources,
+  fetchHttpSource,
+  customSourceKey,
   normalizeIssueState,
   listForgeIssues,
   listBlockingIssues,
@@ -449,6 +451,117 @@ describe('gatherSources custom file confinement', () => {
       { sources: { custom: [{ type: 'file', ref: 'link.md' }] } }
     );
     expect(out['custom:link.md']).toBe('INSIDE');
+  });
+
+  it('keys a file source by its label when one is set', async () => {
+    await writeFile(join(dir, 'METRICS.md'), 'labeled content');
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'file', ref: 'METRICS.md', label: 'Weekly Metrics' }] } }
+    );
+    expect(out['custom:Weekly Metrics']).toBe('labeled content');
+    expect(out['custom:METRICS.md']).toBeUndefined();
+  });
+});
+
+describe('customSourceKey', () => {
+  it('keys each type by its identifying field', () => {
+    expect(customSourceKey({ type: 'file', ref: 'a.md' })).toBe('custom:a.md');
+    expect(customSourceKey({ type: 'http', url: 'https://x/y' })).toBe('custom:https://x/y');
+    expect(customSourceKey({ type: 'cmd', cmd: 'git log' })).toBe('custom:git log');
+  });
+
+  it('prefers a non-blank label over the identifying field', () => {
+    expect(customSourceKey({ type: 'http', url: 'https://x', label: 'Status' })).toBe('custom:Status');
+    expect(customSourceKey({ type: 'cmd', cmd: 'x', label: '   ' })).toBe('custom:x');
+  });
+
+  it('returns null for unrecognized or empty sources', () => {
+    expect(customSourceKey(null)).toBeNull();
+    expect(customSourceKey({ type: 'file' })).toBeNull();
+    expect(customSourceKey({ type: 'nope', ref: 'a' })).toBeNull();
+  });
+});
+
+describe('fetchHttpSource', () => {
+  it('returns response text on a 2xx', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('body text') });
+    expect(await fetchHttpSource('https://x', { fetchImpl })).toBe('body text');
+    expect(fetchImpl).toHaveBeenCalledWith('https://x', expect.objectContaining({ redirect: 'follow' }));
+  });
+
+  it('returns null on a non-2xx response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: () => Promise.resolve('nope') });
+    expect(await fetchHttpSource('https://x', { fetchImpl })).toBeNull();
+  });
+
+  it('returns null when fetch rejects (dead endpoint)', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    expect(await fetchHttpSource('https://x', { fetchImpl })).toBeNull();
+  });
+
+  it('returns null when no fetch implementation is available', async () => {
+    expect(await fetchHttpSource('https://x', { fetchImpl: undefined })).toBeNull();
+  });
+});
+
+describe('gatherSources http/cmd custom sources', () => {
+  it('includes an http source body under its key', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('coverage 91%') });
+    const out = await gatherSources(
+      { repoPath: '/repo' },
+      { sources: { custom: [{ type: 'http', url: 'https://ci/metrics', label: 'CI' }] } },
+      { fetchImpl }
+    );
+    expect(out['custom:CI']).toBe('coverage 91%');
+  });
+
+  it('omits an http source that returns no data', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: () => Promise.resolve('') });
+    const out = await gatherSources(
+      { repoPath: '/repo' },
+      { sources: { custom: [{ type: 'http', url: 'https://ci/down' }] } },
+      { fetchImpl }
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
+  });
+
+  it('includes a cmd source stdout, running it in the repo dir', async () => {
+    const runCommand = vi.fn().mockResolvedValue({ code: 0, stdout: 'a1b2c3 fix\n', stderr: '' });
+    const out = await gatherSources(
+      { repoPath: '/repo' },
+      { sources: { custom: [{ type: 'cmd', cmd: 'git log --oneline -1' }] } },
+      { runCommand }
+    );
+    expect(out['custom:git log --oneline -1']).toBe('a1b2c3 fix\n');
+    expect(runCommand).toHaveBeenCalledWith('git log --oneline -1', { cwd: '/repo' });
+  });
+
+  it('omits a cmd source that exits non-zero', async () => {
+    const runCommand = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'boom' });
+    const out = await gatherSources(
+      { repoPath: '/repo' },
+      { sources: { custom: [{ type: 'cmd', cmd: 'false' }] } },
+      { runCommand }
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
+  });
+
+  it('clamps oversized http/cmd output to 8000 chars', async () => {
+    const big = 'x'.repeat(9000);
+    const out = await gatherSources(
+      { repoPath: '/repo' },
+      { sources: { custom: [
+        { type: 'http', url: 'https://big', label: 'H' },
+        { type: 'cmd', cmd: 'dump', label: 'C' }
+      ] } },
+      {
+        fetchImpl: vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve(big) }),
+        runCommand: vi.fn().mockResolvedValue({ code: 0, stdout: big, stderr: '' })
+      }
+    );
+    expect(out['custom:H']).toHaveLength(8000);
+    expect(out['custom:C']).toHaveLength(8000);
   });
 });
 

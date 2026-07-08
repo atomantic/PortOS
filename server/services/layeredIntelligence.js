@@ -294,14 +294,67 @@ Respond with JSON only (no markdown fences):
 
 /** Run a CLI, resolving `{ code, stdout, stderr }` (never rejects). */
 function runCli(cmd, args, options = {}) {
-  return new Promise((resolve) => {
+  return new Promise((done) => {
     const child = spawn(cmd, args, { shell: false, windowsHide: true, ...options });
     let stdout = '', stderr = '';
     child.stdout?.on('data', d => { stdout += d.toString(); });
     child.stderr?.on('data', d => { stderr += d.toString(); });
-    child.on('close', code => resolve({ code, stdout, stderr }));
-    child.on('error', err => resolve({ code: -1, stdout: '', stderr: err.message }));
+    child.on('close', code => done({ code, stdout, stderr }));
+    child.on('error', err => done({ code: -1, stdout: '', stderr: err.message }));
   });
+}
+
+/**
+ * Run a user-authored `cmd` telemetry source through the shell in the app repo,
+ * resolving `{ code, stdout, stderr }` (never rejects). Time-boxed so a hanging
+ * command can't stall the whole sweep; output clamping is the caller's job. Runs
+ * with `shell: true` on purpose — the operator authors the command (e.g.
+ * `git log --oneline -20`), consistent with the app's existing free-form
+ * startCommands/buildCommand (single trusted operator). cwd confines it to the
+ * app repo.
+ */
+export function runShellCommand(cmd, { cwd, timeoutMs = 15000 } = {}) {
+  return new Promise((done) => {
+    const child = spawn(cmd, { shell: true, cwd, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL' });
+    let stdout = '', stderr = '';
+    child.stdout?.on('data', d => { stdout += d.toString(); });
+    child.stderr?.on('data', d => { stderr += d.toString(); });
+    child.on('close', code => done({ code, stdout, stderr }));
+    child.on('error', err => done({ code: -1, stdout: '', stderr: err.message }));
+  });
+}
+
+/**
+ * Fetch an `http` telemetry source, returning its response body text or null
+ * (never throws — a dead/slow/erroring endpoint degrades to an omitted source).
+ * Time-boxed GET, follows redirects; a non-2xx response is treated as no data.
+ * `fetchImpl` is injectable so tests never hit the network.
+ */
+export async function fetchHttpSource(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000 } = {}) {
+  if (typeof fetchImpl !== 'function') return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const res = await fetchImpl(url, { signal: controller.signal, redirect: 'follow' }).catch(() => null);
+  clearTimeout(timer);
+  if (!res || !res.ok || typeof res.text !== 'function') return null;
+  const text = await res.text().catch(() => null);
+  return typeof text === 'string' ? text : null;
+}
+
+/**
+ * The stable `out` key for a custom telemetry source: `custom:<label|ref|url|cmd>`.
+ * Prefers an operator-provided `label`, else the type's identifying field. Returns
+ * null for an unrecognized/empty source (a no-op, never a mystery key).
+ */
+export function customSourceKey(custom) {
+  if (!custom || typeof custom !== 'object') return null;
+  const label = typeof custom.label === 'string' ? custom.label.trim() : '';
+  const base = label
+    || (custom.type === 'file' ? custom.ref
+      : custom.type === 'http' ? custom.url
+        : custom.type === 'cmd' ? custom.cmd
+          : null);
+  return (typeof base === 'string' && base.trim()) ? `custom:${base}` : null;
 }
 
 /**
@@ -310,7 +363,7 @@ function runCli(cmd, args, options = {}) {
  * files degrade to omitted keys, never throws. `openIssues` is gathered
  * separately by the handler (it shells out to the forge).
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
+export async function gatherSources(app, config, { cosPath = PATHS.cos, fetchImpl = globalThis.fetch, runCommand = runShellCommand } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
@@ -334,14 +387,25 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     }
   }
   for (const custom of src.custom || []) {
-    if (custom?.type === 'file' && typeof custom.ref === 'string' && repo) {
+    if (!custom || typeof custom !== 'object') continue;
+    const key = customSourceKey(custom);
+    if (!key) continue;
+    if (custom.type === 'file' && typeof custom.ref === 'string' && repo) {
       const safe = await confineToRepo(repo, custom.ref);
       if (!safe) {
         console.warn(`⚠️ Layered Intelligence: custom source "${custom.ref}" escapes repo — skipped`);
         continue;
       }
       const content = await tryReadFile(safe);
-      if (content) out[`custom:${custom.ref}`] = content.slice(0, 8000);
+      if (content) out[key] = content.slice(0, 8000);
+    } else if (custom.type === 'http' && typeof custom.url === 'string') {
+      const text = await fetchHttpSource(custom.url, { fetchImpl });
+      if (text && text.trim()) out[key] = text.slice(0, 8000);
+      else console.warn(`⚠️ Layered Intelligence: custom http source "${custom.url}" returned no data — skipped`);
+    } else if (custom.type === 'cmd' && typeof custom.cmd === 'string' && repo) {
+      const { code, stdout, stderr } = await runCommand(custom.cmd, { cwd: repo });
+      if (code === 0 && stdout.trim()) out[key] = stdout.slice(0, 8000);
+      else console.warn(`⚠️ Layered Intelligence: custom cmd source exited ${code}${stderr ? `: ${stderr.slice(0, 200)}` : ''} — skipped`);
     }
   }
   return out;

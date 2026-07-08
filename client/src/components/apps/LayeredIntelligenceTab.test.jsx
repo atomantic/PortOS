@@ -57,6 +57,27 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(update.sources.custom).toEqual([{ type: 'file', ref: 'docs/x.md' }]);
   });
 
+  it('preserves API-set http/cmd custom sources through a save (no silent wipe)', () => {
+    // The tab UI only creates `file` rows, but http/cmd sources set via the API
+    // must survive a save here untouched — a round-trip with no edits is a no-op.
+    const withMixed = { ...baseline, sources: { ...baseline.sources, custom: [
+      { type: 'file', ref: 'docs/x.md' },
+      { type: 'http', url: 'https://ci/coverage', label: 'CI' },
+      { type: 'cmd', cmd: 'git log --oneline -20' }
+    ] } };
+    expect(buildLayeredIntelligenceUpdate(withMixed, { ...withMixed })).toBeNull();
+    // Flipping an unrelated toggle re-emits the full custom list, http/cmd intact.
+    const update = buildLayeredIntelligenceUpdate(withMixed, {
+      ...withMixed,
+      sources: { ...withMixed.sources, goals: !withMixed.sources.goals }
+    });
+    expect(update.sources.custom).toEqual([
+      { type: 'file', ref: 'docs/x.md' },
+      { type: 'http', url: 'https://ci/coverage', label: 'CI' },
+      { type: 'cmd', cmd: 'git log --oneline -20' }
+    ]);
+  });
+
   it('ignores a blank custom-source row that sanitizes back to the baseline (no over-persist)', () => {
     const withCustom = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'file', ref: 'docs/x.md' }] } };
     // User clicks "Add file" but leaves the new row blank → sanitizes away → no change.

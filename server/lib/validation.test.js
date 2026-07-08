@@ -281,6 +281,47 @@ describe('validation.js', () => {
       const result = appSchema.safeParse(app);
       expect(result.success).toBe(false);
     });
+
+    it('should accept layeredIntelligence file/http/cmd custom sources', () => {
+      const app = {
+        name: 'Test', repoPath: '/path',
+        layeredIntelligence: {
+          sources: {
+            custom: [
+              { type: 'file', ref: 'docs/metrics.md' },
+              { type: 'http', url: 'https://ci.example.com/coverage', label: 'CI' },
+              { type: 'cmd', cmd: 'git log --oneline -20' }
+            ]
+          }
+        }
+      };
+      const result = appSchema.safeParse(app);
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject a file custom source with a traversal ref', () => {
+      const app = {
+        name: 'Test', repoPath: '/path',
+        layeredIntelligence: { sources: { custom: [{ type: 'file', ref: '../secret.txt' }] } }
+      };
+      expect(appSchema.safeParse(app).success).toBe(false);
+    });
+
+    it('should reject an http custom source with a non-URL', () => {
+      const app = {
+        name: 'Test', repoPath: '/path',
+        layeredIntelligence: { sources: { custom: [{ type: 'http', url: 'not-a-url' }] } }
+      };
+      expect(appSchema.safeParse(app).success).toBe(false);
+    });
+
+    it('should reject an unrecognized custom source type', () => {
+      const app = {
+        name: 'Test', repoPath: '/path',
+        layeredIntelligence: { sources: { custom: [{ type: 'ftp', url: 'ftp://x' }] } }
+      };
+      expect(appSchema.safeParse(app).success).toBe(false);
+    });
   });
 
   describe('appUpdateSchema', () => {

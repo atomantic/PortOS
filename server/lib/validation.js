@@ -126,16 +126,37 @@ export const layeredIntelligenceConfigSchema = z.object({
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),
     openIssues: z.boolean().optional(),
-    custom: z.array(z.object({
-      type: z.enum(['file']),
-      // A safe repo-relative path — reject absolute paths and `..` traversal so a
-      // custom source can't read files outside the app repo into the LLM prompt.
-      // gatherSources also enforces this at read time (defense in depth).
-      ref: z.string().min(1).max(500)
-        .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
-          message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
-        })
-    })).optional()
+    // Custom telemetry sources fed into the reasoning prompt. Three kinds:
+    //  - file: a repo-relative file (path-confined here AND in gatherSources).
+    //  - http: a GET whose response body is included (time-boxed at read time).
+    //  - cmd:  a shell command run in the app repo whose stdout is included.
+    // http/cmd carry no repo-relative path to confine, but they DO fetch/run
+    // operator-authored config — consistent with the app's existing free-form
+    // startCommands/buildCommand (single trusted operator). An optional `label`
+    // becomes the source's key in the prompt (else the ref/url/cmd is used).
+    custom: z.array(z.discriminatedUnion('type', [
+      z.object({
+        type: z.literal('file'),
+        // A safe repo-relative path — reject absolute paths and `..` traversal so a
+        // custom source can't read files outside the app repo into the LLM prompt.
+        // gatherSources also enforces this at read time (defense in depth).
+        ref: z.string().min(1).max(500)
+          .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
+            message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
+          }),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('http'),
+        url: z.string().url().max(2000),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('cmd'),
+        cmd: z.string().min(1).max(1000),
+        label: z.string().max(120).optional()
+      })
+    ])).optional()
   }).optional(),
   rules: z.string().max(8000).optional(),
   allowedScopes: z.array(z.enum(LAYERED_INTELLIGENCE_SCOPES)).optional(),

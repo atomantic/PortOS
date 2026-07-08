@@ -47,19 +47,34 @@ function sameScopes(a, b) {
   return a.every(s => sb.has(s));
 }
 
-// Sanitize a custom-source list to what actually gets persisted: file-type
-// entries with a trimmed, non-blank ref. Used both to compare against the
-// baseline and to build the emitted value, so a half-typed/blank row that
-// sanitizes away doesn't register as a change (and over-persist the config).
+// Sanitize a custom-source list to what actually gets persisted. Used both to
+// compare against the baseline and to build the emitted value, so a half-typed/
+// blank row that sanitizes away doesn't register as a change (and over-persist).
+// This tab's UI only creates `file` rows, but `http`/`cmd` sources (settable via
+// the API) are preserved untouched so a save here never silently wipes them.
 function sanitizeCustom(list) {
   return (Array.isArray(list) ? list : [])
-    .map(s => ({ type: 'file', ref: String(s?.ref || '').trim() }))
-    .filter(s => s.ref);
+    .map(s => {
+      const label = typeof s?.label === 'string' && s.label.trim() ? { label: s.label.trim() } : {};
+      if (s?.type === 'http') {
+        const url = String(s?.url || '').trim();
+        return url ? { type: 'http', url, ...label } : null;
+      }
+      if (s?.type === 'cmd') {
+        const cmd = String(s?.cmd || '').trim();
+        return cmd ? { type: 'cmd', cmd, ...label } : null;
+      }
+      const ref = String(s?.ref || '').trim();
+      return ref ? { type: 'file', ref, ...label } : null;
+    })
+    .filter(Boolean);
 }
 
+// Both inputs are already sanitizeCustom output (stable key order), so a
+// structural JSON compare covers all source types without per-field casing.
 function sameCustom(a, b) {
   if (a.length !== b.length) return false;
-  return a.every((s, i) => s.type === b[i].type && s.ref === b[i].ref);
+  return a.every((s, i) => JSON.stringify(s) === JSON.stringify(b[i]));
 }
 
 /**
