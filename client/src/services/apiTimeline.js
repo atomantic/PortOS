@@ -70,3 +70,21 @@ export const importBrowserHistory = (file, options = {}) =>
 // live scrape so the backfill and scrape reconcile).
 export const importYoutubeHistory = (file, options = {}) =>
   importFile('/timeline/import/youtube', file, options);
+
+// Gmail full-history metadata (#2160). Google Takeout Gmail ships a multi-GB
+// `.mbox` that doesn't fit the 200MB upload flow, so this importer is PATH-BASED:
+// the server streams a local `.mbox` file (or the extracted `Takeout/Mail/` folder)
+// the user names. Only header metadata + a short summary are stored — never the
+// message body. Each message → a `message.sent`/`message.received` event under
+// source `gmail` (dedupe on the RFC-822 Message-ID). `preview: true` streams +
+// counts without writing; an optional `yourEmail` refines sent/received direction.
+export const importGmailMbox = ({ path, preview = false, yourEmail, ...options } = {}) =>
+  request('/timeline/import/gmail', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      preview,
+      ...(yourEmail && String(yourEmail).trim() ? { yourEmail } : {}),
+    }),
+    ...options,
+  });
