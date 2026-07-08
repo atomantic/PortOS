@@ -883,6 +883,13 @@ describe('checkSemanticDuplicate — I/O wrapper', () => {
     expect(res.duplicate).toBe(false);
   });
 
+  it('degrades to unavailable (never rejects) when the embedder throws', async () => {
+    const embed = vi.fn(async () => { throw new Error('provider down'); });
+    const existing = [{ number: 3, title: 'Add widget', body: 'x', state: 'open' }];
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    expect(res).toEqual({ available: false, duplicate: false, match: null });
+  });
+
   it('flags a near-duplicate when a candidate embedding is close enough', async () => {
     const embed = vi.fn(async () => ok([1, 0, 0])); // proposal + candidate both identical → score 1
     const existing = [{ number: 3, slug: 'add-widget', title: 'Add widget', body: 'x', state: 'open' }];

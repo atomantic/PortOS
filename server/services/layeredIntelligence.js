@@ -579,12 +579,16 @@ export async function checkSemanticDuplicate({ proposal, existingIssues = [], no
     .slice(0, SEMANTIC_DEDUP_MAX_CANDIDATES);
   if (candidates.length === 0) return unavailable;
 
-  const proposalRes = await embed(issueEmbedSeed({ title: proposal.title, body: proposal.body }));
+  // A rejected/throwing embed (transient provider blip, malformed response) must
+  // degrade to the available:false sentinel — NOT reject through processApp and
+  // mark the whole app run 'error'. `.catch(() => null)` mirrors this file's
+  // fetchHttpSource / jira-search failure idiom (no non-boundary try/catch).
+  const proposalRes = await embed(issueEmbedSeed({ title: proposal.title, body: proposal.body })).catch(() => null);
   if (!proposalRes?.success || !Array.isArray(proposalRes.embedding)) return unavailable;
 
   const embedded = [];
   for (const c of candidates) {
-    const res = await embed(issueEmbedSeed({ title: c.title, body: c.body }));
+    const res = await embed(issueEmbedSeed({ title: c.title, body: c.body })).catch(() => null);
     if (res?.success && Array.isArray(res.embedding)) {
       embedded.push({ slug: c.slug || null, number: c.number ?? null, title: c.title || '', embedding: res.embedding });
     }

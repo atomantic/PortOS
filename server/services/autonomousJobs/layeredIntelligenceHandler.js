@@ -223,7 +223,10 @@ async function isSemanticDuplicate(app, proposal, existingIssues, now) {
   const semantic = await checkSemanticDuplicate({ proposal, existingIssues, now })
   if (!semantic.available || !semantic.duplicate) return false
   const m = semantic.match
-  const ref = m?.number ? `#${m.number}` : (m?.slug || 'an existing issue')
+  // `number` is a forge integer (#-prefixed) or a Jira string key (PROJ-123, no #).
+  const ref = m?.number != null
+    ? (typeof m.number === 'number' ? `#${m.number}` : String(m.number))
+    : (m?.slug || 'an existing issue')
   const score = typeof m?.score === 'number' ? m.score.toFixed(2) : '?'
   console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" is a near-duplicate of ${ref} (score ${score}) — suppressed`)
   return true
