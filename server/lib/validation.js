@@ -157,6 +157,11 @@ export const layeredIntelligenceConfigSchema = z.object({
   }).optional(),
   rules: z.string().max(8000).optional(),
   allowedScopes: z.array(z.enum(LAYERED_INTELLIGENCE_SCOPES)).optional(),
+  // Engine-A hand-off: when enabled, a reasoner-marked trivial+safe proposal is
+  // also enqueued as an approval-gated CoS coding-agent task. Off by default.
+  handoff: z.object({
+    enabled: z.boolean().optional()
+  }).optional(),
   lastRunAt: z.string().nullable().optional()
 });
 

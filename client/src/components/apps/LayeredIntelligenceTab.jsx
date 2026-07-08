@@ -125,6 +125,10 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
     update.allowedScopes = Array.isArray(current.allowedScopes) ? current.allowedScopes : [];
   }
 
+  if (!!current.handoff?.enabled !== !!baseline.handoff?.enabled) {
+    update.handoff = { enabled: !!current.handoff?.enabled };
+  }
+
   return Object.keys(update).length > 0 ? update : null;
 }
 
@@ -353,6 +357,24 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
             Loop-meta and PortOS-self scopes are only available on the PortOS baseline app.
           </Banner>
         )}
+      </div>
+
+      <div>
+        <span className="block text-sm text-gray-400 mb-2">Auto hand-off</span>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!li.handoff?.enabled}
+            onChange={e => onChange({ handoff: { ...(li.handoff || {}), enabled: e.target.checked } })}
+            className="mt-1 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+          />
+          <span className="text-sm text-white">
+            Hand trivial, safe fixes to a coding agent
+            <span className="block text-xs text-gray-500">
+              When the loop marks a proposal both trivial and safe, also queue an approval-gated CoS coding-agent task to implement it — instead of only filing the issue for later.
+            </span>
+          </span>
+        </label>
       </div>
     </div>
   );
