@@ -96,6 +96,7 @@ import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
+import { useOnDemandTaskToast } from '../hooks/useOnDemandTaskToast';
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
@@ -495,6 +496,9 @@ export default function Layout() {
 
   // Subscribe to agent completion feedback toasts
   useAgentFeedbackToast();
+
+  // Toast when a user-triggered on-demand task run found no actionable work
+  useOnDemandTaskToast();
 
   // Live AI operation status (model loads, "calling LM Studio…", etc.)
   useAIStatusNotifications();

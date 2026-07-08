@@ -728,6 +728,11 @@ function setupCosEventForwarding() {
   // Watcher events
   cosEvents.on('watcher:started', (data) => broadcastToCos('cos:watcher:started', data));
   cosEvents.on('watcher:stopped', (data) => broadcastToCos('cos:watcher:stopped', data));
+
+  // A user-initiated on-demand "Run" that produced no task — the client toasts
+  // this so an explicit trigger that finds no actionable work (parked) isn't a
+  // silent no-op.
+  cosEvents.on('schedule:on-demand-empty', (data) => broadcastToCos('cos:schedule:on-demand-empty', data));
 }
 
 // Set up error event forwarding

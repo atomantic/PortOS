@@ -235,14 +235,25 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
   }
   if (!Array.isArray(raw)) return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
-  if (raw.length === 0) return { actionable: false, count: 0, reason: 'no-open-issues' };
+  if (raw.length === 0) return { actionable: false, count: 0, total: 0, inFlightCount: 0, filteredCount: 0, reason: 'no-open-issues' };
 
   const inFlight = await inFlightIssueNumbers(repoPath, cfg.inFlightForge);
   const issues = cfg.normalize(raw);
+  const total = issues.length;
+  // How many of the OPEN issues were skipped only because a claim/PR is already
+  // in flight for them (stale post-merge branches count here). Surfacing this
+  // separately from the label/assignee/epic filter tells the user WHY an
+  // apparently-non-empty queue yields zero claimable work — the exact confusion
+  // behind "40 open issues but it parked."
+  const inFlightCount = issues.filter((i) => typeof i.number === 'number' && inFlight.has(i.number)).length;
   const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight));
+  const filteredCount = Math.max(0, total - actionable.length - inFlightCount);
   return {
     actionable: actionable.length > 0,
     count: actionable.length,
+    total,
+    inFlightCount,
+    filteredCount,
     reason: actionable.length > 0 ? 'actionable-issues' : 'no-actionable-issues',
     sample: actionable.slice(0, 5).map((i) => i.number)
   };

@@ -764,6 +764,11 @@ async function dequeueNextTask() {
 
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+      // A user-initiated "Run" must re-check live state, never honor a stale
+      // park or convergence signature — resetting both up front guarantees the
+      // detector/reconcile below runs fresh and dispatches on live state (and,
+      // if still idle, re-stamps a park reflecting THIS check).
+      await taskScheduleMod.resetPerpetualForManualRun(request.taskType, targetApp.id);
       // Advance the cooldown eagerly (deduped per app per cycle), but defer
       // binding the active agent until a task is produced — a null result
       // here must not strand `activeAgentId` (issue #978).
@@ -778,6 +783,8 @@ async function dequeueNextTask() {
       }
     } else {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+      // Same fresh-check guarantee as the app-scoped branch above.
+      await taskScheduleMod.resetPerpetualForManualRun(request.taskType);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();
@@ -794,6 +801,31 @@ async function dequeueNextTask() {
         cosEvents.emit('task:ready', task);
         trackSpawn(task);
       }
+    } else if (!task) {
+      // The explicit user "Run" produced no task. Surface WHY so the trigger
+      // isn't a silent no-op the user only discovers in the pm2 logs. This event
+      // fires ONLY on the on-demand (user-initiated) path, so the client can
+      // toast it without background-park noise.
+      //
+      // Because we reset the park BEFORE the fresh detection above, a park
+      // record here unambiguously means "this check parked" (definitive no
+      // work). Its ABSENCE means the detector did NOT park — a transient probe
+      // failure (gh/glab down) or a non-perpetual skip — which the client must
+      // word as "couldn't re-check", never "nothing to do".
+      const parkInfo = await taskScheduleMod
+        .getPerpetualParkInfo(request.taskType, targetApp?.id || null)
+        .catch(() => null);
+      cosEvents.emit('schedule:on-demand-empty', {
+        requestId: request.id,
+        taskType: request.taskType,
+        appId: targetApp?.id || null,
+        appName: targetApp?.name || null,
+        parked: !!parkInfo,
+        parkReason: parkInfo?.parkReason || null,
+        parkedUntil: parkInfo?.parkedUntil || null,
+        actionableCount: parkInfo?.parkActionableCount ?? null,
+        counts: parkInfo?.parkCounts || null
+      });
     }
   }
 
