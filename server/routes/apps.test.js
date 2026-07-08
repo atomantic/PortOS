@@ -13,6 +13,7 @@ vi.mock('../services/apps.js', () => ({
   archiveApp: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
   getAppTaskTypeOverrides: vi.fn(),
+  getAppLayeredIntelligenceConfig: vi.fn(),
   updateAppLayeredIntelligence: vi.fn(),
   toggleAllAppTaskTypes: vi.fn(),
   notifyAppsChanged: vi.fn(),
@@ -276,6 +277,37 @@ describe('Apps Routes', () => {
       // …it goes through the preserving merge helper instead.
       expect(appsService.updateAppLayeredIntelligence).toHaveBeenCalledWith('app-001', { enabled: true });
       expect(response.body.layeredIntelligence.enabled).toBe(true);
+    });
+
+    it('GET /:id/layered-intelligence returns the effective config + isPortos flag', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      appsService.getAppLayeredIntelligenceConfig.mockResolvedValue({
+        enabled: false, intervalMs: 86400000, sources: { goals: true }, allowedScopes: ['app-improvement']
+      });
+
+      const response = await request(app).get('/api/apps/app-001/layered-intelligence');
+
+      expect(response.status).toBe(200);
+      expect(response.body.appId).toBe('app-001');
+      expect(response.body.isPortos).toBe(false);
+      expect(response.body.config.allowedScopes).toEqual(['app-improvement']);
+      expect(appsService.getAppLayeredIntelligenceConfig).toHaveBeenCalledWith('app-001');
+    });
+
+    it('GET /:id/layered-intelligence flags the PortOS baseline app', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS' });
+      appsService.getAppLayeredIntelligenceConfig.mockResolvedValue({ enabled: false, allowedScopes: ['app-improvement', 'loop-meta'] });
+
+      const response = await request(app).get('/api/apps/portos-default/layered-intelligence');
+
+      expect(response.status).toBe(200);
+      expect(response.body.isPortos).toBe(true);
+    });
+
+    it('GET /:id/layered-intelligence returns 404 for an unknown app', async () => {
+      appsService.getAppById.mockResolvedValue(null);
+      const response = await request(app).get('/api/apps/app-999/layered-intelligence');
+      expect(response.status).toBe(404);
     });
 
     it('writes changed ports back to the ecosystem config (source of truth)', async () => {
