@@ -26,6 +26,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import { isApiProvider } from '../../../utils/providers';
+import ObservedTasteEvidence from '../ObservedTasteEvidence';
 
 const SECTION_ICONS = {
   movies: Film,
@@ -614,6 +615,9 @@ export default function TasteTab({ onRefresh }) {
           </p>
         )}
       </div>
+
+      {/* Observed-behavior evidence (stated vs observed, #2156) */}
+      <ObservedTasteEvidence />
 
       {/* Section Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">

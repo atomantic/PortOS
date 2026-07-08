@@ -48,6 +48,15 @@ const autopilotStartSchema = z.object({
   maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Foundation-quality gate (#2176). Per-run overrides for the pre-draft
+  // foundation judge: `foundationGate` toggles it (defaults ON via the persisted
+  // setting), `foundationThreshold` is the weighted [0,10] bar the foundation
+  // must clear, `maxFoundationRounds` bounds the improve loop (0 = skip). When
+  // omitted, each falls back to the persisted pipelineEditorialChecks setting,
+  // then the module default. Round cap shares the convergence ceiling.
+  foundationGate: z.boolean().optional(),
+  foundationThreshold: z.number().min(0).max(10).optional(),
+  maxFoundationRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   // Per-run retry budget for a failed delegated child runner (beats/text) before
   // the autopilot escalates to a pause (#1574). 0 = single attempt, no retry.
   // Per-run only (no persisted default); falls back to MAX_CHILD_RETRIES. Shares

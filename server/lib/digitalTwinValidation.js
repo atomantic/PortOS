@@ -637,3 +637,19 @@ export const compareSnapshotsInputSchema = z.object({
   id1: z.string().guid(),
   id2: z.string().guid()
 });
+
+// =============================================================================
+// TWIN ENRICHMENT SCHEMAS (Phase 7, #2156)
+// Observed-behavior taste + chronotype evidence. Recompute is LLM-free (empty
+// body); interpret is an explicit user-triggered provider call.
+// =============================================================================
+
+// Recompute the LLM-free rollups. No inputs — the body is ignored, but validate
+// it as an (optionally empty) object so a stray payload is rejected cleanly.
+export const twinEvidenceRecomputeInputSchema = z.object({}).strict().optional().default({});
+
+// "What does my consumption say about me" — explicit provider call.
+export const twinEvidenceInterpretInputSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().min(1).optional()
+});

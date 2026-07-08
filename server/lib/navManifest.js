@@ -62,6 +62,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.insights.genome-health', path: '/insights/genome-health', label: 'Genome-Health', section: 'Brain', aliases: ['genome-health', 'insights-genome-health'], keywords: ['genome', 'dna', 'health', 'longevity', 'genetic'] },
   { id: 'nav.insights.taste-identity', path: '/insights/taste-identity', label: 'Taste & Identity', section: 'Brain', aliases: ['taste-identity', 'insights-taste-identity'], keywords: ['taste', 'identity', 'preferences', 'aesthetic'] },
   { id: 'nav.insights.cross-domain', path: '/insights/cross-domain', label: 'Cross-Domain Patterns', section: 'Brain', aliases: ['cross-domain', 'insights-cross-domain', 'cross-domain-patterns'], keywords: ['cross domain', 'patterns', 'correlations', 'connections'] },
+  { id: 'nav.insights.goal-scorecard', path: '/insights/goal-scorecard', label: 'Goal Scorecard', section: 'Brain', aliases: ['goal-scorecard', 'insights-goal-scorecard', 'scorecard'], keywords: ['goal', 'scorecard', 'time allocation', 'effectiveness', 'goal alignment', 'time vs goals'] },
   { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', aliases: ['brain-links'] },
   { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', aliases: ['brain-memory', 'memory'] },
   { id: 'nav.brain.notes', path: '/brain/notes', label: 'Notes', section: 'Brain', aliases: ['brain-notes', 'notes'] },

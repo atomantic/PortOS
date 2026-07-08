@@ -106,6 +106,7 @@ import { buildRevisionBrief } from './editorial/revisionBrief.js';
 import { evaluateRevisionStop, decideKeepRevert } from './editorial/revisionStop.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
+import { judgeFoundation, applyFoundationFix, weakestDimension, residualFindings, DEFAULT_FOUNDATION_THRESHOLD } from './foundationJudge.js';
 import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
@@ -144,6 +145,16 @@ export const MAX_EDITORIAL_ROUNDS = 2;
 // the residual findings for human review.
 export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
 
+// Foundation-quality gate (CWQE Phase 11, #2176). Before drafting, judge the
+// whole foundation (world / characters / arc) against a weighted rubric and
+// iterate on the weakest dimension until it clears a threshold — bounded like
+// the other convergence loops, then pause with the residual per-dimension
+// findings for human review. Defaults ON for autopilot runs (the point of the
+// phase) but overridable per-run + via the persisted setting. 0 rounds skips
+// the gate entirely (accept the foundation as-is).
+export const MAX_FOUNDATION_ROUNDS = 3;
+export const DEFAULT_FOUNDATION_GATE_ENABLED = true;
+
 // Bounded retry budget for a delegated child runner (#1574). A child (volume
 // beats / text auto-run) can finish with its target stage(s) still empty when
 // the underlying LLM call failed. Before #1574 the autopilot marked the work
@@ -171,7 +182,28 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
     maxArcVerifyRounds: pick('maxArcVerifyRounds', 'maxArcVerifyRounds', MAX_ARC_VERIFY_ROUNDS),
     maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
     maxBeatContinuityRounds: pick('maxBeatContinuityRounds', 'maxBeatContinuityRounds', MAX_BEAT_CONTINUITY_ROUNDS),
+    maxFoundationRounds: pick('maxFoundationRounds', 'maxFoundationRounds', MAX_FOUNDATION_ROUNDS),
   };
+}
+
+// Foundation-gate config (#2176): whether the gate runs, and the weighted [0,10]
+// threshold the foundation must clear. Mirror resolveAutopilotRounds — per-run
+// option wins, then the persisted pipelineEditorialChecks setting, then the
+// default. The enable flag defaults ON (the point of the phase); the threshold
+// falls through to DEFAULT_FOUNDATION_THRESHOLD in the loop when unset. Stamped
+// onto run options once at start so the loop, the dry-run plan, and a resume all
+// read the same effective values.
+export function resolveAutopilotFoundationGate(options = {}, settings = null) {
+  if (typeof options?.foundationGate === 'boolean') return options.foundationGate;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (typeof pec?.foundationGate === 'boolean') return pec.foundationGate;
+  return DEFAULT_FOUNDATION_GATE_ENABLED;
+}
+export function resolveAutopilotFoundationThreshold(options = {}, settings = null) {
+  if (Number.isFinite(options?.foundationThreshold)) return options.foundationThreshold;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (Number.isFinite(pec?.foundationThreshold)) return pec.foundationThreshold;
+  return null;
 }
 
 // Resolve the effective editorial-health readiness gate for a run (#1580): an
@@ -284,6 +316,7 @@ const PAUSE_GATES = {
   arc: { label: 'Arc verification', fix: 'Edit the arc/volumes to address them', limit: 'verify-rounds' },
   beatContinuity: { label: 'Beat continuity', fix: 'Edit the affected issue beats', limit: 'beat-continuity-rounds' },
   editorial: { label: 'Editorial review', fix: 'Address them in the manuscript editor', limit: 'editorial-rounds' },
+  foundation: { label: 'Foundation quality', fix: 'Strengthen the world / characters / arc, or lower the threshold', limit: 'foundation-rounds' },
 };
 function convergencePauseReason(gate, maxRounds, blockingCount) {
   const { label, fix, limit } = PAUSE_GATES[gate];
@@ -332,6 +365,23 @@ function divergencePauseReason(gate, blockingCount, rounds) {
   const plural = rounds === 1 ? 'round' : 'rounds';
   return `${label} stopped converging — ${blockingCount} blocking finding(s) and no net progress over `
     + `${rounds} consecutive ${plural} of auto-resolve. Paused for review. ${fix}, then resume.`;
+}
+
+// Foundation gate pause reasons (#2176) — the gate converges on a WEIGHTED
+// SCORE, not a finding count, so it needs its own wording (score vs. threshold)
+// rather than the finding-count phrasing of convergencePauseReason. Shares
+// PAUSE_GATES.foundation so the copy stays aligned with the other gates.
+function foundationPauseReason(maxRounds, score, threshold) {
+  const { label, fix, limit } = PAUSE_GATES.foundation;
+  const plural = maxRounds === 1 ? 'round' : 'rounds';
+  return `${label} couldn't reach the threshold (weighted ${score} < ${threshold}) in ${maxRounds} ${plural} — `
+    + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
+}
+function foundationDivergenceReason(score, threshold, rounds) {
+  const { label, fix } = PAUSE_GATES.foundation;
+  const plural = rounds === 1 ? 'round' : 'rounds';
+  return `${label} stopped improving — weighted ${score} still below ${threshold} with no net gain over `
+    + `${rounds} consecutive ${plural} of auto-fix. Paused for review. ${fix}, then resume.`;
 }
 
 // Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
@@ -556,6 +606,19 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 3 — arc verification (once per run; bounded loop happens in dispatch).
   if (!runState.arcVerified) {
     return { kind: 'verifyArc', reason: 'arc not yet verified this run' };
+  }
+
+  // STEP 3.5 — foundation-quality gate (#2176). After the arc/volumes exist and
+  // arc structure is verified, judge the whole foundation (world / characters /
+  // arc) BEFORE the expensive beat/text stages and iterate on the weakest
+  // dimension until it clears the threshold. Once per run (bounded loop happens
+  // in dispatch). Gated on `foundationGate` being enabled AND a non-zero round
+  // budget — a disabled/0-round gate is treated as already satisfied so the
+  // resolver falls straight through to beats (the dispatch never runs).
+  if (!runState.foundationGated
+    && options.foundationGate !== false
+    && options.maxFoundationRounds !== 0) {
+    return { kind: 'foundationGate', reason: 'foundation not yet judged this run' };
   }
 
   // STEP 4a — per-volume beat sheets (skip volumes already attempted this run).
@@ -956,6 +1019,105 @@ async function runBeatContinuity(seriesId, record) {
         ? resolved.episodesResolved.filter((e) => e?.corrected).length
         : 0,
     });
+  }
+  return {};
+}
+
+// Foundation-quality convergence loop (#2176). Mirrors runArcVerify but gates on
+// a WEIGHTED SCORE (not a blocking-findings count): judge the whole foundation,
+// and while it's below the threshold, target the weakest dimension, apply the
+// fix through the owning service (universe refine / character expand / arc
+// resolve — force:false, never a raw write), then re-judge. The re-judge is
+// content-hash-cached, so an unchanged foundation short-circuits (no LLM) and
+// can't loop. Bounded; pauses with the residual per-dimension findings on
+// non-convergence. Each judge + each fix bills one cos action, budget-gated like
+// the arc loop. The improve-loop convergence is tracked on the weighted score
+// (higher = better), so divergence = the score failing to reach a NEW HIGH.
+async function runFoundationGate(seriesId, record) {
+  const maxRounds = Number.isInteger(record.options.maxFoundationRounds)
+    ? record.options.maxFoundationRounds
+    : MAX_FOUNDATION_ROUNDS;
+  // 0 rounds (or disabled) means "skip the gate entirely" — accept the
+  // foundation as-is. The resolver already routes past a disabled gate, but a
+  // dispatch that arrives here with 0 rounds still short-circuits cleanly.
+  if (maxRounds === 0 || record.options.foundationGate === false) {
+    record.runState.foundationGated = true;
+    return {};
+  }
+  const threshold = Number.isFinite(record.options.foundationThreshold)
+    ? record.options.foundationThreshold
+    : DEFAULT_FOUNDATION_THRESHOLD;
+  const providerId = record.options.providerOverride;
+  const model = record.options.modelOverride;
+
+  // Convergence tracker keyed on the weighted score (higher is better) — invert
+  // to a "distance below 10" so trackConvergence's fewer-is-better minimum logic
+  // applies unchanged (a new low distance = a new high score = progress).
+  let convergence = { best: null, sinceBest: 0 };
+  for (let round = 1; round <= maxRounds; round += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    const beforeJudge = await budgetPause();
+    if (beforeJudge) return beforeJudge;
+    // Never force: judgeFoundation is content-hash-cached, so an unchanged
+    // foundation (a clean verdict from a prior run, or a fix that changed
+    // nothing) returns the cached score with no LLM call — this IS the fast-pass
+    // that stops an already-clean foundation looping. A real change (any fix, or
+    // a user edit) flips the pinned hash and re-judges automatically.
+    const snap = await judgeFoundation(seriesId, { providerId, model });
+    // A cached (content-hash unchanged) verdict did no LLM work — don't bill it.
+    if (!snap.cached) await recordDomainUsage('cos', { actions: 1 });
+    const score = snap.weightedScore ?? 0;
+    const weak = weakestDimension(snap.dimensions);
+    broadcast(seriesId, {
+      type: 'foundation:round', round, weightedScore: score, threshold, weakest: weak?.dimension || null,
+    });
+    if (score >= threshold) {
+      record.runState.foundationGated = true;
+      return {};
+    }
+    if (round === maxRounds || !weak) {
+      return {
+        pause: true,
+        pauseKind: 'maxRounds',
+        reason: foundationPauseReason(maxRounds, score, threshold),
+        residual: residualFindings(snap.dimensions),
+      };
+    }
+    // Divergence guard (#1571): bail when fixes stop improving the score.
+    convergence = trackConvergence(convergence, 10 - score);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return {
+        pause: true,
+        pauseKind: 'divergence',
+        reason: foundationDivergenceReason(score, threshold, DIVERGENCE_PATIENCE),
+        residual: residualFindings(snap.dimensions),
+      };
+    }
+    if (record.cancelRequested) return { canceled: true };
+    const beforeFix = await budgetPause();
+    if (beforeFix) return beforeFix;
+    const fix = await applyFoundationFix(seriesId, weak.dimension, {
+      finding: snap.dimensions?.[weak.dimension] || {},
+      providerOverride: providerId,
+      modelOverride: model,
+    });
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'foundation:fix', round, dimension: weak.dimension, applied: fix?.applied === true, reason: fix?.reason || null,
+    });
+    // A dimension whose owning service can't apply a fix (no linked universe, a
+    // fully-locked cast, nothing left to fill) would loop unproductively — treat
+    // an inapplicable fix as immediate non-convergence and pause for human
+    // review rather than burning the remaining rounds re-judging an unchanged
+    // foundation.
+    if (fix?.applied !== true) {
+      return {
+        pause: true,
+        pauseKind: 'inapplicable',
+        reason: `Foundation gate can't auto-fix the weakest dimension (${weak.dimension}): ${fix?.reason || 'no change applied'}. Strengthen it manually, or lower the threshold, and resume.`,
+        residual: residualFindings(snap.dimensions),
+      };
+    }
   }
   return {};
 }
@@ -1939,6 +2101,8 @@ async function dispatchStep(sId, step, record) {
       return runBeats(sId, step.seasonId, record);
     case 'beatContinuity':
       return runBeatContinuity(sId, record);
+    case 'foundationGate':
+      return runFoundationGate(sId, record);
     case 'textStages':
       return runText(sId, step.issueId, record);
     case 'scriptVerify':
@@ -1990,6 +2154,12 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
   if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length, estActions: emptySeasons.length });
   const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
   plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds), estActions: convergenceLoopActions(arcRounds) });
+  // foundationGate (#2176) runs once between arc verify and beats, unless
+  // disabled or 0-round. Bills judge + fix per round like the arc loop.
+  const foundationRounds = Number.isInteger(options?.maxFoundationRounds) ? options.maxFoundationRounds : MAX_FOUNDATION_ROUNDS;
+  if (options?.foundationGate !== false && foundationRounds !== 0) {
+    plan.push({ kind: 'foundationGate', count: 1, note: roundsNote(foundationRounds), estActions: convergenceLoopActions(foundationRounds) });
+  }
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded, estActions: beatsNeeded });
@@ -2118,6 +2288,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
   const runOptions = {
     ...options,
     ...resolveAutopilotRounds(options, settings),
+    foundationGate: resolveAutopilotFoundationGate(options, settings),
+    foundationThreshold: resolveAutopilotFoundationThreshold(options, settings),
     readinessGate: resolveAutopilotReadinessGate(options, settings),
     checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
     notifyOnPause: resolveAutopilotNotifyOnPause(options, settings),
@@ -2152,6 +2324,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
     runState: {
       arcAttempted: false,
       arcVerified: false,
+      // #2176 — foundation-quality gate satisfied this run (threshold cleared,
+      // or the gate disabled/0-round). Boolean like arcVerified so the resolver
+      // routes here at most once per run.
+      foundationGated: false,
       beatContinuityChecked: false,
       editorialReviewed: false,
       reverseOutlineRefreshed: false,
@@ -2273,7 +2449,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // budget instead of skipping).
         const zeroRoundSkip = (step.kind === 'verifyArc' && runOptions.maxArcVerifyRounds === 0)
           || (step.kind === 'beatContinuity' && runOptions.maxBeatContinuityRounds === 0)
-          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0);
+          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0)
+          || (step.kind === 'foundationGate' && (runOptions.maxFoundationRounds === 0 || runOptions.foundationGate === false));
         const selfGatingStep = step.kind === 'editorialChecks'
           || step.kind === 'editorialHealthGate'
           || step.kind === 'reverseOutline';

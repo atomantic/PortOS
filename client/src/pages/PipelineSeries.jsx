@@ -31,6 +31,7 @@ import {
   SERIES_TITLE_LOGO_MAX,
 } from '../services/api';
 import AuthorPicker from '../components/pipeline/AuthorPicker';
+import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../components/VoiceExemplarEditor';
 import { buildImporterLink } from '../lib/importerDeepLink';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
@@ -82,11 +83,10 @@ const STYLE_GUIDE_FIELDS = [
   { key: 'contentRating', label: 'Content rating', options: [['G', 'G'], ['PG', 'PG'], ['PG-13', 'PG-13'], ['R', 'R'], ['custom', 'Custom']] },
   { key: 'profanity', label: 'Profanity', options: [['none', 'None'], ['mild', 'Mild'], ['moderate', 'Moderate'], ['strong', 'Strong']] },
 ];
-// Voice exemplar caps — mirror STYLE_GUIDE_LIMITS in server/lib/styleGuide.js
-// so the editor bounds match the server sanitizer (#2179).
-const STYLE_GUIDE_EXEMPLARS_MAX = 3;
-const STYLE_GUIDE_EXEMPLAR_PASSAGE_MAX = 2000;
-const STYLE_GUIDE_EXEMPLAR_NOTE_MAX = 200;
+// Voice exemplar cap — mirror STYLE_GUIDE_LIMITS in server/lib/styleGuide.js so
+// the editor bounds match the server sanitizer (#2179). The passage/note caps
+// live on the shared VoiceExemplarEditor.
+const STYLE_GUIDE_EXEMPLARS_MAX = VOICE_EXEMPLARS_MAX;
 // Tri-state boolean conventions rendered as —/Yes/No selects so "unset" stays
 // distinct from "No" (matches the server's tri-state sanitizer).
 const STYLE_GUIDE_TRISTATE = [
@@ -739,66 +739,6 @@ function VoiceCandidateCard({ candidate, filedAs, onFileExemplar, onFileAntiExem
       </div>
       <p className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-snug max-h-40 overflow-y-auto">{candidate.passage}</p>
       {candidate.note && <p className="text-[11px] text-gray-500 mt-1 italic">{candidate.note}</p>}
-    </div>
-  );
-}
-
-// Editor for the voice exemplar / anti-exemplar passage lists (#2179). Each row
-// is `{ passage, note }`; the passage textarea is required (an empty passage
-// prunes the row), the note is an optional one-liner. Capped at
-// STYLE_GUIDE_EXEMPLARS_MAX rows. All labels are htmlFor/id paired.
-function VoiceExemplarEditor({ idPrefix, title, hint, notePlaceholder, entries, onChange }) {
-  const setEntry = (i, patch) => onChange(entries.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
-  const removeEntry = (i) => onChange(entries.filter((_, idx) => idx !== i));
-  const addEntry = () => onChange([...entries, { passage: '', note: '' }]);
-
-  return (
-    <div className="mt-3">
-      <h4 className="text-[11px] uppercase tracking-wider text-gray-500 mb-1">{title}</h4>
-      <p className="text-[11px] text-gray-500 mb-2 -mt-0.5">{hint}</p>
-      <div className="space-y-2">
-        {entries.map((entry, i) => (
-          <div key={i} className="border border-port-border rounded p-2 bg-port-bg/50">
-            <label htmlFor={`${idPrefix}-passage-${i}`} className="block text-[11px] text-gray-500 mb-1">Passage {i + 1}</label>
-            <textarea
-              id={`${idPrefix}-passage-${i}`}
-              value={entry.passage || ''}
-              onChange={(e) => setEntry(i, { passage: e.target.value })}
-              rows={4}
-              maxLength={STYLE_GUIDE_EXEMPLAR_PASSAGE_MAX}
-              placeholder="Paste a short prose passage that captures the voice."
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm font-mono"
-            />
-            <div className="flex items-center gap-2 mt-1">
-              <label htmlFor={`${idPrefix}-note-${i}`} className="sr-only">Note for passage {i + 1}</label>
-              <input
-                id={`${idPrefix}-note-${i}`}
-                value={entry.note || ''}
-                onChange={(e) => setEntry(i, { note: e.target.value })}
-                maxLength={STYLE_GUIDE_EXEMPLAR_NOTE_MAX}
-                placeholder={notePlaceholder}
-                className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
-              />
-              <button
-                type="button"
-                onClick={() => removeEntry(i)}
-                className="px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-      {entries.length < STYLE_GUIDE_EXEMPLARS_MAX && (
-        <button
-          type="button"
-          onClick={addEntry}
-          className="mt-2 px-2 py-1 text-xs text-port-accent hover:bg-port-accent/10 rounded border border-port-border"
-        >
-          + Add passage
-        </button>
-      )}
     </div>
   );
 }

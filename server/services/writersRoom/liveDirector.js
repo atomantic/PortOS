@@ -17,7 +17,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import {
   getWork, resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, utcDayKey,
-  linkToCreativeDirector,
+  linkToCreativeDirector, renderWorkVoiceGuide,
 } from './local.js';
 import { createProject, setTreatment, deleteProject, updateProject } from '../creativeDirector/local.js';
 import { deleteCollection } from '../mediaCollections.js';
@@ -95,6 +95,12 @@ export async function suggestContinuation(workId, { before = '', after = '', sel
   const variables = {
     work: { title: manifest.title, kind: manifest.kind, status: manifest.status },
     before, after, selection,
+    // Voice exemplars (#2179) — the "tuning fork" passages anchor the drafted
+    // continuation to the chosen voice far better than the template's generic
+    // "match the established voice" line. Empty string when the work carries no
+    // passages, so the continue template's {{#voiceGuide}} section renders
+    // nothing (no per-call overhead for works that never set a voice).
+    voiceGuide: renderWorkVoiceGuide(manifest),
     returnsJson: true,
   };
   const { content } = await runStagedLLM(STAGE, variables, {

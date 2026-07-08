@@ -143,6 +143,31 @@ const checkSeriesCanonReadiness = vi.fn(async (seriesId) => ({
 }));
 vi.mock('./canonReadiness.js', () => ({ checkSeriesCanonReadiness }));
 
+// Foundation-quality gate (#2176). Drive the judged weighted score + the fix
+// router per test. Default: a clean foundation (10) so the gate passes on the
+// first round and existing downstream-step tests are unaffected.
+let foundationScore = 10;
+let foundationFixApplied = true;
+const judgeFoundation = vi.fn(async () => ({
+  seriesId: 'ser-uuid-1', status: 'complete', weightedScore: foundationScore,
+  dimensions: {
+    worldbuilding: { score: foundationScore, gap: 'g', fix: 'f' },
+    character: { score: foundationScore, gap: 'g', fix: 'f' },
+    structure: { score: foundationScore, gap: 'g', fix: 'f' },
+    craft: { score: foundationScore, gap: 'g', fix: 'f' },
+  },
+  weakest: 'worldbuilding',
+}));
+const applyFoundationFix = vi.fn(async (_sId, dimension) => ({ dimension, applied: foundationFixApplied }));
+vi.mock('./foundationJudge.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    judgeFoundation: (...args) => judgeFoundation(...args),
+    applyFoundationFix: (...args) => applyFoundationFix(...args),
+  };
+});
+
 // Pause-escalation notifications (#1615) — spy on the notification center so a
 // test can assert a pause posts a banner (and a clean run / opt-out does not).
 const addNotification = vi.fn(async () => ({ id: 'notif-1' }));
@@ -196,6 +221,8 @@ beforeEach(() => {
   scriptVerifyFindings = [];
   canonReady = true;
   canonUndescribed = [];
+  foundationScore = 10;
+  foundationFixApplied = true;
   reverseOutlineConsumed = false;
   reverseOutlineConsumedGated = null;
   reverseOutlineState = { status: 'complete', stale: false };
@@ -265,12 +292,12 @@ describe('resolveNextStep (pure)', () => {
   });
 
   it('resolveAutopilotRounds: per-run option wins, else setting, else default', () => {
-    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS, MAX_BEAT_CONTINUITY_ROUNDS } = autopilot;
+    const { resolveAutopilotRounds, MAX_ARC_VERIFY_ROUNDS, MAX_EDITORIAL_ROUNDS, MAX_BEAT_CONTINUITY_ROUNDS, MAX_FOUNDATION_ROUNDS } = autopilot;
     // per-run option wins (including an explicit 0 = skip)
     expect(resolveAutopilotRounds(
-      { maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 },
-      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4, maxBeatContinuityRounds: 1 } },
-    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5 });
+      { maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5, maxFoundationRounds: 2 },
+      { pipelineEditorialChecks: { maxArcVerifyRounds: 4, maxEditorialRounds: 4, maxBeatContinuityRounds: 1, maxFoundationRounds: 1 } },
+    )).toEqual({ maxArcVerifyRounds: 7, maxEditorialRounds: 0, maxBeatContinuityRounds: 5, maxFoundationRounds: 2 });
     // persisted setting fills in when no per-run override
     const fromSetting = resolveAutopilotRounds({}, { pipelineEditorialChecks: { maxArcVerifyRounds: 6, maxBeatContinuityRounds: 3 } });
     expect(fromSetting.maxArcVerifyRounds).toBe(6);
@@ -278,7 +305,7 @@ describe('resolveNextStep (pure)', () => {
     expect(fromSetting.maxBeatContinuityRounds).toBe(3);
     // module default when neither is set
     expect(resolveAutopilotRounds({}, null)).toEqual({
-      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS, maxBeatContinuityRounds: MAX_BEAT_CONTINUITY_ROUNDS,
+      maxArcVerifyRounds: MAX_ARC_VERIFY_ROUNDS, maxEditorialRounds: MAX_EDITORIAL_ROUNDS, maxBeatContinuityRounds: MAX_BEAT_CONTINUITY_ROUNDS, maxFoundationRounds: MAX_FOUNDATION_ROUNDS,
     });
     // a non-integer at any layer falls through
     expect(resolveAutopilotRounds(
@@ -502,19 +529,34 @@ describe('resolveNextStep (pure)', () => {
     expect(step.kind).toBe('verifyArc');
   });
 
-  it('asks for beat sheets when an issue has no idea (post-verify)', () => {
+  it('runs the foundation gate after arc verify, before beats (#2176)', () => {
     const step = resolveNextStep(comic, [issue()], { arcVerified: true });
+    expect(step.kind).toBe('foundationGate');
+  });
+
+  it('skips the foundation gate when disabled via options (#2176)', () => {
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true }, { foundationGate: false });
+    expect(step).toMatchObject({ kind: 'beatSheet', seasonId: 'se1' });
+  });
+
+  it('skips the foundation gate when maxFoundationRounds is 0 (#2176)', () => {
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true }, { maxFoundationRounds: 0 });
+    expect(step).toMatchObject({ kind: 'beatSheet', seasonId: 'se1' });
+  });
+
+  it('asks for beat sheets when an issue has no idea (post-verify)', () => {
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true, foundationGated: true });
     expect(step).toMatchObject({ kind: 'beatSheet', seasonId: 'se1' });
   });
 
   it('skips a season already attempted for beats (no infinite loop)', () => {
-    const step = resolveNextStep(comic, [issue()], { arcVerified: true, beatsAttempted: new Set(['se1']) });
+    const step = resolveNextStep(comic, [issue()], { arcVerified: true, foundationGated: true, beatsAttempted: new Set(['se1']) });
     // beats skipped → falls through to text stages
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
   it('runs whole-manuscript beat continuity once beats exist, before text (#1510)', () => {
-    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true });
+    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, foundationGated: true });
     expect(step).toMatchObject({ kind: 'beatContinuity' });
   });
 
@@ -524,13 +566,13 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: { status: 'empty', input: 'syn', output: '' }, comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true },
+      { arcVerified: true, foundationGated: true },
     );
     expect(step.kind).not.toBe('beatContinuity');
   });
 
   it('asks for text stages once beats are continuity-checked but scripts do not exist', () => {
-    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, beatContinuityChecked: true });
+    const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, foundationGated: true, beatContinuityChecked: true });
     expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
   });
 
@@ -538,7 +580,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true },
     );
     expect(step).toMatchObject({ kind: 'scriptVerify', issueId: 'iss1' });
   });
@@ -547,7 +589,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']) },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']) },
     );
     expect(step.kind).toBe('editorialReview');
   });
@@ -556,7 +598,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('reverseOutline');
@@ -566,7 +608,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialChecks');
@@ -576,7 +618,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialHealthGate');
@@ -586,7 +628,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -596,7 +638,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -606,7 +648,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -616,7 +658,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -635,7 +677,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -646,7 +688,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       tv,
       [issue({ stages: { idea: ready(), teleplay: ready() } })],
-      { arcVerified: true, beatContinuityChecked: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true },
     );
     expect(step.kind).toBe('editorialReview');
   });
@@ -662,7 +704,7 @@ describe('resolveNextStep (pure)', () => {
       pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p0' } }],
     },
   };
-  const fullyReady = { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true };
+  const fullyReady = { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true };
 
   it('does NOT ask for a teaser by default (produceTeaser off) — stays done', () => {
     const step = resolveNextStep(comic, [issue({ stages: rendered })], fullyReady, { includeVisual: true });
@@ -744,7 +786,7 @@ describe('resolveNextStep — revision cycle ordering (#2171)', () => {
   const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });
   // Health-clean base runState (everything up to and including the health gate).
   const healthClean = {
-    arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']),
+    arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']),
     editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true,
     editorialHealthReady: true,
   };
@@ -866,7 +908,7 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
   // parity is covered separately by the dedicated cases above.
 
   const freshRunState = () => ({
-    arcAttempted: false, arcVerified: false, beatContinuityChecked: false,
+    arcAttempted: false, arcVerified: false, foundationGated: false, beatContinuityChecked: false,
     editorialReviewed: false, reverseOutlineRefreshed: false,
     editorialChecksReviewed: false, editorialHealthReady: false, canonVerified: false,
     episodesAttempted: new Set(), beatsAttempted: new Set(), textAttempted: new Set(),
@@ -890,6 +932,9 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
         throw new Error(`drift guard: fixture reached "${step.kind}" — parity guard requires fully-populated fixtures (arc present + every season seeded with issues)`);
       case 'verifyArc':
         runState.arcVerified = true;
+        break;
+      case 'foundationGate':
+        runState.foundationGated = true;
         break;
       case 'beatSheet':
         issues.filter((i) => i.seasonId === step.seasonId)
@@ -1207,6 +1252,59 @@ describe('autopilot conductor', () => {
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
     expect(series.autopilot?.residualFindings?.[0]?.problem).toBe('plot hole');
+  });
+
+  // Foundation-quality gate (#2176).
+  it('foundation gate: a clean foundation (default mock ≥ threshold) passes through to completion', async () => {
+    foundationScore = 10;
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(judgeFoundation).toHaveBeenCalled();
+    // clean on round 1 → no fix attempted
+    expect(applyFoundationFix).not.toHaveBeenCalled();
+  });
+
+  it('foundation gate: iterates on the weakest dimension then pauses (maxRounds) when it never clears', async () => {
+    foundationScore = 3; // below the 7.5 default threshold every round
+    foundationFixApplied = true;
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 2 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.scope).toBe('foundationGate');
+    expect(last?.reason).toMatch(/Foundation quality/);
+    // bounded: judged maxRounds times, a fix applied between rounds.
+    expect(judgeFoundation).toHaveBeenCalledTimes(2);
+    expect(applyFoundationFix).toHaveBeenCalledTimes(1);
+    const series = await seriesSvc.getSeries(seriesId);
+    expect(series.autopilot?.status).toBe('paused');
+    expect(series.autopilot?.residualFindings?.length).toBeGreaterThan(0);
+  });
+
+  it('foundation gate: pauses immediately when the weakest dimension cannot be auto-fixed', async () => {
+    foundationScore = 3;
+    foundationFixApplied = false; // owning service can't apply a fix
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 3 });
+    await waitFor(runFinished(seriesId));
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(last?.type).toBe('paused');
+    expect(last?.pauseKind).toBe('inapplicable');
+    // one judge, one (failed) fix attempt, then pause — no burning the rest.
+    expect(judgeFoundation).toHaveBeenCalledTimes(1);
+    expect(applyFoundationFix).toHaveBeenCalledTimes(1);
+  });
+
+  it('foundation gate: disabled via option runs no judge and proceeds', async () => {
+    foundationScore = 3;
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { foundationGate: false });
+    await waitFor(runFinished(seriesId));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    expect(judgeFoundation).not.toHaveBeenCalled();
   });
 
   // Per-series blocking-severity sets (#1616).
@@ -1555,10 +1653,11 @@ describe('autopilot conductor', () => {
   it('a zero-round gate skips even when the budget is exhausted (no budget pause at that gate)', async () => {
     budgetStatus = { withinBudget: false, exceeded: 'actions' };
     const { seriesId } = await seedComplete();
-    // maxArcVerifyRounds:0 + maxBeatContinuityRounds:0 ⇒ both gates short-circuit
-    // with no spend, so the budget gate must NOT pause at either — the run
-    // advances to the next non-exempt step (scriptVerify) and pauses there.
-    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0, maxBeatContinuityRounds: 0 });
+    // maxArcVerifyRounds:0 + maxBeatContinuityRounds:0 + maxFoundationRounds:0 ⇒
+    // all three gates short-circuit with no spend, so the budget gate must NOT
+    // pause at any — the run advances to the next non-exempt step (scriptVerify)
+    // and pauses there.
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 0, maxBeatContinuityRounds: 0, maxFoundationRounds: 0 });
     await waitFor(runFinished(seriesId));
     expect(arcSpies.verifyArc).not.toHaveBeenCalled();
     expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();

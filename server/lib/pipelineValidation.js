@@ -71,6 +71,20 @@ export const writersRoomLiveModeSchema = z.object({
   dailyRenderBudget: z.number().int().min(0).max(10_000).default(20),
 }).strict();
 
+// Voice exemplar / anti-exemplar passages on a Writers Room work (#2179 Writers
+// Room parity). Same shape + caps as the series style guide's voice fields
+// (STYLE_GUIDE_LIMITS in styleGuide.js) — `passage` is the concrete prose
+// anchor ("the tuning fork"), `note` a one-line gloss of what it demonstrates
+// (exemplar) or what's wrong with it (anti-exemplar). `note` is optional; the
+// service sanitizer (sanitizeVoiceExemplars) drops empty passages, trims to the
+// caps, and caps the list at 3 — this wire gate just bounds the shape so a
+// crafted PATCH can't ship an unbounded blob. An explicit `[]` clears the list.
+const writersRoomVoiceExemplarSchema = z.object({
+  passage: z.string().max(2000),
+  note: z.string().max(200).optional(),
+}).strict();
+const writersRoomVoiceExemplarsSchema = z.array(writersRoomVoiceExemplarSchema).max(3);
+
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   kind: writersRoomWorkKindSchema.optional(),
@@ -81,6 +95,8 @@ export const writersRoomWorkUpdateSchema = z.object({
   // the other knobs' defaults and clobber their stored values (Zod 4 .partial()
   // keeps inner defaults — see zodCompat.js). The service field-merges each knob.
   liveMode: partialWithoutDefaults(writersRoomLiveModeSchema).optional(),
+  voiceExemplars: writersRoomVoiceExemplarsSchema.optional(),
+  voiceAntiExemplars: writersRoomVoiceExemplarsSchema.optional(),
 }).strict();
 
 // Cursor-context payload for the live continuation suggest route. The three
@@ -198,6 +214,16 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
   // semantics. Optional + additive so older peers fall through to the default.
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Foundation-quality gate (#2176, CWQE Phase 11). Before drafting, the
+  // autopilot judges the whole foundation (world/characters/arc) against a
+  // weighted rubric and iterates on the weakest dimension until it clears
+  // `foundationThreshold` (a weighted [0,10] score), bounded by
+  // `maxFoundationRounds` (0 = skip the gate). `foundationGate` toggles the gate
+  // (defaults ON — the point of the phase). All three optional + additive so
+  // older peers fall through to the defaults.
+  foundationGate: z.boolean().optional(),
+  foundationThreshold: z.number().min(0).max(10).optional(),
+  maxFoundationRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   // Editorial-checks pause threshold (#1613). When the registry-driven editorial
   // checks pass surfaces ≥ N high-severity findings, the autopilot pauses the run
   // for human review instead of silently proceeding (the downstream health gate is
