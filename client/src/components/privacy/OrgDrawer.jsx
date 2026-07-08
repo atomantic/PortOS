@@ -3,7 +3,7 @@ import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {
-  createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings,
+  createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings, getSocialAccounts,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, labelFor } from './constants';
@@ -12,7 +12,14 @@ const inputCls = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 
 
 const EMPTY = {
   name: '', category: 'other', website: '', trust: 'trusted', status: 'active',
-  contactEmail: '', contactPhone: '', notes: '',
+  contactEmail: '', contactPhone: '', notes: '', socialAccountId: '',
+};
+
+// Human label for a Digital Twin social account in the picker.
+const accountLabel = (a) => {
+  const handle = a.username ? `@${a.username}` : '';
+  const name = a.displayName && a.displayName !== a.username ? ` (${a.displayName})` : '';
+  return `${a.platform || 'other'} · ${handle}${name}`.trim();
 };
 
 // Create/edit an organization plus which vault records it holds. The holdings
@@ -23,6 +30,7 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
   const editing = !!org;
   const [form, setForm] = useState(EMPTY);
   const [selected, setSelected] = useState(() => new Set()); // vaultRecordId set
+  const [socialAccounts, setSocialAccounts] = useState([]); // Digital Twin accounts for the cross-link picker
 
   useEffect(() => {
     if (!open) return;
@@ -36,6 +44,7 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
         contactEmail: org.contact?.email ?? '',
         contactPhone: org.contact?.phone ?? '',
         notes: org.notes ?? '',
+        socialAccountId: org.socialAccountId ?? '',
       }
       : { ...EMPTY });
     setSelected(new Set());
@@ -45,6 +54,11 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
         .then((h) => setSelected(new Set((h || []).map((x) => x.vaultRecordId))))
         .catch(() => {});
     }
+    // Load Digital Twin social accounts for the cross-link picker (#2147). Degrades
+    // to no picker options if the twin has none — never blocks org editing.
+    getSocialAccounts()
+      .then((res) => setSocialAccounts(res?.accounts || []))
+      .catch(() => setSocialAccounts([]));
   }, [open, org]);
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
@@ -67,6 +81,9 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
       status: form.status,
       contact,
       notes: form.notes,
+      // Cross-link to a Digital Twin social account (#2147). Empty → null so a
+      // cleared link persists as an explicit clear rather than an empty string.
+      socialAccountId: form.socialAccountId || null,
     };
 
     const savedOrg = editing
@@ -122,6 +139,26 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
 
         <FormField label="Website">
           <input type="text" value={form.website} onChange={(e) => set('website', e.target.value)} placeholder="https://…" className={inputCls} maxLength={2000} />
+        </FormField>
+
+        <FormField label="Linked social account (Digital Twin)">
+          <select
+            value={form.socialAccountId}
+            onChange={(e) => set('socialAccountId', e.target.value)}
+            className={inputCls}
+          >
+            <option value="">— None —</option>
+            {/* Preserve a stale link (account since deleted) so the select isn't blank. */}
+            {form.socialAccountId && !socialAccounts.some((a) => a.id === form.socialAccountId) && (
+              <option value={form.socialAccountId}>Linked account (unavailable)</option>
+            )}
+            {socialAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{accountLabel(a)}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-gray-500 mt-1">
+            Cross-links this org to one of your Digital Twin social accounts — the account shows an &ldquo;in org registry&rdquo; badge in return.
+          </p>
         </FormField>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

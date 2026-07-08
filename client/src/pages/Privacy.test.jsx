@@ -31,6 +31,11 @@ vi.mock('../services/api', () => ({
   deletePrivacyOrg: vi.fn().mockResolvedValue({ ok: true }),
   getOrgHoldings: vi.fn().mockResolvedValue([]),
   setOrgHoldings: vi.fn(),
+  getSocialAccounts: vi.fn().mockResolvedValue({
+    accounts: [
+      { id: 'sa-1', platform: 'github', username: 'octocat', displayName: 'The Octocat', url: 'https://github.com/octocat' },
+    ],
+  }),
   getPrivacyChanges: vi.fn().mockResolvedValue([
     {
       id: 'ev-1', vaultRecordId: 'rec-1', replacementRecordId: 'rec-9', kind: 'address_change',
@@ -97,6 +102,15 @@ describe('Privacy Center', () => {
     await waitFor(() => expect(screen.getByText('Acme Bank')).toBeInTheDocument());
     // "Trusted" appears both as a filter chip and the org's trust badge.
     expect(screen.getAllByText('Trusted').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('exposes the Digital Twin social-account cross-link picker in the org drawer (#2147)', async () => {
+    renderAt('/privacy/organizations');
+    await waitFor(() => expect(screen.getByText('Acme Bank')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /New organization/i }));
+    // The picker labels itself and offers the twin's social account as an option.
+    await waitFor(() => expect(screen.getByText(/Linked social account/i)).toBeInTheDocument());
+    expect(screen.getByText(/github · @octocat \(The Octocat\)/)).toBeInTheDocument();
   });
 
   it('renders the Changes tab with a declared change and its progress', async () => {
