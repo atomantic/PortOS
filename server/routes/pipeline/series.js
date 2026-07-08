@@ -16,7 +16,7 @@ import { findDuplicateSeriesGroups, findSameNameSeries } from '../../services/du
 import { mergeSeries } from '../../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../../services/recordMergeAI.js';
 import { generateSeriesTitleLogo } from '../../services/pipeline/seriesTitleLogo.js';
-import { generateSeriesConcept } from '../../services/pipeline/seriesGenerate.js';
+import { generateSeriesConcepts, CANDIDATE_COUNT_MIN, CANDIDATE_COUNT_MAX } from '../../services/pipeline/seriesGenerate.js';
 import { discoverSeriesVoice } from '../../services/pipeline/seriesVoiceDiscover.js';
 import {
   LENGTH_PROFILE_NAMES,
@@ -417,18 +417,20 @@ router.post('/series/merge/ai-resolve', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Generate a fresh series concept (name / logline / premise / story shape)
-// from a universe, used as seed material. Returns the concept WITHOUT
-// persisting it — the New Series form pre-fills these for the user to edit
-// before creating. Static path: keep BEFORE `/series/:id`.
+// Multi-concept series ideation (#2180, CWQE Phase 15): invent SEVERAL distinct
+// candidate concepts from a universe, under an anti-generic banlist, WITHOUT
+// persisting — the New Series form presents them for the user to pick (deep-
+// linkable selection). The rejected candidates live in run history so the user
+// can switch without regenerating. Static path: keep BEFORE `/series/:id`.
 const seriesGenerateSchema = z.object({
   universeId: z.string().trim().min(1).max(seriesSvc.UNIVERSE_ID_MAX),
+  count: z.number().int().min(CANDIDATE_COUNT_MIN).max(CANDIDATE_COUNT_MAX).optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
 });
 router.post('/series/generate-concept', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesGenerateSchema, req.body ?? {});
-  const result = await generateSeriesConcept(body.universeId, body)
+  const result = await generateSeriesConcepts(body.universeId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

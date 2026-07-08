@@ -7,9 +7,9 @@
  * drills into its detail page where issues are created and managed.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2, FileInput, Sparkles, BookOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -24,7 +24,7 @@ import {
   createPipelineSeries,
   deletePipelineSeries,
   generateSeriesTitleLogo,
-  generateSeriesConcept,
+  generateSeriesConcepts,
   listUniverses,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
@@ -58,6 +58,21 @@ export default function Pipeline() {
   const [generating, setGenerating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  // Multi-concept ideation (#2180): the generated candidate concepts (kept in
+  // memory so the user can switch without regenerating — they also persist in
+  // run history server-side). The picked candidate index is the URL source of
+  // truth (`?concept=`) so the selection is deep-linkable per convention.
+  const [candidates, setCandidates] = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pickedConcept = (() => {
+    const raw = parseInt(searchParams.get('concept'), 10);
+    return Number.isInteger(raw) && raw >= 0 && raw < candidates.length ? raw : null;
+  })();
+  // Live mirror of the selected universe so an in-flight concept-generate can
+  // detect a mid-request universe switch (see handleGenerate). Synced from the
+  // committed form value — covers every path that changes it (pick, reset, create).
+  const universeIdRef = useRef(form.universeId);
+  useEffect(() => { universeIdRef.current = form.universeId; }, [form.universeId]);
 
   useEffect(() => {
     Promise.all([
@@ -79,7 +94,21 @@ export default function Pipeline() {
   // form fields that are currently empty so a user who's already typed a
   // logline doesn't lose it when they pick a world afterwards.
   const BIBLE_FIELDS = ['logline', 'premise', 'styleNotes'];
+
+  // Drop any generated candidate concepts + the `?concept=` selection. Called
+  // when the universe changes (stale candidates were seeded from the old world)
+  // and after a series is created.
+  const clearCandidates = () => {
+    setCandidates([]);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('concept');
+      return next;
+    }, { replace: true });
+  };
+
   const handleWorldChange = (universeId) => {
+    clearCandidates();
     if (!universeId) {
       setForm((f) => ({ ...f, universeId: '' }));
       return;
@@ -98,12 +127,11 @@ export default function Pipeline() {
     });
   };
 
-  // Generate a fresh series concept from the selected universe and overwrite
-  // the form's story fields (name / logline / premise / shape) so the user can
-  // edit before creating. The user clicked "Generate" explicitly, so this
-  // replaces whatever's there — but an empty field from the LLM keeps the prior
-  // value as a fallback. styleNotes is left to the universe-pull (it's a
-  // world-level aesthetic, not a per-series story choice).
+  // Invent several distinct candidate concepts (#2180) from the selected
+  // universe under the anti-generic banlist, and present them for the user to
+  // pick from. The user clicked "Generate" explicitly (satisfies the AI-provider
+  // policy). Nothing is applied until they pick a candidate — the rejected ones
+  // stay available so they can switch without regenerating.
   const handleGenerate = async () => {
     if (!form.universeId) {
       toast.error('Pick a universe first — the generator uses it as seed material');
@@ -111,39 +139,56 @@ export default function Pipeline() {
     }
     const requestedUniverseId = form.universeId;
     setGenerating(true);
-    const concept = await generateSeriesConcept(requestedUniverseId, {}, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Failed to generate a series concept');
+    const result = await generateSeriesConcepts(requestedUniverseId, {}, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Failed to generate series concepts');
       return null;
     });
     setGenerating(false);
-    if (!concept) return;
+    if (!result) return;
     // The request can outlive the selection: if the user switched universes
-    // while it was in flight, applying a concept seeded from the old universe
-    // would pair the new universeId with a mismatched story. Gate the merge on
-    // the LIVE state inside the functional updater (race-free — `f` is the
-    // committed value, unlike a passively-synced ref), and gate the toast on
-    // whether the merge actually applied.
-    let applied = false;
-    setForm((f) => {
-      if (f.universeId !== requestedUniverseId) return f;
-      applied = true;
-      return {
-        ...f,
-        name: concept.name || f.name,
-        logline: concept.logline || f.logline,
-        premise: concept.premise || f.premise,
-        // The generated concept owns the story shape — apply it verbatim,
-        // including null (LLM picked none), so a stale earlier pick can't
-        // misrepresent the freshly generated concept.
-        shape: concept.shape,
-      };
-    });
-    if (!applied) return;
+    // while it was in flight (which cleared candidates), the arriving batch was
+    // seeded from the OLD universe — drop it rather than showing mismatched
+    // concepts. `universeIdRef` tracks the live selection race-free.
+    if (universeIdRef.current !== requestedUniverseId) return;
+    const list = Array.isArray(result.candidates) ? result.candidates : [];
+    if (!list.length) {
+      toast.error('The generator returned no usable concepts — try again');
+      return;
+    }
+    setCandidates(list);
+    // Clear any prior selection — the new batch is unpicked until the user chooses.
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('concept');
+      return next;
+    }, { replace: true });
     toast.success(
-      concept.rationale
-        ? `Generated "${concept.name}" — ${concept.rationale}`
-        : `Generated "${concept.name}"`,
+      result.rationale
+        ? `${list.length} concepts — ${result.rationale}`
+        : `${list.length} concepts ready — pick one to continue`,
     );
+  };
+
+  // Apply a picked candidate to the form's story fields (name / logline /
+  // premise / shape) and record the selection in the URL (`?concept=`) so it's
+  // deep-linkable. An empty field from the LLM keeps the prior value; the shape
+  // is applied verbatim (including null) since the concept owns it. styleNotes
+  // is left to the universe-pull (world-level aesthetic, not a story choice).
+  const applyCandidate = (index) => {
+    const concept = candidates[index];
+    if (!concept) return;
+    setForm((f) => ({
+      ...f,
+      name: concept.name || f.name,
+      logline: concept.logline || f.logline,
+      premise: concept.premise || f.premise,
+      shape: concept.shape ?? null,
+    }));
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('concept', String(index));
+      return next;
+    }, { replace: true });
   };
 
   const handleCreate = async (e) => {
@@ -178,6 +223,7 @@ export default function Pipeline() {
     // Reactive insert — no full refetch (CLAUDE.md convention).
     setSeries((prev) => [created, ...prev]);
     setForm(emptyForm());
+    clearCandidates();
     setShowForm(false);
     toast.success(`Created "${created.name}"`);
     // Fire-and-forget logo design when a universe is linked — the LLM brief
@@ -317,9 +363,48 @@ export default function Pipeline() {
               {generating ? 'Generating…' : 'Generate with AI'}
             </button>
             <span className="text-[11px] text-gray-500">
-              Invents a different story set in the chosen universe — name, logline, premise & story shape. Edit anything before creating.
+              Invents several distinct stories set in the chosen universe under an anti-generic banlist — pick one to pre-fill the form. Edit anything before creating.
             </span>
           </div>
+          {candidates.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] uppercase tracking-wider text-gray-500">
+                {candidates.length} concepts — pick one to continue (you can switch without regenerating)
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {candidates.map((c, i) => {
+                  const selected = pickedConcept === i;
+                  return (
+                    <button
+                      type="button"
+                      key={`${c.name}-${i}`}
+                      onClick={() => applyCandidate(i)}
+                      aria-pressed={selected}
+                      className={`text-left p-3 rounded-lg border transition-colors ${
+                        selected
+                          ? 'border-port-accent bg-port-accent/10'
+                          : 'border-port-border bg-port-bg hover:border-port-accent/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-sm font-semibold text-white truncate">{c.name || 'Untitled'}</span>
+                        {selected && <span className="text-[10px] text-port-accent font-medium flex-shrink-0">✓ picked</span>}
+                      </div>
+                      {c.logline && <p className="text-xs text-gray-300 mb-1 line-clamp-2">{c.logline}</p>}
+                      {c.hook && <p className="text-[11px] text-gray-400 italic line-clamp-2">Hook: {c.hook}</p>}
+                      {(c.conflictEngine || c.theme) && (
+                        <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">
+                          {c.conflictEngine ? `Engine: ${c.conflictEngine}` : ''}
+                          {c.conflictEngine && c.theme ? ' · ' : ''}
+                          {c.theme ? `Theme: ${c.theme}` : ''}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
             <div>
               <label htmlFor="series-logline" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
