@@ -108,7 +108,7 @@ export async function suggestCastForBrief({ brief, types = DEFAULT_CASTABLE_TYPE
  * project, the members actually added, and the full ranked suggestions (so the UI
  * can show what was considered, including already-cast matches).
  */
-export async function applyAutoCastToProject(projectId, { brief, types, limit } = {}) {
+export async function applyAutoCastToProject(projectId, { brief, types, limit, generateFirstPass } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -134,12 +134,25 @@ export async function applyAutoCastToProject(projectId, { brief, types, limit } 
     .slice(0, capacity);
 
   if (freshIngredients.length === 0) {
+    // Nothing new to merge, but the caller may still have opted into first-pass
+    // scene frames (#1867) — persist that flag on its own so the treatment
+    // handler can find it later. Folded in here (#1938) so the route never has
+    // to issue a second full read-modify-write + peer-sync push of its own.
+    if (generateFirstPass) {
+      const updated = await updateProject(projectId, { generateFirstPass: true });
+      return { project: updated, added: [], suggestions };
+    }
     return { project, added: [], suggestions };
   }
 
   const newMembers = buildCastFromIngredients(freshIngredients);
   const mergedCast = [...existingCast, ...newMembers];
-  const updated = await updateProject(projectId, { cast: mergedCast });
+  // Fold the opt-in flag into the same write as the cast merge (#1938) so the
+  // opt-in path is a single read-modify-write + one peer-sync push, not two.
+  const updated = await updateProject(projectId, {
+    cast: mergedCast,
+    ...(generateFirstPass ? { generateFirstPass: true } : {}),
+  });
 
   // Best-effort ref-link (the cast is already persisted) — mirrors createProject.
   await linkIngredientsToCreativeDirector(projectId, freshIngredients)

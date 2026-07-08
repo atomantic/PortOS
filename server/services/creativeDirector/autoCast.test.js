@@ -181,4 +181,58 @@ describe('applyAutoCastToProject', () => {
     expect(result.added).toHaveLength(1);
     expect(updateProject.mock.calls[0][1].cast).toHaveLength(50);
   });
+
+  // #1938: the generateFirstPass opt-in is folded into the auto-cast write so
+  // the route no longer issues a second full read-modify-write for the flag.
+  it('folds generateFirstPass into the same write as the cast merge', async () => {
+    getProject.mockResolvedValue({ id: 'p1', name: 'Neon Run', styleSpec: 'rain noir', cast: [] });
+    mockSearch([hit('p1', 'place', 'The Spire')]);
+    updateProject.mockImplementation(async (_id, patch) => ({ id: 'p1', ...patch }));
+
+    const result = await applyAutoCastToProject('p1', { generateFirstPass: true });
+    expect(result.added.map((m) => m.ingredientId)).toEqual(['p1']);
+    // single write carries both the cast and the flag
+    expect(updateProject).toHaveBeenCalledTimes(1);
+    expect(updateProject.mock.calls[0][1]).toMatchObject({ generateFirstPass: true });
+    expect(updateProject.mock.calls[0][1].cast).toHaveLength(1);
+    expect(result.project.generateFirstPass).toBe(true);
+  });
+
+  it('does not add a generateFirstPass key to the merge write when the flag is off', async () => {
+    getProject.mockResolvedValue({ id: 'p1', name: 'Neon Run', styleSpec: 'rain noir', cast: [] });
+    mockSearch([hit('p1', 'place', 'The Spire')]);
+    updateProject.mockImplementation(async (_id, patch) => ({ id: 'p1', ...patch }));
+
+    await applyAutoCastToProject('p1', {});
+    expect(updateProject).toHaveBeenCalledTimes(1);
+    expect(updateProject.mock.calls[0][1]).not.toHaveProperty('generateFirstPass');
+  });
+
+  it('persists generateFirstPass alone when there are no fresh members to add', async () => {
+    getProject.mockResolvedValue({
+      id: 'p1', name: 'Neon Run', styleSpec: 'rain noir',
+      cast: [{ ingredientId: 'c1', name: 'Mara', type: 'character', role: 'cast' }],
+    });
+    mockSearch([hit('c1', 'character', 'Mara')]); // already cast → nothing fresh
+    updateProject.mockImplementation(async (_id, patch) => ({ id: 'p1', ...patch }));
+
+    const result = await applyAutoCastToProject('p1', { generateFirstPass: true });
+    expect(result.added).toEqual([]);
+    // still a single flag-only write — no cast churn, no double write
+    expect(updateProject).toHaveBeenCalledTimes(1);
+    expect(updateProject).toHaveBeenCalledWith('p1', { generateFirstPass: true });
+    expect(linkIngredientsToCreativeDirector).not.toHaveBeenCalled();
+    expect(result.project.generateFirstPass).toBe(true);
+  });
+
+  it('does not write at all when nothing is fresh and the flag is off', async () => {
+    getProject.mockResolvedValue({
+      id: 'p1', name: 'Neon Run', styleSpec: 'rain noir',
+      cast: [{ ingredientId: 'c1', name: 'Mara', type: 'character', role: 'cast' }],
+    });
+    mockSearch([hit('c1', 'character', 'Mara')]);
+    const result = await applyAutoCastToProject('p1', {});
+    expect(result.added).toEqual([]);
+    expect(updateProject).not.toHaveBeenCalled();
+  });
 });

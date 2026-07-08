@@ -30,7 +30,7 @@ import {
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
-import { enqueueFirstPassPortraits, enqueueFirstPassSceneFrames } from '../services/creativeDirector/firstPassGen.js';
+import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
@@ -111,7 +111,19 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   const { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
-  const result = await applyAutoCastToProject(req.params.id, { brief, types, limit });
+  // Scene reference frames (#1867) depend on a treatment existing, which may
+  // land well after THIS request — either because `compose` kicks it off
+  // asynchronously below, or because the user opted into `generateFirstPass`
+  // without `compose` and only starts the project later via a separate
+  // `/:id/start` call (the OverviewTab toggles are independent, per its own
+  // "Independent of the treatment toggle" copy). Persist the user's opt-in on
+  // the project record — NOT gated on `composing` — so the `/:id/treatment`
+  // handler (the only place the agent's scene plan actually lands) can find it
+  // regardless of which path triggered composition. Folded into the auto-cast
+  // write itself (#1938) so this is one read-modify-write, not two; because it
+  // resolves before the compose kickoff below, there's no ordering ambiguity
+  // between this write and a same-request compose's first read.
+  const result = await applyAutoCastToProject(req.params.id, { brief, types, limit, generateFirstPass });
   const project = result.project;
   const cast = project?.cast;
   // `advanceAfterSceneSettled` (what startCreativeDirectorProject calls) bails
@@ -121,22 +133,6 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
   // treatment path — so we simply skip those statuses.
   const composable = project && project.status !== 'paused' && project.status !== 'failed';
   const composing = Boolean(compose) && composable && Array.isArray(cast) && cast.length > 0 && !project.treatment;
-  // Scene reference frames (#1867) depend on a treatment existing, which may
-  // land well after THIS request — either because `compose` kicks it off
-  // asynchronously below, or because the user opted into `generateFirstPass`
-  // without `compose` and only starts the project later via a separate
-  // `/:id/start` call (the OverviewTab toggles are independent, per its own
-  // "Independent of the treatment toggle" copy). Persist the user's opt-in on
-  // the project record unconditionally — NOT gated on `composing` — so the
-  // `/:id/treatment` handler (the only place the agent's scene plan actually
-  // lands) can find it regardless of which path triggered composition.
-  // Awaited (rather than fired alongside startCreativeDirectorProject) so
-  // there is no ordering ambiguity between this write and a same-request
-  // compose's first read.
-  if (generateFirstPass) {
-    await updateProject(req.params.id, { generateFirstPass: true })
-      .catch((e) => console.log(`⚠️ CD persist generateFirstPass flag failed: ${e.message}`));
-  }
   if (composing) {
     startCreativeDirectorProject(req.params.id).catch((e) => console.log(`⚠️ CD auto-compose failed: ${e.message}`));
   }
@@ -179,17 +175,11 @@ router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
 // Agent-callable: write the treatment doc.
 router.patch('/:id/treatment', asyncHandler(async (req, res) => {
   const treatment = validateRequest(creativeDirectorTreatmentSchema, req.body);
+  // Scene reference frames (#1867): seeding a first reference frame per scene
+  // when the project opted into first-pass gen now fires from `setTreatment`
+  // itself (#1938) — the domain write — so every treatment path honors the
+  // opt-in, not just this route.
   const updated = await setTreatment(req.params.id, treatment);
-  // Scene reference frames (#1867): the user opted into first-pass gen back
-  // at auto-cast time (persisted as `generateFirstPass` on the project since
-  // the treatment lands asynchronously, possibly much later). Now that a
-  // scene plan exists, seed a first reference frame per scene the same way
-  // first-pass portraits are seeded — fire-and-forget like auto-compose
-  // above; the response shouldn't block on render-queue work.
-  if (updated?.generateFirstPass) {
-    enqueueFirstPassSceneFrames(updated)
-      .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
-  }
   res.json(updated);
 }));
 

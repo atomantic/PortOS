@@ -18,6 +18,22 @@ export const ASPECT_PRESETS = Object.freeze({
   '1:1-small': { width: 384, height: 384 }, // Legacy alias — pre-removal smoke-test fixture
 });
 
+/**
+ * Look up an aspectRatio's {width,height}, degrading gracefully when the ratio
+ * is unrecognized (best-effort callers — prompt views, first-pass seed frames —
+ * must not throw on a stale/unknown ratio the way the render path does).
+ *
+ * The `fallback` is caller-owned because the two consumers want different
+ * degraded shapes: prompt views want `{ width: 0, height: 0 }` (a printable
+ * literal), while first-pass gen wants `{}` so `width`/`height` come through
+ * `undefined` and the image worker applies its own default box instead. Pass
+ * `presetToRenderParams` (which throws on an unknown ratio) when a hard failure
+ * is the correct behavior. See #1938.
+ */
+export function resolveAspectDimensions(aspectRatio, fallback = { width: 0, height: 0 }) {
+  return ASPECT_PRESETS[aspectRatio] || fallback;
+}
+
 // `steps` and `guidance` are mlx_video knobs. `fps` is the render frame
 // rate. Higher quality = more denoising steps + slightly higher guidance,
 // trading wall-clock time for fidelity.

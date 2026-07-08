@@ -26,6 +26,7 @@ import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
+import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 
 export { trimRuns, startingImageFilename } from './projectsLogic.js';
 
@@ -139,6 +140,18 @@ export async function deleteProject(id) {
 export async function setTreatment(id, treatmentInput) {
   const next = await (await selectBackend()).setTreatment(id, treatmentInput);
   emitRecordUpdated('creativeDirectorProject', id);
+  // Scene reference frames (#1867): the user opts into first-pass gen at
+  // auto-cast time (persisted as `generateFirstPass` on the project since the
+  // treatment lands asynchronously, possibly much later). Now that a scene plan
+  // exists, seed a first reference frame per scene. Fire-and-forget — no caller
+  // should block on render-queue work. Fires here, on the domain write, rather
+  // than in one route handler (#1938) so every setTreatment path (the agent
+  // `/:id/treatment` PATCH, episodeVideo, liveDirector) honors the opt-in
+  // instead of the flag silently no-op'ing for treatments that land another way.
+  if (next?.generateFirstPass) {
+    enqueueFirstPassSceneFrames(next)
+      .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
+  }
   return next;
 }
 
