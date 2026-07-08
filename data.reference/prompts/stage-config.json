@@ -324,6 +324,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-judge-foundation": {
+      "name": "Pipeline — Foundation Quality Judge",
+      "description": "CWQE Phase 11 (#2176): a harsh, calibrated LLM judge that scores a series' FOUNDATION — universe canon (worldbuilding 40%), character records (character 30%), the series arc/volumes (structure 20%), and declared voice (craft 10%) — against the Phase 10 craft doctrine BEFORE any drafting. Uses an anti-inflation calibration ladder (median AI foundation = 6; no 10) and requires a concrete gap AND fix per dimension. Series Autopilot's foundationGate spends the weighted composite: proceed to beat sheets once it clears the threshold, else target the weakest dimension, apply the fix through the owning service (universe refine / character expand / arc resolve), and re-judge. Provider/model resolve via the pipeline-arc-overview stage's judgeProvider/judgeModel (writer/judge split) — configure a DIFFERENT model to avoid self-congratulation.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-panel-editor": {
       "name": "Pipeline — Reader Panel: The Editor",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",

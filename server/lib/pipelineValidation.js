@@ -198,6 +198,16 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
   // semantics. Optional + additive so older peers fall through to the default.
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Foundation-quality gate (#2176, CWQE Phase 11). Before drafting, the
+  // autopilot judges the whole foundation (world/characters/arc) against a
+  // weighted rubric and iterates on the weakest dimension until it clears
+  // `foundationThreshold` (a weighted [0,10] score), bounded by
+  // `maxFoundationRounds` (0 = skip the gate). `foundationGate` toggles the gate
+  // (defaults ON — the point of the phase). All three optional + additive so
+  // older peers fall through to the defaults.
+  foundationGate: z.boolean().optional(),
+  foundationThreshold: z.number().min(0).max(10).optional(),
+  maxFoundationRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   // Editorial-checks pause threshold (#1613). When the registry-driven editorial
   // checks pass surfaces ≥ N high-severity findings, the autopilot pauses the run
   // for human review instead of silently proceeding (the downstream health gate is
