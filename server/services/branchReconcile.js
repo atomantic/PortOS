@@ -36,10 +36,18 @@ export const PROTECTED_BRANCHES = ['main', 'master', 'release'];
 // such a claim worktree once it is older than this AND its branch is merged AND
 // its worktree is clean. That trio is only ever true for an ABANDONED claim: a
 // claim with real work in progress is never merged+clean (uncommitted edits →
-// dirty → WIP; committed work → not an ancestor of default → not MERGED), so the
-// age gate exists purely to spare the narrow "just created, about to start"
-// window a live human session occupies.
-export const STALE_CLAIM_IDLE_MS = 24 * 60 * 60 * 1000; // 24h
+// dirty → WIP; committed work → not an ancestor of default → not MERGED).
+//
+// Because a reaped worktree is merged+clean, the reap loses NOTHING recoverable —
+// no commits beyond the default branch, no uncommitted edits — and re-running
+// `/claim` recreates it in seconds. So even a false positive (a human who claimed
+// an issue, left the branch untouched at the default commit, and returns to a
+// *paused* session) costs only a re-claim, never work. The window is set very
+// conservatively at a full week anyway — mtime alone can't prove abandonment, so
+// we err far toward preservation: a paused session returned-to within 7 days keeps
+// its worktree, while a genuinely-leaked one (which persists indefinitely) is
+// reaped on the daily recheck once it crosses the threshold.
+export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;

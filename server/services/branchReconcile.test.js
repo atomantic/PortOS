@@ -144,7 +144,8 @@ describe('cleanupMerged', () => {
     git.isBranchMergedInto.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const res = await cleanupMerged('/repo', 'main', [
-      { branch: 'claim/issue-1933', worktreePath: '/repo/data/cos/worktrees/claim-issue-1933', worktreeAgeMs: 3 * 24 * 60 * 60 * 1000 }
+      // 10 days old — comfortably past the 7-day STALE_CLAIM_IDLE_MS default
+      { branch: 'claim/issue-1933', worktreePath: '/repo/data/cos/worktrees/claim-issue-1933', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 }
     ]);
     expect(res.cleaned).toEqual(['claim/issue-1933']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
