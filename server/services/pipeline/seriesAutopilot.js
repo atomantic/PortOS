@@ -759,6 +759,18 @@ const providerOverrideOpts = (record) => ({
 const providerIdOpts = (record) => ({
   providerIdDefault: record.options.providerOverride,
   modelIdDefault: record.options.modelOverride,
+  // Multi-candidate draft gate (#2169): bill one cos action per re-roll and stop
+  // re-rolling when the daily budget is spent. Only ever invoked by
+  // generateStage's runDraftGate on a judgeable stage with draftAttempts > 1 — a
+  // no-op for every other stage/run. Check-then-bill so a skipped (budget-out)
+  // attempt isn't charged. Returns false to halt further attempts (keep the best
+  // so far); true when the attempt may proceed.
+  chargeAction: async () => {
+    const budget = await getDomainBudgetStatus('cos');
+    if (!budget.withinBudget) return false;
+    await recordDomainUsage('cos', { actions: 1 });
+    return true;
+  },
 });
 
 // Pause result when the cos action budget is exhausted, else null. Used to gate

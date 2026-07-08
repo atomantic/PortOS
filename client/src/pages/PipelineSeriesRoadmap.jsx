@@ -14,11 +14,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, ChevronRight, ChevronDown, AlertTriangle, Crown, ChartSpline, Users,
+  ArrowLeft, Loader2, Sparkles, ChevronRight, ChevronDown, AlertTriangle, Crown, ChartSpline, Users, Swords,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
 import ReaderPanelView from '../components/pipeline/ReaderPanelView';
+import ComparativeRankView from '../components/pipeline/ComparativeRankView';
 import TabPills from '../components/ui/TabPills';
 import {
   getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
@@ -30,6 +31,7 @@ import { useSeriesEditorial } from '../hooks/useSeriesEditorial';
 const TABS = [
   { id: 'roadmap', label: 'Reader Map', icon: ChartSpline },
   { id: 'panel', label: 'Reader Panel', icon: Users },
+  { id: 'rank', label: 'Rankings', icon: Swords },
 ];
 const TAB_IDS = TABS.map((t) => t.id);
 
@@ -320,6 +322,8 @@ export default function PipelineSeriesRoadmap() {
 
       {activeTab === 'panel' ? (
         <ReaderPanelView seriesId={seriesId} hasContent={coverage.withContent > 0} />
+      ) : activeTab === 'rank' ? (
+        <ComparativeRankView seriesId={seriesId} hasContent={coverage.withContent > 0} />
       ) : (
       <>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)] gap-4 items-start">

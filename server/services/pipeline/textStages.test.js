@@ -69,10 +69,19 @@ vi.mock('../promptService.js', () => ({
   getStage: vi.fn(() => null),
 }));
 
+// The draft gate (#2169) dynamic-imports the judge; mock it so the gate tests
+// drive per-attempt scores without a real judge LLM call. A no-op for every
+// non-gated test (default draftAttempts=1 never enters runDraftGate).
+vi.mock('./pipelineJudge.js', () => ({
+  judgeIssue: vi.fn(async () => ({ status: 'no-content' })),
+}));
+
 const issuesSvc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const universeSvc = await import('../universeBuilder.js');
+const promptSvc = await import('../promptService.js');
+const pipelineJudge = await import('./pipelineJudge.js');
 const textStages = await import('./textStages.js');
 
 // Strip the `RENDERED:<stage>:` prefix that the mocked buildPrompt prepends
@@ -1114,5 +1123,139 @@ describe('pipeline-idea-expansion template render', () => {
 
     const withoutClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: renderTickingClock({ enabled: false, label: 'x' }) }));
     expect(withoutClock).not.toContain('Ticking clock the reader is anticipating');
+  });
+});
+
+describe('multi-candidate draft gate (#2169, CWQE Phase 5)', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    llmCalls.length = 0;
+    vi.clearAllMocks();
+    // Default: single-shot (no gate) unless a test opts in.
+    promptSvc.getStage.mockReturnValue(null);
+    pipelineJudge.judgeIssue.mockResolvedValue({ status: 'no-content' });
+  });
+
+  async function seedProse() {
+    const series = await seriesSvc.createSeries({ name: 'Gate', logline: 'L', premise: 'P' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'One' });
+    return { series, issue };
+  }
+
+  // Score each attempt in order; extra (re-judge) calls reuse the last score.
+  function scoreAttempts(scores) {
+    let i = 0;
+    pipelineJudge.judgeIssue.mockImplementation(async () => {
+      const q = scores[Math.min(i, scores.length - 1)];
+      i += 1;
+      return { status: 'complete', qualityScore: q, overall: q, slopPenalty: 0 };
+    });
+  }
+
+  describe('resolveDraftGate (pure)', () => {
+    it('is off (attempts=1) for a non-judgeable stage even when configured', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+      expect(textStages.resolveDraftGate('idea', 'pipeline-idea-expansion', {})).toEqual({ attempts: 1, threshold: null });
+    });
+
+    it('reads draftAttempts/threshold from stage config and clamps to 1..3 / 0..10', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 9, draftGateThreshold: 42 });
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', {})).toEqual({ attempts: 3, threshold: 10 });
+    });
+
+    it('lets an explicit options override beat the stage config', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', { draftAttempts: 2, draftGateThreshold: 7 }))
+        .toEqual({ attempts: 2, threshold: 7 });
+    });
+
+    it('defaults to attempts=1 with no config (the pre-#2169 single-shot path)', () => {
+      promptSvc.getStage.mockReturnValue(null);
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', {})).toEqual({ attempts: 1, threshold: null });
+    });
+  });
+
+  describe('pickBestAttempt (pure)', () => {
+    it('returns the highest-scoring attempt, keeping the earlier on ties', () => {
+      const a = { runId: 'r1', qualityScore: 8 };
+      const b = { runId: 'r2', qualityScore: 8 };
+      const c = { runId: 'r3', qualityScore: 5 };
+      expect(textStages.pickBestAttempt([a, b, c])).toBe(a);
+    });
+    it('falls back to the last attempt when none scored', () => {
+      const list = [{ runId: 'r1', qualityScore: null }, { runId: 'r2', qualityScore: null }];
+      expect(textStages.pickBestAttempt(list)).toBe(list[1]);
+    });
+    it('returns null for an empty list', () => {
+      expect(textStages.pickBestAttempt([])).toBeNull();
+    });
+  });
+
+  it('generates and judges each attempt, keeping the best-scoring one (winner is last)', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 });
+    scoreAttempts([5, 8]); // second attempt is better → kept, no restore
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', { seedInput: 'beats' });
+
+    expect(llmCalls).toHaveLength(2);               // two fresh generations
+    expect(pipelineJudge.judgeIssue).toHaveBeenCalledTimes(2); // judged each, no re-judge (winner=last)
+    const gate = result.stage.draftGate;
+    expect(gate.attempts).toHaveLength(2);
+    expect(gate.winner).toBe(result.stage.lastRunId);
+    const winner = gate.attempts.find((a) => a.runId === gate.winner);
+    expect(winner.qualityScore).toBe(8);
+    expect(winner.rejected).toBe(false);
+    expect(gate.attempts.find((a) => a.qualityScore === 5).rejected).toBe(true);
+  });
+
+  it('restores the earlier attempt when it out-scores the last, and re-judges the winner', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 }); // no threshold → run all, pick best
+    scoreAttempts([8, 5]); // first attempt is better → restore it
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+
+    expect(llmCalls).toHaveLength(2);
+    // 2 attempt judges + 1 re-judge of the restored winner.
+    expect(pipelineJudge.judgeIssue).toHaveBeenCalledTimes(3);
+    const gate = result.stage.draftGate;
+    expect(gate.winner).toBe(result.stage.lastRunId);
+    expect(gate.attempts.find((a) => a.runId === gate.winner).qualityScore).toBe(8);
+    // The rejected attempt's text stays recoverable in runHistory.
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.prose.runHistory.length).toBeGreaterThan(0);
+  });
+
+  it('early-stops re-rolling once an attempt clears the threshold', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 3, draftGateThreshold: 7 });
+    scoreAttempts([9]); // first attempt already clears 7
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+
+    expect(llmCalls).toHaveLength(1);                 // stopped after the first good draft
+    expect(result.stage.draftGate.stoppedEarly).toBe(true);
+    expect(result.stage.draftGate.attempts).toHaveLength(1);
+  });
+
+  it('bills one cos action per re-roll via chargeAction and stops when it returns false', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+    scoreAttempts([4, 4, 4]);
+    const charge = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { issue } = await seedProse();
+    await textStages.generateStage(issue.id, 'prose', { chargeAction: charge });
+
+    // attempt 1 (baseline, not charged) + attempt 2 (charged true) generated;
+    // attempt 3 short-circuits when chargeAction returns false.
+    expect(charge).toHaveBeenCalledTimes(2);
+    expect(llmCalls).toHaveLength(2);
+  });
+
+  it('is a no-op single-shot when draftAttempts is 1 (default) — judge never runs', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 1 });
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+    expect(llmCalls).toHaveLength(1);
+    expect(pipelineJudge.judgeIssue).not.toHaveBeenCalled();
+    expect(result.stage.draftGate).toBeNull();
   });
 });
