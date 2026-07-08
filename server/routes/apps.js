@@ -21,7 +21,8 @@ import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appI
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../services/taskSchedule.js';
-import { summarizeLoopStatus, LI_JOB_ID } from '../services/layeredIntelligence.js';
+import { summarizeLoopStatus, summarizeFiledProposals, LI_JOB_ID } from '../services/layeredIntelligence.js';
+import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { certPaths } from '../../lib/certPaths.js';
 
@@ -739,9 +740,11 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
 // effective config + scheduler bookkeeping (lastRunAt/nextDueAt/due) plus the
 // global autonomous-job on/off state (a per-app config is inert while the job is
 // disabled). NO LLM and NO forge I/O — filed-proposal counts stay off this
-// surface deliberately (they'd require per-app `gh`/`glab` shell-outs). This
-// two-segment static path can't collide with `/:id` (one segment) or
-// `/:id/layered-intelligence` (literal second segment), so ordering is safe.
+// surface deliberately (they'd require per-app `gh`/`glab` shell-outs); those
+// are served by the separate opt-in `/layered-intelligence/proposals` endpoint
+// below so this base overview stays fast. This two-segment static path can't
+// collide with `/:id` (one segment) or `/:id/layered-intelligence` (literal
+// second segment), so ordering is safe.
 router.get('/layered-intelligence/overview', asyncHandler(async (req, res) => {
   const [apps, job] = await Promise.all([
     appsService.getActiveApps(),
@@ -763,6 +766,33 @@ router.get('/layered-intelligence/overview', asyncHandler(async (req, res) => {
     enabledCount: summaries.filter(s => s.enabled).length,
     apps: summaries
   });
+}));
+
+// GET /api/apps/layered-intelligence/proposals - Cross-app filed-proposal counts
+// + links for the overview page (issue #2293). Deliberately SPLIT from the base
+// overview: this one DOES per-app forge/Jira/PLAN I/O (gh/glab shell-outs, Jira
+// REST, PLAN.md scan) to count the layered-intelligence-labelled items the loop
+// has actually filed, so it's an opt-in "refresh counts" action the client fires
+// on demand rather than baking network/CLI latency into the base overview. Only
+// enabled-loop apps are swept so the I/O fan-out is bounded. Each app resolves +
+// summarizes concurrently and independently — one failing tracker read surfaces
+// as that app's `ok:false` without aborting the batch. NO LLM calls (forge reads
+// only), so it's outside the no-cold-bootstrap policy. Static two-segment path,
+// registered before `/:id/...`, so no route collision.
+router.get('/layered-intelligence/proposals', asyncHandler(async (req, res) => {
+  const apps = await appsService.getActiveApps();
+  // Bound the I/O fan-out to apps whose loop is actually enabled — a disabled
+  // app has filed nothing this config cares about, and sweeping every managed
+  // app would shell out `gh`/`glab` needlessly.
+  const enabled = apps.filter(app => summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID }).enabled);
+  const results = await Promise.all(enabled.map(async (app) => {
+    const tracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan', forge: null }));
+    const summary = await summarizeFiledProposals({ app, tracker })
+      .catch(() => ({ ok: false, tracker: tracker?.resolved || 'plan', reason: 'error', open: 0, closed: 0, total: 0, issues: [] }));
+    return { id: app.id, name: app.name || app.id, ...summary };
+  }));
+  console.log(`🧠 Layered Intelligence: filed-proposal counts read for ${results.length} enabled app(s)`);
+  res.json({ apps: results });
 }));
 
 // GET /api/apps/:id/layered-intelligence - Effective Layered Intelligence config

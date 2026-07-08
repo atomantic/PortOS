@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Brain, Settings, Clock, CheckCircle2, PauseCircle, Sparkles } from 'lucide-react';
+import { Brain, Settings, Clock, CheckCircle2, PauseCircle, Sparkles, FileText, ExternalLink, RefreshCw } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 import * as api from '../services/api';
@@ -45,7 +45,67 @@ function Chip({ children, tone = 'default' }) {
   );
 }
 
-function AppLoopCard({ app }) {
+// Human label for a resolved work tracker (matches server workTracker.js values).
+const TRACKER_LABEL = {
+  github: 'GitHub Issues', gitlab: 'GitLab Issues', jira: 'Jira', plan: 'PLAN.md'
+};
+
+// Muted reason text for an app whose filed-proposal read didn't succeed.
+const PROPOSAL_REASON_TEXT = {
+  'read-failed': 'Couldn’t read the tracker',
+  'jira-not-configured': 'Jira not configured for this app',
+  'no-repo': 'No repo path set',
+  error: 'Couldn’t read filed proposals'
+};
+
+// Filed-proposal counts + links for one app (issue #2293). Rendered only after
+// the user loads counts (the base overview stays I/O-free). `summary` is the
+// per-app entry from GET /apps/layered-intelligence/proposals, or undefined
+// before the counts are loaded.
+function ProposalSummary({ summary, loading }) {
+  if (loading && !summary) {
+    return <div className="text-xs text-gray-500 flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Reading filed proposals…</div>;
+  }
+  if (!summary) return null;
+  const trackerLabel = TRACKER_LABEL[summary.tracker] || summary.tracker;
+  if (!summary.ok) {
+    return <div className="text-xs text-gray-500 flex items-center gap-1"><FileText size={11} /> {PROPOSAL_REASON_TEXT[summary.reason] || 'No proposal data'}</div>;
+  }
+  if (summary.total === 0) {
+    return <div className="text-xs text-gray-500 flex items-center gap-1"><FileText size={11} /> No filed proposals yet ({trackerLabel})</div>;
+  }
+  const linked = (summary.issues || []).filter(i => i.url);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-xs text-gray-300 flex items-center gap-1.5 flex-wrap">
+        <FileText size={11} className="text-port-accent shrink-0" />
+        <span className="font-medium text-white">{summary.total}</span> filed proposal{summary.total === 1 ? '' : 's'}
+        <span className="text-gray-500">
+          ({summary.open} open{summary.closed > 0 ? `, ${summary.closed} closed` : ''} · {trackerLabel})
+        </span>
+      </div>
+      {linked.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {linked.map(i => (
+            <a
+              key={i.number ?? i.url}
+              href={i.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={i.title}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs hover:border-port-accent/50 ${i.state === 'open' ? 'bg-port-accent/10 text-port-accent border-port-accent/30' : 'bg-port-bg text-gray-500 border-port-border line-through'}`}
+            >
+              {i.number != null ? `#${i.number}` : 'issue'}
+              <ExternalLink size={10} />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AppLoopCard({ app, proposals, proposalsLoading }) {
   const scopes = (app.allowedScopes || []).map(id => SCOPE_LABEL[id] || id);
   const chips = sourceChips(app.sources);
   return (
@@ -107,6 +167,7 @@ function AppLoopCard({ app }) {
             </div>
           )}
           {app.hasRules && <div className="text-xs text-gray-500 flex items-center gap-1"><Sparkles size={11} /> Custom guidance rules set</div>}
+          <ProposalSummary summary={proposals} loading={proposalsLoading} />
         </div>
       )}
     </div>
@@ -117,6 +178,10 @@ export default function LayeredIntelligence() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  // Filed-proposal counts (issue #2293) — loaded on demand so the base overview
+  // stays I/O-free. `proposals` is a map of appId → summary once fetched.
+  const [proposals, setProposals] = useState(null);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
 
   const load = useCallback(async () => {
     setError(false);
@@ -124,6 +189,15 @@ export default function LayeredIntelligence() {
     if (!res) setError(true);
     else setData(res);
     setLoading(false);
+  }, []);
+
+  const loadProposals = useCallback(async () => {
+    setProposalsLoading(true);
+    const res = await api.getLayeredIntelligenceProposals().catch(() => null);
+    if (res?.apps) {
+      setProposals(Object.fromEntries(res.apps.map(a => [a.id, a])));
+    }
+    setProposalsLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -170,13 +244,29 @@ export default function LayeredIntelligence() {
             </Banner>
           )}
 
-          <div className="text-sm text-gray-400">
-            {enabledApps.length} of {apps.length} app{apps.length === 1 ? '' : 's'} have the loop enabled.
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-sm text-gray-400">
+              {enabledApps.length} of {apps.length} app{apps.length === 1 ? '' : 's'} have the loop enabled.
+            </div>
+            {enabledApps.length > 0 && (
+              <button
+                type="button"
+                onClick={loadProposals}
+                disabled={proposalsLoading}
+                title="Read each enabled app's tracker for the layered-intelligence proposals the loop has filed"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={proposalsLoading ? 'animate-spin' : ''} />
+                {proposals ? 'Refresh filed counts' : 'Load filed-proposal counts'}
+              </button>
+            )}
           </div>
 
           {enabledApps.length > 0 ? (
             <div className="grid gap-3 md:grid-cols-2">
-              {enabledApps.map(app => <AppLoopCard key={app.id} app={app} />)}
+              {enabledApps.map(app => (
+                <AppLoopCard key={app.id} app={app} proposals={proposals?.[app.id]} proposalsLoading={proposalsLoading} />
+              ))}
             </div>
           ) : (
             <Banner tone="info" size="md">

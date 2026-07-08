@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import LayeredIntelligence from './LayeredIntelligence';
 import * as api from '../services/api';
 
 vi.mock('../services/api', () => ({
-  getLayeredIntelligenceOverview: vi.fn()
+  getLayeredIntelligenceOverview: vi.fn(),
+  getLayeredIntelligenceProposals: vi.fn()
 }));
 
 const renderPage = () => render(
@@ -68,5 +70,28 @@ describe('LayeredIntelligence page', () => {
 
     await waitFor(() => expect(screen.getByText(/Couldn't load/)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('loads filed-proposal counts + links on demand and merges them into the enabled card', async () => {
+    api.getLayeredIntelligenceOverview.mockResolvedValue(overview());
+    api.getLayeredIntelligenceProposals.mockResolvedValue({
+      apps: [{
+        id: 'app-on', name: 'Alpha', ok: true, tracker: 'github', open: 2, closed: 1, total: 3,
+        issues: [{ number: 5, title: 'Add widget', state: 'open', url: 'https://github.com/o/r/issues/5' }]
+      }]
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+    const btn = screen.getByRole('button', { name: /Load filed-proposal counts/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => expect(screen.getByText(/filed proposals/)).toBeInTheDocument());
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText(/2 open, 1 closed · GitHub Issues/)).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /#5/ });
+    expect(link).toHaveAttribute('href', 'https://github.com/o/r/issues/5');
+    // Button flips to "Refresh" once counts are loaded.
+    expect(screen.getByRole('button', { name: /Refresh filed counts/ })).toBeInTheDocument();
   });
 });
