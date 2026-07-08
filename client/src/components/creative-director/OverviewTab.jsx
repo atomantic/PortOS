@@ -107,6 +107,10 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
         const composing = Boolean(result?.composing);
         const firstPassQueued = result?.firstPass?.enqueued?.length || 0;
         const musicBedQueued = Boolean(result?.firstPassMusicBed?.enqueued);
+        // The music-bed render is a single background `audio` media job — hand its
+        // id up so the detail page can watch `audio-gen:*` and toast a failure the
+        // user would otherwise only find by polling the Render Queue (#1933).
+        const musicBedJobId = result?.firstPassMusicBed?.jobId || null;
         // When the director starts composing, optimistically flip the status to
         // 'planning' as well — the detail page disables polling for 'draft'
         // projects, so without this the treatment + runs the agent produces stay
@@ -123,7 +127,7 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
         // escape it, unlike the `composing` branch above). Tell the parent to
         // extend polling for a bit so either result actually shows up in the
         // open tab instead of requiring a manual Refresh / navigate-away.
-        if (firstPassQueued > 0 || musicBedQueued) onAsyncWorkQueued?.();
+        if (firstPassQueued > 0 || musicBedQueued) onAsyncWorkQueued?.({ musicBedJobId });
         // Suffix the portrait-gen count + music-bed status onto whichever
         // success toast fires, so a user who opted into either first-pass gen
         // sees it kicked off in one place.

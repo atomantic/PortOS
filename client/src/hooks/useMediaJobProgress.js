@@ -4,10 +4,11 @@ import { getMediaJob } from '../services/apiMediaJobs';
 import { usePreviousSync } from './usePrevious.js';
 
 /**
- * Subscribe to live progress for a single mediaJobQueue job (image-gen
- * today, video-gen once a caller passes kind='video'). Filters socket
- * events by jobId so multiple instances of this hook coexist (one per
- * comic panel / storyboard scene) without cross-talk.
+ * Subscribe to live progress for a single mediaJobQueue job. `kind`
+ * selects the socket namespace: 'image' (default) → image-gen, 'video' →
+ * video-gen, 'audio' → audio-gen (first-pass music-bed, #1933). Filters
+ * socket events by jobId so multiple instances of this hook coexist (one
+ * per comic panel / storyboard scene) without cross-talk.
  *
  * Returns:
  *   {
@@ -82,7 +83,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       // when the parent already has the completed render's filename.
     });
 
-    const evtPrefix = kind === 'video' ? 'video-gen' : 'image-gen';
+    const evtPrefix = kind === 'video' ? 'video-gen' : kind === 'audio' ? 'audio-gen' : 'image-gen';
     const onStarted = (data) => {
       if (data.generationId !== jobId) return;
       setState((prev) => {
