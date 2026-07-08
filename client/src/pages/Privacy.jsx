@@ -1,11 +1,12 @@
 import { useNavigate } from 'react-router-dom';
-import { Shield, LayoutDashboard, KeyRound, Building2 } from 'lucide-react';
+import { Shield, LayoutDashboard, KeyRound, Building2, Repeat } from 'lucide-react';
 import { useValidTab } from '../hooks/useValidTab';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import PrivacyOverviewTab from '../components/privacy/PrivacyOverviewTab';
 import PrivacyVaultTab from '../components/privacy/PrivacyVaultTab';
 import PrivacyOrgsTab from '../components/privacy/PrivacyOrgsTab';
+import PrivacyChangesTab from '../components/privacy/PrivacyChangesTab';
 
 // Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
 // Each id maps to `/privacy/<id>` and needs a NAV_COMMANDS entry.
@@ -13,6 +14,7 @@ export const TABS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'vault', label: 'Vault', icon: KeyRound },
   { id: 'organizations', label: 'Organizations', icon: Building2 },
+  { id: 'changes', label: 'Changes', icon: Repeat },
 ];
 
 export default function Privacy() {
@@ -23,6 +25,7 @@ export default function Privacy() {
     switch (activeTab) {
       case 'vault': return <PrivacyVaultTab />;
       case 'organizations': return <PrivacyOrgsTab />;
+      case 'changes': return <PrivacyChangesTab />;
       case 'overview':
       default: return <PrivacyOverviewTab />;
     }

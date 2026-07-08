@@ -1187,6 +1187,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker ON privacy_bro
 -- "Which cases are due for a recheck" — the run-loop's primary query.
 CREATE INDEX IF NOT EXISTS idx_privacy_broker_cases_recheck ON privacy_broker_cases (next_recheck_at);
 
+-- Privacy Center: change-of-address events (issue #2143, epic #2138). One row
+-- per "field X changed from A to B" declaration. `vault_record_id` is the OLD
+-- record (marked `previous` on declare); `replacement_record_id` is the NEW one
+-- (nullable for a removal-only change). Declaring an event flips every `current`
+-- holding of the old record to `update_pending` (see privacyChanges.js). Both
+-- FKs cascade-delete so removing a vault record cleans up its change events.
+-- Machine-local — no federation, no tombstones (same deferred scope as the
+-- vault, #2148). Mirrors the block in server/lib/db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS privacy_change_events (
+  id UUID PRIMARY KEY,
+  vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
+  replacement_record_id UUID REFERENCES privacy_vault_records (id) ON DELETE SET NULL,
+  kind TEXT NOT NULL DEFAULT 'other',
+  declared_at TIMESTAMPTZ DEFAULT NOW(),
+  note TEXT NOT NULL DEFAULT ''
+);
+-- "Changes touching this record" — the inventory view groups by the old record.
+CREATE INDEX IF NOT EXISTS idx_privacy_change_events_vault_record ON privacy_change_events (vault_record_id);
+
 -- Deletion audit log (incident #1248-follow-up). Append-only forensic trail of
 -- every tombstone / un-tombstone / hard-delete of user-authored records, written
 -- by a DB trigger so it captures deletions from ANY source (app, a test suite's

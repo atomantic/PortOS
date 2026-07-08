@@ -147,6 +147,56 @@ export const privacyOrgHoldingsSetSchema = z.object({
 }).strict();
 
 // =============================================================================
+// CHANGE-OF-ADDRESS EVENTS + INVENTORY SCHEMAS (issue #2143, epic #2138)
+// =============================================================================
+// Zod schemas for `privacy_change_events` — db-primary Postgres, machine-local
+// (same federation-deferred scope as the vault, #2148). Declaring a change flips
+// every `current` holding of the old vault record to `update_pending`; the
+// Changes tab then works that per-org checklist.
+
+export const PRIVACY_CHANGE_KINDS = Object.freeze([
+  'address_change', 'phone_change', 'email_change', 'name_change', 'other',
+]);
+
+// The replacement value can be supplied inline (a brand-new vault record is
+// created for it) — the same shape as a vault create MINUS status (always
+// 'current') and validTo (an active replacement has no end date yet). `type`
+// defaults to the OLD record's type in the service when omitted.
+const privacyChangeReplacementSchema = z.object({
+  type: z.enum(PRIVACY_VAULT_TYPES).optional(),
+  label: z.string().trim().min(1).max(200),
+  value: z.string().min(1).max(10000),
+  validFrom: isoDateSchema,
+  shareWithTwin: z.boolean().optional(),
+  useForScans: z.boolean().optional(),
+  notes: z.string().max(5000).optional(),
+}).strict();
+
+// POST /api/privacy/changes — declare a change. Supply the replacement EITHER
+// inline (`replacement`) OR by id (`replacementRecordId`), never both; omit both
+// for a removal-only change (the field went away with no successor). `kind`
+// defaults in the service from the old record's type when omitted.
+export const privacyChangeDeclareSchema = z.object({
+  vaultRecordId: z.string().uuid(),
+  replacement: privacyChangeReplacementSchema.optional(),
+  replacementRecordId: z.string().uuid().optional(),
+  kind: z.enum(PRIVACY_CHANGE_KINDS).optional(),
+  note: z.string().max(5000).optional(),
+}).strict().refine(
+  (v) => !(v.replacement && v.replacementRecordId),
+  { message: 'provide either replacement or replacementRecordId, not both', path: ['replacement'] },
+);
+
+export const privacyChangeIdParamsSchema = z.object({
+  id: z.string().uuid(),
+}).strict();
+
+export const privacyChangeOrgParamsSchema = z.object({
+  id: z.string().uuid(),
+  orgId: z.string().uuid(),
+}).strict();
+
+// =============================================================================
 // DATA-BROKER DATABASE + CASE LEDGER SCHEMAS (issue #2144, epic #2138)
 // =============================================================================
 // Zod schemas for `privacy_brokers` / `privacy_broker_cases` — db-primary

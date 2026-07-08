@@ -145,6 +145,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', aliases: ['privacy', 'privacy-center', 'my-data'], keywords: ['pii', 'privacy', 'personal data', 'identity facts', 'who has my data'] },
   { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', aliases: ['vault', 'pii-vault', 'privacy-vault'], keywords: ['pii', 'vault', 'encrypted', 'ssn', 'address', 'passport', 'identity'] },
   { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', aliases: ['organizations', 'orgs', 'trusted-orgs'], keywords: ['organizations', 'banks', 'utilities', 'who holds my data', 'registry', 'holdings'] },
+  { id: 'nav.identity.privacy-changes', path: '/privacy/changes', label: 'Changes', section: 'Identity', aliases: ['changes', 'change-of-address', 'address-change', 'privacy-changes'], keywords: ['change of address', 'moved', 'update address', 'inventory', 'who needs updating', 'new phone', 'new email'] },
 
   { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'Health', aliases: ['meatspace'] },
   { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'Health', aliases: ['meatspace-health', 'body-health'], keywords: ['health', 'vitals', 'wellbeing', 'biometrics'] },

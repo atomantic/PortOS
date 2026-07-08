@@ -25,6 +25,9 @@ import {
   privacyBrokerCaseListQuerySchema,
   privacyBrokerRefreshSchema,
   privacyScanStartSchema,
+  privacyChangeDeclareSchema,
+  privacyChangeIdParamsSchema,
+  privacyChangeOrgParamsSchema,
 } from '../lib/privacyValidation.js';
 import {
   createVaultRecord,
@@ -52,6 +55,14 @@ import {
   getScanStatus,
 } from '../services/privacyBrokers.js';
 import { runScanPass } from '../services/privacyScan.js';
+import {
+  declareChange,
+  listChangeEvents,
+  getChange,
+  markOrgUpdated,
+  markOrgRemoved,
+  draftUpdateEmail,
+} from '../services/privacyChanges.js';
 
 const router = Router();
 
@@ -139,6 +150,37 @@ router.put('/orgs/:id/holdings', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacyOrgIdParamsSchema, req.params);
   const { holdings } = validateRequest(privacyOrgHoldingsSetSchema, req.body);
   res.json(await setOrgHoldings(id, holdings));
+}));
+
+// ─── Change-of-address events + inventory workflow (issue #2143) ────────────
+
+router.get('/changes', asyncHandler(async (_req, res) => {
+  res.json(await listChangeEvents());
+}));
+
+router.post('/changes', asyncHandler(async (req, res) => {
+  const data = validateRequest(privacyChangeDeclareSchema, req.body);
+  res.status(201).json(await declareChange(data));
+}));
+
+router.get('/changes/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyChangeIdParamsSchema, req.params);
+  res.json(await getChange(id));
+}));
+
+router.post('/changes/:id/orgs/:orgId/updated', asyncHandler(async (req, res) => {
+  const { id, orgId } = validateRequest(privacyChangeOrgParamsSchema, req.params);
+  res.json(await markOrgUpdated(id, orgId));
+}));
+
+router.post('/changes/:id/orgs/:orgId/removed', asyncHandler(async (req, res) => {
+  const { id, orgId } = validateRequest(privacyChangeOrgParamsSchema, req.params);
+  res.json(await markOrgRemoved(id, orgId));
+}));
+
+router.post('/changes/:id/orgs/:orgId/draft-email', asyncHandler(async (req, res) => {
+  const { id, orgId } = validateRequest(privacyChangeOrgParamsSchema, req.params);
+  res.status(201).json(await draftUpdateEmail(id, orgId));
 }));
 
 // ─── Data-broker database + exposure scan + case ledger (issue #2144) ───────
