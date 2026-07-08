@@ -1600,7 +1600,12 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
       return null;
     } else {
-      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count });
+      // Carry the detector's open/in-flight/filtered breakdown into the park so
+      // an explicit "Run" can explain WHY a non-empty queue yielded no work.
+      const counts = detection.total != null
+        ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
+        : null;
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts });
       emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
       return null;
     }

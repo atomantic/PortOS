@@ -743,7 +743,7 @@ export async function computePerpetualRecheckAt(interval, fromMs = Date.now()) {
  * skeleton if absent.
  */
 function ensureExecutionRecord(schedule, taskType, appId) {
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+  const key = executionKey(taskType);
   if (!schedule.executions[key]) {
     schedule.executions[key] = { lastRun: null, count: 0, perApp: {} };
   }
@@ -756,12 +756,33 @@ function ensureExecutionRecord(schedule, taskType, appId) {
   return top;
 }
 
+/** Normalize a task type to its `task:`-prefixed executions map key. */
+function executionKey(taskType) {
+  return taskType.startsWith('task:') ? taskType : `task:${taskType}`;
+}
+
+/**
+ * Resolve the EXISTING execution sub-record (global or per-app) without creating
+ * it — the read-only counterpart to ensureExecutionRecord. Returns null when the
+ * task (or that app) has no record yet.
+ */
+function resolveExecutionRecord(schedule, taskType, appId = null) {
+  const top = schedule.executions[executionKey(taskType)];
+  if (!top) return null;
+  return (appId ? top.perApp?.[appId] : top) || null;
+}
+
+// Every field parkPerpetual stamps for a park. Kept as one list so the clear /
+// reset paths can't drift from what park writes (adding a park field here is the
+// single edit that keeps all three in sync).
+const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCounts', 'parkedAt'];
+
 /**
  * Park a perpetual task: its work-detector reported nothing actionable, so stop
  * draining and wait until `parkedUntil` before re-probing. Stamps the park
  * fields on the (per-app or global) execution record.
  */
-export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, signature } = {}) {
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature } = {}) {
   const schedule = await loadSchedule();
   const interval = schedule.tasks[taskType] || {};
   const parkedUntil = await computePerpetualRecheckAt(interval);
@@ -769,6 +790,12 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
   record.parkedUntil = parkedUntil;
   record.parkReason = reason;
   record.parkActionableCount = actionableCount;
+  // The detector's candidate breakdown ({ open, inFlight, filtered }). Lets the
+  // UI explain WHY a non-empty queue yields zero claimable work — "0 of N, M
+  // in-flight" — instead of a bare "no work". `null` = the detector reported no
+  // breakdown (e.g. the reconcile scans), so the field is left off the record.
+  if (counts != null) record.parkCounts = counts;
+  else delete record.parkCounts;
   record.parkedAt = new Date().toISOString();
   // A drain that parks because a full cycle made NO progress (branch-reconcile's
   // 'no-progress' park) records the actionable signature it was stuck on, so the
@@ -781,17 +808,33 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
   }
   await saveSchedule(schedule);
   emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
-  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason });
+  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts });
   return record;
+}
+
+/**
+ * Read the current park record for a perpetual task (or null when not parked).
+ * Used by the on-demand handler to explain to the user WHY an explicit "Run"
+ * produced no task — the park fields are freshly stamped by the same dispatch,
+ * so this reflects the just-completed detection, not stale cadence state.
+ */
+export async function getPerpetualParkInfo(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const record = resolveExecutionRecord(schedule, taskType, appId);
+  if (!record || record.parkedUntil == null) return null;
+  return {
+    parkedUntil: record.parkedUntil,
+    parkReason: record.parkReason ?? null,
+    parkActionableCount: record.parkActionableCount ?? null,
+    parkCounts: record.parkCounts ?? null,
+    parkedAt: record.parkedAt ?? null
+  };
 }
 
 /** Read the last actionable signature recorded for a perpetual drain (or null). */
 export async function getPerpetualSignature(taskType, appId = null) {
   const schedule = await loadSchedule();
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
-  const top = schedule.executions[key];
-  if (!top) return null;
-  const record = appId ? top.perApp?.[appId] : top;
+  const record = resolveExecutionRecord(schedule, taskType, appId);
   return record?.lastActionableSignature ?? null;
 }
 
@@ -815,17 +858,33 @@ export async function setPerpetualSignature(taskType, appId = null, signature) {
  */
 export async function clearPerpetualPark(taskType, appId = null) {
   const schedule = await loadSchedule();
-  const key = taskType.startsWith('task:') ? taskType : `task:${taskType}`;
-  const top = schedule.executions[key];
-  if (!top) return false;
-  const record = appId ? top.perApp?.[appId] : top;
+  const record = resolveExecutionRecord(schedule, taskType, appId);
   if (!record || record.parkedUntil == null) return false;
-  delete record.parkedUntil;
-  delete record.parkReason;
-  delete record.parkActionableCount;
-  delete record.parkedAt;
+  for (const field of PARK_FIELDS) delete record[field];
   await saveSchedule(schedule);
   return true;
+}
+
+/**
+ * Reset a perpetual task's cached drain state for an explicit user-initiated
+ * re-run. Drops any park AND the convergence `lastActionableSignature` in a
+ * single write, so the next detection dispatches on LIVE state alone — never a
+ * stale "no-progress" verdict or a cadence park. This is what makes a manual
+ * "Run" honor the user's intent to re-check now: without clearing the signature,
+ * branch-reconcile/issue-reconcile would re-park `no-progress` against an
+ * unchanged-since-last-run set even though the user explicitly asked to re-drive.
+ * Returns true when it cleared anything.
+ */
+export async function resetPerpetualForManualRun(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const record = resolveExecutionRecord(schedule, taskType, appId);
+  if (!record) return false;
+  let changed = false;
+  for (const field of [...PARK_FIELDS, 'lastActionableSignature']) {
+    if (record[field] !== undefined) { delete record[field]; changed = true; }
+  }
+  if (changed) await saveSchedule(schedule);
+  return changed;
 }
 
 /**
