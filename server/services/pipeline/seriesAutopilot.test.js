@@ -739,6 +739,132 @@ describe('resolveAutopilotProduceTeaser (config gate, #2185)', () => {
   });
 });
 
+// CWQE Phase 7 (#2171) — iterate-to-quality revision loop.
+describe('resolveAutopilotRevision (config gate, #2171)', () => {
+  const {
+    resolveAutopilotRevision,
+    DEFAULT_REVISION_MIN_CYCLES,
+    DEFAULT_REVISION_MAX_CYCLES,
+    DEFAULT_REVISION_PLATEAU_DELTA,
+  } = autopilot;
+
+  it('defaults OFF with the module cycle defaults', () => {
+    expect(resolveAutopilotRevision({}, null)).toEqual({
+      revisionEnabled: false,
+      revisionMinCycles: DEFAULT_REVISION_MIN_CYCLES,
+      revisionMaxCycles: DEFAULT_REVISION_MAX_CYCLES,
+      revisionPlateauDelta: DEFAULT_REVISION_PLATEAU_DELTA,
+    });
+  });
+  it('per-run option wins over the persisted setting', () => {
+    const r = resolveAutopilotRevision(
+      { revisionEnabled: true, revisionMaxCycles: 4, revisionPlateauDelta: 0.5 },
+      { pipelineEditorialChecks: { revisionEnabled: false, revisionMaxCycles: 2 } },
+    );
+    expect(r.revisionEnabled).toBe(true);
+    expect(r.revisionMaxCycles).toBe(4);
+    expect(r.revisionPlateauDelta).toBe(0.5);
+  });
+  it('falls back to the persisted setting when no per-run option', () => {
+    const r = resolveAutopilotRevision({}, { pipelineEditorialChecks: { revisionEnabled: true, revisionMinCycles: 2 } });
+    expect(r.revisionEnabled).toBe(true);
+    expect(r.revisionMinCycles).toBe(2);
+  });
+  it('clamps maxCycles up to at least minCycles (misconfig can never strand the loop)', () => {
+    const r = resolveAutopilotRevision({ revisionMinCycles: 3, revisionMaxCycles: 1 });
+    expect(r.revisionMaxCycles).toBe(3);
+  });
+  it('floors minCycles at 1 and plateauDelta at 0', () => {
+    const r = resolveAutopilotRevision({ revisionMinCycles: 0, revisionPlateauDelta: -5 });
+    expect(r.revisionMinCycles).toBe(1);
+    expect(r.revisionPlateauDelta).toBe(0);
+  });
+});
+
+describe('resolveNextStep — revision cycle ordering (#2171)', () => {
+  const comic = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+  const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });
+  // Health-clean base runState (everything up to and including the health gate).
+  const healthClean = {
+    arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']),
+    editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true,
+    editorialHealthReady: true,
+  };
+  const stages = { idea: ready(), comicScript: ready(VALID_SCRIPT) };
+
+  it('does NOT insert a revision cycle when disabled (default) — proceeds to canonVerify', () => {
+    const step = resolveNextStep(comic, [issue({ stages })], healthClean, { includeVisual: true });
+    expect(step.kind).toBe('canonVerify');
+  });
+
+  it('inserts the revision cycle after the health gate and before canonVerify when enabled', () => {
+    const step = resolveNextStep(comic, [issue({ stages })], healthClean, { includeVisual: true, revisionEnabled: true, revisionMaxCycles: 2 });
+    expect(step.kind).toBe('revisionCycle');
+    expect(step.reason).toMatch(/cycle 1/);
+  });
+
+  it('routes back to the revision cycle while cycles remain (cursor is revisionCyclesRun)', () => {
+    const step = resolveNextStep(
+      comic, [issue({ stages })],
+      { ...healthClean, revisionCyclesRun: 1 },
+      { includeVisual: true, revisionEnabled: true, revisionMaxCycles: 3 },
+    );
+    expect(step.kind).toBe('revisionCycle');
+    expect(step.reason).toMatch(/cycle 2/);
+  });
+
+  it('stops routing to the revision cycle once maxCycles is reached', () => {
+    const step = resolveNextStep(
+      comic, [issue({ stages })],
+      { ...healthClean, revisionCyclesRun: 2 },
+      { includeVisual: true, revisionEnabled: true, revisionMaxCycles: 2 },
+    );
+    expect(step.kind).toBe('canonVerify');
+  });
+
+  it('stops routing to the revision cycle once converged (plateau/hedge latched)', () => {
+    const step = resolveNextStep(
+      comic, [issue({ stages })],
+      { ...healthClean, revisionCyclesRun: 1, revisionConverged: true },
+      { includeVisual: true, revisionEnabled: true, revisionMaxCycles: 5 },
+    );
+    expect(step.kind).toBe('canonVerify');
+  });
+
+  it('dry-run plan lists the revision cycle after the health gate when enabled', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, { revisionEnabled: true, revisionMaxCycles: 3, includeVisual: false });
+    const kinds = plan.map((p) => p.kind);
+    expect(kinds).toContain('revisionCycle');
+    expect(kinds.indexOf('revisionCycle')).toBeGreaterThan(kinds.indexOf('editorialHealthGate'));
+    const rev = plan.find((p) => p.kind === 'revisionCycle');
+    expect(rev.count).toBe(3);
+  });
+
+  it('dry-run plan omits the revision cycle when disabled', () => {
+    const series = { targetFormat: 'comic', arc: { logline: 'L', summary: 'S' }, seasons: [{ id: 'se1', number: 1 }] };
+    const issues = [{ id: 'i1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {} }];
+    const plan = autopilot.__testing.buildDryRunPlan(series, issues, { includeVisual: false });
+    expect(plan.map((p) => p.kind)).not.toContain('revisionCycle');
+  });
+});
+
+describe('meanQualityScore (#2171)', () => {
+  const { meanQualityScore } = autopilot.__testing;
+  it('averages only judged, finite scores', () => {
+    expect(meanQualityScore({ scores: [
+      { judged: true, qualityScore: 6 },
+      { judged: true, qualityScore: 8 },
+      { judged: false, qualityScore: null },
+    ] })).toBe(7);
+  });
+  it('is null when nothing is judged', () => {
+    expect(meanQualityScore({ scores: [{ judged: false, qualityScore: null }] })).toBe(null);
+    expect(meanQualityScore({ scores: [] })).toBe(null);
+  });
+});
+
 describe('autopilotEvents in-process bus (#2185)', () => {
   it('mirrors the SSE frames a real run broadcasts onto the bus keyed by seriesId', async () => {
     cosMode = 'dry-run';

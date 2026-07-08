@@ -91,6 +91,18 @@ const autopilotStartSchema = z.object({
   // comic issue is drafted the run mints + starts a Creative Director teaser video
   // per issue. Falls back to pipelineEditorialChecks.produceTeaser, then off.
   produceTeaser: z.boolean().optional(),
+  // Iterate-to-quality revision loop (CWQE Phase 7, #2171). When true, after the
+  // editorial-health gate the run cycles the weakest drafted issue through
+  // adversarial cuts + a judge-gated keep/revert, stopping on plateau /
+  // hedged-convergence / maxCycles. Falls back to the persisted
+  // pipelineEditorialChecks.revision* setting, then off. minCycles floors the
+  // stops; maxCycles is the cost ceiling; plateauDelta is the score-movement
+  // convergence threshold. Caps share MAX_CONVERGENCE_ROUNDS so a direct API call
+  // can't request an absurd cycle budget.
+  revisionEnabled: z.boolean().optional(),
+  revisionMinCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionMaxCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionPlateauDelta: z.number().min(0).max(10).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
