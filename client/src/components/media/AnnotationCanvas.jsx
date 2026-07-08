@@ -59,24 +59,18 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
 
   // Redraw the whole layer from the committed strokes plus any in-progress
   // stroke. Full redraw (rather than incremental) keeps undo/erase trivially
-  // correct — the layer is a pure function of the stroke list. In blank mode the
-  // background fills first so erase (destination-out) reveals the paper, not the
-  // page behind the canvas.
+  // correct — the layer is a pure function of the stroke list. The stroke layer
+  // itself always stays transparent (drawStrokes clears it, and erase uses
+  // destination-out to cut holes); in blank mode the "paper" is a CSS background
+  // on the <canvas> element so an erased hole reveals white, not the dark page.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !dims) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (isBlank) {
-      ctx.save();
-      ctx.fillStyle = backgroundColor;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.restore();
-    }
     const all = inProgress ? [...strokes, inProgress] : strokes;
     drawStrokes(ctx, all, canvas.width, canvas.height);
-  }, [strokes, inProgress, dims, isBlank, backgroundColor]);
+  }, [strokes, inProgress, dims]);
 
   // Map a pointer event to natural-pixel canvas coordinates, accounting for the
   // CSS scale between the displayed size and the canvas's internal resolution.
@@ -179,6 +173,10 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
           onPointerMove={handlePointerMove}
           onPointerUp={finishStroke}
           onPointerCancel={finishStroke}
+          // Blank mode paints the "paper" as a CSS background so the transparent
+          // stroke layer sits over it and an erased hole reveals white, not the
+          // dark page behind the canvas.
+          style={isBlank ? { backgroundColor } : undefined}
           className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
         />
       )}

@@ -102,7 +102,12 @@ export default function MediaAnnotate() {
     if (!isSupported) { setLoading(false); return; }
     let active = true;
     setStrokes([]);
-    setDims(null);
+    // In image mode dims come from the <img> onLoad, which re-fires when the src
+    // changes — so reset to null and let it re-report. In blank mode dims derive
+    // from the (stable-per-key) URL size params; the child's dims effect won't
+    // re-fire when navigating sketch→sketch at the same w/h, so clearing here
+    // would strand Save disabled (`!dims`). Leave blank dims in place.
+    if (!isBlank) setDims(null);
     setImageError(false);
     setLoading(true);
     getMediaSketch(mediaKey, { silent: true })
