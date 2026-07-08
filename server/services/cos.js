@@ -86,6 +86,7 @@ import {
   queueEligibleImprovementTasks,
   generateSelfImprovementTaskForType,
   generateManagedAppImprovementTaskForType,
+  emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
   isCooldownExemptTask,
@@ -802,30 +803,12 @@ async function dequeueNextTask() {
         trackSpawn(task);
       }
     } else if (!task) {
-      // The explicit user "Run" produced no task. Surface WHY so the trigger
-      // isn't a silent no-op the user only discovers in the pm2 logs. This event
-      // fires ONLY on the on-demand (user-initiated) path, so the client can
-      // toast it without background-park noise.
-      //
-      // Because we reset the park BEFORE the fresh detection above, a park
-      // record here unambiguously means "this check parked" (definitive no
-      // work). Its ABSENCE means the detector did NOT park — a transient probe
-      // failure (gh/glab down) or a non-perpetual skip — which the client must
-      // word as "couldn't re-check", never "nothing to do".
-      const parkInfo = await taskScheduleMod
-        .getPerpetualParkInfo(request.taskType, targetApp?.id || null)
-        .catch(() => null);
-      cosEvents.emit('schedule:on-demand-empty', {
-        requestId: request.id,
-        taskType: request.taskType,
-        appId: targetApp?.id || null,
-        appName: targetApp?.name || null,
-        parked: !!parkInfo,
-        parkReason: parkInfo?.parkReason || null,
-        parkedUntil: parkInfo?.parkedUntil || null,
-        actionableCount: parkInfo?.parkActionableCount ?? null,
-        counts: parkInfo?.parkCounts || null
-      });
+      // Explicit user "Run" produced no task — surface WHY (parked / transient /
+      // idle) so the trigger isn't a silent no-op. Shared with the sibling
+      // spawnPriority0OnDemand engine so a request drained by either path gets
+      // the same feedback. Because we reset the park BEFORE the fresh detection
+      // above, the outcome classification reflects THIS check.
+      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: taskSchedule.tasks[request.taskType] });
     }
   }
 

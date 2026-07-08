@@ -574,6 +574,10 @@ async function spawnPriority0OnDemand(ctx) {
 
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+        // A user-initiated "Run" must re-check live state — reset any park + the
+        // reconcile convergence signature so the detector below runs fresh (see
+        // cos.dequeueNextTask for the full rationale).
+        await taskSchedule.resetPerpetualForManualRun(request.taskType, targetApp.id);
         // Advance the cooldown eagerly (deduped per app per cycle), but defer
         // binding the active agent until a task is produced — a null result
         // here must not strand `activeAgentId` (issue #978).
@@ -588,6 +592,7 @@ async function spawnPriority0OnDemand(ctx) {
         }
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+        await taskSchedule.resetPerpetualForManualRun(request.taskType);
         await taskSchedule.recordExecution(`task:${request.taskType}`);
         await withStateLock(async () => {
           const s = await loadState();
@@ -604,6 +609,10 @@ async function spawnPriority0OnDemand(ctx) {
           tasksToSpawn.push(task);
           trackSpawn(task);
         }
+      } else if (!task) {
+        // Explicit user Run produced no task on THIS engine too — same feedback
+        // as cos.dequeueNextTask so a request drained here isn't a silent no-op.
+        await emitOnDemandEmpty({ taskScheduleMod: taskSchedule, request, targetApp, taskConfig: liveSchedule.tasks[request.taskType] });
       }
     }
   }
@@ -1492,6 +1501,42 @@ async function generateManagedAppImprovementTask(app, state) {
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
+/**
+ * Surface WHY a user-initiated on-demand "Run" produced no task, so the trigger
+ * isn't a silent no-op the user only discovers in the pm2 logs. Emits
+ * `schedule:on-demand-empty` (which the client toasts) with an `outcome`:
+ *   - 'parked'    → a perpetual detector re-checked and found no actionable work;
+ *                   carries the reason + open/in-flight/filtered breakdown.
+ *   - 'transient' → a perpetual task that did NOT park — a transient gh/glab
+ *                   probe failure — so the check didn't actually complete.
+ *   - 'idle'      → a non-perpetual task produced no task: a genuine "nothing to
+ *                   do", NOT a failure (e.g. pr-watcher with no new PRs).
+ *
+ * Called from BOTH on-demand drain engines (cos.dequeueNextTask and
+ * spawnPriority0OnDemand below) so a user Run gets feedback no matter which one
+ * drains the request. `taskConfig` is the already-loaded interval for the task,
+ * passed in to avoid re-reading the schedule. The event fires ONLY on the
+ * user-initiated on-demand path, so the client can toast it without
+ * background-park noise.
+ */
+export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
+  const appId = targetApp?.id || null;
+  const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
+  const isPerpetual = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL;
+  const outcome = parkInfo ? 'parked' : (isPerpetual ? 'transient' : 'idle');
+  cosEvents.emit('schedule:on-demand-empty', {
+    requestId: request.id,
+    taskType: request.taskType,
+    appId,
+    appName: targetApp?.name || null,
+    outcome,
+    parkReason: parkInfo?.parkReason || null,
+    parkedUntil: parkInfo?.parkedUntil || null,
+    actionableCount: parkInfo?.parkActionableCount ?? null,
+    counts: parkInfo?.parkCounts || null
+  });
+}
+
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
