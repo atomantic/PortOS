@@ -168,6 +168,16 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
   // played-at+track key. The granularity is the export's own: iOS carries seconds,
   // but Android lines have none (second defaults to 0), so two identical Android
   // messages within the same clock-MINUTE collapse to one event.
+  //
+  // Accepted residual (reviewed, deliberately not "fixed" by re-adding a chat
+  // identity): if two DIFFERENT chats both contain a same-named sender sending the
+  // same body at the same timestamp granularity, they collapse to one event. A
+  // stable chat scope would avoid this, but none exists in a WhatsApp export — the
+  // filename is unstable (zip vs extracted `_chat.txt`, renames) and the sender set
+  // shifts between a chat's successive full-history exports, so either would
+  // REINTRODUCE whole-conversation double-counting, a worse and more common bug
+  // than a rare cross-chat single-message collision. Tracked as a #2160 follow-up
+  // if a robust chat key ever becomes warranted.
   const dedupeKey = createHash('sha1')
     .update(`${happenedAt} ${msg.sender} ${bodyText}`)
     .digest('hex')
