@@ -13,6 +13,8 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   applyTreatment,
+  applyPlan,
+  applyPlanStepUpdate,
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
@@ -276,5 +278,104 @@ describe('mergeProjectRecord (LWW, tombstone-aware)', () => {
   });
   it('drops a malformed remote (next null)', () => {
     expect(mergeProjectRecord(at('2026-06-23T00:00:00.000Z'), { name: 'no id' }).next).toBeNull();
+  });
+});
+
+// =============================================================================
+// CDO Phase 2 (#2184) — production directive + plan transforms.
+// =============================================================================
+
+const VALID_PLAN = {
+  steps: [
+    { stepId: 'a', toolName: 'pipeline_createSeries', args: { name: 'Noir' } },
+    { stepId: 'b', toolName: 'pipeline_renderComicCover', args: { issueId: 'i1' }, dependsOn: ['a'] },
+  ],
+};
+
+describe('buildProjectRecord — directive/plan (CDO Phase 2)', () => {
+  it('defaults directive and plan to null on a bare project', () => {
+    const p = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 },
+      { id: 'cd-1', now: 'T', collectionId: 'col-1' },
+    );
+    expect(p.directive).toBeNull();
+    expect(p.plan).toBeNull();
+  });
+  it('stores a supplied directive object verbatim', () => {
+    const directive = { goal: 'make a comic', deliverables: ['covers'], constraints: { universeId: 'u1' } };
+    const p = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9, directive },
+      { id: 'cd-1', now: 'T', collectionId: 'col-1' },
+    );
+    expect(p.directive).toEqual(directive);
+    expect(p.plan).toBeNull();
+  });
+  it('coerces a non-object directive to null', () => {
+    const p = buildProjectRecord(
+      { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9, directive: 'nope' },
+      { id: 'cd-1', now: 'T', collectionId: 'col-1' },
+    );
+    expect(p.directive).toBeNull();
+  });
+});
+
+describe('applyPlan', () => {
+  it('normalizes steps (status→pending, retryCount→0, result→null, dependsOn→[]) and flips planning→rendering', () => {
+    const next = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
+    expect(next.status).toBe('rendering');
+    expect(next.plan.replanRounds).toBe(0);
+    expect(next.plan.steps[0]).toMatchObject({ stepId: 'a', status: 'pending', retryCount: 0, result: null, dependsOn: [] });
+    expect(next.plan.steps[1]).toMatchObject({ stepId: 'b', status: 'pending', dependsOn: ['a'] });
+  });
+  it('preserves paused/failed status (a human parked it)', () => {
+    expect(applyPlan({ id: 'cd-1', status: 'paused' }, VALID_PLAN).status).toBe('paused');
+    expect(applyPlan({ id: 'cd-1', status: 'failed' }, VALID_PLAN).status).toBe('failed');
+  });
+  it('throws a validation error on a malformed plan', () => {
+    expect(() => applyPlan({ id: 'cd-1', status: 'planning' }, { steps: [] })).toThrow(/Plan validation failed/);
+    expect(() => applyPlan({ id: 'cd-1', status: 'planning' }, { steps: [{ stepId: 'a' }] })).toThrow(/Plan validation failed/);
+  });
+  it('on a RE-PLAN preserves an already-done step verbatim and bumps replanRounds', () => {
+    const first = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
+    // Mark step "a" done as the advance loop would.
+    first.plan.steps[0].status = 'done';
+    first.plan.steps[0].result = { seriesId: 's1' };
+    const revised = applyPlan(first, {
+      steps: [
+        { stepId: 'a', toolName: 'pipeline_createSeries', args: { name: 'Noir' } },
+        { stepId: 'c', toolName: 'pipeline_generateStage', args: { issueId: 'i1', stageId: 'prose' }, dependsOn: ['a'] },
+      ],
+    });
+    expect(revised.plan.replanRounds).toBe(1);
+    // "a" keeps its terminal-success status + result — never re-run.
+    expect(revised.plan.steps[0]).toMatchObject({ stepId: 'a', status: 'done', result: { seriesId: 's1' } });
+    // The revised remaining step is fresh pending.
+    expect(revised.plan.steps[1]).toMatchObject({ stepId: 'c', status: 'pending' });
+  });
+  it('does NOT preserve a failed step across a re-plan (re-runs it)', () => {
+    const first = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
+    first.plan.steps[0].status = 'failed';
+    const revised = applyPlan(first, VALID_PLAN);
+    expect(revised.plan.steps[0].status).toBe('pending');
+  });
+});
+
+describe('applyPlanStepUpdate', () => {
+  it('patches a single step and returns the updated step', () => {
+    const base = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
+    const { project, updated } = applyPlanStepUpdate(base, 'b', { status: 'running' });
+    expect(updated).toMatchObject({ stepId: 'b', status: 'running' });
+    expect(project.plan.steps.find((s) => s.stepId === 'b').status).toBe('running');
+    expect(project.plan.steps.find((s) => s.stepId === 'a').status).toBe('pending');
+  });
+  it('returns { updated: null } (project unchanged) for an unknown stepId', () => {
+    const base = applyPlan({ id: 'cd-1', status: 'planning' }, VALID_PLAN);
+    const { project, updated } = applyPlanStepUpdate(base, 'zzz', { status: 'done' });
+    expect(updated).toBeNull();
+    expect(project).toBe(base);
+  });
+  it('returns { updated: null } when the project has no plan', () => {
+    const { updated } = applyPlanStepUpdate({ id: 'cd-1', plan: null }, 'a', { status: 'done' });
+    expect(updated).toBeNull();
   });
 });

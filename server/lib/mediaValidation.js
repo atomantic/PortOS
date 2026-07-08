@@ -29,6 +29,16 @@ export const imessageConfigSchema = z.object({
   intervalMinutes: z.number().int().min(1).max(1440).optional()
 });
 
+// Spotify listening-history ingestion config (#2152) — the `settings.spotify`
+// slice. Sync is OFF by default and only polls the recently-played API when
+// enabled AND the user has completed OAuth (credentials/tokens live under
+// data/spotify/, not settings). Validated as a settings slice on
+// PUT /api/settings; service-side DEFAULT_CONFIG fills any absent field.
+export const spotifyConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
 // Shared LoRA-training parameter bounds — used by both the settings-slice
 // defaults and the per-run override on POST /api/lora-training/runs.
 const loraTrainingParamsSchema = z.object({

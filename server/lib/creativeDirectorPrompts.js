@@ -79,6 +79,43 @@ export async function buildTreatmentPrompt(project) {
   return buildPrompt('cd-treatment', view);
 }
 
+// CDO Phase 2 (#2184) — the planner view. `toolSpecs` is the resolved
+// getToolSpecs() output from the creative tool registry, passed IN by the
+// caller (agentBridge) rather than imported here: the registry is a services
+// module and lib must not import it (nor pull its heavy import-time tool graph
+// into every prompt build). The template iterates `tools` + renders the
+// directive brief + the current plan (present only on a re-plan).
+function buildPlanView(project, toolSpecs) {
+  const directive = project.directive && typeof project.directive === 'object' ? project.directive : {};
+  const deliverables = Array.isArray(directive.deliverables) ? directive.deliverables : [];
+  const tools = (Array.isArray(toolSpecs) ? toolSpecs : []).map((s) => ({
+    name: s?.function?.name || '',
+    description: s?.function?.description || '',
+    parametersJson: JSON.stringify(s?.function?.parameters ?? {}),
+  }));
+  const currentSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
+  return {
+    project: buildProjectView(project),
+    apiUrl: PORTOS_API_URL,
+    directive: {
+      goal: directive.goal || '',
+      hasDeliverables: deliverables.length > 0,
+      deliverables: deliverables.map((value) => ({ value })),
+      constraintsJson: JSON.stringify(directive.constraints ?? {}),
+    },
+    tools,
+    hasCurrentPlan: currentSteps.length > 0,
+    currentPlanJson: JSON.stringify(
+      currentSteps.map((s) => ({ stepId: s.stepId, toolName: s.toolName, status: s.status })),
+    ),
+  };
+}
+
+export async function buildPlanPrompt(project, { toolSpecs } = {}) {
+  const view = buildPlanView(project, toolSpecs);
+  return buildPrompt('cd-plan', view);
+}
+
 function frameTimelineLabel(i, total) {
   if (total <= 1) return 'only frame';
   const pct = Math.round((i / (total - 1)) * 100);

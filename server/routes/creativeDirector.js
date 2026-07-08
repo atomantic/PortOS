@@ -14,6 +14,7 @@ import {
   creativeDirectorProjectCreateSchema,
   creativeDirectorProjectUpdateSchema,
   creativeDirectorTreatmentSchema,
+  creativeDirectorPlanSchema,
   creativeDirectorSceneUpdateSchema,
   creativeDirectorAutoCastSuggestSchema,
   creativeDirectorAutoCastApplySchema,
@@ -25,6 +26,7 @@ import {
   updateProject,
   deleteProject,
   setTreatment,
+  setPlan,
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
@@ -188,6 +190,20 @@ router.patch('/:id/treatment', asyncHandler(async (req, res) => {
     enqueueFirstPassSceneFrames(updated)
       .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
   }
+  res.json(updated);
+}));
+
+// Agent-callable (CDO Phase 2, #2184): write the production plan. The planner
+// agent (cd-plan) PATCHes a validated step list here; the server then executes
+// it step-by-step through the gated tool registry. Idempotent re-PATCH (a
+// re-plan) preserves already-completed steps by stepId (see applyPlan). Nudges
+// the plan advance loop so execution begins on the returned plan.
+router.patch('/:id/plan', asyncHandler(async (req, res) => {
+  const plan = validateRequest(creativeDirectorPlanSchema, req.body);
+  const updated = await setPlan(req.params.id, plan);
+  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
+  advanceAfterPlanStepSettled(req.params.id)
+    .catch((e) => console.log(`⚠️ CD plan advance failed: ${e.message}`));
   res.json(updated);
 }));
 

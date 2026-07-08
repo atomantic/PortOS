@@ -26,6 +26,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { replaceMarkedSection } from '../lib/markedSection.js';
 import * as brainStorage from './brainStorage.js';
 import { brainEvents, now } from './brainStorage.js';
 import * as obsidian from './obsidian.js';
@@ -299,6 +300,39 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
   // Per-entry event so the memory bridge re-embeds only this day, not all
   // of them. (Keep journals:appended separate — it carries the single new
   // segment for UI live-updates, which is a different consumer.)
+  brainEvents.emit('journals:upserted', { entry });
+  return entry;
+}
+
+/**
+ * Splice an auto-generated, marker-delimited section into a day's entry WITHOUT
+ * disturbing user-authored content or segment history. Unlike setJournalContent
+ * (which collapses segments on a full rewrite), this preserves `segments` — it
+ * only rewrites the region between the markers (see server/lib/markedSection.js),
+ * so a re-run replaces just the auto section and typed/dictated text stays
+ * primary. Passing an empty `body` removes the section.
+ *
+ * Rides the same brainStorage.upsertWithId path as every other journal write
+ * (via putEntry), so the edit federates + re-embeds through brainMemoryBridge.
+ * Returns the updated entry, or null when there was nothing to write (no
+ * existing entry AND an empty section, or an idempotent no-op re-run).
+ */
+export async function upsertAutoSection(date, body, markers) {
+  if (!isIsoDate(date)) throw new Error(`invalid date: ${date}`);
+  const entry = await storeMutex(async () => {
+    const existing = await getEntry(date);
+    const base = existing || newEntry(date);
+    const nextContent = replaceMarkedSection(base.content || '', body, markers);
+    // Idempotent re-run against an unchanged day: skip the write, sync-log
+    // append, and Obsidian round-trip entirely.
+    if (existing && nextContent === (base.content || '')) return existing;
+    // Nothing to persist: no prior entry and the draft produced no section.
+    if (!existing && !nextContent.trim()) return null;
+    return putEntry(date, { ...base, content: nextContent });
+  });
+  if (!entry) return null;
+  scheduleObsidianSync(entry);
+  brainEvents.emit('journals:changed', { records: await rawRecords() });
   brainEvents.emit('journals:upserted', { entry });
   return entry;
 }

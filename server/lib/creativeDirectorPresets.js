@@ -42,6 +42,27 @@ export const SCENE_STATUSES = Object.freeze([
   'pending', 'rendering', 'evaluating', 'accepted', 'failed',
 ]);
 
+// Production-plan step lifecycle states (CDO Phase 2, #2184). A plan step is
+// `pending` until its `dependsOn[]` are all terminal-success (done/skipped) and
+// the advance loop dispatches it; `running` while a synchronous tool executes or
+// a long-running job/run is in flight; `blocked` when an underlying run pauses
+// for human review (or the orchestrator gate rejects it — off/budget); `done`
+// on success; `failed` on an unrecoverable tool error; `skipped` when the plan
+// (re-planner) drops it. Mirrors SCENE_STATUSES' role for the legacy video flow.
+export const PLAN_STEP_STATUSES = Object.freeze([
+  'pending', 'running', 'blocked', 'done', 'failed', 'skipped',
+]);
+
+// Terminal-SUCCESS plan-step states — a step in one of these is finished and its
+// dependents are unblocked. `failed` is terminal but NOT success (a dependent
+// can never run), so it is deliberately excluded.
+export const PLAN_STEP_TERMINAL_SUCCESS = Object.freeze(new Set(['done', 'skipped']));
+
+// Bounded re-planning: after a plan step fails, the planner may revise the
+// remaining steps at most this many times before the project pauses with
+// residuals for human review (autopilot's convergence-pause contract).
+export const MAX_REPLAN_ROUNDS = 2;
+
 /**
  * Map a project's aspectRatio + quality + scene durationSeconds to the
  * concrete render-API body.

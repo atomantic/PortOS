@@ -319,6 +319,7 @@ const navItems = [
       { to: '/digital-twin/import', label: 'Import', icon: Upload },
       { to: '/digital-twin/interview', label: 'Interview', icon: MessageSquare },
       { to: '/digital-twin/overview', label: 'Overview', icon: Heart },
+      { to: '/privacy/overview', label: 'Privacy', icon: Shield },
       { to: '/digital-twin/taste', label: 'Taste', icon: Palette },
       { to: '/digital-twin/test', label: 'Test', icon: CheckCircle },
       { to: '/digital-twin/time-capsule', label: 'Time Capsule', icon: Archive },

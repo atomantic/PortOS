@@ -142,6 +142,18 @@ export async function setTreatment(id, treatmentInput) {
   return next;
 }
 
+export async function setPlan(id, planInput) {
+  const next = await (await selectBackend()).setPlan(id, planInput);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return next;
+}
+
+export async function updatePlanStep(id, stepId, patch) {
+  const result = await (await selectBackend()).updatePlanStep(id, stepId, patch);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return result;
+}
+
 export async function updateScene(id, sceneId, patch) {
   const result = await (await selectBackend()).updateScene(id, sceneId, patch);
   emitRecordUpdated('creativeDirectorProject', id);

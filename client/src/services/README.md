@@ -77,6 +77,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiTribe.js` | Tribe people (relationship rings + contacts). |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications. |
+| `apiSpotify.js` | Spotify OAuth + listening-history sync. |
 | `apiPersonalities.js` | Agent personality profiles. |
 
 ## Media / creative
@@ -115,6 +116,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiPalette.js` | Command-palette manifest + action dispatch. |
 | `apiVoice.js` | Voice synthesis / processing. |
 | `apiCity.js` | CyberCity snapshots — historical city-state series for the timeline scrubber (GET /snapshots, GET /config, POST /capture). |
+| `apiPrivacy.js` | Privacy Center — encrypted PII Vault + Trusted Organizations registry (status, vault CRUD + reveal, org CRUD, org holdings replace-set). |
 
 ## Browser-facing (DOM, voice, build) — not pure API wrappers
 

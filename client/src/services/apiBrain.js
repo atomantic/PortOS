@@ -295,3 +295,14 @@ export const updateDailyLogSettings = (settings) => request('/brain/daily-log/se
   body: JSON.stringify(settings)
 });
 export const syncDailyLogsToObsidian = () => request('/brain/daily-log/sync-obsidian', { method: 'POST' });
+
+// Brain - Daily Log - Activity Digest (auto-drafts, #2155)
+export const getActivityDigestSettings = () => request('/brain/daily-log/digest-settings');
+export const updateActivityDigestSettings = (settings) => request('/brain/daily-log/digest-settings', {
+  method: 'PUT',
+  body: JSON.stringify(settings)
+});
+export const draftActivityDigest = (date = 'today') => request(
+  `/brain/daily-log/${encodeURIComponent(date)}/draft`,
+  { method: 'POST' }
+);

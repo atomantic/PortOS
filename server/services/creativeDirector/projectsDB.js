@@ -28,6 +28,8 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   applyTreatment,
+  applyPlan,
+  applyPlanStepUpdate,
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
@@ -229,6 +231,19 @@ export async function pruneTombstonedProjects(olderThanMs) {
 export async function setTreatment(id, treatmentInput) {
   const { project } = await withLockedProject(id, (p) => ({ project: applyTreatment(p, treatmentInput) }));
   return project;
+}
+
+export async function setPlan(id, planInput) {
+  const { project } = await withLockedProject(id, (p) => ({ project: applyPlan(p, planInput) }));
+  return project;
+}
+
+export async function updatePlanStep(id, stepId, patch) {
+  const { result } = await withLockedProject(id, (p) => {
+    const { project, updated } = applyPlanStepUpdate(p, stepId, patch);
+    return { project, result: updated };
+  });
+  return result;
 }
 
 export async function updateScene(id, sceneId, patch) {

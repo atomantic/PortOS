@@ -34,6 +34,7 @@ const {
   knownModelContextWindow,
   knownProviderContextWindow,
   resolveStageContext,
+  resolveJudgeForStage,
   withLocalConcurrencyGate,
   LOCAL_LLM_MAX_CONCURRENCY,
 } = await import('./stageRunner.js');
@@ -656,5 +657,37 @@ describe('withLocalConcurrencyGate', () => {
     await expect(withLocalConcurrencyGate(provider, () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     // A subsequent call still acquires the freed slot and resolves.
     await expect(withLocalConcurrencyGate(provider, () => Promise.resolve('after'))).resolves.toBe('after');
+  });
+});
+
+describe('stageRunner — resolveJudgeForStage (writer/judge split, #2167)', () => {
+  it('resolves the stage judge pin to the pinned provider + model', async () => {
+    const judge = { id: 'judge-cli', name: 'Judge', type: 'cli', enabled: true, defaultModel: 'jm-default', heavyModel: 'jm-heavy' };
+    providers.getProviderById.mockResolvedValue(judge);
+    const out = await resolveJudgeForStage({ provider: 'writer', model: 'default', judgeProvider: 'judge-cli', judgeModel: 'heavy' });
+    expect(out.provider.id).toBe('judge-cli');
+    expect(out.model).toBe('jm-heavy'); // tier mapped against the judge provider
+  });
+
+  it('throws STAGE_JUDGE_PROVIDER_UNAVAILABLE when the pinned judge is disabled/missing', async () => {
+    providers.getProviderById.mockResolvedValue({ id: 'judge-cli', enabled: false });
+    await expect(resolveJudgeForStage({ judgeProvider: 'judge-cli' }))
+      .rejects.toMatchObject({ code: 'STAGE_JUDGE_PROVIDER_UNAVAILABLE' });
+  });
+
+  it('an explicit providerOverride beats the stage judge pin', async () => {
+    const override = { id: 'override-cli', name: 'Override', type: 'cli', enabled: true, defaultModel: 'om' };
+    providers.getProviderById.mockImplementation(async (id) => (id === 'override-cli' ? override : { id, enabled: true, type: 'cli', defaultModel: 'x' }));
+    const out = await resolveJudgeForStage({ judgeProvider: 'judge-cli' }, { providerOverride: 'override-cli' });
+    expect(out.provider.id).toBe('override-cli');
+  });
+
+  it('with no judge pin, falls back to the writer stage provider/model', async () => {
+    const active = apiProvider({ id: 'writer-api', defaultModel: 'wm-default' });
+    providers.getActiveProvider.mockResolvedValue(active);
+    providers.getProviderById.mockResolvedValue(null);
+    const out = await resolveJudgeForStage({ model: 'default' }); // no provider pin → active
+    expect(out.provider.id).toBe('writer-api');
+    expect(out.model).toBe('wm-default');
   });
 });

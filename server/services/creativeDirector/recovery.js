@@ -25,7 +25,7 @@
  *      fresh evaluate task, runs the stitch, etc.
  */
 
-import { listProjects, updateScene, updateRun, updateProject } from './local.js';
+import { listProjects, updateScene, updatePlanStep, updateRun, updateProject } from './local.js';
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { updateTask } from '../cos.js';
 
@@ -75,9 +75,25 @@ export async function recoverInFlightProjects() {
   }
 
   const { advanceAfterSceneSettled } = await import('./completionHook.js');
+  const { advanceAfterPlanStepSettled } = await import('./planAdvance.js');
   let resumed = 0;
   const completedAt = new Date().toISOString();
   for (const project of needsCleanup) {
+    // CDO Phase 2 (#2184): a directive-driven project's plan steps stuck in
+    // `running` lost their in-memory dispatch/job listener when the process
+    // died — reset them to `pending` so the advance loop re-dispatches. (Their
+    // stale `plan-step` run rows are reaped by the staleRuns pass below, same as
+    // treatment/evaluate runs.)
+    const planSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
+    const stuckPlanSteps = planSteps.filter((s) => s.status === 'running');
+    for (const step of stuckPlanSteps) {
+      await updatePlanStep(project.id, step.stepId, { status: 'pending' })
+        .catch((e) => console.log(`⚠️ CD recovery: reset plan step ${step.stepId} of ${project.id} failed: ${e.message}`));
+    }
+    if (stuckPlanSteps.length) {
+      console.log(`🔄 CD recovery: ${project.id} reset ${stuckPlanSteps.length} stuck plan step(s) to pending`);
+    }
+
     const scenes = project.treatment?.scenes || [];
     const stuck = scenes.filter((s) => STUCK_SCENE_STATUSES.has(s.status));
     for (const scene of stuck) {
@@ -159,8 +175,13 @@ export async function recoverInFlightProjects() {
     // while we're iterating projects here. queuedAt > recoveryStartedAt
     // means it's a brand-new user-initiated job, not a stale snapshot
     // entry, and canceling it would silently kill the user's action.
+    // Match BOTH owner conventions: the scene loop tags renders `cd:<id>:<sceneId>`;
+    // a Phase-2 plan render step tags media jobs `creative-director:<id>` (the
+    // registry's resolveOwner). Both must be canceled so the reset step's fresh
+    // dispatch doesn't race a doomed sibling for the same output.
     const orphaned = listJobs()
-      .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`))
+      .filter((j) => typeof j.owner === 'string'
+        && (j.owner.startsWith(`cd:${project.id}:`) || j.owner === `creative-director:${project.id}`))
       .filter((j) => j.status === 'queued' || j.status === 'running')
       .filter((j) => {
         const qa = new Date(j.queuedAt || 0).getTime();
@@ -177,6 +198,15 @@ export async function recoverInFlightProjects() {
     // `paused` projects skip this — the cleanup above is enough to make a
     // future Resume click work.
     if (RECOVERABLE_STATUSES.has(project.status)) {
+      // CDO Phase 2 (#2184): a directive-driven project resumes through the
+      // generalized plan advance loop (deriveNextPlanAction re-derives the next
+      // step from the reset plan). Legacy video projects stay on the scene loop.
+      if (project.directive) {
+        advanceAfterPlanStepSettled(project.id)
+          .catch((e) => console.log(`⚠️ CD recovery: plan advance for ${project.id} failed: ${e.message}`));
+        resumed += 1;
+        continue;
+      }
       // Special case: a project that was mid-stitch when the server died
       // still has status='stitching'. advanceAfterSceneSettled exits
       // early when it sees that status (its stitch dedup guard), so it
