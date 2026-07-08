@@ -108,6 +108,11 @@ describe('historyVisitToCandidate', () => {
   it('drops records without a usable timestamp', () => {
     expect(historyVisitToCandidate({ url: 'https://x.com', time_usec: 0 })).toBeNull();
   });
+  it('drops non-web-scheme visits (chrome://, about:, file://) so no local path is persisted', () => {
+    expect(historyVisitToCandidate({ url: 'chrome://newtab/', time_usec: 1614624300000000 })).toBeNull();
+    expect(historyVisitToCandidate({ url: 'about:blank', time_usec: 1614624300000000 })).toBeNull();
+    expect(historyVisitToCandidate({ url: 'file:///Users/me/secret.pdf', time_usec: 1614624300000000 })).toBeNull();
+  });
   it('falls back to the hostname when the title is empty', () => {
     const c = historyVisitToCandidate({ url: 'https://only.example/', time_usec: 1614624300000000 });
     expect(c.title).toBe('only.example');

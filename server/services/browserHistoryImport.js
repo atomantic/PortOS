@@ -23,7 +23,10 @@
  * Subframe navigations (`AUTO_SUBFRAME` / `MANUAL_SUBFRAME` — ad/embed iframe
  * loads Chrome records alongside real navigations) carry no autobiographical "I
  * visited this" signal, so they're dropped the same way the location importer
- * drops travel segments.
+ * drops travel segments. Non-web-scheme entries (`chrome://`, `about:`,
+ * `file:///…` local file opens) are likewise dropped — they aren't web visits,
+ * and dropping them keeps a local filesystem path from being persisted as a
+ * `web.visit`.
  *
  * Idempotent: a visit has no stable id in the export, so the dedupe key is a
  * content hash of (visit instant + URL). Re-importing the same export — or a
@@ -90,14 +93,19 @@ export function historyVisitToCandidate(record) {
   const transition = normalizeTransition(record.page_transition ?? record.pageTransition);
   if (isSubframeTransition(transition)) return null;
 
+  // Only http(s) navigations are web visits — drop non-web schemes (chrome://,
+  // about:, file:///… local file opens) and unparseable URLs so a local
+  // filesystem path is never persisted as a `web.visit`.
   const host = hostnameOf(url);
-  const title = String(record.title ?? '').trim() || host || url;
+  if (!host) return null;
+  const title = String(record.title ?? '').trim() || host;
 
   // No visit id in the export — hash the visit's CONTENT identity (instant + URL)
-  // so re-imports collapse deterministically. Two identical URLs at the same
-  // microsecond are indistinguishable in the file (and can't happen in practice),
-  // so collapsing them is correct — same precedent as the location importer's
-  // visit-start + place key.
+  // so re-imports collapse deterministically. `happenedAt` is millisecond-precision
+  // (the export's microsecond `time_usec` is truncated to ms by the Date round-trip),
+  // so two visits to the SAME URL within the same millisecond collapse to one event.
+  // That's an impossible cadence for real navigation, so collapsing them is correct
+  // — same precedent as the location importer's visit-start + place key.
   const dedupeKey = createHash('sha1')
     .update(`${happenedAt} ${url}`)
     .digest('hex')
@@ -108,11 +116,11 @@ export function historyVisitToCandidate(record) {
     kind: 'web.visit',
     happenedAt,
     title,
-    summary: host ? shortSummary(host) : null,
+    summary: shortSummary(host),
     url,
     dedupeKey: `browser:${dedupeKey}`,
     metadata: {
-      host: host || null,
+      host,
       transition: transition || null,
     },
   };
