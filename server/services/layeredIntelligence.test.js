@@ -22,6 +22,7 @@ import {
   appendProposalToPlan,
   gatherSources,
   fetchHttpSource,
+  runShellCommand,
   customSourceKey,
   normalizeIssueState,
   listForgeIssues,
@@ -502,6 +503,32 @@ describe('fetchHttpSource', () => {
 
   it('returns null when no fetch implementation is available', async () => {
     expect(await fetchHttpSource('https://x', { fetchImpl: undefined })).toBeNull();
+  });
+
+  it('aborts (returns null) when the body read hangs past the timeout', async () => {
+    // Headers resolve fast, but res.text() never settles until the abort signal fires.
+    const fetchImpl = vi.fn((_url, { signal }) => Promise.resolve({
+      ok: true,
+      text: () => new Promise((_res, rej) => {
+        signal.addEventListener('abort', () => rej(new Error('aborted')));
+      })
+    }));
+    expect(await fetchHttpSource('https://slow', { fetchImpl, timeoutMs: 20 })).toBeNull();
+  });
+});
+
+describe('runShellCommand', () => {
+  it('caps runaway stdout at maxBytes and kills the command', async () => {
+    // `yes` streams forever; without the cap this buffers unbounded until the timeout.
+    const { stdout, code } = await runShellCommand('yes abcdefgh', { cwd: process.cwd(), maxBytes: 500, timeoutMs: 5000 });
+    expect(stdout.length).toBe(500);
+    expect(code).toBe(0); // capped-then-killed still reports success so the caller keeps the output
+  });
+
+  it('returns the real exit code for a normal short command', async () => {
+    const { stdout, code } = await runShellCommand('printf hello', { cwd: process.cwd() });
+    expect(code).toBe(0);
+    expect(stdout).toBe('hello');
   });
 });
 

@@ -313,13 +313,22 @@ function runCli(cmd, args, options = {}) {
  * startCommands/buildCommand (single trusted operator). cwd confines it to the
  * app repo.
  */
-export function runShellCommand(cmd, { cwd, timeoutMs = 15000 } = {}) {
+export function runShellCommand(cmd, { cwd, timeoutMs = 15000, maxBytes = 8000 } = {}) {
   return new Promise((done) => {
     const child = spawn(cmd, { shell: true, cwd, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL' });
-    let stdout = '', stderr = '';
-    child.stdout?.on('data', d => { stdout += d.toString(); });
-    child.stderr?.on('data', d => { stderr += d.toString(); });
-    child.on('close', code => done({ code, stdout, stderr }));
+    let stdout = '', stderr = '', capped = false;
+    // Cap stdout WHILE streaming and kill the child once we have enough — a runaway
+    // or endless command (`yes`, a looping metrics script) would otherwise buffer
+    // gigabytes into memory before the timeout fires. The gathered telemetry is
+    // sliced to maxBytes anyway, so a killed-at-cap command still yields usable
+    // output; report code 0 in that case so the caller keeps the truncated result.
+    child.stdout?.on('data', d => {
+      if (capped) return;
+      stdout += d.toString();
+      if (stdout.length >= maxBytes) { stdout = stdout.slice(0, maxBytes); capped = true; child.kill('SIGKILL'); }
+    });
+    child.stderr?.on('data', d => { if (stderr.length < maxBytes) stderr += d.toString(); });
+    child.on('close', code => done({ code: capped ? 0 : code, stdout, stderr }));
     child.on('error', err => done({ code: -1, stdout: '', stderr: err.message }));
   });
 }
@@ -334,10 +343,16 @@ export async function fetchHttpSource(url, { fetchImpl = globalThis.fetch, timeo
   if (typeof fetchImpl !== 'function') return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const res = await fetchImpl(url, { signal: controller.signal, redirect: 'follow' }).catch(() => null);
+  // Keep the abort timer armed across BOTH the fetch AND the body read: a server
+  // that returns headers fast but then dribbles (or never finishes) the body would
+  // otherwise hang res.text() forever if we cleared the timer on fetch-resolve. The
+  // signal aborts the body stream too, so a stalled read rejects → caught → null.
+  const text = await (async () => {
+    const res = await fetchImpl(url, { signal: controller.signal, redirect: 'follow' });
+    if (!res || !res.ok || typeof res.text !== 'function') return null;
+    return res.text();
+  })().catch(() => null);
   clearTimeout(timer);
-  if (!res || !res.ok || typeof res.text !== 'function') return null;
-  const text = await res.text().catch(() => null);
   return typeof text === 'string' ? text : null;
 }
 
