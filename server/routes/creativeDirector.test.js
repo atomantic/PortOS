@@ -6,9 +6,11 @@ vi.mock('../services/creativeDirector/local.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'cd-1', name: 'A' }]),
   getProject: vi.fn(),
   createProject: vi.fn(),
-  updateProject: vi.fn(),
+  updateProject: vi.fn(async (id, patch) => ({ id, ...patch })),
   deleteProject: vi.fn(async () => ({ ok: true })),
   setTreatment: vi.fn(),
+  setPlan: vi.fn(),
+  updatePlanStep: vi.fn(async () => ({})),
   updateScene: vi.fn(),
 }));
 
@@ -16,6 +18,18 @@ vi.mock('../services/creativeDirector/completionHook.js', () => ({
   startCreativeDirectorProject: vi.fn(async () => undefined),
   advanceAfterSceneSettled: vi.fn(async () => undefined),
 }));
+
+// CDO Phase 4 (#2186) — the new studio routes dynamic-import these; mock so the
+// route test stays off the heavy tool graph + cos state modules.
+vi.mock('../services/creativeDirector/planAdvance.js', () => ({
+  advanceAfterPlanStepSettled: vi.fn(async () => undefined),
+}));
+vi.mock('../services/creative/toolRegistry.js', () => ({
+  getAllCreativeToolMetadata: vi.fn(() => [{ id: 'universe_create', costClass: 'free', longRunning: false, destructive: false }]),
+}));
+vi.mock('../lib/domainAutonomy.js', () => ({ getCreativeAutonomyMode: vi.fn(() => 'dry-run') }));
+vi.mock('../services/domainUsage.js', () => ({ getDomainBudgetStatus: vi.fn(async () => ({ withinBudget: false, exceeded: 'actions' })) }));
+vi.mock('../services/cosState.js', () => ({ loadState: vi.fn(async () => ({ config: {} })) }));
 
 // Mock the auto-cast service so the route test doesn't pull the real
 // catalogDB/embeddings graph; the route's job here is to validate + dispatch.
@@ -509,6 +523,110 @@ describe('creativeDirector routes', () => {
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPassMusicBed: 'yes' });
       expect(r.status).toBe(400);
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+    });
+  });
+
+  // CDO Phase 4 (#2186) — studio UI routes.
+  describe('GET /tools', () => {
+    it('returns the tool catalog + mode + budget', async () => {
+      const r = await request(app).get('/api/creative-director/tools');
+      expect(r.status).toBe(200);
+      expect(r.body.tools).toEqual([{ id: 'universe_create', costClass: 'free', longRunning: false, destructive: false }]);
+      expect(r.body.mode).toBe('dry-run');
+      expect(r.body.budget).toEqual({ withinBudget: false, exceeded: 'actions' });
+    });
+  });
+
+  describe('POST /:id/directive', () => {
+    it('sets a directive, clears the plan, flips to planning, and nudges the advance loop', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'draft' });
+      const r = await request(app).post('/api/creative-director/cd-1/directive')
+        .send({ goal: 'Make a noir series', deliverables: ['story'], constraints: { budgetCap: 10 } });
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', expect.objectContaining({
+        plan: null, status: 'planning', directive: expect.objectContaining({ goal: 'Make a noir series' }),
+      }));
+      expect(planAdvance.advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-1');
+    });
+
+    it('leaves a paused project parked (no advance)', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'paused' });
+      const r = await request(app).post('/api/creative-director/cd-1/directive').send({ goal: 'x' });
+      expect(r.status).toBe(200);
+      expect(planAdvance.advanceAfterPlanStepSettled).not.toHaveBeenCalled();
+    });
+
+    it('400s on a missing goal', async () => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'draft' });
+      const r = await request(app).post('/api/creative-director/cd-1/directive').send({ deliverables: ['x'] });
+      expect(r.status).toBe(400);
+    });
+
+    it('404s on an unknown project', async () => {
+      cdService.getProject.mockResolvedValue(null);
+      const r = await request(app).post('/api/creative-director/nope/directive').send({ goal: 'x' });
+      expect(r.status).toBe(404);
+    });
+  });
+
+  describe('POST /:id/replan', () => {
+    it('clears the plan and re-runs the planner', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'rendering', directive: { goal: 'x' } });
+      const r = await request(app).post('/api/creative-director/cd-1/replan');
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { plan: null, status: 'planning', failureReason: null });
+      expect(planAdvance.advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-1');
+    });
+
+    it('400s when the project has no directive', async () => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'draft', directive: null });
+      const r = await request(app).post('/api/creative-director/cd-1/replan');
+      expect(r.status).toBe(400);
+    });
+  });
+
+  describe('POST /:id/plan/step/:stepId', () => {
+    const projectWithStep = (status = 'rendering') => ({
+      id: 'cd-1', status, directive: { goal: 'x' },
+      plan: { steps: [{ stepId: 'draft', toolName: 'story_generateStep', status: 'blocked' }] },
+    });
+
+    it('skips a step, then nudges the advance loop', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      cdService.getProject.mockResolvedValue(projectWithStep());
+      const r = await request(app).post('/api/creative-director/cd-1/plan/step/draft').send({ action: 'skip' });
+      expect(r.status).toBe(200);
+      expect(cdService.updatePlanStep).toHaveBeenCalledWith('cd-1', 'draft', expect.objectContaining({ status: 'skipped' }));
+      expect(planAdvance.advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-1');
+    });
+
+    it('retries a step, resetting it to pending', async () => {
+      cdService.getProject.mockResolvedValue(projectWithStep());
+      const r = await request(app).post('/api/creative-director/cd-1/plan/step/draft').send({ action: 'retry' });
+      expect(r.status).toBe(200);
+      expect(cdService.updatePlanStep).toHaveBeenCalledWith('cd-1', 'draft', { status: 'pending', retryCount: 0, result: null });
+    });
+
+    it('clears a plan-level pause (paused → rendering) before advancing', async () => {
+      cdService.getProject.mockResolvedValue(projectWithStep('paused'));
+      const r = await request(app).post('/api/creative-director/cd-1/plan/step/draft').send({ action: 'retry' });
+      expect(r.status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'rendering', failureReason: null });
+    });
+
+    it('404s on an unknown step', async () => {
+      cdService.getProject.mockResolvedValue(projectWithStep());
+      const r = await request(app).post('/api/creative-director/cd-1/plan/step/ghost').send({ action: 'skip' });
+      expect(r.status).toBe(404);
+    });
+
+    it('400s on an invalid action', async () => {
+      cdService.getProject.mockResolvedValue(projectWithStep());
+      const r = await request(app).post('/api/creative-director/cd-1/plan/step/draft').send({ action: 'nuke' });
+      expect(r.status).toBe(400);
     });
   });
 });

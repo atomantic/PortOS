@@ -140,6 +140,16 @@ export const getToolSpecs = ({ includeDestructive = false } = {}) =>
 export const getAllCreativeToolNames = () => CREATIVE_TOOLS.map((t) => t.name);
 
 /**
+ * Plain metadata for EVERY registered tool (id, description, costClass,
+ * longRunning, destructive) — the plan-board / directive-composer consumers
+ * (CDO Phase 4) hydrate cost-class badges + approval affordances from this
+ * without pulling the LLM-shaped `getToolSpecs()`. Destructive tools ARE
+ * included here (unlike the default spec set) so a hand-authored or bridged plan
+ * step naming one still renders with its real cost/approval flags.
+ */
+export const getAllCreativeToolMetadata = () => CREATIVE_TOOLS.map((t) => getCreativeToolMetadata(t.name));
+
+/**
  * Plain metadata for one tool (for non-LLM consumers, e.g. a plan board or the
  * command palette). Shape-independent from getToolSpecs.
  *

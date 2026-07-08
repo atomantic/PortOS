@@ -11,6 +11,7 @@ import {
 import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
 import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
+import PlanTab from '../components/creative-director/PlanTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
@@ -22,6 +23,7 @@ const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draf
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'plan', label: 'Plan' },
   { id: 'treatment', label: 'Treatment' },
   { id: 'segments', label: 'Segments' },
   { id: 'runs', label: 'Runs' },
@@ -216,6 +218,12 @@ export default function CreativeDirectorDetail() {
             project={project}
             onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)}
             onAsyncWorkQueued={extendPollingForAsyncWork}
+          />
+        )}
+        {activeTab === 'plan' && (
+          <PlanTab
+            project={project}
+            onProjectUpdate={(updated) => setProject((p) => (p ? { ...p, ...updated } : updated))}
           />
         )}
         {activeTab === 'treatment' && <TreatmentTab project={project} />}

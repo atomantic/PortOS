@@ -252,6 +252,19 @@ export const creativeDirectorPlanSchema = z.object({
   steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
 }).strict();
 
+// Blocked-step triage actions (CDO Phase 4, #2186). The studio UI's Plan tab
+// dispatches one of these against a single plan step:
+//   - `skip`  → mark the step `skipped` (a terminal-success state), unblocking
+//               its dependents, and resume the plan advance loop.
+//   - `retry` → reset a `blocked`/`failed` step back to `pending` (clearing its
+//               prior result + retryCount) so the advance loop re-dispatches it.
+//               Doubles as the "approve" affordance for a step the gate blocked
+//               (destructive / over-budget): once the human raises the budget or
+//               flips autonomy, retry re-runs just that step.
+export const creativeDirectorPlanStepActionSchema = z.object({
+  action: z.enum(['skip', 'retry']),
+}).strict();
+
 // ---------------------------------------------------------------------------
 // Create Suite — Importer.
 //

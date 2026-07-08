@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles } from 'lucide-react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCreativeDirectorProjects,
@@ -12,8 +12,12 @@ import {
 } from '../services/apiCreativeDirector.js';
 import { listCatalogIngredientsByIds } from '../services/apiCatalog.js';
 import { listVideoModels } from '../services/apiImageVideo.js';
+import { listUniverses } from '../services/apiUniverseBuilder.js';
+import { listPipelineSeries } from '../services/apiPipeline.js';
 import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
+import Drawer from '../components/Drawer';
+import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -28,13 +32,25 @@ const STATUS_COLORS = {
   failed: 'bg-port-error/30 text-port-error',
 };
 
+const EMPTY_DIRECTIVE = { goal: '', deliverables: [], constraints: { universeId: null, seriesId: null, budgetCap: null } };
+
 export default function CreativeDirector() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [models, setModels] = useState([]);
+  // Directive composer (CDO Phase 4, #2186) — deep-linkable drawer (`?new=directive`)
+  // that creates a studio production project seeded with a directive. State is
+  // hoisted here (above the Drawer body) per the Drawer state-hoisting rule.
+  const directiveOpen = searchParams.get('new') === 'directive';
+  const [directiveName, setDirectiveName] = useState('');
+  const [directiveDraft, setDirectiveDraft] = useState(EMPTY_DIRECTIVE);
+  const [creatingDirective, setCreatingDirective] = useState(false);
+  const [universes, setUniverses] = useState([]);
+  const [series, setSeries] = useState([]);
   // Catalog "Remix into… → Creative Director" handoff (#1808). The ingredient
   // ids arrive in the generic `location.state.remix.ingredientIds`; we hydrate
   // them for the chip list and forward the ids on create so the server folds
@@ -131,6 +147,45 @@ export default function CreativeDirector() {
     }
   };
 
+  const openDirective = () => {
+    setDirectiveName('');
+    setDirectiveDraft(EMPTY_DIRECTIVE);
+    setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('new', 'directive'); return n; }, { replace: true });
+    if (!universes.length) listUniverses({ silent: true }).then((u) => setUniverses(Array.isArray(u) ? u : (u?.items || []))).catch(() => {});
+    if (!series.length) listPipelineSeries({ silent: true }).then((s) => setSeries(Array.isArray(s) ? s : (s?.items || []))).catch(() => {});
+  };
+  const closeDirective = () => {
+    setSearchParams((prev) => { const n = new URLSearchParams(prev); n.delete('new'); return n; }, { replace: true });
+  };
+
+  const handleCreateDirective = async () => {
+    if (!directiveName.trim()) { toast.error('Name is required'); return; }
+    if (!directiveDraft.goal.trim()) { toast.error('Directive goal is required'); return; }
+    const modelId = form.modelId || models.find((m) => !m.deprecated)?.id || models[0]?.id;
+    if (!modelId) { toast.error('No video model available'); return; }
+    setCreatingDirective(true);
+    // A directive project still carries the base video params (the built-in video
+    // production template uses them); the planner drives the rest from the brief.
+    const created = await createCreativeDirectorProject({
+      name: directiveName.trim(),
+      aspectRatio: form.aspectRatio,
+      quality: form.quality,
+      modelId,
+      targetDurationSeconds: Number(form.targetDurationSeconds) || 60,
+      directive: {
+        goal: directiveDraft.goal.trim(),
+        deliverables: directiveDraft.deliverables || [],
+        constraints: directiveDraft.constraints || {},
+      },
+    }).catch((err) => { toast.error(err.message || 'Failed to create directive project'); return null; });
+    setCreatingDirective(false);
+    if (!created) return;
+    setProjects((prev) => [created, ...prev]);
+    toast.success(`Created directive "${created.name}"`);
+    closeDirective();
+    navigate(`/media/creative-director/${created.id}/plan`);
+  };
+
   // Optimistic-update the row in place rather than refetching the whole list
   // (per CLAUDE.md "Reactive UI updates"). The detail page's poll picks up the
   // server's authoritative status within 5s if anything diverges.
@@ -193,6 +248,14 @@ export default function CreativeDirector() {
             >
               <FlaskConical className="w-4 h-4" />
               Run smoke test
+            </button>
+            <button
+              onClick={openDirective}
+              className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
+              title="Compose a directive — the Creative Director plans and executes it across the creative suite"
+            >
+              <Wand2 className="w-4 h-4" />
+              New directive
             </button>
             <button
               onClick={() => { setShowForm((s) => !s); clearRemix(); }}
@@ -375,6 +438,46 @@ export default function CreativeDirector() {
           ))}
         </div>
       </div>
+
+      <Drawer
+        open={directiveOpen}
+        onClose={closeDirective}
+        title="New directive"
+        subtitle="A studio production the Creative Director plans and executes"
+        size="lg"
+        closeOnEsc={false}
+        closeOnBackdrop={false}
+      >
+        <div className="mb-4">
+          <label htmlFor="directive-project-name" className="block text-sm text-port-text-muted mb-1">Project name</label>
+          <input
+            id="directive-project-name"
+            value={directiveName}
+            onChange={(e) => setDirectiveName(e.target.value)}
+            placeholder="Noir Anthology"
+            maxLength={200}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+          />
+        </div>
+        <DirectiveComposer
+          directive={directiveDraft}
+          onChange={setDirectiveDraft}
+          universes={universes}
+          series={series}
+          idPrefix="new-directive"
+          disabled={creatingDirective}
+        />
+        <div className="flex gap-2 justify-end mt-5 pt-4 border-t border-port-border">
+          <button onClick={closeDirective} className="px-3 py-1.5 rounded text-sm bg-port-bg border border-port-border">Cancel</button>
+          <button
+            onClick={handleCreateDirective}
+            disabled={creatingDirective || !directiveName.trim() || !directiveDraft.goal.trim()}
+            className="px-3 py-1.5 rounded text-sm bg-port-accent text-white disabled:opacity-50"
+          >
+            {creatingDirective ? 'Creating…' : 'Create directive'}
+          </button>
+        </div>
+      </Drawer>
     </div>
   );
 }
