@@ -512,7 +512,12 @@ export async function interpretConsumption({ providerId, model } = {}) {
     usedFallback: Boolean(result.usedFallback),
     generatedAt: new Date().toISOString(),
   };
-  const merged = { ...(taste || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
+  // Re-read immediately before the write: the provider call above can take many
+  // seconds, during which a sync-hook or the daily scheduler may have rewritten
+  // this file with fresh rollup numbers. Overlay the interpretation onto the
+  // LATEST record, not the pre-call snapshot, so we don't roll the numbers back.
+  const current = await getTasteEvidence();
+  const merged = { ...(current || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
   await ensureDir(DIR);
   await atomicWrite(TASTE_OBSERVED_FILE, merged);
   console.log(`🧭 Twin interpretation generated via ${interpretation.providerName} (${text.length} chars)`);
