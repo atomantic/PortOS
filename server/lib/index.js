@@ -210,6 +210,7 @@ export * from './pgTimestamp.js';
 export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
+export * from './signalCrypto.js';
 export * from './timezone.js';
 export * from './tribeCadence.js';
 export * from './tribeMatch.js';

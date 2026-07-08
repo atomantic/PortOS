@@ -49,6 +49,7 @@ import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
 import timelineRoutes from './routes/timeline.js';
 import imessageRoutes from './routes/imessage.js';
+import signalRoutes from './routes/signal.js';
 import spotifyRoutes from './routes/spotify.js';
 import youtubeRoutes from './routes/youtube.js';
 import notificationsRoutes from './routes/notifications.js';
@@ -172,6 +173,7 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
+import { startSignalScheduler } from './services/signalScheduler.js';
 import { startSpotifyScheduler } from './services/spotifyScheduler.js';
 import { startYoutubeScheduler } from './services/youtubeScheduler.js';
 import * as telegram from './services/telegram.js';
@@ -482,6 +484,7 @@ app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/imessage', imessageRoutes);
+app.use('/api/signal', signalRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/youtube', youtubeRoutes);
 app.use('/api/notifications', notificationsRoutes);
@@ -615,6 +618,10 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
 // the user opts in via Settings → iMessage (needs macOS Full Disk Access) (#2151).
 startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
+// Initialize Signal sync scheduler — OFF by default; only reads the SQLCipher
+// chat DB (via the keychain-wrapped key) when the user opts in via
+// Settings → Signal (#2154).
+startSignalScheduler().catch(err => console.error(`❌ Signal sync scheduler init failed: ${err.message}`));
 // Initialize Spotify sync scheduler — OFF by default; only polls the
 // recently-played API when the user connects Spotify + opts in via
 // Settings → Spotify (#2152).
