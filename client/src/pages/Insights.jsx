@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useValidTab } from '../hooks/useValidTab';
-import { Dna, Palette, Link2, Lightbulb, ArrowRight } from 'lucide-react';
+import { Dna, Palette, Link2, Lightbulb, ArrowRight, Target } from 'lucide-react';
 import {
   getGenomeHealthCorrelations,
   getInsightThemes,
@@ -10,6 +10,7 @@ import {
 import GenomeHealthTab from '../components/insights/GenomeHealthTab';
 import TasteIdentityTab from '../components/insights/TasteIdentityTab';
 import CrossDomainTab from '../components/insights/CrossDomainTab';
+import GoalScorecardTab from '../components/insights/GoalScorecardTab';
 import ConfidenceBadge from '../components/insights/ConfidenceBadge';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
@@ -20,7 +21,8 @@ export const TABS = [
   { id: 'overview', label: 'Overview', icon: Lightbulb },
   { id: 'genome-health', label: 'Genome-Health', icon: Dna },
   { id: 'taste-identity', label: 'Taste & Identity', icon: Palette },
-  { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 }
+  { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 },
+  { id: 'goal-scorecard', label: 'Goal Scorecard', icon: Target }
 ];
 
 function SummaryCardSkeleton() {
@@ -191,6 +193,8 @@ export default function Insights() {
         return <TasteIdentityTab />;
       case 'cross-domain':
         return <CrossDomainTab />;
+      case 'goal-scorecard':
+        return <GoalScorecardTab />;
       default:
         return <OverviewTab />;
     }

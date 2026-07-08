@@ -315,6 +315,27 @@ export const refreshInsightNarrative = (providerId, model) => request('/insights
   body: JSON.stringify({ providerId, model })
 });
 
+// Goal effectiveness scorecard (#2157)
+export const getGoalScorecard = () => request('/insights/goal-scorecard');
+export const computeGoalScorecard = (weekStart) => request('/insights/goal-scorecard/compute', {
+  method: 'POST',
+  body: JSON.stringify(weekStart ? { weekStart } : {})
+});
+export const refreshGoalScorecardNarrative = (providerId, model) => request('/insights/goal-scorecard/narrative', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const getGoalScorecardRules = () => request('/insights/goal-scorecard/rules');
+export const saveGoalScorecardRules = (overrides) => request('/insights/goal-scorecard/rules', {
+  method: 'PUT',
+  body: JSON.stringify(overrides ?? {})
+});
+export const getGoalScorecardSettings = () => request('/insights/goal-scorecard/settings');
+export const updateGoalScorecardSettings = (partial) => request('/insights/goal-scorecard/settings', {
+  method: 'PUT',
+  body: JSON.stringify(partial ?? {})
+});
+
 // Media - Server media devices
 export const getMediaDevices = () => request('/media/devices');
 export const getMediaStatus = () => request('/media/status');
