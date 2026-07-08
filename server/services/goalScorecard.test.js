@@ -94,7 +94,7 @@ describe('goalKeywords', () => {
 describe('buildMappingRules', () => {
   const goals = [
     { id: 'g1', title: 'Musical Fluency', category: 'creative', status: 'active' },
-    { id: 'g2', title: 'Buy Humanoid Robot', category: 'financial', status: 'active', linkedCalendars: ['cal-x'] },
+    { id: 'g2', title: 'Buy Humanoid Robot', category: 'financial', status: 'active', linkedCalendars: [{ subcalendarId: 'cal-x', matchPattern: null }] },
     { id: 'g3', title: 'Archived goal', category: 'health', status: 'archived' },
   ];
 
@@ -103,9 +103,17 @@ describe('buildMappingRules', () => {
     expect(rules.map((r) => r.id)).toEqual(['g1', 'g2']);
   });
 
-  it('carries linkedCalendars into subcalendarIds', () => {
+  it('carries linkedCalendars ({subcalendarId, matchPattern}) into subcalendars', () => {
     const rules = buildMappingRules(goals);
-    expect(rules.find((r) => r.id === 'g2').subcalendarIds).toEqual(['cal-x']);
+    expect(rules.find((r) => r.id === 'g2').subcalendars).toEqual([{ subcalendarId: 'cal-x', matchPattern: null }]);
+  });
+
+  it('folds linkedActivities activityName values into keywords (not personIds)', () => {
+    const rules = buildMappingRules([
+      { id: 'gp', title: 'Piano', category: 'creative', status: 'active', linkedActivities: [{ activityName: 'Scales Drill', requiredFrequency: 3 }] },
+    ]);
+    expect(rules[0].keywords).toContain('scales drill');
+    expect(rules[0].personIds).toEqual([]);
   });
 
   it('merges override keywords and can disable a goal', () => {
@@ -119,19 +127,19 @@ describe('buildMappingRules', () => {
     expect(rules[0].keywords.filter((k) => k === 'guitar')).toHaveLength(1);
   });
 
-  it('override personIds/subcalendarIds replace the goal defaults', () => {
+  it('override personIds add participants; override subcalendarIds replace linked calendars', () => {
     const rules = buildMappingRules(goals, { g2: { personIds: ['p9'], subcalendarIds: ['cal-y'] } });
     const r = rules.find((x) => x.id === 'g2');
     expect(r.personIds).toEqual(['p9']);
-    expect(r.subcalendarIds).toEqual(['cal-y']);
+    expect(r.subcalendars).toEqual([{ subcalendarId: 'cal-y', matchPattern: null }]);
   });
 });
 
 describe('eventGoalMatches', () => {
   const rules = buildMappingRules([
     { id: 'music', title: 'Musical Fluency', category: 'creative', status: 'active' },
-    { id: 'robot', title: 'Buy Humanoid Robot', category: 'financial', status: 'active', linkedActivities: ['p-bob'], linkedCalendars: ['cal-robot'] },
-  ]);
+    { id: 'robot', title: 'Buy Humanoid Robot', category: 'financial', status: 'active', linkedCalendars: [{ subcalendarId: 'cal-robot', matchPattern: null }] },
+  ], { robot: { personIds: ['p-bob'] } });
 
   it('matches by keyword in title/summary/participant name', () => {
     expect(eventGoalMatches(ev({ title: 'piano and musical practice' }), rules)).toEqual(['music']);
@@ -139,12 +147,21 @@ describe('eventGoalMatches', () => {
     expect(eventGoalMatches(ev({ participants: [{ name: 'Robot Lab' }] }), rules)).toEqual(['robot']);
   });
 
-  it('matches by linked personId', () => {
+  it('matches by override-linked personId', () => {
     expect(eventGoalMatches(ev({ participants: [{ personId: 'p-bob' }] }), rules)).toEqual(['robot']);
   });
 
   it('matches by linked calendar subcalendarId', () => {
     expect(eventGoalMatches(ev({ kind: 'calendar.event', metadata: { subcalendarId: 'cal-robot' } }), rules)).toEqual(['robot']);
+  });
+
+  it('honors a calendar matchPattern (title must contain it)', () => {
+    const patternRules = buildMappingRules([
+      { id: 'gym', title: 'Fitness', category: 'health', status: 'active', linkedCalendars: [{ subcalendarId: 'cal-health', matchPattern: 'workout' }] },
+    ]);
+    expect(eventGoalMatches(ev({ kind: 'calendar.event', title: 'morning workout', metadata: { subcalendarId: 'cal-health' } }), patternRules)).toEqual(['gym']);
+    // Same calendar, title without the pattern → no match.
+    expect(eventGoalMatches(ev({ kind: 'calendar.event', title: 'dentist appt', metadata: { subcalendarId: 'cal-health' } }), patternRules)).toEqual([]);
   });
 
   it('returns empty for an unaligned event', () => {

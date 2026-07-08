@@ -139,9 +139,14 @@ export function goalKeywords(goal) {
 }
 
 // Build the deterministic goal→match ruleset. Each active goal gets a rule with
-// derived keywords plus any explicitly-linked personIds / calendar ids. A
-// per-goal override (keyed by goal id) can add keywords, replace personIds /
-// subcalendarIds, or disable the goal from the scorecard entirely.
+// derived keywords plus its linked calendars. A per-goal override (keyed by goal
+// id) can add keywords, add participant personIds, replace the linked calendars,
+// or disable the goal from the scorecard entirely.
+//
+// Note the real goal shapes (see server/services/identity/goals.js): a goal's
+// `linkedActivities` are named tracked activities (`{ activityName, … }`), NOT
+// tribe person ids — so their names fold into keywords. `linkedCalendars` are
+// `{ subcalendarId, matchPattern }` objects (same shape dailyReview.js reads).
 export function buildMappingRules(goals = [], overrides = {}) {
   const rules = [];
   for (const goal of goals || []) {
@@ -149,19 +154,35 @@ export function buildMappingRules(goals = [], overrides = {}) {
     if (goal.status && goal.status !== 'active') continue;
     const override = overrides[goal.id] || {};
     if (override.enabled === false) continue;
+
+    const activityNames = Array.isArray(goal.linkedActivities)
+      ? goal.linkedActivities.map((a) => String(a?.activityName || '').toLowerCase().trim()).filter(Boolean)
+      : [];
     const keywords = Array.from(new Set([
       ...goalKeywords(goal),
+      ...activityNames,
       ...((Array.isArray(override.keywords) ? override.keywords : []).map((k) => String(k).toLowerCase().trim()).filter(Boolean)),
     ]));
+
+    // Linked calendars → { subcalendarId, matchPattern } (matchPattern, when
+    // present, further requires the event title to contain it — like dailyReview).
+    let subcalendars = Array.isArray(goal.linkedCalendars)
+      ? goal.linkedCalendars
+        .filter((lc) => lc?.subcalendarId != null)
+        .map((lc) => ({ subcalendarId: String(lc.subcalendarId), matchPattern: lc.matchPattern ? String(lc.matchPattern).toLowerCase() : null }))
+      : [];
+    if (Array.isArray(override.subcalendarIds)) {
+      // Override supplies plain ids (no per-calendar pattern).
+      subcalendars = override.subcalendarIds.map((id) => ({ subcalendarId: String(id), matchPattern: null }));
+    }
+
     rules.push({
       id: goal.id,
       title: goal.title || '(untitled goal)',
       category: goal.category || null,
       keywords,
-      personIds: Array.isArray(override.personIds) ? override.personIds.map(String)
-        : (Array.isArray(goal.linkedActivities) ? goal.linkedActivities.map(String) : []),
-      subcalendarIds: Array.isArray(override.subcalendarIds) ? override.subcalendarIds.map(String)
-        : (Array.isArray(goal.linkedCalendars) ? goal.linkedCalendars.map(String) : []),
+      personIds: Array.isArray(override.personIds) ? override.personIds.map(String) : [],
+      subcalendars,
     });
   }
   return rules;
@@ -194,7 +215,9 @@ export function eventGoalMatches(event, rules = []) {
   for (const rule of rules) {
     const byKeyword = rule.keywords.some((k) => k && (k.includes(' ') ? text.includes(k) : words.has(k)));
     const byPerson = rule.personIds.some((id) => personIds.has(String(id)));
-    const byCalendar = subcal != null && rule.subcalendarIds.some((id) => String(id) === subcal);
+    const byCalendar = subcal != null && rule.subcalendars.some((sc) => (
+      sc.subcalendarId === subcal && (!sc.matchPattern || text.includes(sc.matchPattern))
+    ));
     if (byKeyword || byPerson || byCalendar) matched.push(rule.id);
   }
   return Array.from(new Set(matched));
