@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, spotifyConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -162,6 +162,11 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed enabled/interval can't reach disk and break the sync scheduler.
   if (req.body?.spotify !== undefined) {
     validateRequest(spotifyConfigSchema.partial(), req.body.spotify);
+  }
+  // YouTube watch-history scrape config (#2153) — validate the slice when present
+  // so a malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.youtube !== undefined) {
+    validateRequest(youtubeConfigSchema.partial(), req.body.youtube);
   }
   // LoRA training config (caption provider + training defaults) — validate
   // the slice when present so a malformed save can't write bad bounds the

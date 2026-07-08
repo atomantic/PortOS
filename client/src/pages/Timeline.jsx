@@ -10,6 +10,7 @@ import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationIm
 import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
 import WhatsappImportPanel from '../components/timeline/WhatsappImportPanel';
 import BrowserHistoryImportPanel from '../components/timeline/BrowserHistoryImportPanel';
+import YoutubeImportPanel from '../components/timeline/YoutubeImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -217,6 +218,7 @@ export default function Timeline() {
       <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <WhatsappImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <BrowserHistoryImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      <YoutubeImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 
