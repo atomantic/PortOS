@@ -11,6 +11,7 @@ import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
 import WhatsappImportPanel from '../components/timeline/WhatsappImportPanel';
 import BrowserHistoryImportPanel from '../components/timeline/BrowserHistoryImportPanel';
 import YoutubeImportPanel from '../components/timeline/YoutubeImportPanel';
+import GmailMboxImportPanel from '../components/timeline/GmailMboxImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -213,6 +214,7 @@ export default function Timeline() {
         <div className="text-sm text-gray-400">{dayLabel}</div>
       </div>
 
+      <GmailMboxImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />

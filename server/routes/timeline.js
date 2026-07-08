@@ -12,6 +12,7 @@ import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
 import { importBrowserHistory } from '../services/browserHistoryImport.js';
 import { importYoutubeHistory } from '../services/youtubeImport.js';
+import { importGmailMbox } from '../services/gmailMboxImport.js';
 
 const router = Router();
 
@@ -174,5 +175,31 @@ router.post('/import/browser', uploadBrowserHistory, importHandler(importBrowser
 // `watch-history.json` (standalone or the whole ZIP) → media.watch events under
 // source `youtube` (dedupe on video id + local day, shared with the live scrape).
 router.post('/import/youtube', uploadYoutube, importHandler(importYoutubeHistory));
+
+// POST /api/timeline/import/gmail — bulk-backfill Gmail full-history metadata from
+// a Google Takeout `.mbox`. Unlike the other importers this is PATH-BASED (a JSON
+// body, not a multipart upload): the Gmail mbox is routinely multiple GB and does
+// not fit the 200MB upload flow, so the server streams a local file/folder the
+// user names. Header metadata only (never the body) → message.sent/message.received
+// events under source `gmail` (dedupe on the RFC-822 Message-ID). `preview=true`
+// streams + counts without writing. `yourEmail` (optional, blank → ignored) refines
+// sent/received direction when the export's Gmail labels are absent.
+const gmailImportSchema = z.object({
+  path: z.string().trim().min(1).max(4096),
+  preview: z.boolean().optional().default(false),
+  yourEmail: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().max(320).optional(),
+  ),
+});
+router.post('/import/gmail', asyncHandler(async (req, res) => {
+  const { path: mboxPath, preview, yourEmail } = validateRequest(gmailImportSchema, req.body);
+  const result = await importGmailMbox({
+    path: mboxPath,
+    dryRun: preview,
+    selfEmails: yourEmail ? [yourEmail] : [],
+  });
+  res.json(result);
+}));
 
 export default router;
