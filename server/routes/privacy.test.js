@@ -42,6 +42,12 @@ vi.mock('../services/privacyScan.js', () => ({
   runScanPass: vi.fn(async (opts) => ({ scanned: 2, verdicts: { found: 1, not_found: 1 }, skipped: 0, brokers: 20, _opts: opts })),
 }));
 
+vi.mock('../services/privacyOptOut.js', () => ({
+  runOptOutPass: vi.fn(async (opts) => ({ submitted: [{ brokerId: 'spokeo', lane: 'email', outcome: 'submitted' }], skipped: 0, verification: { advanced: [], confirmed: [] }, _opts: opts })),
+  runVerificationPass: vi.fn(async () => ({ advanced: [{ caseId: 'c1', brokerId: 'spokeo' }], confirmed: [] })),
+  getOptOutDigest: vi.fn(async () => ({ total: 1, humanTasks: 1, blocked: 0, items: [{ caseId: 'h1', brokerId: 'wp', state: 'human_task_queued', playbook: ['call back'] }] })),
+}));
+
 vi.mock('../services/privacyChanges.js', () => ({
   declareChange: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-000000000003', ...input })),
   listChangeEvents: vi.fn(async () => [{ id: 'ev1', kind: 'address_change', progress: { pending: 1, updated: 0, removed: 0, total: 1 } }]),
@@ -57,6 +63,7 @@ const orgService = await import('../services/privacyOrgs.js');
 const brokerService = await import('../services/privacyBrokers.js');
 const scanService = await import('../services/privacyScan.js');
 const changeService = await import('../services/privacyChanges.js');
+const optOutService = await import('../services/privacyOptOut.js');
 
 const VALID_UUID = 'c0ffee00-0000-4000-8000-000000000001';
 
@@ -374,5 +381,40 @@ describe('POST /api/privacy/scan', () => {
     await request(makeApp()).post('/api/privacy/scan').send({ concurrency: 4 });
     expect(scanService.runScanPass).toHaveBeenCalledWith({ concurrency: 4 });
     expect((await request(makeApp()).post('/api/privacy/scan').send({ concurrency: 99 })).status).toBe(400);
+  });
+});
+
+// ─── Opt-out automation engine (issue #2145) ────────────────────────────────
+
+describe('POST /api/privacy/optout', () => {
+  it('runs an opt-out pass and returns the summary', async () => {
+    const res = await request(makeApp()).post('/api/privacy/optout').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ submitted: [{ brokerId: 'spokeo', outcome: 'submitted' }] });
+    expect(optOutService.runOptOutPass).toHaveBeenCalledWith({});
+  });
+
+  it('passes runVerification through and rejects an unknown key', async () => {
+    await request(makeApp()).post('/api/privacy/optout').send({ runVerification: false });
+    expect(optOutService.runOptOutPass).toHaveBeenCalledWith({ runVerification: false });
+    expect((await request(makeApp()).post('/api/privacy/optout').send({ nope: 1 })).status).toBe(400);
+  });
+});
+
+describe('POST /api/privacy/optout/verify', () => {
+  it('runs a verification-only pass', async () => {
+    const res = await request(makeApp()).post('/api/privacy/optout/verify').send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ advanced: [{ caseId: 'c1' }] });
+    expect(optOutService.runVerificationPass).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/privacy/optout/digest', () => {
+  it('returns the human-task digest', async () => {
+    const res = await request(makeApp()).get('/api/privacy/optout/digest');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, humanTasks: 1 });
+    expect(res.body.items[0].playbook).toEqual(['call back']);
   });
 });

@@ -1,0 +1,20 @@
+Subject: Opt-Out and Removal Request — {{fullName}}
+
+To the {{brokerName}} Privacy team,
+
+I am requesting that you remove and suppress my personal information from your
+people-search listings and databases, and opt me out of any sale or sharing of
+my information.
+
+Identifying information (provided solely to locate and match my records):
+{{disclosedSummary}}
+
+{{listingSection}}
+Please confirm completion in writing to this email address.
+
+I am submitting this request on my own behalf. Do not use the information above
+for any purpose other than fulfilling this request.
+
+Regards,
+{{fullName}}
+{{requestDate}}

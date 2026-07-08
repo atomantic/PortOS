@@ -171,6 +171,7 @@ import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
 import { startSignalScheduler } from './services/signalScheduler.js';
@@ -612,6 +613,10 @@ initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: $
 registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
+// re-runs the broker scan + opt-out pass when the user opts in via
+// Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
+startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
