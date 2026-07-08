@@ -90,8 +90,12 @@ const cleanTaskTopicLine = (line) => {
 // deriving one from the first meaningful, de-scaffolded line of the description.
 export const deriveTaskSpeechLabel = (task) => {
   if (!task) return '';
-  const explicit = task.title || task.metadata?.taskSummary;
-  if (explicit && explicit.toString().trim()) return clip(explicit, TASK_LABEL_CLIP_LEN);
+  // Prefer the first NON-BLANK of title / summary — a whitespace-only title must
+  // fall through to a real taskSummary, not short-circuit past it (`||` would
+  // return the blank title and then trip the trim guard down to the description).
+  for (const explicit of [task.title, task.metadata?.taskSummary]) {
+    if (explicit && explicit.toString().trim()) return clip(explicit, TASK_LABEL_CLIP_LEN);
+  }
   for (const raw of (task.description || '').toString().split('\n')) {
     const cleaned = cleanTaskTopicLine(raw);
     if (cleaned) return clip(cleaned, TASK_LABEL_CLIP_LEN);
