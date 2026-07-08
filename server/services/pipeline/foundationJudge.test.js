@@ -274,11 +274,27 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
   });
 
   it('worldbuilding refine reports applied:false when EVERY refinable field is locked', async () => {
-    const uni = { id: 'uni-1', name: 'U', locked: { logline: true, premise: true, styleNotes: true, influences: true } };
+    const uni = { id: 'uni-1', name: 'U', locked: { logline: true, premise: true, styleNotes: true, influencesEmbrace: true, influencesAvoid: true } };
     universeBuilder.getUniverse.mockResolvedValue(uni);
+    universeBuilderExpand.expandWorldTemplate.mockResolvedValue({ logline: 'L2', premise: 'P2', styleNotes: 'S2', influences: { embrace: ['x'], avoid: [] } });
     universeBuilder.updateUniverse.mockImplementation(async (id, m) => { const p = typeof m === 'function' ? m(uni) : m; return p === null ? { id } : { id, ...p }; });
     const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
     expect(r).toMatchObject({ dimension: 'worldbuilding', applied: false });
+  });
+
+  it('worldbuilding refine does NOT write influences when a sublist is locked (influencesAvoid)', async () => {
+    // Only the influence sublists are lockable; `influences` is replaced
+    // wholesale, so a locked avoid-list must block the whole influences write.
+    const uni = { id: 'uni-1', name: 'U', locked: { influencesAvoid: true } };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    universeBuilderExpand.expandWorldTemplate.mockResolvedValue({ logline: 'L2', premise: 'P2', styleNotes: 'S2', influences: { embrace: ['new'], avoid: ['clobber'] } });
+    let writtenPatch = null;
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { writtenPatch = typeof m === 'function' ? m(uni) : m; return { id, ...(writtenPatch || {}) }; });
+    const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
+    expect(writtenPatch).not.toHaveProperty('influences');
+    // the unlocked scalars still land
+    expect(writtenPatch).toMatchObject({ logline: 'L2', premise: 'P2', styleNotes: 'S2' });
+    expect(r.applied).toBe(true);
   });
 
   it('routes craft → the same universe world refine as worldbuilding', async () => {

@@ -494,7 +494,13 @@ async function refineWorld(universeId, { providerId, model }) {
     if (locked.logline !== true && filled(expanded.logline)) patch.logline = expanded.logline;
     if (locked.premise !== true && filled(expanded.premise)) patch.premise = expanded.premise;
     if (locked.styleNotes !== true && filled(expanded.styleNotes)) patch.styleNotes = expanded.styleNotes;
-    if (locked.influences !== true && expanded.influences && typeof expanded.influences === 'object') patch.influences = expanded.influences;
+    // `influences` is an { embrace, avoid } object and updateUniverse replaces it
+    // WHOLESALE — but the lockable keys are the two SUBLISTS
+    // (`influencesEmbrace`/`influencesAvoid`, see universeBuilder LOCKABLE_FIELDS),
+    // not `influences`. A wholesale write would clobber a locked sublist, so only
+    // write influences when NEITHER sublist is locked.
+    const influencesLocked = locked.influencesEmbrace === true || locked.influencesAvoid === true;
+    if (!influencesLocked && expanded.influences && typeof expanded.influences === 'object') patch.influences = expanded.influences;
     if (!Object.keys(patch).length) return null; // all locked or nothing authored → no-op
     wrote = true;
     return patch;
