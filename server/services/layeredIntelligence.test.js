@@ -12,6 +12,13 @@ import {
   extractSlugFromBody,
   normalizeSlug,
   isProposalDuplicate,
+  isIssueWithinDedupWindow,
+  cosineSimilarity,
+  findSemanticDuplicate,
+  issueEmbedSeed,
+  checkSemanticDuplicate,
+  SEMANTIC_DEDUP_THRESHOLD,
+  SEMANTIC_DEDUP_MAX_CANDIDATES,
   isAppParked,
   validateReasonerResponse,
   resolveBlockOnIssue,
@@ -784,5 +791,146 @@ describe('Jira filer', () => {
     const res = await applyJiraBlockingLabel({ instanceId: 'i', key: 'PROJ-1', addLabel });
     expect(res.success).toBe(false);
     expect(res.error).toContain('nope');
+  });
+});
+
+describe('semantic dedup — pure helpers', () => {
+  const NOW = Date.parse('2026-07-07T00:00:00Z');
+
+  describe('isIssueWithinDedupWindow', () => {
+    it('open issues are always in-window', () => {
+      expect(isIssueWithinDedupWindow({ state: 'open' }, NOW)).toBe(true);
+    });
+    it('recently-closed issues are in-window; long-closed are not', () => {
+      const recent = new Date(NOW - 5 * 24 * 60 * 60 * 1000).toISOString();
+      const old = new Date(NOW - (CLOSED_SUPPRESSION_MS + 1000)).toISOString();
+      expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: recent }, NOW)).toBe(true);
+      expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: old }, NOW)).toBe(false);
+    });
+    it('closed with unknown close time falls out of window', () => {
+      expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(false);
+    });
+    it('agrees with isProposalDuplicate on the window boundary', () => {
+      const old = new Date(NOW - (CLOSED_SUPPRESSION_MS + 1000)).toISOString();
+      const existing = [{ slug: 'add-x', state: 'closed', closedAt: old }];
+      expect(isProposalDuplicate({ slug: 'add-x', existingIssues: existing, now: NOW })).toBe(false);
+      const recent = new Date(NOW - 1000).toISOString();
+      const existing2 = [{ slug: 'add-x', state: 'closed', closedAt: recent }];
+      expect(isProposalDuplicate({ slug: 'add-x', existingIssues: existing2, now: NOW })).toBe(true);
+    });
+  });
+
+  describe('cosineSimilarity', () => {
+    it('is 1 for identical vectors and 0 for orthogonal', () => {
+      expect(cosineSimilarity([1, 2, 3], [1, 2, 3])).toBeCloseTo(1, 6);
+      expect(cosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0, 6);
+    });
+    it('returns 0 (not NaN) for shape mismatch, empty, or zero-magnitude vectors', () => {
+      expect(cosineSimilarity([1, 2], [1, 2, 3])).toBe(0);
+      expect(cosineSimilarity([], [])).toBe(0);
+      expect(cosineSimilarity([0, 0], [1, 1])).toBe(0);
+      expect(cosineSimilarity('x', [1])).toBe(0);
+    });
+  });
+
+  describe('issueEmbedSeed', () => {
+    it('joins trimmed title + body and caps length', () => {
+      expect(issueEmbedSeed({ title: ' T ', body: ' B ' })).toBe('T\n\nB');
+      expect(issueEmbedSeed({ title: '', body: 'only body' })).toBe('only body');
+      expect(issueEmbedSeed({}).length).toBe(0);
+      expect(issueEmbedSeed({ title: 'x'.repeat(5000) }).length).toBe(2000);
+    });
+  });
+
+  describe('findSemanticDuplicate', () => {
+    it('returns the highest-scoring candidate above threshold', () => {
+      const p = [1, 0, 0];
+      const candidates = [
+        { slug: 'low', embedding: [0, 1, 0] },      // orthogonal → 0
+        { slug: 'high', number: 9, embedding: [1, 0, 0] }, // identical → 1
+      ];
+      const match = findSemanticDuplicate({ proposalEmbedding: p, candidates, threshold: 0.9 });
+      expect(match.slug).toBe('high');
+      expect(match.number).toBe(9);
+      expect(match.score).toBeCloseTo(1, 6);
+    });
+    it('returns null when nothing meets threshold, or the proposal embedding is unusable', () => {
+      expect(findSemanticDuplicate({ proposalEmbedding: [1, 0], candidates: [{ embedding: [0, 1] }], threshold: 0.9 })).toBe(null);
+      expect(findSemanticDuplicate({ proposalEmbedding: [], candidates: [{ embedding: [1] }] })).toBe(null);
+      expect(findSemanticDuplicate({ proposalEmbedding: [1], candidates: [{ embedding: [] }, {}] })).toBe(null);
+    });
+  });
+});
+
+describe('checkSemanticDuplicate — I/O wrapper', () => {
+  const NOW = Date.parse('2026-07-07T00:00:00Z');
+  const ok = (embedding) => ({ success: true, embedding });
+  const proposal = { title: 'Introduce widget', body: 'add it' };
+
+  it('is unavailable (never suppresses) when there are no embeddable candidates', async () => {
+    const embed = vi.fn(async () => ok([1, 0, 0]));
+    // plan-style slug-only issue has no title/body to embed
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: [{ slug: 's', state: 'open' }], now: NOW, embed });
+    expect(res).toEqual({ available: false, duplicate: false, match: null });
+    expect(embed).not.toHaveBeenCalled();
+  });
+
+  it('is unavailable when the embeddings provider is off (skipped proposal embed)', async () => {
+    const embed = vi.fn(async () => ({ skipped: true, reason: 'provider-disabled' }));
+    const existing = [{ number: 3, title: 'Add widget', body: 'x', state: 'open' }];
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    expect(res.available).toBe(false);
+    expect(res.duplicate).toBe(false);
+  });
+
+  it('degrades to unavailable (never rejects) on an async rejection OR a synchronous throw', async () => {
+    const existing = [{ number: 3, title: 'Add widget', body: 'x', state: 'open' }];
+    const asyncThrow = vi.fn(async () => { throw new Error('provider down'); });
+    expect(await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed: asyncThrow }))
+      .toEqual({ available: false, duplicate: false, match: null });
+    // A non-async embedder that throws synchronously must also degrade, not reject.
+    const syncThrow = vi.fn(() => { throw new Error('sync boom'); });
+    expect(await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed: syncThrow }))
+      .toEqual({ available: false, duplicate: false, match: null });
+  });
+
+  it('flags a near-duplicate when a candidate embedding is close enough', async () => {
+    const embed = vi.fn(async () => ok([1, 0, 0])); // proposal + candidate both identical → score 1
+    const existing = [{ number: 3, slug: 'add-widget', title: 'Add widget', body: 'x', state: 'open' }];
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    expect(res.available).toBe(true);
+    expect(res.duplicate).toBe(true);
+    expect(res.match.number).toBe(3);
+  });
+
+  it('checks but finds no duplicate when candidates are dissimilar', async () => {
+    const embed = vi.fn(async (text) => ok(text === issueEmbedSeed({ title: proposal.title, body: proposal.body }) ? [1, 0, 0] : [0, 1, 0]));
+    const existing = [{ number: 3, title: 'Unrelated', body: 'y', state: 'open' }];
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    expect(res.available).toBe(true);
+    expect(res.duplicate).toBe(false);
+    expect(res.match).toBe(null);
+  });
+
+  it('ignores long-closed candidates (out of the dedup window)', async () => {
+    const embed = vi.fn(async () => ok([1, 0, 0]));
+    const old = new Date(NOW - (CLOSED_SUPPRESSION_MS + 1000)).toISOString();
+    const existing = [{ number: 3, title: 'Add widget', body: 'x', state: 'closed', closedAt: old }];
+    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    expect(res.available).toBe(false);
+    expect(embed).not.toHaveBeenCalled();
+  });
+
+  it('caps the number of candidates embedded per run', async () => {
+    const embed = vi.fn(async () => ok([0, 1, 0])); // dissimilar so nothing matches
+    const existing = Array.from({ length: SEMANTIC_DEDUP_MAX_CANDIDATES + 20 }, (_, i) => ({ number: i, title: `t${i}`, body: 'b', state: 'open' }));
+    await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
+    // 1 proposal embed + at most SEMANTIC_DEDUP_MAX_CANDIDATES candidate embeds
+    expect(embed.mock.calls.length).toBe(SEMANTIC_DEDUP_MAX_CANDIDATES + 1);
+  });
+
+  it('respects the threshold constant default', () => {
+    expect(SEMANTIC_DEDUP_THRESHOLD).toBeGreaterThan(0);
+    expect(SEMANTIC_DEDUP_THRESHOLD).toBeLessThanOrEqual(1);
   });
 });
