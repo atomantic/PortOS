@@ -21,6 +21,8 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   applyTreatment,
+  applyPlan,
+  applyPlanStepUpdate,
   applySceneUpdate,
   appendRun,
   applyRunUpdate,
@@ -169,6 +171,27 @@ export async function setTreatment(id, treatmentInput) {
   all[idx] = applyTreatment(all[idx], treatmentInput);
   await saveAll(all);
   return all[idx];
+}
+
+export async function setPlan(id, planInput) {
+  const all = await loadAll();
+  const idx = all.findIndex((p) => p.id === id);
+  // Missing OR tombstoned (#1564 soft-delete) → gone for user-facing mutators, so a
+  // post-delete write can't resurrect + re-push a modified tombstone.
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  all[idx] = applyPlan(all[idx], planInput);
+  await saveAll(all);
+  return all[idx];
+}
+
+export async function updatePlanStep(id, stepId, patch) {
+  const all = await loadAll();
+  const idx = all.findIndex((p) => p.id === id);
+  if (idx < 0 || all[idx].deleted) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { project, updated } = applyPlanStepUpdate(all[idx], stepId, patch);
+  all[idx] = project;
+  await saveAll(all);
+  return updated;
 }
 
 export async function updateScene(id, sceneId, patch) {

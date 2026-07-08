@@ -26,6 +26,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
 import { enqueueTreatmentTask } from './agentBridge.js';
+import { advanceAfterPlanStepSettled } from './planAdvance.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
@@ -82,6 +83,14 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const fresh = await getProject(project.id);
   if (!fresh) return;
   if (fresh.status === 'paused' || fresh.status === 'failed') return;
+
+  // CDO Phase 2 (#2184): a directive-driven project runs the generalized plan
+  // advance loop (the `plan` completion is the planner writing the plan; every
+  // subsequent step runs server-side through the tool registry, no agent task).
+  // Legacy video projects (no directive) stay on the scene loop below.
+  if (fresh.directive) {
+    return advanceAfterPlanStepSettled(fresh.id);
+  }
 
   // Always advance — advanceAfterSceneSettled is idempotent and inspects
   // project state to decide what comes next. Calling it for unknown kinds
@@ -523,9 +532,12 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
 
 /**
  * Convenience: kick off the project from the user's "Start" button. Skips
- * straight to advancing.
+ * straight to advancing. Routes a directive-driven project (CDO Phase 2) to the
+ * generalized plan advance loop; legacy video projects to the scene loop.
  */
 export async function startCreativeDirectorProject(projectId) {
+  const project = await getProject(projectId).catch(() => null);
+  if (project?.directive) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
 
