@@ -38,6 +38,17 @@ vi.mock('../services/discordImport.js', () => ({
   })),
 }));
 
+vi.mock('../services/whatsappImport.js', () => ({
+  importWhatsappHistory: vi.fn(async (file, opts) => ({
+    dryRun: Boolean(opts?.dryRun),
+    parsed: 3,
+    mapped: 2,
+    recorded: opts?.dryRun ? 0 : 2,
+    skipped: opts?.dryRun ? 0 : 0,
+    summary: { messages: 2, uniqueSenders: 2, from: null, to: null, topSenders: [], chatTitle: null },
+  })),
+}));
+
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
@@ -46,6 +57,7 @@ vi.mock('../services/humanActivity.js', () => ({
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import { importDiscordHistory } from '../services/discordImport.js';
+import { importWhatsappHistory } from '../services/whatsappImport.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -237,5 +249,46 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(400);
     expect(importDiscordHistory).not.toHaveBeenCalled();
+  });
+
+  it('POST /import/whatsapp parses a .txt upload and calls the importer', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false' },
+      { filename: 'WhatsApp Chat with Alice.txt', contentType: 'text/plain', content: '[2024-01-15, 6:30:45 PM] Alice: hi\n' },
+    );
+    const r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.recorded).toBe(2);
+    expect(importWhatsappHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ originalname: 'WhatsApp Chat with Alice.txt' }),
+      { dryRun: false },
+    );
+  });
+
+  it('whatsapp accepts a zipped export as a preview dry run', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'true' },
+      { filename: 'WhatsApp Chat - Alice.zip', contentType: 'application/zip', content: 'PK...' },
+    );
+    const r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(r.body.dryRun).toBe(true);
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+  });
+
+  it('whatsapp rejects a disallowed file type with 400', async () => {
+    const { boundary, body } = multipart(
+      {},
+      { filename: 'data.json', contentType: 'application/json', content: '{}' },
+    );
+    const r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(400);
+    expect(importWhatsappHistory).not.toHaveBeenCalled();
   });
 });

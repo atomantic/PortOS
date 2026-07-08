@@ -9,6 +9,7 @@ import * as humanActivity from '../services/humanActivity.js';
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import { importDiscordHistory } from '../services/discordImport.js';
+import { importWhatsappHistory } from '../services/whatsappImport.js';
 
 const router = Router();
 
@@ -36,6 +37,17 @@ const uploadDiscord = uploadSingle('file', {
       || ['application/zip', 'application/x-zip-compressed', 'application/json', 'text/json', 'text/csv', 'application/csv'].includes(file.mimetype);
     if (ok) return cb(null, true);
     cb(new ServerError('Only Discord data-package ZIP, JSON, or CSV files are accepted', { status: 400, code: 'BAD_REQUEST' }));
+  },
+});
+// WhatsApp "Export chat" ships a `_chat.txt` transcript, either standalone or
+// bundled in a ZIP with media — accept the plain text file alongside the ZIP.
+const uploadWhatsapp = uploadSingle('file', {
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(zip|txt)$/i.test(file.originalname)
+      || ['application/zip', 'application/x-zip-compressed', 'text/plain'].includes(file.mimetype);
+    if (ok) return cb(null, true);
+    cb(new ServerError('Only WhatsApp chat-export TXT or ZIP files are accepted', { status: 400, code: 'BAD_REQUEST' }));
   },
 });
 
@@ -112,5 +124,10 @@ router.post('/import/takeout-location', uploadTakeoutLocation, importHandler(imp
 // (the messages you sent across every channel/DM) → message.sent events
 // (dedupe on the globally-unique Discord message snowflake id).
 router.post('/import/discord', uploadDiscord, importHandler(importDiscordHistory));
+
+// POST /api/timeline/import/whatsapp — bulk-backfill a WhatsApp "Export chat"
+// transcript (`_chat.txt`, standalone or zipped) → neutral message events
+// (dedupe on a content hash, since WhatsApp lines carry no message id).
+router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHistory));
 
 export default router;
