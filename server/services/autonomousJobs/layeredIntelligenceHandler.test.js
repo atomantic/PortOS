@@ -26,7 +26,15 @@ const forgeState = {
   blockingOk: true,
   fileResult: { success: true, number: 100 },
   filed: [],
-  blockingApplied: []
+  blockingApplied: [],
+  // Jira mirrors: separate lister/filer/label spies so the dispatch is asserted per tracker.
+  jiraExisting: [],
+  jiraExistingOk: true,
+  jiraBlocking: [],
+  jiraBlockingOk: true,
+  jiraFileResult: { success: true, key: 'PROJ-100' },
+  jiraFiled: [],
+  jiraBlockingApplied: []
 };
 vi.mock('../layeredIntelligence.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -38,7 +46,11 @@ vi.mock('../layeredIntelligence.js', async (importOriginal) => {
     listBlockingIssues: vi.fn(async () => ({ ok: forgeState.blockingOk, issues: forgeState.blocking })),
     fileProposalToForge: vi.fn(async (opts) => { forgeState.filed.push(opts); return forgeState.fileResult; }),
     applyBlockingLabel: vi.fn(async (opts) => { forgeState.blockingApplied.push(opts); return { success: true }; }),
-    appendProposalToPlan: vi.fn(async () => ({ success: true, duplicate: false }))
+    appendProposalToPlan: vi.fn(async () => ({ success: true, duplicate: false })),
+    listJiraIssues: vi.fn(async () => ({ ok: forgeState.jiraExistingOk, issues: forgeState.jiraExisting })),
+    listJiraBlockingIssues: vi.fn(async () => ({ ok: forgeState.jiraBlockingOk, issues: forgeState.jiraBlocking })),
+    fileProposalToJira: vi.fn(async (opts) => { forgeState.jiraFiled.push(opts); return forgeState.jiraFileResult; }),
+    applyJiraBlockingLabel: vi.fn(async (opts) => { forgeState.jiraBlockingApplied.push(opts); return { success: true }; })
   };
 });
 
@@ -61,6 +73,13 @@ beforeEach(() => {
   forgeState.fileResult = { success: true, number: 100 };
   forgeState.filed = [];
   forgeState.blockingApplied = [];
+  forgeState.jiraExisting = [];
+  forgeState.jiraExistingOk = true;
+  forgeState.jiraBlocking = [];
+  forgeState.jiraBlockingOk = true;
+  forgeState.jiraFileResult = { success: true, key: 'PROJ-100' };
+  forgeState.jiraFiled = [];
+  forgeState.jiraBlockingApplied = [];
   resolveTrackerMock.mockResolvedValue({ resolved: 'github', forge: 'gh' });
 });
 
@@ -201,6 +220,83 @@ describe('processApp', () => {
     expect(out.action).toBe('filed');
     expect(out.paused).toBe(false); // pause skipped for plan tracker
     expect(forgeState.blockingApplied).toHaveLength(0);
+  });
+});
+
+describe('processApp — jira tracker', () => {
+  const jiraApp = (extra = {}) => ({
+    id: 'app-j', name: 'Jira App', repoPath: '/repo',
+    jira: { enabled: true, instanceId: 'inst', projectKey: 'PROJ', issueType: 'Task' },
+    layeredIntelligence: { enabled: true, intervalMs: DAY, allowedScopes: ['app-improvement', 'app-data-gap'] },
+    ...extra
+  });
+
+  beforeEach(() => {
+    resolveTrackerMock.mockResolvedValue({ resolved: 'jira', forge: null });
+  });
+
+  it('skips a jira-tracked app that has no usable jira config (before reasoning)', async () => {
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 's', title: 'T' } });
+    const out = await processApp({
+      id: 'app-j', name: 'Jira App', repoPath: '/repo',
+      jira: { enabled: false },
+      layeredIntelligence: { enabled: true, intervalMs: DAY, allowedScopes: ['app-improvement'] }
+    }, { callLLM });
+    expect(out.action).toBe('skipped');
+    expect(out.reason).toBe('jira-not-configured');
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it('files ONE jira ticket for a valid proposal', async () => {
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X', body: 'do it' } });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.action).toBe('filed');
+    expect(out.filedKey).toBe('PROJ-100');
+    expect(forgeState.jiraFiled).toHaveLength(1);
+    expect(forgeState.jiraFiled[0]).toMatchObject({ instanceId: 'inst', projectKey: 'PROJ', slug: 'add-x' });
+    expect(forgeState.filed).toHaveLength(0); // never touches the forge filer
+  });
+
+  it('parks a jira app when a blocking ticket is open (skips reasoning)', async () => {
+    forgeState.jiraBlocking = [{ number: 'PROJ-5', state: 'open' }];
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 's', title: 'T' } });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.action).toBe('parked');
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it('does NOT file when the jira issue-list read failed (avoids blind duplicate)', async () => {
+    forgeState.jiraExistingOk = false;
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.action).toBe('tracker-read-failed');
+    expect(forgeState.jiraFiled).toHaveLength(0);
+  });
+
+  it('dedups a jira proposal against existing tickets', async () => {
+    forgeState.jiraExisting = [{ slug: 'add-x', state: 'open' }];
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.action).toBe('duplicate');
+    expect(forgeState.jiraFiled).toHaveLength(0);
+  });
+
+  it('files AND pauses on the just-filed jira ticket key ("this")', async () => {
+    const callLLM = reasoner({
+      proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' },
+      pause: { blockOnIssue: 'this', reason: 'need this first' }
+    });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.action).toBe('filed');
+    expect(out.paused).toBe(true);
+    expect(forgeState.jiraBlockingApplied[0]).toMatchObject({ instanceId: 'inst', key: 'PROJ-100' });
+  });
+
+  it('resolves an integer pause target to <project>-<n> on an existing jira ticket', async () => {
+    const callLLM = reasoner({ pause: { blockOnIssue: 7, reason: 'block on an existing ticket' } });
+    const out = await processApp(jiraApp(), { callLLM });
+    expect(out.paused).toBe(true);
+    expect(forgeState.jiraBlockingApplied[0].key).toBe('PROJ-7');
   });
 });
 

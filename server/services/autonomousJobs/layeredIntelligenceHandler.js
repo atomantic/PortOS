@@ -30,7 +30,12 @@ import {
   fileProposalToForge,
   applyBlockingLabel,
   appendProposalToPlan,
-  extractPlanSlugs
+  extractPlanSlugs,
+  listJiraIssues,
+  listJiraBlockingIssues,
+  fileProposalToJira,
+  resolveJiraBlockKey,
+  applyJiraBlockingLabel
 } from '../layeredIntelligence.js'
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js'
@@ -77,24 +82,31 @@ export async function processApp(app, deps = {}) {
   const forgeCli = tracker.forge // 'gh' | 'glab' | null
   const cwd = app.repoPath
 
-  // Jira filing is deferred to a follow-up (see PR Remaining). Skip a jira-tracked
-  // app BEFORE reasoning so we never burn an LLM call that can't file the result.
-  if (filer === 'jira') {
+  // Jira coordinates come from the app's explicit per-app config (never
+  // auto-detected). A jira-tracked app with no usable instance/project can't file,
+  // so skip it BEFORE reasoning rather than burn an LLM call on a result we can't
+  // land. `projectKey` is also needed to resolve integer pause targets to keys.
+  const jira = (filer === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
+    ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey, issueType: app.jira.issueType || 'Task' }
+    : null
+  if (filer === 'jira' && !jira) {
     await recordRun(app, config, now)
-    return { app: app.id, action: 'skipped', reason: 'jira-filer-not-implemented' }
+    return { app: app.id, action: 'skipped', reason: 'jira-not-configured' }
   }
 
-  // ---- Park check (forge only; plan has no issue to block on) ----
-  if (trackerSupportsPause(tracker.resolved) && filer === 'forge' && forgeCli) {
-    const blocking = await listBlockingIssues({ cli: forgeCli, cwd })
+  // ---- Park check (forge + jira; plan has no issue to block on) ----
+  if (trackerSupportsPause(tracker.resolved)) {
+    const blocking = filer === 'jira'
+      ? await listJiraBlockingIssues({ instanceId: jira.instanceId, projectKey: jira.projectKey })
+      : (forgeCli ? await listBlockingIssues({ cli: forgeCli, cwd }) : null)
     // A FAILED read (ok:false) is not "no blocking issues" — skip this app rather
     // than risk resuming work the user parked, and try again next run.
-    if (!blocking.ok) {
+    if (blocking && !blocking.ok) {
       console.warn(`⚠️ Layered Intelligence: ${app.name} blocking-issue read failed — skipping this run`)
       await recordRun(app, config, now)
       return { app: app.id, action: 'skipped', reason: 'blocking-read-failed' }
     }
-    if (isAppParked(blocking.issues)) {
+    if (blocking && isAppParked(blocking.issues)) {
       console.log(`⏸️ Layered Intelligence: ${app.name} parked on ${blocking.issues.length} blocking issue(s) — skipping`)
       await recordRun(app, config, now)
       return { app: app.id, action: 'parked', blocking: blocking.issues.length }
@@ -112,6 +124,13 @@ export async function processApp(app, deps = {}) {
     existingIssues = listed.issues
     // Only surface open issues to the reasoner when the openIssues source is on;
     // dedup still runs against ALL existing issues regardless of the toggle.
+    if (config.sources?.openIssues !== false) {
+      openIssues = existingIssues.filter(i => i.state === 'open')
+    }
+  } else if (filer === 'jira') {
+    const listed = await listJiraIssues({ instanceId: jira.instanceId, projectKey: jira.projectKey })
+    trackerReadFailed = !listed.ok
+    existingIssues = listed.issues
     if (config.sources?.openIssues !== false) {
       openIssues = existingIssues.filter(i => i.state === 'open')
     }
@@ -138,7 +157,8 @@ export async function processApp(app, deps = {}) {
   const { proposal, pause } = validateReasonerResponse(parsed)
 
   // ---- Layer 3: DECIDE (scope-gate + dedup) ----
-  let filedNumber = null
+  let filedNumber = null  // forge: integer issue number
+  let filedKey = null     // jira: string ticket key (PROJ-123)
   let filedAction = 'no-op'
   if (proposal) {
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
@@ -154,18 +174,20 @@ export async function processApp(app, deps = {}) {
       filedAction = 'duplicate'
     } else {
       // ---- Layer 4: ACT (file exactly one) ----
-      const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal })
+      const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
       if (filed.success) {
         filedNumber = filed.number ?? null
+        filedKey = filed.key ?? null
         filedAction = 'filed'
-        console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${filedNumber ? ` (#${filedNumber})` : ''}`)
+        const ref = filedKey || (filedNumber ? `#${filedNumber}` : '')
+        console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
       } else {
         console.error(`❌ Layered Intelligence: ${app.name} failed to file proposal: ${filed.error || 'unknown'}`)
       }
     }
   }
 
-  // ---- Pause (forge only; resolve blockOnIssue after filing) ----
+  // ---- Pause (forge + jira; resolve blockOnIssue after filing) ----
   let paused = false
   if (pause && filer === 'forge' && forgeCli) {
     const number = resolveBlockOnIssue(pause, filedNumber)
@@ -174,22 +196,34 @@ export async function processApp(app, deps = {}) {
       paused = res.success
       if (paused) console.log(`⏸️ Layered Intelligence: ${app.name} paused on #${number} — ${pause.reason}`)
     }
+  } else if (pause && filer === 'jira' && jira) {
+    const key = resolveJiraBlockKey(pause, filedKey, jira.projectKey)
+    if (key) {
+      const res = await applyJiraBlockingLabel({ instanceId: jira.instanceId, key })
+      paused = res.success
+      if (paused) console.log(`⏸️ Layered Intelligence: ${app.name} paused on ${key} — ${pause.reason}`)
+    }
   }
 
   await recordRun(app, config, now)
-  return { app: app.id, action: filedAction, filedNumber, paused }
+  return { app: app.id, action: filedAction, filedNumber, filedKey, paused }
 }
 
 /** File the proposal via the resolved tracker's filer. */
-async function fileProposal({ filer, forgeCli, cwd, app, proposal }) {
+async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
   if (filer === 'forge' && forgeCli) {
     return fileProposalToForge({ cli: forgeCli, cwd, title: proposal.title, body: proposal.body, slug: proposal.slug })
+  }
+  if (filer === 'jira' && jira) {
+    return fileProposalToJira({
+      instanceId: jira.instanceId, projectKey: jira.projectKey, issueType: jira.issueType,
+      title: proposal.title, body: proposal.body, slug: proposal.slug
+    })
   }
   if (filer === 'plan' && cwd) {
     const res = await appendProposalToPlan({ repoPath: cwd, appName: app.name, slug: proposal.slug, title: proposal.title, body: proposal.body })
     return { success: res.success, number: null }
   }
-  // Jira filing is deferred to a follow-up (see PR Remaining).
   return { success: false, error: `filer "${filer}" not implemented` }
 }
 

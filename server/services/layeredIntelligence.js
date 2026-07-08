@@ -25,12 +25,18 @@ import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
 // reasoner reading open issues) can self-avoid duplicates.
 export const LI_LABEL = 'layered-intelligence';
 export const LI_BLOCKING_LABEL = 'layered-intelligence:blocking';
+
+// Jira labels can't contain spaces, and a ':' is unsafe on some Jira versions,
+// so the Jira pause label swaps the ':' for a '-'. The base LI_LABEL is already
+// Jira-safe (kebab, no colon) and is reused verbatim across all trackers.
+export const LI_JIRA_BLOCKING_LABEL = 'layered-intelligence-blocking';
 
 // Closed issues carrying a matching slug suppress a re-proposal for this long,
 // so the loop doesn't immediately re-file something the user just resolved.
@@ -533,6 +539,104 @@ export async function applyBlockingLabel({ cli, cwd, env, number, exec = runCli 
     : ['issue', 'edit', String(number), '--add-label', LI_BLOCKING_LABEL];
   const { code, stderr } = await exec(cli, args, { cwd, env });
   return code === 0 ? { success: true } : { success: false, error: stderr };
+}
+
+// ---------------------------------------------------------------------------
+// Jira filer. Jira has no forge CLI — it goes through the PortOS Jira REST
+// service (server/services/jira.js). Dedup + pause are label-based (same as the
+// forges) via JQL, with the slug marker embedded in the ticket description.
+// The Jira deps (search/create/addLabel) are injectable so tests drive the
+// dispatch without a live Jira instance.
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a Jira status CATEGORY to `open` / `closed`. Jira's three canonical
+ * categories are "To Do" / "In Progress" / "Done"; only "Done" counts as closed
+ * for dedup + park. Anything unrecognized is treated as open so a custom
+ * in-flight status can't slip past dedup.
+ */
+export function normalizeJiraState(statusCategory) {
+  return (statusCategory || '').toLowerCase() === 'done' ? 'closed' : 'open';
+}
+
+/**
+ * List existing layered-intelligence tickets in a Jira project (open + recently
+ * closed) for the reasoner + dedup guard. Mirrors listForgeIssues' `{ ok, issues }`
+ * failed-vs-empty contract: a thrown search is `ok:false` (do NOT file — a blind
+ * dedup would duplicate); an empty result is `ok:true, issues:[]`.
+ */
+export async function listJiraIssues({ instanceId, projectKey, search = searchIssues } = {}) {
+  if (!instanceId || !projectKey) return { ok: false, issues: [] };
+  const jql = `project = "${escapeJql(projectKey)}" AND labels = "${LI_LABEL}" ORDER BY updated DESC`;
+  const rows = await search(instanceId, jql).then(r => r, () => null);
+  if (!Array.isArray(rows)) return { ok: false, issues: [] };
+  return {
+    ok: true,
+    issues: rows.map(i => ({
+      number: i.key || null,
+      title: i.summary || '',
+      body: i.description || '',
+      state: normalizeJiraState(i.statusCategory),
+      closedAt: i.resolutiondate || null,
+      slug: extractSlugFromBody(i.description || '') || extractSlugFromBody(i.summary || '')
+    }))
+  };
+}
+
+/**
+ * List OPEN blocking-labeled Jira tickets for the app (park check). `{ ok, issues }`
+ * with the same failed-vs-empty distinction. JQL filters out Done so a resolved
+ * blocking ticket un-parks the app automatically (matching the forge pause model).
+ */
+export async function listJiraBlockingIssues({ instanceId, projectKey, search = searchIssues } = {}) {
+  if (!instanceId || !projectKey) return { ok: false, issues: [] };
+  const jql = `project = "${escapeJql(projectKey)}" AND labels = "${LI_JIRA_BLOCKING_LABEL}" AND statusCategory != Done ORDER BY updated DESC`;
+  const rows = await search(instanceId, jql).then(r => r, () => null);
+  if (!Array.isArray(rows)) return { ok: false, issues: [] };
+  return {
+    ok: true,
+    issues: rows.map(i => ({ number: i.key || null, title: i.summary || '', state: normalizeJiraState(i.statusCategory) }))
+  };
+}
+
+/**
+ * File ONE proposal ticket in a Jira project. Embeds the slug marker in the
+ * description (searchable for dedup) and tags it with the layered-intelligence
+ * label. Returns `{ success, key, url }` — Jira issues are keyed strings
+ * (`PROJ-123`), not integers, so the handler resolves pause targets by key.
+ */
+export async function fileProposalToJira({ instanceId, projectKey, issueType = 'Task', title, body, slug, create = createTicket } = {}) {
+  if (!instanceId || !projectKey) return { success: false, error: 'jira instance/project not configured' };
+  const description = `${body}\n\n${slugMarker(slug)}`;
+  const res = await create(instanceId, {
+    projectKey,
+    summary: title,
+    description,
+    issueType,
+    labels: [LI_LABEL]
+  }).then(r => r, (err) => ({ success: false, error: err?.message || 'jira create failed' }));
+  if (!res?.success) return { success: false, error: res?.error || 'jira create failed' };
+  return { success: true, key: res.ticketId || null, url: res.url || null };
+}
+
+/**
+ * Resolve a Jira pause target to a concrete issue KEY. `"this"` → the just-filed
+ * ticket's key; an integer → `<projectKey>-<n>` (a pre-existing ticket in the
+ * same project). Returns null when it can't resolve (e.g. `"this"` but nothing
+ * was filed, or no project key for an integer target).
+ */
+export function resolveJiraBlockKey(pause, filedKey, projectKey) {
+  if (!pause) return null;
+  if (pause.blockOnIssue === 'this') return filedKey || null;
+  if (Number.isInteger(pause.blockOnIssue) && projectKey) return `${projectKey}-${pause.blockOnIssue}`;
+  return null;
+}
+
+/** Apply the Jira blocking label to an existing ticket (pause). Returns `{ success }`. */
+export async function applyJiraBlockingLabel({ instanceId, key, addLabel = addLabels } = {}) {
+  if (!instanceId || !key) return { success: false, error: 'no jira ticket key' };
+  const res = await addLabel(instanceId, key, [LI_JIRA_BLOCKING_LABEL]).then(r => r, (err) => ({ success: false, error: err?.message }));
+  return res?.success ? { success: true } : { success: false, error: res?.error || 'jira label failed' };
 }
 
 /**

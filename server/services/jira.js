@@ -11,7 +11,7 @@ import { hostFromOriginUrl } from '../lib/workTracker.js';
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
-const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+export const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 /**
  * Get JIRA instances configuration
@@ -267,6 +267,64 @@ export async function createTicket(instanceId, ticketData) {
     url: ticketUrl,
     response: response.data
   };
+}
+
+/**
+ * Search JIRA issues by an arbitrary JQL string. STRICT variant — lets fetch
+ * errors bubble so a caller can distinguish a transient API failure from a
+ * legitimately empty result set (the CLAUDE.md sentinel rule). `fields` selects
+ * the returned issue fields; `maxResults` caps the page.
+ *
+ * Returns `[{ key, summary, description, status, statusCategory, labels, updated, url }]`.
+ */
+export async function searchIssues(instanceId, jql, { fields = 'summary,status,labels,updated,description,resolutiondate', maxResults = 100 } = {}) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get('/rest/api/2/search', {
+    params: { jql, fields, maxResults }
+  });
+
+  return (response.data.issues || []).map(issue => ({
+    key: issue.key,
+    summary: issue.fields.summary || '',
+    description: issue.fields.description || '',
+    status: issue.fields.status?.name || null,
+    statusCategory: issue.fields.status?.statusCategory?.name || null,
+    labels: issue.fields.labels || [],
+    updated: issue.fields.updated || null,
+    resolutiondate: issue.fields.resolutiondate || null,
+    url: `${instance.baseUrl}/browse/${issue.key}`
+  }));
+}
+
+/**
+ * Add labels to an existing JIRA ticket without disturbing its other labels.
+ * Jira's field-update API takes an `update.labels` array of `{ add: <label> }`
+ * ops, so this is additive (unlike PUT-ing `fields.labels`, which replaces).
+ */
+export async function addLabels(instanceId, ticketId, labels = []) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const toAdd = (Array.isArray(labels) ? labels : []).filter(l => typeof l === 'string' && l.trim());
+  if (toAdd.length === 0) return { success: true, ticketId };
+
+  const client = createJiraClient(instance);
+  await client.put(`/rest/api/2/issue/${encodeURIComponent(ticketId)}`, {
+    update: { labels: toAdd.map(name => ({ add: name })) }
+  });
+
+  return { success: true, ticketId };
 }
 
 /**
@@ -667,6 +725,8 @@ export default {
   getBoards,
   getIssue,
   createTicket,
+  searchIssues,
+  addLabels,
   updateTicket,
   addComment,
   getTransitions,
