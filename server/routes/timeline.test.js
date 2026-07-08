@@ -60,6 +60,17 @@ vi.mock('../services/browserHistoryImport.js', () => ({
   })),
 }));
 
+vi.mock('../services/gmailMboxImport.js', () => ({
+  importGmailMbox: vi.fn(async (opts) => ({
+    dryRun: Boolean(opts?.dryRun),
+    parsed: 6,
+    mapped: 5,
+    recorded: opts?.dryRun ? 0 : 5,
+    skipped: opts?.dryRun ? 0 : 0,
+    summary: { messages: 5, sent: 2, received: 3, from: null, to: null, uniqueCorrespondents: 3, topCorrespondents: [] },
+  })),
+}));
+
 vi.mock('../services/humanActivity.js', () => ({
   getDaySummary: vi.fn(async () => ({ date: '2026-07-07', events: [] })),
   listEvents: vi.fn(async () => []),
@@ -70,6 +81,7 @@ import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.
 import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
 import { importBrowserHistory } from '../services/browserHistoryImport.js';
+import { importGmailMbox } from '../services/gmailMboxImport.js';
 import timelineRoutes from './timeline.js';
 
 function makeApp() {
@@ -386,5 +398,49 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(400);
     expect(importBrowserHistory).not.toHaveBeenCalled();
+  });
+
+  // Gmail is PATH-BASED (a JSON body, not a multipart upload) because the Takeout
+  // `.mbox` is multi-GB and doesn't fit the 200MB upload flow.
+  it('POST /import/gmail parses a path body and calls the importer (real import)', async () => {
+    const r = await request(app).post('/api/timeline/import/gmail')
+      .send({ path: '~/Takeout/Mail/all.mbox', preview: false });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ recorded: 5, mapped: 5 });
+    expect(importGmailMbox).toHaveBeenCalledWith({
+      path: '~/Takeout/Mail/all.mbox', dryRun: false, selfEmails: [],
+    });
+  });
+
+  it('gmail honors preview=true as a dry run', async () => {
+    const r = await request(app).post('/api/timeline/import/gmail')
+      .send({ path: '/data/Mail', preview: true });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ dryRun: true, recorded: 0 });
+    expect(importGmailMbox).toHaveBeenCalledWith({ path: '/data/Mail', dryRun: true, selfEmails: [] });
+  });
+
+  it('gmail threads yourEmail through as selfEmails for direction inference', async () => {
+    const r = await request(app).post('/api/timeline/import/gmail')
+      .send({ path: '/data/all.mbox', preview: false, yourEmail: 'me@gmail.com' });
+    expect(r.status).toBe(200);
+    expect(importGmailMbox).toHaveBeenCalledWith({
+      path: '/data/all.mbox', dryRun: false, selfEmails: ['me@gmail.com'],
+    });
+  });
+
+  it('gmail treats a blank yourEmail as not provided', async () => {
+    const r = await request(app).post('/api/timeline/import/gmail')
+      .send({ path: '/data/all.mbox', preview: false, yourEmail: '   ' });
+    expect(r.status).toBe(200);
+    expect(importGmailMbox).toHaveBeenCalledWith({
+      path: '/data/all.mbox', dryRun: false, selfEmails: [],
+    });
+  });
+
+  it('gmail 400s when path is missing', async () => {
+    const r = await request(app).post('/api/timeline/import/gmail').send({ preview: false });
+    expect(r.status).toBe(400);
+    expect(importGmailMbox).not.toHaveBeenCalled();
   });
 });
