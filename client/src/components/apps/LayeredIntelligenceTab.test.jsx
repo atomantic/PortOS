@@ -57,6 +57,39 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(update.sources.custom).toEqual([{ type: 'file', ref: 'docs/x.md' }]);
   });
 
+  it('sanitizes http + cmd sources with optional labels', () => {
+    const update = buildLayeredIntelligenceUpdate(baseline, {
+      ...baseline,
+      sources: { ...baseline.sources, custom: [
+        { type: 'http', url: ' https://x.com/s ', label: '  status  ' },
+        { type: 'cmd', cmd: ' git log ' },
+        { type: 'http', url: '' } // blank → dropped
+      ] }
+    });
+    expect(update.sources.custom).toEqual([
+      { type: 'http', url: 'https://x.com/s', label: 'status' },
+      { type: 'cmd', cmd: 'git log' }
+    ]);
+  });
+
+  it('detects a label-only change on an existing custom source', () => {
+    const withHttp = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'http', url: 'https://x.com/s' }] } };
+    const update = buildLayeredIntelligenceUpdate(withHttp, {
+      ...withHttp,
+      sources: { ...withHttp.sources, custom: [{ type: 'http', url: 'https://x.com/s', label: 'status' }] }
+    });
+    expect(update.sources.custom).toEqual([{ type: 'http', url: 'https://x.com/s', label: 'status' }]);
+  });
+
+  it('detects a type change on a custom source (file → cmd)', () => {
+    const withFile = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'file', ref: 'docs/x.md' }] } };
+    const update = buildLayeredIntelligenceUpdate(withFile, {
+      ...withFile,
+      sources: { ...withFile.sources, custom: [{ type: 'cmd', cmd: 'git log' }] }
+    });
+    expect(update.sources.custom).toEqual([{ type: 'cmd', cmd: 'git log' }]);
+  });
+
   it('ignores a blank custom-source row that sanitizes back to the baseline (no over-persist)', () => {
     const withCustom = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'file', ref: 'docs/x.md' }] } };
     // User clicks "Add file" but leaves the new row blank → sanitizes away → no change.
@@ -120,5 +153,40 @@ describe('LayeredIntelligenceTab (render)', () => {
     render(<LayeredIntelligenceTab {...props} onChange={onChange} isPortos={false} />);
     fireEvent.click(screen.getByLabelText(/Enable the self-improvement loop/i));
     expect(onChange).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('adds a custom source (defaulting to file) via "Add source"', () => {
+    const onChange = vi.fn();
+    render(<LayeredIntelligenceTab {...props} onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /Add source/i }));
+    expect(onChange).toHaveBeenCalledWith({ sources: expect.objectContaining({ custom: [{ type: 'file', ref: '' }] }) });
+  });
+
+  it('renders the type selector and type-appropriate value field for each custom source', () => {
+    const li = {
+      ...baseline,
+      sources: { ...baseline.sources, custom: [
+        { type: 'file', ref: 'docs/x.md' },
+        { type: 'http', url: 'https://x.com/s' },
+        { type: 'cmd', cmd: 'git log' }
+      ] }
+    };
+    render(<LayeredIntelligenceTab {...props} li={li} />);
+    // One type selector per row.
+    expect(screen.getByLabelText(/Custom source 1 type/i)).toHaveValue('file');
+    expect(screen.getByLabelText(/Custom source 2 type/i)).toHaveValue('http');
+    expect(screen.getByLabelText(/Custom source 3 type/i)).toHaveValue('cmd');
+    // Type-appropriate value field is populated.
+    expect(screen.getByLabelText(/Custom source 1 file/i)).toHaveValue('docs/x.md');
+    expect(screen.getByLabelText(/Custom source 2 url/i)).toHaveValue('https://x.com/s');
+    expect(screen.getByLabelText(/Custom source 3 command/i)).toHaveValue('git log');
+  });
+
+  it('switches a row type, clearing the old value field but keeping the label', () => {
+    const onChange = vi.fn();
+    const li = { ...baseline, sources: { ...baseline.sources, custom: [{ type: 'file', ref: 'docs/x.md', label: 'notes' }] } };
+    render(<LayeredIntelligenceTab {...props} li={li} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText(/Custom source 1 type/i), { target: { value: 'http' } });
+    expect(onChange).toHaveBeenCalledWith({ sources: expect.objectContaining({ custom: [{ type: 'http', url: '', label: 'notes' }] }) });
   });
 });

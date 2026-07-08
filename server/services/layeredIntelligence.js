@@ -334,17 +334,79 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     }
   }
   for (const custom of src.custom || []) {
-    if (custom?.type === 'file' && typeof custom.ref === 'string' && repo) {
+    const key = customSourceKey(custom);
+    if (!key) continue;
+    if (custom.type === 'file' && typeof custom.ref === 'string' && repo) {
       const safe = await confineToRepo(repo, custom.ref);
       if (!safe) {
         console.warn(`⚠️ Layered Intelligence: custom source "${custom.ref}" escapes repo — skipped`);
         continue;
       }
       const content = await tryReadFile(safe);
-      if (content) out[`custom:${custom.ref}`] = content.slice(0, 8000);
+      if (content) out[key] = content.slice(0, 8000);
+    } else if (custom.type === 'http' && typeof custom.url === 'string') {
+      const content = await fetchHttpSource(custom.url);
+      if (content) out[key] = content.slice(0, 8000);
+    } else if (custom.type === 'cmd' && typeof custom.cmd === 'string') {
+      const content = await runShellCommand(custom.cmd, { cwd: repo });
+      if (content) out[key] = content.slice(0, 8000);
     }
   }
   return out;
+}
+
+/**
+ * Stable map key for a custom source. Namespaced by type so a `file` ref and an
+ * `http` url that share a string can't collide, and so the prompt's source block
+ * labels are self-describing. Returns null for a malformed/unknown source.
+ */
+export function customSourceKey(custom) {
+  if (!custom || typeof custom !== 'object') return null;
+  if (custom.type === 'file' && custom.ref) return `custom:${custom.ref}`;
+  if (custom.type === 'http' && custom.url) return `custom:http:${custom.url}`;
+  if (custom.type === 'cmd' && custom.cmd) return `custom:cmd:${custom.cmd}`;
+  return null;
+}
+
+/**
+ * Fetch an http(s) custom source for the loop's prompt. Deterministic read, no
+ * LLM. Rejects any non-http(s) scheme (defense in depth over the Zod refine),
+ * bounds the request with a 10s timeout, and returns null on any failure so a
+ * dead URL just omits the key rather than throwing. `fetchImpl` is injectable
+ * for tests.
+ */
+export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchImpl = fetch } = {}) {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
+  const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const text = await res.text().catch(() => null);
+  return text || null;
+}
+
+/**
+ * Run a user-configured shell command for a `cmd` custom source and return its
+ * stdout. Deterministic read, no LLM. Runs the full command string through the
+ * shell (e.g. `git log --oneline -20 | head`), bounded by a wall-clock timeout,
+ * in the app's repo dir. Returns null on non-zero exit / no output so a failing
+ * command just omits the key. `exec` is injectable for tests.
+ */
+export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = runShell } = {}) {
+  if (typeof cmd !== 'string' || !cmd.trim()) return null;
+  const { code, stdout } = await exec(cmd, { cwd, timeout: timeoutMs });
+  if (code !== 0) return null;
+  return stdout.trim() || null;
+}
+
+/** Run a full command string through the shell, resolving `{ code, stdout, stderr }` (never rejects). */
+function runShell(cmd, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, { shell: true, windowsHide: true, ...options });
+    let stdout = '', stderr = '';
+    child.stdout?.on('data', d => { stdout += d.toString(); });
+    child.stderr?.on('data', d => { stderr += d.toString(); });
+    child.on('close', code => resolve({ code, stdout, stderr }));
+    child.on('error', err => resolve({ code: -1, stdout: '', stderr: err.message }));
+  });
 }
 
 /**

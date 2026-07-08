@@ -21,6 +21,9 @@ import {
   extractPlanSlugs,
   appendProposalToPlan,
   gatherSources,
+  customSourceKey,
+  fetchHttpSource,
+  runShellCommand,
   normalizeIssueState,
   listForgeIssues,
   listBlockingIssues,
@@ -449,6 +452,56 @@ describe('gatherSources custom file confinement', () => {
       { sources: { custom: [{ type: 'file', ref: 'link.md' }] } }
     );
     expect(out['custom:link.md']).toBe('INSIDE');
+  });
+});
+
+describe('customSourceKey', () => {
+  it('namespaces by type so file/http/cmd never collide', () => {
+    expect(customSourceKey({ type: 'file', ref: 'x' })).toBe('custom:x');
+    expect(customSourceKey({ type: 'http', url: 'https://x' })).toBe('custom:http:https://x');
+    expect(customSourceKey({ type: 'cmd', cmd: 'git log' })).toBe('custom:cmd:git log');
+  });
+  it('returns null for a malformed/blank source', () => {
+    expect(customSourceKey(null)).toBeNull();
+    expect(customSourceKey({ type: 'file' })).toBeNull();
+    expect(customSourceKey({ type: 'nope', ref: 'x' })).toBeNull();
+  });
+});
+
+describe('fetchHttpSource', () => {
+  it('returns body text on a 2xx http(s) response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: async () => 'remote body' });
+    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBe('remote body');
+  });
+  it('rejects a non-http scheme without calling fetch', async () => {
+    const fetchImpl = vi.fn();
+    expect(await fetchHttpSource('file:///etc/hosts', { fetchImpl })).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it('returns null on a non-ok response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: async () => 'nope' });
+    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  });
+  it('returns null when fetch throws (dead URL / timeout)', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('boom'));
+    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  });
+});
+
+describe('runShellCommand', () => {
+  it('returns trimmed stdout on exit 0', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '  out\n', stderr: '' });
+    expect(await runShellCommand('echo out', { cwd: '/x', exec })).toBe('out');
+    expect(exec).toHaveBeenCalledWith('echo out', expect.objectContaining({ cwd: '/x' }));
+  });
+  it('returns null on non-zero exit', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 1, stdout: 'partial', stderr: 'err' });
+    expect(await runShellCommand('false', { cwd: '/x', exec })).toBeNull();
+  });
+  it('returns null on empty command without invoking exec', async () => {
+    const exec = vi.fn();
+    expect(await runShellCommand('   ', { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
   });
 });
 
