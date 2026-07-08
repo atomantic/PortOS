@@ -15,6 +15,11 @@ export const getAppWorkTracker = (id, options) =>
 // side). Caller owns its own .catch fallback, so default to silent.
 export const getAppLayeredIntelligence = (id, options) =>
   request(`/apps/${id}/layered-intelligence`, { silent: true, ...options });
+// Cross-app Layered Intelligence Loop overview for the dedicated status page:
+// { jobEnabled, jobExists, enabledCount, apps: [{ id, name, enabled, intervalMs,
+// lastRunAt, nextDueAt, due, allowedScopes, sources, ... }] }. Read-only.
+export const getLayeredIntelligenceOverview = (options) =>
+  request('/apps/layered-intelligence/overview', options);
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)

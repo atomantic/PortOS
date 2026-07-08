@@ -187,6 +187,7 @@ const navItems = [
       { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
       { to: '/cos/health', label: 'Health', icon: Activity },
+      { to: '/layered-intelligence', label: 'Layered Intelligence', icon: Layers },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },

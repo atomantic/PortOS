@@ -42,6 +42,12 @@ export const LI_JIRA_BLOCKING_LABEL = 'layered-intelligence-blocking';
 // so the loop doesn't immediately re-file something the user just resolved.
 export const CLOSED_SUPPRESSION_MS = 30 * DAY;
 
+// The autonomous-job id that drives the whole loop (the global sweep). Single
+// source of truth — the DEFAULT_JOBS catalog entry and the cross-app overview
+// route both key on this so per-app enablement and the global on/off stay in
+// sync in the UI (a per-app config does nothing while this job is disabled).
+export const LI_JOB_ID = 'job-layered-intelligence';
+
 // Every proposal scope the reasoner may return. The handler enforces WHERE each
 // lands (see PROPOSAL_SCOPE_TARGETS) and gates meta/self scopes to PortOS only.
 export const PROPOSAL_SCOPES = ['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self'];
@@ -97,6 +103,48 @@ export function getEffectiveConfig(app) {
   if (!Array.isArray(merged.sources.custom)) merged.sources.custom = [];
   if (!Array.isArray(merged.allowedScopes)) merged.allowedScopes = base.allowedScopes;
   return merged;
+}
+
+/**
+ * Summarize one app's loop status for the cross-app overview page. Pure and
+ * side-effect-free (no LLM, no forge I/O): derives the display shape from the
+ * app's stored config + scheduler bookkeeping only. `lastRunAt` rides along on
+ * the effective config (a passthrough stored key, absent on a never-run app);
+ * `nextDueAt` is `lastRunAt + intervalMs` (null when never run), and `due` is a
+ * display flag (only meaningful when enabled) mirroring the sweep's cadence
+ * check. `rules` is reduced to a boolean so the free-text guidance never leaks
+ * into a list payload.
+ */
+export function summarizeLoopStatus({ app, isPortos = false, now = Date.now() } = {}) {
+  const config = getEffectiveConfig({ ...app, isPortos });
+  const sources = config.sources || {};
+  const lastRunAt = typeof config.lastRunAt === 'string' ? config.lastRunAt : null;
+  const last = lastRunAt ? Date.parse(lastRunAt) : NaN;
+  const interval = config.intervalMs || 0;
+  const nextDueAt = Number.isFinite(last) ? new Date(last + interval).toISOString() : null;
+  const due = !Number.isFinite(last) || (now - last) >= interval;
+  return {
+    id: app.id,
+    name: app.name || app.id,
+    isPortos,
+    enabled: !!config.enabled,
+    intervalMs: config.intervalMs,
+    providerId: config.providerId || null,
+    model: config.model || null,
+    hasRules: !!(typeof config.rules === 'string' && config.rules.trim()),
+    lastRunAt,
+    nextDueAt,
+    due: !!config.enabled && due,
+    allowedScopes: Array.isArray(config.allowedScopes) ? config.allowedScopes : [],
+    sources: {
+      goals: !!sources.goals,
+      cosMetrics: !!sources.cosMetrics,
+      healthReport: !!sources.healthReport,
+      planMd: !!sources.planMd,
+      openIssues: !!sources.openIssues,
+      customCount: Array.isArray(sources.custom) ? sources.custom.length : 0
+    }
+  };
 }
 
 /**

@@ -21,6 +21,8 @@ import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appI
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../services/taskSchedule.js';
+import { summarizeLoopStatus, LI_JOB_ID } from '../services/layeredIntelligence.js';
+import * as autonomousJobs from '../services/autonomousJobs.js';
 import { certPaths } from '../../lib/certPaths.js';
 
 const router = Router();
@@ -730,6 +732,37 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const info = await appsService.getAppWorkTracker(app.id);
   res.json({ appId: app.id, appName: app.name, ...info });
+}));
+
+// GET /api/apps/layered-intelligence/overview - Cross-app Layered Intelligence
+// Loop status for the dedicated page. Deterministic read only: each active app's
+// effective config + scheduler bookkeeping (lastRunAt/nextDueAt/due) plus the
+// global autonomous-job on/off state (a per-app config is inert while the job is
+// disabled). NO LLM and NO forge I/O — filed-proposal counts stay off this
+// surface deliberately (they'd require per-app `gh`/`glab` shell-outs). This
+// two-segment static path can't collide with `/:id` (one segment) or
+// `/:id/layered-intelligence` (literal second segment), so ordering is safe.
+router.get('/layered-intelligence/overview', asyncHandler(async (req, res) => {
+  const [apps, job] = await Promise.all([
+    appsService.getActiveApps(),
+    autonomousJobs.getJob(LI_JOB_ID).catch(() => null)
+  ]);
+  const now = Date.now();
+  const summaries = apps
+    .map(app => summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID, now }))
+    .sort((a, b) => {
+      // Enabled apps first, then the PortOS baseline, then alphabetical by name.
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+      if (a.isPortos !== b.isPortos) return a.isPortos ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  res.json({
+    jobId: LI_JOB_ID,
+    jobEnabled: !!job?.enabled,
+    jobExists: !!job,
+    enabledCount: summaries.filter(s => s.enabled).length,
+    apps: summaries
+  });
 }));
 
 // GET /api/apps/:id/layered-intelligence - Effective Layered Intelligence config
