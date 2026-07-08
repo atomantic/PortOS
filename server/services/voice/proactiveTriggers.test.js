@@ -121,6 +121,14 @@ describe('deriveTaskSpeechLabel', () => {
     })).toBe('Fixed the flaky backup test');
   });
 
+  it('falls through a blank title to a real post-run summary', () => {
+    expect(deriveTaskSpeechLabel({
+      title: '   ',
+      metadata: { taskSummary: 'Fixed the flaky backup test' },
+      description: SWARM_DESCRIPTION,
+    })).toBe('Fixed the flaky backup test');
+  });
+
   it('skips scaffolding-only leading lines to the first real topic', () => {
     expect(deriveTaskSpeechLabel({ description: '#\n---\nRefactor the widget registry' }))
       .toBe('Refactor the widget registry');
