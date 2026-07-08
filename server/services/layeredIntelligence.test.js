@@ -505,6 +505,30 @@ describe('fetchHttpSource', () => {
     expect(await fetchHttpSource('https://x', { fetchImpl: undefined })).toBeNull();
   });
 
+  it('byte-caps a large streamed body and stops reading', async () => {
+    // A body reader that would yield far more than the cap; readBodyCapped must
+    // stop and cancel once maxBytes is reached rather than draining the whole stream.
+    const chunk = new TextEncoder().encode('y'.repeat(400));
+    let reads = 0;
+    const cancel = vi.fn(() => Promise.resolve());
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({
+        read: () => { reads++; return Promise.resolve(reads > 100 ? { done: true } : { done: false, value: chunk }); },
+        cancel
+      }) }
+    });
+    const text = await fetchHttpSource('https://big', { fetchImpl, maxBytes: 1000 });
+    expect(text).toHaveLength(1000);
+    expect(cancel).toHaveBeenCalled();
+    expect(reads).toBeLessThan(10); // stopped early, did not drain 100 chunks
+  });
+
+  it('falls back to res.text() when the Response has no stream body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('z'.repeat(50)) });
+    expect(await fetchHttpSource('https://x', { fetchImpl, maxBytes: 20 })).toBe('z'.repeat(20));
+  });
+
   it('aborts (returns null) when the body read hangs past the timeout', async () => {
     // Headers resolve fast, but res.text() never settles until the abort signal fires.
     const fetchImpl = vi.fn((_url, { signal }) => Promise.resolve({

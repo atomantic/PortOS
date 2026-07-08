@@ -314,22 +314,40 @@ function runCli(cmd, args, options = {}) {
  * app repo.
  */
 export function runShellCommand(cmd, { cwd, timeoutMs = 15000, maxBytes = 8000 } = {}) {
-  return new Promise((done) => {
-    const child = spawn(cmd, { shell: true, cwd, windowsHide: true, timeout: timeoutMs, killSignal: 'SIGKILL' });
-    let stdout = '', stderr = '', capped = false;
-    // Cap stdout WHILE streaming and kill the child once we have enough — a runaway
-    // or endless command (`yes`, a looping metrics script) would otherwise buffer
-    // gigabytes into memory before the timeout fires. The gathered telemetry is
-    // sliced to maxBytes anyway, so a killed-at-cap command still yields usable
-    // output; report code 0 in that case so the caller keeps the truncated result.
+  return new Promise((resolveOnce) => {
+    // `detached: true` makes the shell a process-GROUP leader so we can SIGKILL the
+    // whole tree (`-pid`), not just the top-level shell — a cmd that spawns a child
+    // keeping stdout open would otherwise leave Node's `close` pending forever
+    // despite the timeout (inherited stdio never closes). Falls back to a plain
+    // child.kill() on platforms without POSIX process groups (Windows).
+    const child = spawn(cmd, { shell: true, cwd, windowsHide: true, detached: true });
+    let stdout = '', stderr = '', capped = false, settled = false;
+    const killTree = () => {
+      try { process.kill(-child.pid, 'SIGKILL'); }
+      catch { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+    };
+    // Settle deterministically on close, cap-reached, OR timeout — never wait
+    // unbounded on `close`. The timeout both kills the tree and resolves, so a
+    // process that ignores the kill (or a lingering grandchild) can't keep the
+    // sweep blocked.
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveOnce({ code, stdout, stderr });
+    };
+    const timer = setTimeout(() => { killTree(); finish(-1); }, timeoutMs);
     child.stdout?.on('data', d => {
-      if (capped) return;
+      if (capped || settled) return;
       stdout += d.toString();
-      if (stdout.length >= maxBytes) { stdout = stdout.slice(0, maxBytes); capped = true; child.kill('SIGKILL'); }
+      // Cap WHILE streaming: a runaway/endless command (`yes`, a looping script)
+      // would otherwise buffer gigabytes before the timeout. The telemetry is
+      // sliced to maxBytes anyway, so report code 0 and keep the truncated output.
+      if (stdout.length >= maxBytes) { stdout = stdout.slice(0, maxBytes); capped = true; killTree(); finish(0); }
     });
     child.stderr?.on('data', d => { if (stderr.length < maxBytes) stderr += d.toString(); });
-    child.on('close', code => done({ code: capped ? 0 : code, stdout, stderr }));
-    child.on('error', err => done({ code: -1, stdout: '', stderr: err.message }));
+    child.on('close', code => finish(capped ? 0 : code));
+    child.on('error', err => { stderr = err.message; finish(-1); });
   });
 }
 
@@ -337,23 +355,50 @@ export function runShellCommand(cmd, { cwd, timeoutMs = 15000, maxBytes = 8000 }
  * Fetch an `http` telemetry source, returning its response body text or null
  * (never throws — a dead/slow/erroring endpoint degrades to an omitted source).
  * Time-boxed GET, follows redirects; a non-2xx response is treated as no data.
- * `fetchImpl` is injectable so tests never hit the network.
+ * The body is read as a byte-capped stream so a large-but-responsive endpoint
+ * (CI logs, coverage HTML, an artifact) can't allocate far more than needed
+ * before the caller slices it. `fetchImpl` is injectable so tests never hit the
+ * network; a fetch impl whose Response has no stream body falls back to text().
  */
-export async function fetchHttpSource(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000 } = {}) {
+export async function fetchHttpSource(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, maxBytes = 8000 } = {}) {
   if (typeof fetchImpl !== 'function') return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // Keep the abort timer armed across BOTH the fetch AND the body read: a server
   // that returns headers fast but then dribbles (or never finishes) the body would
-  // otherwise hang res.text() forever if we cleared the timer on fetch-resolve. The
+  // otherwise hang the read forever if we cleared the timer on fetch-resolve. The
   // signal aborts the body stream too, so a stalled read rejects → caught → null.
   const text = await (async () => {
     const res = await fetchImpl(url, { signal: controller.signal, redirect: 'follow' });
-    if (!res || !res.ok || typeof res.text !== 'function') return null;
-    return res.text();
+    if (!res || !res.ok) return null;
+    return readBodyCapped(res, maxBytes);
   })().catch(() => null);
   clearTimeout(timer);
   return typeof text === 'string' ? text : null;
+}
+
+/**
+ * Read a fetch Response body as text, stopping once ~maxBytes of decoded text is
+ * collected (then aborting the stream) so a huge body isn't buffered whole. Falls
+ * back to res.text() when the Response exposes no readable stream (e.g. a test
+ * double or a polyfill without `body.getReader`).
+ */
+async function readBodyCapped(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    if (typeof res.text !== 'function') return null;
+    const t = await res.text();
+    return typeof t === 'string' ? t.slice(0, maxBytes) : null;
+  }
+  const decoder = new TextDecoder();
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += decoder.decode(value, { stream: true });
+    if (out.length >= maxBytes) { reader.cancel().catch(() => {}); break; }
+  }
+  return out.slice(0, maxBytes);
 }
 
 /**
