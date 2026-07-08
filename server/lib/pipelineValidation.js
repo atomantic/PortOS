@@ -218,6 +218,17 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // (opt-in) — producing video is a fresh burst of LLM + render spend. Optional +
   // additive so older peers fall through to off.
   produceTeaser: z.boolean().optional(),
+  // Iterate-to-quality revision loop (CWQE Phase 7, #2171). When on, the autopilot
+  // cycles the weakest drafted issue through adversarial cuts + a judge-gated
+  // keep/revert after the editorial-health gate, stopping on plateau /
+  // hedged-convergence / maxCycles. Defaults OFF (opt-in) — a fresh burst of judge
+  // + cut LLM spend. `revisionMaxCycles` is the cost ceiling; `revisionMinCycles`
+  // floors the plateau/hedge stops; `revisionPlateauDelta` is the mean-score
+  // movement below which the series counts as converged. All optional + additive.
+  revisionEnabled: z.boolean().optional(),
+  revisionMinCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionMaxCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionPlateauDelta: z.number().min(0).max(10).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

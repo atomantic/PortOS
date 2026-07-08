@@ -31,6 +31,13 @@ const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
 // Pause-notification escalation (#1615) — mirror the server default (on). The one
 // autopilot setting that defaults ON: a zero-cost in-app banner when a run pauses.
 const DEFAULT_NOTIFY_ON_PAUSE = true;
+// Iterate-to-quality revision loop (#2171) — mirror the server defaults. Off by
+// default (a fresh burst of judge + cut LLM spend); cycles bound the cost and the
+// plateau delta is the mean-score movement below which the series counts converged.
+const DEFAULT_REVISION_ENABLED = false;
+const DEFAULT_REVISION_MIN_CYCLES = 1;
+const DEFAULT_REVISION_MAX_CYCLES = 2;
+const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
 
 // Editorial-health readiness gate (#1316/#1580) — the "manuscript clean" bar the
 // autopilot must clear before visuals. Mirrors READINESS_GATES on the server. The
@@ -56,6 +63,15 @@ const clampNumber = (n, { fallback, min, max }) => {
 const clampRound = (n, fallback) => clampNumber(n, { fallback, min: ROUND_MIN, max: ROUND_MAX });
 // Pause threshold: blank → 0 (off), non-negative integer, no upper cap.
 const clampThreshold = (n) => clampNumber(n, { fallback: 0, min: 0, max: null });
+// Revision cycles: at least 1 (0 would strand the loop), capped like the rounds.
+const clampCycles = (n, fallback) => clampNumber(n, { fallback, min: 1, max: ROUND_MAX });
+// Plateau delta: a float ≥ 0 (blank → the default). No rounding, unlike the gates.
+const clampDelta = (n, fallback) => {
+  if (n === '' || n === null || n === undefined) return fallback;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(10, Math.max(0, v));
+};
 
 // A single numeric field for the Options popover (round bounds + the pause
 // threshold). Allows '' mid-edit (so the field can be cleared) and clamps +
@@ -64,7 +80,7 @@ const clampThreshold = (n) => clampNumber(n, { fallback: 0, min: 0, max: null })
 // fallback or mark the field dirty, or it would clobber a saved limit before
 // settings load and block the load from applying it. `max` caps the input (null =
 // uncapped); `clamp(value, defaultValue)` defaults to the round clamp.
-function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist, max = ROUND_MAX, clamp = clampRound }) {
+function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist, max = ROUND_MAX, clamp = clampRound, min = ROUND_MIN, step }) {
   const dirtyRef = useRef(false);
   return (
     <div className="flex items-center gap-2">
@@ -72,8 +88,9 @@ function RoundInput({ id, label, settingKey, value, setValue, defaultValue, pers
       <input
         id={id}
         type="number"
-        min={ROUND_MIN}
+        min={min}
         max={max ?? undefined}
+        step={step ?? undefined}
         value={value}
         onChange={(e) => { dirtyRef.current = true; setValue(e.target.value === '' ? '' : Number(e.target.value)); }}
         onBlur={() => {
@@ -107,8 +124,10 @@ const STEP_LABELS = {
   reverseOutline: 'Refreshing scene segmentation',
   editorialChecks: 'Editorial checks',
   editorialHealthGate: 'Editorial health gate',
+  revisionCycle: 'Iterate-to-quality revision',
   canonVerify: 'Checking canon descriptions',
   visualDraft: 'Drafting comic art',
+  produceTeaser: 'Producing teaser video',
 };
 
 const stepLabel = (kind) => STEP_LABELS[kind] || kind;
@@ -204,6 +223,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // default + per-run override) but defaults ON — toggling off silences the
   // in-app pause banner. Persisted on change so the choice is reused on Resume.
   const [notifyOnPause, setNotifyOnPause] = useState(DEFAULT_NOTIFY_ON_PAUSE);
+  // Iterate-to-quality revision loop (#2171). Persisted like the other options
+  // (saved default + per-run override) so a configured loop is reused on Resume.
+  const [revisionEnabled, setRevisionEnabled] = useState(DEFAULT_REVISION_ENABLED);
+  const [revisionMinCycles, setRevisionMinCycles] = useState(DEFAULT_REVISION_MIN_CYCLES);
+  const [revisionMaxCycles, setRevisionMaxCycles] = useState(DEFAULT_REVISION_MAX_CYCLES);
+  const [revisionPlateauDelta, setRevisionPlateauDelta] = useState(DEFAULT_REVISION_PLATEAU_DELTA);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -214,6 +239,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const beatContinuityEditedRef = useRef(false);
   const checkPauseEditedRef = useRef(false);
   const notifyEditedRef = useRef(false);
+  const revisionEnabledEditedRef = useRef(false);
+  const revisionMinEditedRef = useRef(false);
+  const revisionMaxEditedRef = useRef(false);
+  const revisionDeltaEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
 
@@ -233,6 +262,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
         if (!checkPauseEditedRef.current) setCheckPauseThreshold(Number.isInteger(pec.checkFindingsPauseThreshold) ? pec.checkFindingsPauseThreshold : DEFAULT_CHECK_PAUSE_THRESHOLD);
         if (!notifyEditedRef.current) setNotifyOnPause(typeof pec.notifyOnPause === 'boolean' ? pec.notifyOnPause : DEFAULT_NOTIFY_ON_PAUSE);
+        if (!revisionEnabledEditedRef.current) setRevisionEnabled(typeof pec.revisionEnabled === 'boolean' ? pec.revisionEnabled : DEFAULT_REVISION_ENABLED);
+        if (!revisionMinEditedRef.current) setRevisionMinCycles(Number.isInteger(pec.revisionMinCycles) ? pec.revisionMinCycles : DEFAULT_REVISION_MIN_CYCLES);
+        if (!revisionMaxEditedRef.current) setRevisionMaxCycles(Number.isInteger(pec.revisionMaxCycles) ? pec.revisionMaxCycles : DEFAULT_REVISION_MAX_CYCLES);
+        if (!revisionDeltaEditedRef.current) setRevisionPlateauDelta(Number.isFinite(pec.revisionPlateauDelta) ? pec.revisionPlateauDelta : DEFAULT_REVISION_PLATEAU_DELTA);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
@@ -268,6 +301,16 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     setNotifyOnPause(v);
     persistRounds({ notifyOnPause: v });
   }, [persistRounds]);
+  // Revision loop (#2171): the enable checkbox persists immediately (no blur); the
+  // cycle bounds + plateau delta persist on blur via RoundInput like the others.
+  const editRevisionEnabled = useCallback((v) => {
+    revisionEnabledEditedRef.current = true;
+    setRevisionEnabled(v);
+    persistRounds({ revisionEnabled: v });
+  }, [persistRounds]);
+  const editRevisionMinCycles = useCallback((v) => { revisionMinEditedRef.current = true; setRevisionMinCycles(v); }, []);
+  const editRevisionMaxCycles = useCallback((v) => { revisionMaxEditedRef.current = true; setRevisionMaxCycles(v); }, []);
+  const editRevisionPlateauDelta = useCallback((v) => { revisionDeltaEditedRef.current = true; setRevisionPlateauDelta(v); }, []);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -349,6 +392,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // #1615 — pause notification toggle persists + overrides like the others, but
     // is a plain boolean (no clamp). Untouched sends nothing → server default (on).
     if (notifyEditedRef.current) roundOverrides.notifyOnPause = notifyOnPause;
+    // #2171 — the revision-loop knobs persist + override like the round inputs.
+    if (revisionEnabledEditedRef.current) roundOverrides.revisionEnabled = revisionEnabled;
+    if (revisionMinEditedRef.current) roundOverrides.revisionMinCycles = clampCycles(revisionMinCycles, DEFAULT_REVISION_MIN_CYCLES);
+    if (revisionMaxEditedRef.current) roundOverrides.revisionMaxCycles = clampCycles(revisionMaxCycles, DEFAULT_REVISION_MAX_CYCLES);
+    if (revisionDeltaEditedRef.current) roundOverrides.revisionPlateauDelta = clampDelta(revisionPlateauDelta, DEFAULT_REVISION_PLATEAU_DELTA);
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -364,7 +412,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, readinessGate, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, readinessGate, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -513,6 +561,54 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           <p className="text-[11px] text-gray-500">
             When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
           </p>
+          <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
+            <input type="checkbox" checked={revisionEnabled} onChange={(e) => editRevisionEnabled(e.target.checked)} />
+            Iterate to quality (revise the weakest issue under a keep/revert score gate)
+          </label>
+          {revisionEnabled ? (
+            <>
+              <div className="flex flex-wrap gap-4 pt-1">
+                <RoundInput
+                  id="autopilot-revision-min-cycles"
+                  label="Min cycles"
+                  settingKey="revisionMinCycles"
+                  value={revisionMinCycles}
+                  setValue={editRevisionMinCycles}
+                  defaultValue={DEFAULT_REVISION_MIN_CYCLES}
+                  persist={persistRounds}
+                  min={1}
+                  clamp={clampCycles}
+                />
+                <RoundInput
+                  id="autopilot-revision-max-cycles"
+                  label="Max cycles"
+                  settingKey="revisionMaxCycles"
+                  value={revisionMaxCycles}
+                  setValue={editRevisionMaxCycles}
+                  defaultValue={DEFAULT_REVISION_MAX_CYCLES}
+                  persist={persistRounds}
+                  min={1}
+                  clamp={clampCycles}
+                />
+                <RoundInput
+                  id="autopilot-revision-plateau-delta"
+                  label="Plateau Δ"
+                  settingKey="revisionPlateauDelta"
+                  value={revisionPlateauDelta}
+                  setValue={editRevisionPlateauDelta}
+                  defaultValue={DEFAULT_REVISION_PLATEAU_DELTA}
+                  persist={persistRounds}
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  clamp={clampDelta}
+                />
+              </div>
+              <p className="text-[11px] text-gray-500">
+                After the editorial-health gate, judge every drafted issue and revise the weakest via adversarial cuts, keeping a change only when the quality score doesn&apos;t regress. Stops on plateau (mean score moves less than Δ), hedged-convergence, or max cycles. Fresh judge + cut LLM spend — saved as the default and reused on Resume.
+              </p>
+            </>
+          ) : null}
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.
           </p>
