@@ -209,12 +209,13 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
   // granularity collapse to one event. The filename-derived chatTitle can't be the
   // scope (it's unstable across zip-vs-extracted uploads and renames). The optional
   // `chatScope` (a stable, user-supplied chat name) closes this: when present it is
-  // prefixed into the hash ahead of the ISO instant, so the two chats key apart.
-  // When absent the hash input is byte-identical to the legacy key, so unlabelled
-  // imports (and their idempotency) are unchanged.
+  // prefixed into the hash ahead of the ISO instant, separated by a NUL (`\u0000`)
+  // that can't occur in a normalized display name, so the two chats key apart with
+  // no delimiter ambiguity. When absent the hash input is byte-identical to the
+  // legacy key, so unlabelled imports (and their idempotency) are unchanged.
   const scope = normalizeChatScope(chatScope);
   const hashInput = scope
-    ? `${scope} ${happenedAt} ${msg.sender} ${bodyText}`
+    ? `${scope}\u0000${happenedAt} ${msg.sender} ${bodyText}`
     : `${happenedAt} ${msg.sender} ${bodyText}`;
   const dedupeKey = createHash('sha1')
     .update(hashInput)
