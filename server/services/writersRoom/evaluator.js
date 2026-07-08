@@ -14,6 +14,7 @@ import { extractBible } from '../../lib/bibleExtractor.js';
 import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';
 import { BIBLE_KIND } from '../../lib/storyBible.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
+import { CUT_TYPES } from '../../lib/editorial/cutApplier.js';
 import { getWorkWithBody, ensureWorkMediaCollection } from './local.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../mediaCollections.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
@@ -23,13 +24,20 @@ import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 export { ANALYSIS_KINDS };
 
-const KIND_META = {
+// `cuts` and `revise` are the two Polish-loop pass kinds (#2173). They are NOT
+// in ANALYSIS_KINDS — they never run as standalone user analyses (no snapshot
+// row in the analysis history); the multi-pass Polish runner (polish.js) drives
+// them against the work body directly. They live here so the stage-name +
+// returnsJson mapping stays single-sourced.
+export const KIND_META = {
   evaluate:   { stage: 'writers-room-evaluate',   returnsJson: true },
   format:     { stage: 'writers-room-format',     returnsJson: false },
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
   places:     { stage: 'writers-room-places',     returnsJson: true },
   objects:    { stage: 'writers-room-objects',    returnsJson: true },
+  cuts:       { stage: 'writers-room-cuts',       returnsJson: true },
+  revise:     { stage: 'writers-room-revise',     returnsJson: false },
 };
 
 // Analysis id == kind. Each work keeps at most one snapshot per kind on disk
@@ -58,13 +66,17 @@ function extractJson(text) {
   return JSON.parse(str);
 }
 
-const SHAPERS = {
-  format: (raw) => {
-    let text = raw.trim();
-    const fence = text.match(/^```(?:markdown|md|text)?\s*([\s\S]*?)```$/);
-    if (fence) text = fence[1].trim();
-    return { formattedBody: text };
-  },
+// Strip a leading/trailing markdown code fence from a prose response — some
+// providers wrap returned prose in a ```markdown … ``` block.
+function stripProseFence(raw) {
+  let text = String(raw ?? '').trim();
+  const fence = text.match(/^```(?:markdown|md|text)?\s*([\s\S]*?)```$/);
+  if (fence) text = fence[1].trim();
+  return text;
+}
+
+export const SHAPERS = {
+  format: (raw) => ({ formattedBody: stripProseFence(raw) }),
   evaluate: (raw) => {
     const parsed = extractJson(raw);
     return {
@@ -76,6 +88,33 @@ const SHAPERS = {
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter((s) => s && typeof s === 'object') : [],
     };
   },
+  // Adversarial-cut pass (#2173). Shapes the ruthless-editor JSON into typed cut
+  // findings the mechanical applier can consume (anchorQuote + cutType), plus the
+  // health signals (fat %, protected passage). Findings without a usable anchor
+  // quote or a recognized cut type are dropped — the applier can't act on them.
+  cuts: (raw) => {
+    const parsed = extractJson(raw);
+    const rawFindings = Array.isArray(parsed.findings) ? parsed.findings : [];
+    return {
+      fatPercentage: typeof parsed.fat_percentage === 'number' ? parsed.fat_percentage : null,
+      tightestPassage: typeof parsed.tightest_passage === 'string' ? parsed.tightest_passage : null,
+      loosestPassage: typeof parsed.loosest_passage === 'string' ? parsed.loosest_passage : null,
+      oneSentenceVerdict: typeof parsed.one_sentence_verdict === 'string' ? parsed.one_sentence_verdict : null,
+      findings: rawFindings
+        .filter((f) => f && typeof f === 'object')
+        .map((f) => ({
+          severity: typeof f.severity === 'string' ? f.severity : 'low',
+          location: typeof f.location === 'string' ? f.location : null,
+          problem: typeof f.problem === 'string' ? f.problem : '',
+          suggestion: typeof f.suggestion === 'string' ? f.suggestion : '',
+          anchorQuote: typeof f.anchorQuote === 'string' ? f.anchorQuote : '',
+          cutType: CUT_TYPES.includes(f.cutType) ? f.cutType : null,
+        }))
+        .filter((f) => f.anchorQuote && f.cutType),
+    };
+  },
+  // Brief-driven rewrite (#2173) returns prose only (returnsJson:false).
+  revise: (raw) => ({ revisedBody: stripProseFence(raw) }),
   // characters / places / objects route through `extractBible`,
   // and `script` routes through `extractScenes` — no per-kind shaper here.
 };
@@ -261,6 +300,36 @@ export async function recoverStuckAnalyses() {
   );
   if (migrated > 0) console.log(`📝 wr: migrated ${migrated} legacy analysis file(s) to per-kind layout`);
   if (recovered > 0) console.log(`📝 wr: recovered ${recovered} stuck analysis snapshot(s) on boot`);
+}
+
+// ---------- shared pass runner (used by runAnalysis + the Polish loop) ----------
+
+/**
+ * Run one LLM prose pass for a KIND_META kind against an already-loaded work
+ * body, returning the shaped result plus provider/model. Thin wrapper over
+ * runStagedLLM + the per-kind SHAPER so the Polish loop (polish.js) drives the
+ * `evaluate` / `cuts` / `revise` passes through the same single code path as
+ * the standalone analysis runner — no duplicated plumbing.
+ *
+ * Only the template-driven kinds (evaluate/format/cuts/revise) route here; the
+ * bible/script kinds have their own extraction paths in runAnalysis.
+ *
+ * @param {string} kind - A KIND_META key with a template stage.
+ * @param {object} variables - Extra prompt variables (work, draftBody, brief, …).
+ * @param {{ source?: string }} [opts]
+ * @returns {Promise<{ result: any, content: string, providerId: string, model: string }>}
+ */
+export async function runProsePass(kind, variables, { source } = {}) {
+  const meta = KIND_META[kind];
+  if (!meta) throw badRequest(`Unknown prose pass kind: ${kind}`);
+  const { stage, returnsJson } = meta;
+  const { content, model, providerId } = await runStagedLLM(
+    stage,
+    { ...variables, returnsJson },
+    { source: source || `writers-room-${kind}` },
+  );
+  const shaper = SHAPERS[kind];
+  return { result: shaper ? shaper(content) : content, content, providerId, model };
 }
 
 // ---------- run ----------

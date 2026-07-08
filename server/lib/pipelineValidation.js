@@ -313,6 +313,22 @@ export const writersRoomAnalysisCreateSchema = z.object({
   kind: z.enum(ANALYSIS_KINDS)
 }).strict();
 
+// Start options for the autonomous Polish loop (#2173). All bounds mirror the
+// polish.js runtime clamps so a direct API call can't request an out-of-range
+// run; the runner clamps again defensively.
+export const writersRoomPolishStartSchema = z.object({
+  cycles: z.number().int().min(1).max(3).optional(),
+  plateauThreshold: z.number().min(0).max(100).optional(),
+  cutTargetPercent: z.number().int().min(5).max(20).optional(),
+  minCuts: z.number().int().min(1).max(50).optional(),
+  maxCuts: z.number().int().min(1).max(50).optional(),
+}).strict();
+
+// Manual revert of a work body to an immutable Polish snapshot (#2173).
+export const writersRoomPolishRevertSchema = z.object({
+  snapshotId: z.string().trim().regex(/^wr-snap-[0-9a-f-]+$/i, 'Invalid snapshot id'),
+}).strict();
+
 // Character profile fields are all optional on update so the UI can PATCH
 // one field at a time. `name` accepts trimmed non-empty when present; all
 // other text fields tolerate '' so the writer can deliberately blank a field
