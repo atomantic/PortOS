@@ -252,6 +252,13 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
     expect(r).toMatchObject({ dimension: 'worldbuilding', applied: false });
   });
 
+  it('reports applied:false (not a throw) for structure when the arc is locked', async () => {
+    seriesSvc.getSeries.mockResolvedValue({ id: 'ser-1', name: 'S', universeId: 'uni-1', locked: { arc: true } });
+    const r = await applyFoundationFix('ser-1', 'structure', { finding: { gap: 'g', fix: 'f' } });
+    expect(arcPlanner.resolveVerifyIssues).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ dimension: 'structure', applied: false });
+  });
+
   it('reports applied:false for character when no unlocked blank character exists', async () => {
     universeBuilder.getUniverse.mockResolvedValue({ id: 'uni-1', characters: [{ id: 'locked', name: 'A', locked: true }] });
     const r = await applyFoundationFix('ser-1', 'character', {});

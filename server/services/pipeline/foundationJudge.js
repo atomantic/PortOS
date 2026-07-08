@@ -520,8 +520,15 @@ export async function applyFoundationFix(seriesId, dimension, { finding = {}, pr
   }
 
   if (dimension === 'structure') {
+    // A locked arc is a constraint, not a fix target — resolveVerifyIssues throws
+    // on a locked arc, which would error the whole run. Degrade to a graceful
+    // "can't apply" so the gate pauses for human review instead (mirrors the
+    // no-linked-universe / fully-locked-cast paths above).
+    if (series?.locked?.arc === true) {
+      return { dimension, applied: false, reason: 'arc is locked (a constraint, not a fix target)' };
+    }
     // Synthesize an arc finding from the judge's structure gap/fix and route it
-    // through the existing arc-resolve owning service (respects the arc lock).
+    // through the existing arc-resolve owning service.
     const findings = [{
       severity: 'high',
       location: 'arc',
