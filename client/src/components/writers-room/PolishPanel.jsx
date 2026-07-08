@@ -75,7 +75,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
       toast('Polish canceled', { icon: '🛑' });
       onBodyChanged?.();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentionally keyed on `closed` only — this fires once when the stream ends.
   }, [closed]);
 
   const start = async () => {
