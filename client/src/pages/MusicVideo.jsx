@@ -20,7 +20,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
-import { listTracks } from '../services/apiTracks.js';
+import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
@@ -206,6 +206,16 @@ export default function MusicVideo() {
   }, []);
 
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
+
+  // The project's master audio file lives under data/music/ — either the linked
+  // track's stored audio or the project's own uploaded file. Returns the bare
+  // basename (or null when the project has no audio yet) for the preview/download
+  // controls; the bytes are served statically via trackAudioUrl().
+  const projectAudioFilename = useCallback((project) => {
+    if (!project) return null;
+    if (project.trackId) return tracks.find((t) => t.id === project.trackId)?.audioFilename || null;
+    return project.uploadedAudioFilename || null;
+  }, [tracks]);
 
   const handleCreate = (e) => {
     e.preventDefault();
@@ -658,6 +668,23 @@ export default function MusicVideo() {
                     compact
                   />
                 </div>
+                {/* Preview + download the project's master audio track. Both act on
+                    the resolved data/music/ file (linked track or uploaded audio). */}
+                {(() => {
+                  const audioFile = projectAudioFilename(selected);
+                  if (!audioFile) return null;
+                  const audioUrl = trackAudioUrl(audioFile);
+                  return (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
+                      <a href={audioUrl} download={audioFile}
+                        title="Download the audio track"
+                        className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
+                        <Download size={13} /> Download audio
+                      </a>
+                    </div>
+                  );
+                })()}
                 {render && (
                   <div className="mt-2">
                     <div className="h-1.5 bg-port-bg rounded overflow-hidden">
