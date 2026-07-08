@@ -11,6 +11,7 @@ import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.
 import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
 import { importBrowserHistory } from '../services/browserHistoryImport.js';
+import { importYoutubeHistory } from '../services/youtubeImport.js';
 
 const router = Router();
 
@@ -28,6 +29,9 @@ const zipOrJsonUpload = (label) => uploadSingle('file', {
 });
 
 const uploadSpotify = zipOrJsonUpload('Spotify');
+// YouTube watch history ships as a Takeout `watch-history.json` (or the whole
+// ZIP) — same ZIP-or-JSON shape as the other Takeout importers.
+const uploadYoutube = zipOrJsonUpload('Google Takeout YouTube watch history');
 const uploadTakeoutLocation = zipOrJsonUpload('Google Takeout location');
 // Browser history ships as a Takeout Chrome `History.json` (or the whole ZIP) —
 // same ZIP-or-JSON shape as the other Takeout importers.
@@ -165,5 +169,10 @@ router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHist
 // `browser` (dedupe on a content hash of visit-instant + URL, since the export
 // carries no visit id). Subframe (iframe) loads are dropped as noise.
 router.post('/import/browser', uploadBrowserHistory, importHandler(importBrowserHistory));
+
+// POST /api/timeline/import/youtube — bulk-backfill a Google Takeout YouTube
+// `watch-history.json` (standalone or the whole ZIP) → media.watch events under
+// source `youtube` (dedupe on video id + local day, shared with the live scrape).
+router.post('/import/youtube', uploadYoutube, importHandler(importYoutubeHistory));
 
 export default router;

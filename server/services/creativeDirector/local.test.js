@@ -26,7 +26,14 @@ vi.mock('../catalogDB.js', () => ({
   cdRefRoleForType: (type) => type,
 }));
 
+// setTreatment fires first-pass scene-frame seeding (#1938) — mock it so this
+// dispatcher test doesn't pull the real mediaJobQueue/imageGen graph.
+vi.mock('./firstPassGen.js', () => ({
+  enqueueFirstPassSceneFrames: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
+}));
+
 const { setTreatment, recordRun, updateRun, trimRuns } = await import('./local.js');
+import * as firstPassGen from './firstPassGen.js';
 
 const VALID_TREATMENT = {
   logline: 'A cat finds a hat.',
@@ -46,6 +53,24 @@ beforeEach(() => {
   mockReadJSONFile.mockReset();
   mockAtomicWrite.mockReset().mockResolvedValue(undefined);
   mockEnsureDir.mockReset().mockResolvedValue(undefined);
+  firstPassGen.enqueueFirstPassSceneFrames.mockClear();
+});
+
+describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
+  it('seeds first-pass scene frames when the project opted into generateFirstPass', async () => {
+    mockReadJSONFile.mockResolvedValue([{ id: 'cd-1', generateFirstPass: true, name: 'Test' }]);
+    const result = await setTreatment('cd-1', VALID_TREATMENT);
+    // Fires on the domain write itself (not the route) so every setTreatment
+    // caller honors the opt-in. Called with the freshly-persisted project.
+    expect(firstPassGen.enqueueFirstPassSceneFrames).toHaveBeenCalledWith(result);
+    expect(result.generateFirstPass).toBe(true);
+  });
+
+  it('does not seed first-pass scene frames when the project never opted in', async () => {
+    mockReadJSONFile.mockResolvedValue([{ id: 'cd-1', name: 'Test' }]);
+    await setTreatment('cd-1', VALID_TREATMENT);
+    expect(firstPassGen.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();
+  });
 });
 
 describe('setTreatment — status preservation', () => {
