@@ -30,6 +30,7 @@ import { WRITERS_ROOM_TOOLS } from './tools/writersRoom.js';
 import { PIPELINE_TOOLS } from './tools/pipeline.js';
 import { MEDIA_TOOLS } from './tools/media.js';
 import { CATALOG_TOOLS } from './tools/catalog.js';
+import { CD_TOOLS } from './tools/cd.js';
 
 // The daily action budget the creative gate charges against. Creative
 // orchestration mirrors the cos autonomy posture (see getCreativeAutonomyMode),
@@ -46,6 +47,7 @@ export const CREATIVE_TOOLS = [
   ...PIPELINE_TOOLS,
   ...MEDIA_TOOLS,
   ...CATALOG_TOOLS,
+  ...CD_TOOLS,
 ];
 
 const COST_SET = new Set(COST_CLASSES);

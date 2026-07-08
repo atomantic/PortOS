@@ -212,6 +212,12 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // informational signal — so this is the one autopilot setting that's opt-OUT.
   // Optional + additive so older peers fall through to the default.
   notifyOnPause: z.boolean().optional(),
+  // Autopilot → CD teaser deliverable (CDO Phase 3, #2185). When on, once a comic
+  // issue is text-ready + drafted the autopilot OPTIONALLY mints + starts a
+  // Creative Director teaser/trailer video project seeded from it. Defaults OFF
+  // (opt-in) — producing video is a fresh burst of LLM + render spend. Optional +
+  // additive so older peers fall through to off.
+  produceTeaser: z.boolean().optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

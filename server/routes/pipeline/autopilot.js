@@ -78,6 +78,10 @@ const autopilotStartSchema = z.object({
   // pipelineEditorialChecks.notifyOnPause, then true (on by default — a zero-cost
   // informational signal). Set false to silence pause notifications for this run.
   notifyOnPause: z.boolean().optional(),
+  // Autopilot → CD teaser deliverable (CDO Phase 3, #2185). When true, once every
+  // comic issue is drafted the run mints + starts a Creative Director teaser video
+  // per issue. Falls back to pipelineEditorialChecks.produceTeaser, then off.
+  produceTeaser: z.boolean().optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

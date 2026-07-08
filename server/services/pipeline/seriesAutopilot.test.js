@@ -650,6 +650,73 @@ describe('resolveNextStep (pure)', () => {
     );
     expect(step.kind).toBe('editorialReview');
   });
+
+  // CDO Phase 3 (#2185) — the opt-in teaser deliverable is the LAST step, after
+  // visuals are drafted, and only when produceTeaser is on.
+  const rendered = {
+    idea: ready(),
+    comicScript: ready(VALID_SCRIPT),
+    comicPages: {
+      cover: { proofImage: { jobId: 'j' } },
+      backCover: { proofImage: { jobId: 'jb' } },
+      pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p0' } }],
+    },
+  };
+  const fullyReady = { arcVerified: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true };
+
+  it('does NOT ask for a teaser by default (produceTeaser off) — stays done', () => {
+    const step = resolveNextStep(comic, [issue({ stages: rendered })], fullyReady, { includeVisual: true });
+    expect(step.kind).toBe('done');
+  });
+
+  it('asks for a teaser once visuals are drafted and produceTeaser is on', () => {
+    const step = resolveNextStep(comic, [issue({ stages: rendered })], fullyReady, { includeVisual: true, produceTeaser: true });
+    expect(step).toMatchObject({ kind: 'produceTeaser', issueId: 'iss1' });
+  });
+
+  it('is done once the teaser has been produced this run', () => {
+    const step = resolveNextStep(comic, [issue({ stages: rendered })], { ...fullyReady, teaserProduced: new Set(['iss1']) }, { includeVisual: true, produceTeaser: true });
+    expect(step.kind).toBe('done');
+  });
+
+  it('never asks for a teaser on a text-only run even with produceTeaser on', () => {
+    const step = resolveNextStep(comic, [issue({ stages: rendered })], fullyReady, { target: 'text', produceTeaser: true });
+    expect(step.kind).toBe('done');
+  });
+});
+
+describe('resolveAutopilotProduceTeaser (config gate, #2185)', () => {
+  it('defaults OFF', () => {
+    expect(autopilot.resolveAutopilotProduceTeaser({}, null)).toBe(false);
+  });
+  it('per-run option wins over the persisted setting', () => {
+    expect(autopilot.resolveAutopilotProduceTeaser({ produceTeaser: true }, { pipelineEditorialChecks: { produceTeaser: false } })).toBe(true);
+  });
+  it('falls back to the persisted setting when no per-run option', () => {
+    expect(autopilot.resolveAutopilotProduceTeaser({}, { pipelineEditorialChecks: { produceTeaser: true } })).toBe(true);
+  });
+});
+
+describe('autopilotEvents in-process bus (#2185)', () => {
+  it('mirrors the SSE frames a real run broadcasts onto the bus keyed by seriesId', async () => {
+    cosMode = 'dry-run';
+    const { seriesId } = await seedComplete();
+    const frames = [];
+    const handler = (p) => frames.push(p);
+    autopilot.autopilotEvents.on(seriesId, handler);
+    await autopilot.startSeriesAutopilot(seriesId, {});
+    await waitFor(runFinished(seriesId));
+    autopilot.autopilotEvents.off(seriesId, handler);
+    // The bus received the same terminal frame the SSE client sees (lastPayload).
+    const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
+    expect(frames).toContainEqual(last);
+    expect(frames.some((f) => f.type === 'start')).toBe(true);
+    expect(frames.some((f) => f.type === 'complete')).toBe(true);
+  });
+
+  it('exposes the terminal frame types a server-side consumer settles on', () => {
+    expect([...autopilot.AUTOPILOT_TERMINAL_TYPES]).toEqual(['complete', 'paused', 'canceled', 'error']);
+  });
 });
 
 describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
