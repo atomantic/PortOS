@@ -83,6 +83,24 @@ describe('suggestContinuation', () => {
     expect(runStagedLLM).toHaveBeenCalledOnce();
   });
 
+  it('injects the work voice guide into the continue prompt when exemplars are set, empty otherwise (#2179)', async () => {
+    runStagedLLM.mockResolvedValue(OPTIONS_RESPONSE);
+    const work = await createWork({ title: 'Voiced' });
+    await updateWork(work.id, { liveMode: { enabled: true } });
+
+    // No exemplars → voiceGuide is empty (the template's {{#voiceGuide}} renders nothing).
+    await suggestContinuation(work.id, { before: 'The door creaked open.' });
+    expect(runStagedLLM.mock.calls[0][1].voiceGuide).toBe('');
+
+    await updateWork(work.id, {
+      voiceExemplars: [{ passage: 'She counted the exits, then the lies.', note: 'terse' }],
+    });
+    await suggestContinuation(work.id, { before: 'The door creaked open.' });
+    const vars = runStagedLLM.mock.calls[1][1];
+    expect(vars.voiceGuide).toContain('MATCH this voice');
+    expect(vars.voiceGuide).toContain('She counted the exits, then the lies.');
+  });
+
   it('charges budget even when the model returns zero usable options', async () => {
     // The LLM cost is incurred regardless of whether the response parsed into
     // usable options — sparing zero-option calls would open an unbounded-call

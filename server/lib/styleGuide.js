@@ -126,7 +126,12 @@ function cleanTone(raw) {
 // tuning fork), `note` a one-line gloss of what it demonstrates (exemplar) or
 // what's wrong with it (anti-exemplar). Drops entries with no passage, trims to
 // the char caps, and caps the list length. Returns `[]` when nothing usable.
-function cleanExemplars(raw) {
+//
+// Exported so the Writers Room (`services/writersRoom/local.js`) can carry the
+// SAME voice-exemplar shape on a freeform work as the series style guide does —
+// one sanitizer, one set of caps, no drift between the two surfaces (#2179
+// Writers Room parity).
+export function sanitizeVoiceExemplars(raw) {
   if (!Array.isArray(raw)) return [];
   const out = [];
   for (const item of raw) {
@@ -168,8 +173,8 @@ export function sanitizeStyleGuide(raw) {
   const readingLevel = optReadingLevel(raw.readingLevel);
   const tone = cleanTone(raw.tone);
   const conventions = sanitizeConventions(raw.conventions);
-  const voiceExemplars = cleanExemplars(raw.voiceExemplars);
-  const voiceAntiExemplars = cleanExemplars(raw.voiceAntiExemplars);
+  const voiceExemplars = sanitizeVoiceExemplars(raw.voiceExemplars);
+  const voiceAntiExemplars = sanitizeVoiceExemplars(raw.voiceAntiExemplars);
   if (
     tense == null && povPerson == null && targetAudience == null && contentRating == null
     && profanity == null && readingLevel == null && tone.length === 0 && conventions == null
@@ -189,10 +194,15 @@ export function sanitizeStyleGuide(raw) {
 // anti-exemplars are appended to the house-style directives. Both are
 // conditional: absent exemplars render nothing (so a guide with no passages
 // carries no empty husk in the prompt). Returns `''` when neither is present.
-function renderVoiceExemplars(styleGuide) {
+//
+// `carrier` is any object exposing `voiceExemplars` / `voiceAntiExemplars`
+// arrays — the series style guide OR a Writers Room work manifest — so the two
+// surfaces render byte-identical voice blocks (#2179 Writers Room parity).
+export function renderVoiceExemplars(carrier) {
+  if (!carrier || typeof carrier !== 'object') return '';
   const blocks = [];
-  const exemplars = Array.isArray(styleGuide.voiceExemplars) ? styleGuide.voiceExemplars : [];
-  const antiExemplars = Array.isArray(styleGuide.voiceAntiExemplars) ? styleGuide.voiceAntiExemplars : [];
+  const exemplars = Array.isArray(carrier.voiceExemplars) ? carrier.voiceExemplars : [];
+  const antiExemplars = Array.isArray(carrier.voiceAntiExemplars) ? carrier.voiceAntiExemplars : [];
   const renderPassage = (e) => (e.note ? `> ${e.passage}\n> — ${e.note}` : `> ${e.passage}`);
   if (exemplars.length) {
     blocks.push(`MATCH this voice — these passages are the tuning fork for the series' prose. Echo their rhythm, diction, and register; do not copy their content:\n${exemplars.map(renderPassage).join('\n\n')}`);

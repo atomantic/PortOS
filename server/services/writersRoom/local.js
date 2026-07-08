@@ -19,6 +19,7 @@ import { readFile, rm } from 'fs/promises';
 import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { sanitizeVoiceExemplars, renderVoiceExemplars } from '../../lib/styleGuide.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
 import { writersRoomStore } from './store.js';
@@ -363,6 +364,19 @@ export async function updateWork(id, patch) {
       renderUsage: current.renderUsage,
     };
   }
+  // Voice exemplars / anti-exemplars (#2179 Writers Room parity). Sanitized
+  // through the SAME helper the series style guide uses (drops empty passages,
+  // trims to the char caps, caps the list at 3). Key present → replace (an
+  // explicit `[]` clears); key absent → carry the stored value untouched. These
+  // are consumed by the live-continuation prompt and the Phase 9 polish loop's
+  // revision brief so a freeform work anchors its voice the same way a series
+  // does.
+  if (patch.voiceExemplars !== undefined) {
+    next.voiceExemplars = sanitizeVoiceExemplars(patch.voiceExemplars);
+  }
+  if (patch.voiceAntiExemplars !== undefined) {
+    next.voiceAntiExemplars = sanitizeVoiceExemplars(patch.voiceAntiExemplars);
+  }
   // Trim title and reject if it becomes empty after trim — keeps parity with
   // createWork's "title required" guard so a PATCH can't blank a title out.
   if (patch.title !== undefined) {
@@ -378,6 +392,21 @@ export async function updateWork(id, patch) {
   }
   await saveManifest(id, next);
   return next;
+}
+
+/**
+ * Resolve a work's voice exemplars into the rendered "MATCH this voice / NEVER
+ * drift toward this" prompt block (#2179 Writers Room parity), or `''` when the
+ * work carries no passages. Re-sanitizes on read (defense against a hand-edited
+ * manifest) and delegates to the shared styleGuide renderer so the block is
+ * byte-identical to the series pipeline's. Consumed by the live-continuation
+ * suggest path (liveDirector.js) and the Phase 9 polish loop (polish.js).
+ */
+export function renderWorkVoiceGuide(manifest) {
+  return renderVoiceExemplars({
+    voiceExemplars: sanitizeVoiceExemplars(manifest?.voiceExemplars),
+    voiceAntiExemplars: sanitizeVoiceExemplars(manifest?.voiceAntiExemplars),
+  });
 }
 
 /**

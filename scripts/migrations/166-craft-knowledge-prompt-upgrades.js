@@ -38,7 +38,10 @@ import { makePromptReplaceMigration } from './_lib.js';
 // Pre-change shipped hashes (the current shipped bodies before #2172).
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-prose.md': ['25e3d58c2741bd98acd5d08ba70d8a5e', '430d38ed2da59e0d4212e65edc499a74'],
-  'writers-room-continue.md': ['93bfe80543ceca39842201a78b8393fa'],
+  'writers-room-continue.md': [
+    '93bfe80543ceca39842201a78b8393fa',
+    '67663696c97ebaeb23de25f7410cfdd4', // post-166 / pre-179 (voice exemplars)
+  ],
   'pipeline-arc-overview.md': [
     '0a1f6ffa6908522e3690c5e9e53a6ee0',
     '612f8b04950e2ff26dd350dd76a062fe', // post-166 / pre-173 (MICE thread nesting)
@@ -50,7 +53,7 @@ export const ACCEPTED_OLD_MD5 = {
 // continuity, #2177) per the drift-cross-sync convention.
 export const NEW_SHIPPED_MD5 = {
   'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54',
-  'writers-room-continue.md': '67663696c97ebaeb23de25f7410cfdd4',
+  'writers-room-continue.md': '458dc5ff4732befc1fb90890bdc885c2', // post-179 (voice exemplars)
   'pipeline-arc-overview.md': '74d6c26548660d85fc345b2099c63b6c', // post-173 (MICE thread nesting)
 };
 
