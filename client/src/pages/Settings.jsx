@@ -15,6 +15,7 @@ import { IMessageTab } from '../components/settings/IMessageTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
+import { SignalTab } from '../components/settings/SignalTab';
 import { SpotifyTab } from '../components/settings/SpotifyTab';
 import { YoutubeTab } from '../components/settings/YoutubeTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
@@ -49,6 +50,7 @@ export default function Settings() {
       case 'local-llm': return <LocalLlmTab />;
       case 'security': return <SecurityTab />;
       case 'sharing': return <SharingTab />;
+      case 'signal': return <SignalTab />;
       case 'spotify': return <SpotifyTab />;
       case 'youtube': return <YoutubeTab />;
       case 'voice': return <VoiceTab />;

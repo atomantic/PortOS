@@ -29,6 +29,16 @@ export const imessageConfigSchema = z.object({
   intervalMinutes: z.number().int().min(1).max(1440).optional()
 });
 
+// Signal Desktop ingestion config (#2154) — the `settings.signal` slice. Sync is
+// OFF by default and only reads Signal's SQLCipher-encrypted chat DB (via the
+// keychain-wrapped key) when enabled. Validated as a settings slice on
+// PUT /api/settings; service-side DEFAULT_CONFIG fills any absent field so an
+// install with no `signal` key still resolves (default cadence 60min).
+export const signalConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
 // Spotify listening-history ingestion config (#2152) — the `settings.spotify`
 // slice. Sync is OFF by default and only polls the recently-played API when
 // enabled AND the user has completed OAuth (credentials/tokens live under
