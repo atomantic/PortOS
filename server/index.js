@@ -179,6 +179,7 @@ import { startUpdateScheduler, clearStaleUpdateInProgress, processUpdateMarker }
 import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
+import { startActivityDigestScheduler } from './services/activityDigestScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
@@ -585,6 +586,10 @@ recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recover
 recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
+// Initialize activity-digest scheduler — OFF by default; drafts daily-log
+// auto-summaries from the Human Activity timeline only when the user enables it
+// (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
+startActivityDigestScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
 // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
