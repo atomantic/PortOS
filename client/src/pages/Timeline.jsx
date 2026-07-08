@@ -2,13 +2,14 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Mail, MailOpen, Send,
-  CalendarDays, Music, Play, MessageSquare, Activity, MapPin,
+  CalendarDays, Music, Play, MessageSquare, Activity, MapPin, Globe,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
 import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
 import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
 import WhatsappImportPanel from '../components/timeline/WhatsappImportPanel';
+import BrowserHistoryImportPanel from '../components/timeline/BrowserHistoryImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -42,6 +43,7 @@ const SOURCE_ICON = {
   youtube: Play,
   location: MapPin,
   discord: MessageSquare,
+  browser: Globe,
 };
 
 function kindIcon(kind, source) {
@@ -49,6 +51,7 @@ function kindIcon(kind, source) {
   if (kind === 'message.received') return MailOpen;
   if (kind === 'calendar.event') return CalendarDays;
   if (kind === 'place.visit') return MapPin;
+  if (kind === 'web.visit') return Globe;
   return SOURCE_ICON[source] || Activity;
 }
 
@@ -57,7 +60,8 @@ function KindBadge({ kind }) {
     : kind === 'message.received' ? 'Received'
       : kind === 'calendar.event' ? 'Event'
         : kind === 'place.visit' ? 'Visit'
-          : kind;
+          : kind === 'web.visit' ? 'Web'
+            : kind;
   return (
     <span className="rounded bg-port-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-400">
       {label}
@@ -212,6 +216,7 @@ export default function Timeline() {
       <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <WhatsappImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      <BrowserHistoryImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 

@@ -10,6 +10,7 @@ import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
 import { importDiscordHistory } from '../services/discordImport.js';
 import { importWhatsappHistory } from '../services/whatsappImport.js';
+import { importBrowserHistory } from '../services/browserHistoryImport.js';
 
 const router = Router();
 
@@ -28,6 +29,9 @@ const zipOrJsonUpload = (label) => uploadSingle('file', {
 
 const uploadSpotify = zipOrJsonUpload('Spotify');
 const uploadTakeoutLocation = zipOrJsonUpload('Google Takeout location');
+// Browser history ships as a Takeout Chrome `History.json` (or the whole ZIP) —
+// same ZIP-or-JSON shape as the other Takeout importers.
+const uploadBrowserHistory = zipOrJsonUpload('Chrome browser history');
 // The Discord data package ships `messages.csv` in older exports, so accept CSV
 // alongside the ZIP/JSON the other importers take.
 const uploadDiscord = uploadSingle('file', {
@@ -149,5 +153,11 @@ router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHist
   schema: whatsappImportBodySchema,
   toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null }),
 }));
+
+// POST /api/timeline/import/browser — bulk-backfill a Google Takeout Chrome
+// `History.json` (standalone or the whole ZIP) → web.visit events under source
+// `browser` (dedupe on a content hash of visit-instant + URL, since the export
+// carries no visit id). Subframe (iframe) loads are dropped as noise.
+router.post('/import/browser', uploadBrowserHistory, importHandler(importBrowserHistory));
 
 export default router;
