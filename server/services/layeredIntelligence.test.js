@@ -883,11 +883,15 @@ describe('checkSemanticDuplicate — I/O wrapper', () => {
     expect(res.duplicate).toBe(false);
   });
 
-  it('degrades to unavailable (never rejects) when the embedder throws', async () => {
-    const embed = vi.fn(async () => { throw new Error('provider down'); });
+  it('degrades to unavailable (never rejects) on an async rejection OR a synchronous throw', async () => {
     const existing = [{ number: 3, title: 'Add widget', body: 'x', state: 'open' }];
-    const res = await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed });
-    expect(res).toEqual({ available: false, duplicate: false, match: null });
+    const asyncThrow = vi.fn(async () => { throw new Error('provider down'); });
+    expect(await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed: asyncThrow }))
+      .toEqual({ available: false, duplicate: false, match: null });
+    // A non-async embedder that throws synchronously must also degrade, not reject.
+    const syncThrow = vi.fn(() => { throw new Error('sync boom'); });
+    expect(await checkSemanticDuplicate({ proposal, existingIssues: existing, now: NOW, embed: syncThrow }))
+      .toEqual({ available: false, duplicate: false, match: null });
   });
 
   it('flags a near-duplicate when a candidate embedding is close enough', async () => {

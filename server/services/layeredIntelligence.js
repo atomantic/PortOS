@@ -579,16 +579,20 @@ export async function checkSemanticDuplicate({ proposal, existingIssues = [], no
     .slice(0, SEMANTIC_DEDUP_MAX_CANDIDATES);
   if (candidates.length === 0) return unavailable;
 
-  // A rejected/throwing embed (transient provider blip, malformed response) must
-  // degrade to the available:false sentinel — NOT reject through processApp and
-  // mark the whole app run 'error'. `.catch(() => null)` mirrors this file's
-  // fetchHttpSource / jira-search failure idiom (no non-boundary try/catch).
-  const proposalRes = await embed(issueEmbedSeed({ title: proposal.title, body: proposal.body })).catch(() => null);
+  // A failing embed (transient provider blip, malformed response) must degrade to
+  // the available:false sentinel — NOT reject through processApp and mark the
+  // whole app run 'error'. Deferring the call into a promise chain then catching
+  // absorbs BOTH an async rejection AND a synchronous throw from the (injectable)
+  // embedder, mirroring this file's fetchHttpSource / jira-search failure idiom
+  // (no non-boundary try/catch).
+  const safeEmbed = (text) => Promise.resolve().then(() => embed(text)).catch(() => null);
+
+  const proposalRes = await safeEmbed(issueEmbedSeed({ title: proposal.title, body: proposal.body }));
   if (!proposalRes?.success || !Array.isArray(proposalRes.embedding)) return unavailable;
 
   const embedded = [];
   for (const c of candidates) {
-    const res = await embed(issueEmbedSeed({ title: c.title, body: c.body })).catch(() => null);
+    const res = await safeEmbed(issueEmbedSeed({ title: c.title, body: c.body }));
     if (res?.success && Array.isArray(res.embedding)) {
       embedded.push({ slug: c.slug || null, number: c.number ?? null, title: c.title || '', embedding: res.embedding });
     }
