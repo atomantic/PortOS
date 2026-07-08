@@ -364,6 +364,13 @@ async function doRunSync() {
     return { recorded: 0, skipped: candidates.length };
   });
 
+  // Incrementally refresh observed twin evidence when new watches landed (#2156).
+  // LLM-free + self-guarded — never blocks or fails the sync.
+  if (!persistFailed && recordResult.recorded > 0) {
+    const { refreshTwinEvidenceAfterSync } = await import('./twinEnrichment.js');
+    await refreshTwinEvidenceAfterSync();
+  }
+
   const result = {
     ok: !persistFailed,
     status: persistFailed ? 'persist-failed' : 'ok',

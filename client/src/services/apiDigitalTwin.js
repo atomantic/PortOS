@@ -310,6 +310,19 @@ export const compareTimeCapsuleSnapshots = (id1, id2) => request('/digital-twin/
   body: JSON.stringify({ id1, id2 })
 });
 
+// Twin enrichment — observed taste + chronotype evidence (Phase 7, #2156)
+export const getTwinEvidence = (options) => request('/digital-twin/twin-evidence', options);
+export const recomputeTwinEvidence = (options = {}) => request('/digital-twin/twin-evidence/recompute', {
+  method: 'POST',
+  body: JSON.stringify({}),
+  ...options
+});
+export const interpretTwinConsumption = (providerId, model, options = {}) => request('/digital-twin/twin-evidence/interpret', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model }),
+  ...options
+});
+
 // Soul aliases (used by digital-twin UI components)
 export const createSoulDocument = createDigitalTwinDocument;
 export const updateSoulDocument = updateDigitalTwinDocument;

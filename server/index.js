@@ -187,6 +187,7 @@ import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { startActivityDigestScheduler } from './services/activityDigestScheduler.js';
+import { startTwinEnrichmentScheduler } from './services/twinEnrichmentScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
@@ -600,6 +601,10 @@ startBrainScheduler();
 // auto-summaries from the Human Activity timeline only when the user enables it
 // (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
 startActivityDigestScheduler();
+// Initialize twin-enrichment scheduler — LLM-free daily rollup of observed
+// taste + chronotype evidence from the Human Activity timeline (#2156). No
+// provider calls; the AI interpretation is a separate explicit-button action.
+startTwinEnrichmentScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
 // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
