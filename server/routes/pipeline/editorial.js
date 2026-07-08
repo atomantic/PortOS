@@ -32,6 +32,7 @@ import * as pipelineJudge from '../../services/pipeline/pipelineJudge.js';
 import * as editorialRunner from '../../services/pipeline/editorialAnalysisRunner.js';
 import * as readerPanel from '../../services/pipeline/readerPanel.js';
 import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js';
+import * as comparativeRank from '../../services/pipeline/editorial/comparativeRank.js';
 import * as voiceFingerprint from '../../services/pipeline/voiceFingerprint.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
 import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
@@ -180,6 +181,38 @@ router.get('/series/:id/editorial/panel/run/status', (req, res) => {
 
 router.post('/series/:id/editorial/panel/run/cancel', asyncHandler(async (req, res) => {
   res.json({ canceled: readerPanelRunner.cancelReaderPanel(req.params.id) });
+}));
+
+// ---------------------------------------------------------------------------
+// Head-to-head comparative Elo ranking (#2169, CWQE Phase 5) — forced-pick
+// pairwise comparison + Swiss/Elo tournament across a series' drafted issues.
+// Escapes the rubric trap where absolute 1-10 scores collapse into a 2-point
+// band; the ranking gives Phase 7 a reliable weakest-issue selector. One LLM
+// call per match — runs only from this explicit action (AI-provider policy).
+// ---------------------------------------------------------------------------
+
+// Optional compare-judge provider/model override + Swiss rounds. Provider/model
+// fall through to the compare stage's own config when omitted.
+const comparativeRankRunSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  rounds: z.coerce.number().int().min(1).max(8).optional(),
+});
+
+// Stored ranking: { status:'complete', ranking[], weakest[], matches[], stale, ... }
+// or { status:'none' } / { status:'insufficient' }.
+router.get('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await comparativeRank.getComparativeRank(req.params.id));
+}));
+
+// Run the tournament (synchronous — returns the finished ranking, like the
+// per-issue judge). Potentially many LLM calls for a large series, so it's an
+// explicit user action.
+router.post('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
+  const body = validateRequest(comparativeRankRunSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await comparativeRank.runComparativeRank(req.params.id, body));
 }));
 
 // ---------------------------------------------------------------------------

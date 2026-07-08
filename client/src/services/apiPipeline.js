@@ -727,6 +727,22 @@ export const cancelReaderPanel = (seriesId) =>
     method: 'POST',
   });
 
+// ---- Head-to-head comparative Elo ranking (#2169, CWQE Phase 5) ----
+// Stored ranking: { status:'complete', ranking:[{ rank, issueId, number, label,
+// rating, wins, losses }], weakest[], matches[], entrants, rounds, stale } or
+// { status:'none' } / { status:'insufficient' }.
+export const getComparativeRank = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/rank`, options);
+
+// Run the pairwise Elo tournament (synchronous; returns the finished ranking).
+// opts: { providerId?, model?, rounds? }.
+export const runComparativeRank = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/rank`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
 // { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
 export const getReaderPanelStatus = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/status`, options);

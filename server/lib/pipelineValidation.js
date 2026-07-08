@@ -519,6 +519,33 @@ export const stageConfigUpdateSchema = z.object({
   // saved config, so schema parity is required in the same change.
   judgeProvider: z.string().nullable().optional(),
   judgeModel: z.string().nullable().optional(),
+  // Multi-candidate draft gate (#2169, CWQE Phase 5). Opt-in, DEFAULT OFF
+  // (draftAttempts 1 = single generation, no gate) because each extra attempt
+  // multiplies generation + judge cost. When > 1, generateStage re-rolls a fresh
+  // draft while the composite qualityScore (#2167) is below draftGateThreshold,
+  // up to the attempt cap, and keeps the best-scoring attempt. `null`/'' clears
+  // the override. Only judgeable stages (prose/comicScript/teleplay) honor it.
+  // Coerce digit-only strings (form inputs) the same way `timeout` does.
+  draftAttempts: z.preprocess(
+    (v) => {
+      if (v === '' || v === null) return null;
+      if (v === undefined) return undefined;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && /^\d+$/.test(v.trim())) return Number(v.trim());
+      return v;
+    },
+    z.number().int().min(1).max(3).nullable().optional(),
+  ),
+  draftGateThreshold: z.preprocess(
+    (v) => {
+      if (v === '' || v === null) return null;
+      if (v === undefined) return undefined;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim())) return Number(v.trim());
+      return v;
+    },
+    z.number().min(0).max(10).nullable().optional(),
+  ),
   timeout: z.preprocess(
     // Treat empty string as a "clear override" (null). Coerce digit-only
     // strings to numbers so form clients that send "900000" still parse —

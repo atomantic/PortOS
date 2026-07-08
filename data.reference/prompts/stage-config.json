@@ -317,6 +317,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-judge-compare": {
+      "name": "Pipeline — Head-to-Head Issue Comparison",
+      "description": "CWQE Phase 5 (#2169): a forced-pick comparison judge for the head-to-head Elo ranking. Reads two drafted issues (truncated to a comparable budget) and MUST pick a winner — ties are forbidden — quoting the deciding passage. Escapes the rubric trap where 1-10 scoring collapses to a 2-point band; comparative ranking forces discrimination. Runs pairwise across a series' drafted issues in a Swiss/Elo tournament to produce the weakest-issue ordering Phase 7 consumes.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-panel-editor": {
       "name": "Pipeline — Reader Panel: The Editor",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
