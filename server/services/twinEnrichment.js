@@ -487,11 +487,17 @@ export async function interpretConsumption({ providerId, model } = {}) {
   const text = (result?.text || '').trim();
   if (!text) throw new Error('The AI provider returned no interpretation. Try again or pick another provider.');
 
+  // Persist the EFFECTIVE provider/model that actually ran — createRun may
+  // proactively swap to a fallback, so recording the requested provider would
+  // show false provenance. Fall back to the requested values if the runner
+  // didn't surface them.
+  const ranProvider = result.provider || provider;
   const interpretation = {
     text,
-    provider: provider.id,
-    providerName: provider.name || provider.id,
-    model: chosenModel || null,
+    provider: ranProvider.id || provider.id,
+    providerName: ranProvider.name || ranProvider.id || provider.name || provider.id,
+    model: result.model ?? chosenModel ?? null,
+    usedFallback: Boolean(result.usedFallback),
     generatedAt: new Date().toISOString(),
   };
   const merged = { ...(taste || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
