@@ -159,6 +159,9 @@ function rowToBroker(row) {
   };
 }
 
+// Slug an auto-discovered broker name into a stable id token.
+const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
 // A broker record from any source, normalized to the row shape. Defensive:
 // tolerates a sparse auto-discovered entry (BADBOOL / CA registry).
 function normalizeBroker(b) {
@@ -271,7 +274,7 @@ export function parseCaRegistryCsv(csv) {
     if (!name) return null;
     const website = urlIdx !== -1 ? (cols[urlIdx] || '').trim().replace(/^"|"$/g, '') : '';
     return normalizeBroker({
-      id: `ca-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`,
+      id: `ca-${slugify(name)}`,
       name,
       urls: website ? { home: website } : {},
       source: 'ca_registry',
@@ -287,7 +290,7 @@ export function parseBadboolList(payload) {
     const name = b.name || b.id;
     if (!name) return null;
     return normalizeBroker({
-      id: b.id || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+      id: b.id || slugify(name),
       name,
       urls: b.url ? { home: b.url } : (b.urls || {}),
       optout: b.optout || {},
@@ -498,15 +501,4 @@ export async function getScanStatus({ now = new Date() } = {}) {
     caseCounts,
     dueForRecheck: due.rows[0].n,
   };
-}
-
-/** Cases whose next_recheck_at is due (or unscanned/never-stamped). */
-export async function getDueCases({ now = new Date() } = {}) {
-  const { rows } = await query(
-    `SELECT ${CASE_COLUMNS} FROM privacy_broker_cases
-     WHERE next_recheck_at IS NULL OR next_recheck_at <= $1
-     ORDER BY next_recheck_at NULLS FIRST`,
-    [now.toISOString()],
-  );
-  return rows.map(rowToCase);
 }
