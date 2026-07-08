@@ -114,11 +114,27 @@ describe('whatsappMessageToCandidate', () => {
       .not.toBe(c1.dedupeKey);
   });
 
+  it('keys the dedupe hash independent of chatTitle so upload method does not double-count', () => {
+    // Importing `WhatsApp Chat - Alice.zip` (chatTitle "Alice") then the bare
+    // `_chat.txt` extracted from it (chatTitle null) must produce the SAME key for
+    // the same message, or the whole conversation re-imports as duplicates.
+    const zipped = whatsappMessageToCandidate(msg, { order: 'ymd', chatTitle: 'Alice', timezone: UTC });
+    const bare = whatsappMessageToCandidate(msg, { order: 'ymd', chatTitle: null, timezone: UTC });
+    expect(zipped.dedupeKey).toBe(bare.dedupeKey);
+  });
+
   it('flags a media-only body and shows a placeholder summary', () => {
     const [media] = parseWhatsappChat('[2024-01-15, 6:30:45 PM] Bob: <Media omitted>');
     const c = whatsappMessageToCandidate(media, { order: 'ymd', timezone: UTC });
     expect(c.metadata.hasMedia).toBe(true);
     expect(c.summary).toBe('<Media omitted>');
+  });
+
+  it('does not mis-flag a normal message that merely contains the word "omitted"', () => {
+    const [normal] = parseWhatsappChat('[2024-01-15, 6:30:45 PM] Bob: I omitted that detail on purpose');
+    const c = whatsappMessageToCandidate(normal, { order: 'ymd', timezone: UTC });
+    expect(c.metadata.hasMedia).toBe(false);
+    expect(c.summary).toBe('I omitted that detail on purpose');
   });
 
   it('drops system notices and messages with no sender', () => {

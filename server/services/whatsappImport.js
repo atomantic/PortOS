@@ -135,8 +135,10 @@ function resolveYmd(msg, order) {
 // A body that's only a media placeholder ("<Media omitted>", "image omitted",
 // "‎<attached: …>") still carries autobiographical signal (you sent/received
 // something then) — flagged so the summary can show a placeholder rather than an
-// empty line.
-const MEDIA_RE = /(<media omitted>|omitted>?$|<attached:|\bomitted\b)/i;
+// empty line. Anchored to the actual placeholder shapes (the whole body IS the
+// placeholder, or an `<attached:` token) so a normal message that merely contains
+// the word "omitted" ("I omitted that detail") isn't mis-flagged.
+const MEDIA_RE = /^\s*(<[^>]*\bomitted\b[^>]*>|(?:image|video|audio|gif|sticker|document|contact card|media)\s+omitted|<attached:[^>]*>)\s*$|<attached:/i;
 
 // Map ONE raw WhatsApp message to an activity candidate, or null if it's a system
 // notice, lacks a sender, or has an unresolvable timestamp. `timezone` anchors the
@@ -155,12 +157,19 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
   const title = chatTitle ? `WhatsApp: ${chatTitle}` : 'WhatsApp message';
   const summaryText = bodyText || (hasMedia ? '(media)' : '');
 
-  // No message id in the export — hash the identifying tuple so re-imports of the
-  // same (or an overlapping) export collapse deterministically. Two identical
-  // bodies from the same sender at the same second in the same chat are
-  // indistinguishable in the file, so collapsing them is correct.
+  // No message id in the export — hash the message's CONTENT identity (instant +
+  // sender + body) so re-imports collapse deterministically. Deliberately NOT
+  // keyed on chatTitle: that's derived from the upload filename, which differs
+  // between a `WhatsApp Chat - Alice.zip` and the bare `_chat.txt` extracted from
+  // it (and changes on any rename), so keying on it would double-count the whole
+  // conversation across those equivalent uploads. Two identical bodies from the
+  // same sender at the same timestamp granularity are indistinguishable in the
+  // file, so collapsing them is correct — same precedent as the Spotify importer's
+  // played-at+track key. The granularity is the export's own: iOS carries seconds,
+  // but Android lines have none (second defaults to 0), so two identical Android
+  // messages within the same clock-MINUTE collapse to one event.
   const dedupeKey = createHash('sha1')
-    .update(`${chatTitle || ''} ${happenedAt} ${msg.sender} ${bodyText}`)
+    .update(`${happenedAt} ${msg.sender} ${bodyText}`)
     .digest('hex')
     .slice(0, 24);
 
