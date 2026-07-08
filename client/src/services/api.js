@@ -69,6 +69,7 @@ export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
 export * from './apiAuth.js';
 export * from './apiCity.js';
+export * from './apiPrivacy.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

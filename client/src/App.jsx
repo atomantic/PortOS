@@ -76,6 +76,7 @@ const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
 const Brain = lazyWithReload(() => import('./pages/Brain'));
 const Security = lazyWithReload(() => import('./pages/Security'));
 const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
+const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
@@ -228,6 +229,8 @@ export default function App() {
           <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
+          <Route path="privacy" element={<Navigate to="/privacy/overview" replace />} />
+          <Route path="privacy/:tab" element={<Privacy />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
           <Route path="goals/:tab" element={<Goals />} />
           <Route path="feature-agents" element={<FeatureAgents />} />
