@@ -30,9 +30,16 @@ import {
   fileProposalToForge,
   ensureForgeLabels,
   applyBlockingLabel,
+  normalizeJiraState,
+  listJiraIssues,
+  listJiraBlockingIssues,
+  fileProposalToJira,
+  resolveJiraBlockKey,
+  applyJiraBlockingLabel,
   CLOSED_SUPPRESSION_MS,
   LI_LABEL,
-  LI_BLOCKING_LABEL
+  LI_BLOCKING_LABEL,
+  LI_JIRA_BLOCKING_LABEL
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -610,5 +617,104 @@ describe('forge I/O (injected exec)', () => {
 
   it('PROPOSAL_SCOPES is the full scope set', () => {
     expect(PROPOSAL_SCOPES).toEqual(['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self']);
+  });
+});
+
+describe('Jira filer', () => {
+  it('normalizeJiraState maps only the Done category to closed', () => {
+    expect(normalizeJiraState('Done')).toBe('closed');
+    expect(normalizeJiraState('done')).toBe('closed');
+    expect(normalizeJiraState('In Progress')).toBe('open');
+    expect(normalizeJiraState('To Do')).toBe('open');
+    expect(normalizeJiraState('')).toBe('open');
+    expect(normalizeJiraState(null)).toBe('open');
+  });
+
+  it('LI_JIRA_BLOCKING_LABEL is space-and-colon-free (Jira-safe)', () => {
+    expect(LI_JIRA_BLOCKING_LABEL).toBe('layered-intelligence-blocking');
+    expect(LI_JIRA_BLOCKING_LABEL).not.toMatch(/[\s:]/);
+    // The base label is reused verbatim and is already Jira-safe.
+    expect(LI_LABEL).not.toMatch(/[\s:]/);
+  });
+
+  it('listJiraIssues maps rows and reports ok:true on a successful search', async () => {
+    const search = vi.fn().mockResolvedValue([
+      { key: 'PROJ-1', summary: 'Do a thing', description: `body ${slugMarker('do-a-thing')}`, statusCategory: 'To Do', resolutiondate: null },
+      { key: 'PROJ-2', summary: 'Done thing', description: 'no marker', statusCategory: 'Done', resolutiondate: '2026-07-01T00:00:00.000+0000' }
+    ]);
+    const res = await listJiraIssues({ instanceId: 'i', projectKey: 'PROJ', search });
+    expect(res.ok).toBe(true);
+    expect(res.issues[0]).toMatchObject({ number: 'PROJ-1', state: 'open', slug: 'do-a-thing' });
+    expect(res.issues[1]).toMatchObject({ number: 'PROJ-2', state: 'closed', closedAt: '2026-07-01T00:00:00.000+0000' });
+    // JQL scopes to the project and base LI label.
+    expect(search.mock.calls[0][1]).toContain('project = "PROJ"');
+    expect(search.mock.calls[0][1]).toContain(`labels = "${LI_LABEL}"`);
+  });
+
+  it('listJiraIssues reports ok:false on a thrown search (failed != empty)', async () => {
+    const search = vi.fn().mockRejectedValue(new Error('boom'));
+    const res = await listJiraIssues({ instanceId: 'i', projectKey: 'PROJ', search });
+    expect(res.ok).toBe(false);
+    expect(res.issues).toEqual([]);
+  });
+
+  it('listJiraIssues reports ok:false when instance/project missing', async () => {
+    expect((await listJiraIssues({ instanceId: '', projectKey: 'PROJ' })).ok).toBe(false);
+    expect((await listJiraIssues({ instanceId: 'i', projectKey: '' })).ok).toBe(false);
+  });
+
+  it('listJiraBlockingIssues filters to the blocking label and non-Done', async () => {
+    const search = vi.fn().mockResolvedValue([{ key: 'PROJ-9', summary: 'blocker', statusCategory: 'In Progress' }]);
+    const res = await listJiraBlockingIssues({ instanceId: 'i', projectKey: 'PROJ', search });
+    expect(res.ok).toBe(true);
+    expect(res.issues[0]).toMatchObject({ number: 'PROJ-9', state: 'open' });
+    expect(search.mock.calls[0][1]).toContain(`labels = "${LI_JIRA_BLOCKING_LABEL}"`);
+    expect(search.mock.calls[0][1]).toContain('statusCategory != Done');
+  });
+
+  it('fileProposalToJira embeds the slug marker + LI label and returns the key/url', async () => {
+    const create = vi.fn().mockResolvedValue({ success: true, ticketId: 'PROJ-10', url: 'https://j/browse/PROJ-10' });
+    const res = await fileProposalToJira({ instanceId: 'i', projectKey: 'PROJ', title: 'T', body: 'B', slug: 'add-x', create });
+    expect(res).toEqual({ success: true, key: 'PROJ-10', url: 'https://j/browse/PROJ-10' });
+    const payload = create.mock.calls[0][1];
+    expect(payload).toMatchObject({ projectKey: 'PROJ', summary: 'T', issueType: 'Task', labels: [LI_LABEL] });
+    expect(payload.description).toContain(slugMarker('add-x'));
+    expect(payload.description).toContain('B');
+  });
+
+  it('fileProposalToJira surfaces a create failure rather than throwing', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('403'));
+    const res = await fileProposalToJira({ instanceId: 'i', projectKey: 'PROJ', title: 'T', body: 'B', slug: 's', create });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('403');
+  });
+
+  it('fileProposalToJira refuses when instance/project missing', async () => {
+    const res = await fileProposalToJira({ instanceId: '', projectKey: 'PROJ', title: 'T', body: 'B', slug: 's' });
+    expect(res.success).toBe(false);
+  });
+
+  it('resolveJiraBlockKey resolves "this" to the filed key and an integer to <project>-<n>', () => {
+    expect(resolveJiraBlockKey({ blockOnIssue: 'this' }, 'PROJ-10', 'PROJ')).toBe('PROJ-10');
+    expect(resolveJiraBlockKey({ blockOnIssue: 42 }, null, 'PROJ')).toBe('PROJ-42');
+    // "this" with nothing filed → null; integer with no project → null; no pause → null.
+    expect(resolveJiraBlockKey({ blockOnIssue: 'this' }, null, 'PROJ')).toBe(null);
+    expect(resolveJiraBlockKey({ blockOnIssue: 42 }, null, '')).toBe(null);
+    expect(resolveJiraBlockKey(null, 'PROJ-1', 'PROJ')).toBe(null);
+  });
+
+  it('applyJiraBlockingLabel adds the Jira blocking label to the key', async () => {
+    const addLabel = vi.fn().mockResolvedValue({ success: true });
+    const res = await applyJiraBlockingLabel({ instanceId: 'i', key: 'PROJ-10', addLabel });
+    expect(res.success).toBe(true);
+    expect(addLabel).toHaveBeenCalledWith('i', 'PROJ-10', [LI_JIRA_BLOCKING_LABEL]);
+  });
+
+  it('applyJiraBlockingLabel refuses without a key and surfaces a thrown error', async () => {
+    expect((await applyJiraBlockingLabel({ instanceId: 'i', key: null })).success).toBe(false);
+    const addLabel = vi.fn().mockRejectedValue(new Error('nope'));
+    const res = await applyJiraBlockingLabel({ instanceId: 'i', key: 'PROJ-1', addLabel });
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('nope');
   });
 });
