@@ -1,0 +1,24 @@
+Subject: CCPA Request to Delete and Opt Out of Sale — {{fullName}}
+
+To the {{brokerName}} Privacy / Data Rights team,
+
+I am a California resident exercising my rights under the California Consumer
+Privacy Act (CCPA, Cal. Civ. Code § 1798.100 et seq.). I request that you:
+
+1. Delete all personal information you hold about me, and
+2. Opt me out of any sale or sharing of my personal information, and
+3. Suppress my information from your public people-search listings.
+
+Identifying information (provided solely to locate and match my records):
+{{disclosedSummary}}
+
+{{listingSection}}
+Please confirm completion in writing to this email address. Under the CCPA you
+must respond within 45 days.
+
+I am submitting this request on my own behalf. Do not use the information above
+for any purpose other than fulfilling this request.
+
+Regards,
+{{fullName}}
+{{requestDate}}

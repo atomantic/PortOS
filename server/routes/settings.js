@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -190,6 +190,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // registry would then choke on.
   if (req.body?.pipelineEditorialChecks !== undefined) {
     validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
+  }
+  // Privacy Center opt-out recheck config (#2145) — validate the slice when
+  // present so a malformed cron / non-boolean autonomy toggle can't reach disk
+  // and break the recheck scheduler. Both autonomy toggles default OFF.
+  if (req.body?.privacy !== undefined) {
+    validateRequest(privacySettingsSchema.partial(), req.body.privacy);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

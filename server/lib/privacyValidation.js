@@ -233,3 +233,41 @@ export const privacyBrokerRefreshSchema = z.object({}).strict();
 export const privacyScanStartSchema = z.object({
   concurrency: z.number().int().min(1).max(6).optional(),
 }).strict();
+
+// =============================================================================
+// OPT-OUT AUTOMATION ENGINE SCHEMAS (issue #2145, epic #2138)
+// =============================================================================
+// Zod schemas for the opt-out run/verify actions + the user-configured recheck
+// settings slice (`settings.privacy.recheck`). The engine reads its submission
+// autonomy (auto-approve emails / auto-submit web forms) from that slice —
+// BOTH default OFF (a fresh install never auto-sends or auto-submits anything).
+
+// POST /api/privacy/optout — run one opt-out pass. `runVerification` (default
+// true) folds the verification poll into the same pass.
+export const privacyOptOutPassSchema = z.object({
+  runVerification: z.boolean().optional(),
+}).strict();
+
+// POST /api/privacy/optout/verify — run only the verification pass. No body.
+export const privacyOptOutVerifySchema = z.object({}).strict();
+
+// A basic 5-field cron expression validator (minute hour dom month dow). Kept
+// permissive (tokens can be `*`, numbers, ranges, lists, steps) — the scheduler
+// library does the strict parse; this just rejects obvious garbage before disk.
+const cronExpressionSchema = z.string().trim().min(1).max(120).regex(
+  /^(\S+\s+){4}\S+$/, 'expected a 5-field cron expression',
+);
+
+// The `privacy.recheck` settings slice. Validated by PUT /api/settings when the
+// `privacy` key is present (partial). Everything OFF/absent by default.
+export const privacyRecheckConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  cronExpression: cronExpressionSchema.optional(),
+  autoApproveOptOutEmails: z.boolean().optional(),
+  autoSubmitWebForms: z.boolean().optional(),
+}).strict();
+
+// The `privacy` settings slice (only `recheck` for now — room to grow).
+export const privacySettingsSchema = z.object({
+  recheck: privacyRecheckConfigSchema.optional(),
+}).strict();
