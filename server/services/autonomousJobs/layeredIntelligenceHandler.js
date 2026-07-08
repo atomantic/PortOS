@@ -24,6 +24,7 @@ import {
   validateReasonerResponse,
   isScopeAllowed,
   isProposalDuplicate,
+  checkSemanticDuplicate,
   filerForTracker,
   trackerSupportsPause,
   resolveBlockOnIssue,
@@ -172,6 +173,8 @@ export async function processApp(app, deps = {}) {
     } else if (isProposalDuplicate({ slug: proposal.slug, existingIssues, now })) {
       console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" is a duplicate — suppressed`)
       filedAction = 'duplicate'
+    } else if (await isSemanticDuplicate(app, proposal, existingIssues, now)) {
+      filedAction = 'semantic-duplicate'
     } else {
       // ---- Layer 4: ACT (file exactly one) ----
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
@@ -207,6 +210,23 @@ export async function processApp(app, deps = {}) {
 
   await recordRun(app, config, now)
   return { app: app.id, action: filedAction, filedNumber, filedKey, paused }
+}
+
+/**
+ * Semantic (embedding-similarity) near-duplicate check — the extra dedup layer
+ * that runs AFTER the exact slug dedup passes. Suppresses a proposal that restates
+ * an existing dedup-window issue in different words (different slug). Best-effort:
+ * when embeddings aren't configured it's `available:false` and we DON'T suppress
+ * (slug dedup already covered the exact case). Returns a boolean "should suppress".
+ */
+async function isSemanticDuplicate(app, proposal, existingIssues, now) {
+  const semantic = await checkSemanticDuplicate({ proposal, existingIssues, now })
+  if (!semantic.available || !semantic.duplicate) return false
+  const m = semantic.match
+  const ref = m?.number ? `#${m.number}` : (m?.slug || 'an existing issue')
+  const score = typeof m?.score === 'number' ? m.score.toFixed(2) : '?'
+  console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" is a near-duplicate of ${ref} (score ${score}) — suppressed`)
+  return true
 }
 
 /** File the proposal via the resolved tracker's filer. */

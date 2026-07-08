@@ -34,7 +34,11 @@ const forgeState = {
   jiraBlockingOk: true,
   jiraFileResult: { success: true, key: 'PROJ-100' },
   jiraFiled: [],
-  jiraBlockingApplied: []
+  jiraBlockingApplied: [],
+  // Semantic dedup default: unavailable (embeddings off) → never suppresses.
+  // The real checkSemanticDuplicate lazy-imports embeddings.js; mock it so
+  // processApp orchestration is isolated from the embedding provider.
+  semanticResult: { available: false, duplicate: false, match: null }
 };
 vi.mock('../layeredIntelligence.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -44,6 +48,7 @@ vi.mock('../layeredIntelligence.js', async (importOriginal) => {
     // Listers now return { ok, issues }; forgeState.existingOk toggles a failed read.
     listForgeIssues: vi.fn(async () => ({ ok: forgeState.existingOk, issues: forgeState.existing })),
     listBlockingIssues: vi.fn(async () => ({ ok: forgeState.blockingOk, issues: forgeState.blocking })),
+    checkSemanticDuplicate: vi.fn(async () => forgeState.semanticResult),
     fileProposalToForge: vi.fn(async (opts) => { forgeState.filed.push(opts); return forgeState.fileResult; }),
     applyBlockingLabel: vi.fn(async (opts) => { forgeState.blockingApplied.push(opts); return { success: true }; }),
     appendProposalToPlan: vi.fn(async () => ({ success: true, duplicate: false })),
@@ -80,6 +85,7 @@ beforeEach(() => {
   forgeState.jiraFileResult = { success: true, key: 'PROJ-100' };
   forgeState.jiraFiled = [];
   forgeState.jiraBlockingApplied = [];
+  forgeState.semanticResult = { available: false, duplicate: false, match: null };
   resolveTrackerMock.mockResolvedValue({ resolved: 'github', forge: 'gh' });
 });
 
@@ -156,6 +162,26 @@ describe('processApp', () => {
     const out = await processApp(enabledApp(), { callLLM });
     expect(out.action).toBe('duplicate');
     expect(forgeState.filed).toHaveLength(0);
+  });
+
+  it('suppresses a semantic near-duplicate (different slug) when embeddings flag it', async () => {
+    // Slug does NOT match an existing issue, so slug dedup passes; the semantic
+    // layer reports a near-duplicate and suppresses before filing.
+    forgeState.existing = [{ number: 7, slug: 'add-widget', title: 'Add widget', body: 'do it', state: 'open' }];
+    forgeState.semanticResult = { available: true, duplicate: true, match: { number: 7, slug: 'add-widget', score: 0.95 } };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'introduce-widget', title: 'Introduce a widget', body: 'do it' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('semantic-duplicate');
+    expect(forgeState.filed).toHaveLength(0);
+  });
+
+  it('files when the semantic layer is unavailable (embeddings off) — best-effort only', async () => {
+    forgeState.existing = [{ number: 7, slug: 'add-widget', title: 'Add widget', body: 'do it', state: 'open' }];
+    forgeState.semanticResult = { available: false, duplicate: false, match: null };
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'introduce-widget', title: 'Introduce a widget', body: 'do it' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('filed');
+    expect(forgeState.filed).toHaveLength(1);
   });
 
   it('files AND pauses when the response carries both, blocking on "this"', async () => {

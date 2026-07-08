@@ -42,6 +42,18 @@ export const LI_JIRA_BLOCKING_LABEL = 'layered-intelligence-blocking';
 // so the loop doesn't immediately re-file something the user just resolved.
 export const CLOSED_SUPPRESSION_MS = 30 * DAY;
 
+// Cosine-similarity floor for the semantic (embedding) near-duplicate guard that
+// layers atop the exact slug/label dedup. A proposal whose embedding is at least
+// this close to an existing dedup-window issue is treated as the same work worded
+// differently and suppressed. Deliberately conservative — only near-identical
+// intent should trip it (768-dim local embeddings put genuine near-dups ≳0.9).
+export const SEMANTIC_DEDUP_THRESHOLD = 0.9;
+
+// Cap the number of existing issues embedded per run so a repo with a large LI
+// backlog can't fan out into an unbounded embedding sweep. Open dedup-window
+// issues should be few (the loop files ≤1/run), so this is a generous ceiling.
+export const SEMANTIC_DEDUP_MAX_CANDIDATES = 50;
+
 // The autonomous-job id that drives the whole loop (the global sweep). Single
 // source of truth — the DEFAULT_JOBS catalog entry and the cross-app overview
 // route both key on this so per-app enablement and the global on/off stay in
@@ -188,6 +200,19 @@ export function normalizeSlug(slug) {
 }
 
 /**
+ * Whether an existing tracker issue is still within the dedup suppression window:
+ * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. A closed-long-ago (or unknown
+ * close time, treated as long ago) issue falls out of the window so its work can
+ * be re-proposed. Shared by both the slug dedup and the semantic dedup so the two
+ * guards agree on which issues still count.
+ */
+export function isIssueWithinDedupWindow(issue, now = Date.now()) {
+  if ((issue?.state || '').toLowerCase() === 'open') return true;
+  const closedAt = issue?.closedAt ? Date.parse(issue.closedAt) : NaN;
+  return Number.isFinite(closedAt) && now - closedAt <= CLOSED_SUPPRESSION_MS;
+}
+
+/**
  * Deterministic dedup guard. Given the slug of the proposed item and the live
  * tracker's existing issues (each `{ slug, state, closedAt }`), suppress the
  * proposal when a match is open, OR closed within CLOSED_SUPPRESSION_MS.
@@ -203,14 +228,55 @@ export function isProposalDuplicate({ slug, existingIssues = [], now = Date.now(
       ? normalizeSlug(issue.slug)
       : extractSlugFromBody(issue.body) || extractSlugFromBody(issue.title);
     if (issueSlug !== target) continue;
-    const state = (issue.state || '').toLowerCase();
-    if (state === 'open') return true;
-    // Closed within the suppression window still suppresses.
-    const closedAt = issue.closedAt ? Date.parse(issue.closedAt) : NaN;
-    if (Number.isFinite(closedAt) && now - closedAt <= CLOSED_SUPPRESSION_MS) return true;
-    // Closed long ago (or unknown close time treated as long ago) → allow re-file.
+    if (isIssueWithinDedupWindow(issue, now)) return true;
   }
   return false;
+}
+
+/**
+ * Build the text to embed for a proposal OR an existing issue — title + body,
+ * trimmed and length-capped so a single huge body can't blow the embedding
+ * model's context. Both sides go through THIS helper so the proposal and the
+ * candidates are embedded from the same seed shape (a fair comparison).
+ */
+export function issueEmbedSeed({ title = '', body = '' } = {}) {
+  const parts = [title, body].map(s => (typeof s === 'string' ? s.trim() : '')).filter(Boolean);
+  return parts.join('\n\n').slice(0, 2000);
+}
+
+/** Cosine similarity of two equal-length numeric vectors. Returns 0 for a shape
+ * mismatch, empty vector, or a zero-magnitude vector (nothing meaningful to
+ * compare) rather than NaN, so a bad embedding can never trip the dedup guard. */
+export function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/**
+ * Pure near-duplicate finder. Given the proposal's embedding and an array of
+ * candidates (each `{ slug?, number?, title?, embedding }`), return the single
+ * best candidate whose cosine similarity meets `threshold` (highest score wins),
+ * or null when none qualify / the proposal embedding is unusable. Side-effect-free
+ * and unit-tested; the I/O layer feeds it real embeddings.
+ */
+export function findSemanticDuplicate({ proposalEmbedding, candidates = [], threshold = SEMANTIC_DEDUP_THRESHOLD } = {}) {
+  if (!Array.isArray(proposalEmbedding) || proposalEmbedding.length === 0) return null;
+  let best = null;
+  for (const c of candidates) {
+    if (!Array.isArray(c?.embedding) || c.embedding.length === 0) continue;
+    const score = cosineSimilarity(proposalEmbedding, c.embedding);
+    if (score >= threshold && (!best || score > best.score)) {
+      best = { slug: c.slug || null, number: c.number ?? null, title: c.title || '', score };
+    }
+  }
+  return best;
 }
 
 /**
@@ -473,6 +539,60 @@ export async function confineToRepo(repo, ref) {
   const realRel = relative(realRepo, realAbs);
   if (realRel.startsWith('..') || isAbsolute(realRel)) return null;
   return realAbs;
+}
+
+/** Lazily resolve the default embedder so the pure module doesn't statically pull
+ * in the embeddings/settings/provider graph (matches the handler's dynamic-import
+ * pattern for heavy deps). Only reached in production — tests inject `embed`. */
+async function defaultEmbed(text) {
+  const { embedText } = await import('./embeddings.js');
+  return embedText(text);
+}
+
+/**
+ * SEMANTIC dedup guard — the embedding-similarity layer ON TOP OF the exact
+ * slug/label dedup (`isProposalDuplicate`). Catches a proposal that describes the
+ * same work as an existing issue but was worded differently (so its slug differs).
+ * Runs only AFTER slug dedup passes, so it's a best-effort extra catch.
+ *
+ * Returns `{ available, duplicate, match }`:
+ *   - `available:false` when semantic dedup couldn't run (no embeddable candidates,
+ *     or the embeddings provider is off / the proposal embed failed). This is a
+ *     SENTINEL, distinct from `available:true, duplicate:false` ("checked, no
+ *     near-dup"): the handler treats unavailable as "proceed to file" because slug
+ *     dedup already guarded the exact case — losing the semantic catch just
+ *     restores pre-feature behavior, it never files a slug-duplicate.
+ *   - `duplicate:true` with `match` = the highest-scoring near-duplicate issue.
+ *
+ * No cold-bootstrap risk: `embed` degrades to `{ skipped:true }` when no
+ * embeddings provider is configured, and this only runs inside the user-enabled
+ * scheduled sweep. `embed` is injectable for tests.
+ */
+export async function checkSemanticDuplicate({ proposal, existingIssues = [], now = Date.now(), embed = defaultEmbed, threshold = SEMANTIC_DEDUP_THRESHOLD } = {}) {
+  const unavailable = { available: false, duplicate: false, match: null };
+  if (!proposal || typeof proposal !== 'object') return unavailable;
+
+  // Only issues still within the dedup window with SOMETHING to embed are worth
+  // comparing; a plan-tracked slug-only issue (no title/body) can't be embedded.
+  const candidates = existingIssues
+    .filter(i => isIssueWithinDedupWindow(i, now) && (i.body || i.title))
+    .slice(0, SEMANTIC_DEDUP_MAX_CANDIDATES);
+  if (candidates.length === 0) return unavailable;
+
+  const proposalRes = await embed(issueEmbedSeed({ title: proposal.title, body: proposal.body }));
+  if (!proposalRes?.success || !Array.isArray(proposalRes.embedding)) return unavailable;
+
+  const embedded = [];
+  for (const c of candidates) {
+    const res = await embed(issueEmbedSeed({ title: c.title, body: c.body }));
+    if (res?.success && Array.isArray(res.embedding)) {
+      embedded.push({ slug: c.slug || null, number: c.number ?? null, title: c.title || '', embedding: res.embedding });
+    }
+  }
+  if (embedded.length === 0) return unavailable;
+
+  const match = findSemanticDuplicate({ proposalEmbedding: proposalRes.embedding, candidates: embedded, threshold });
+  return { available: true, duplicate: !!match, match };
 }
 
 /**
