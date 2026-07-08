@@ -506,6 +506,13 @@ export const stageConfigUpdateSchema = z.object({
   description: z.string().optional(),
   model: z.string().nullable().optional(),
   provider: z.string().nullable().optional(),
+  // Writer/judge model split (#2167, CWQE Phase 3). A writer stage may pin a
+  // DIFFERENT provider/model to grade its own output — `null`/'' clears the pin
+  // so the judge falls back to the writer provider (see resolveJudgeForStage).
+  // Without these keys the `.strip()` below would silently drop them from the
+  // saved config, so schema parity is required in the same change.
+  judgeProvider: z.string().nullable().optional(),
+  judgeModel: z.string().nullable().optional(),
   timeout: z.preprocess(
     // Treat empty string as a "clear override" (null). Coerce digit-only
     // strings to numbers so form clients that send "900000" still parse —

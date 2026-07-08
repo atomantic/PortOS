@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {BookOpen, ChevronLeft, ChevronRight, Mic, MicOff, Save, Volume2, Settings,
-  Plus, Trash2, CloudUpload, Menu, X} from 'lucide-react';
+  Plus, Trash2, CloudUpload, Menu, X, Sparkles} from 'lucide-react';
 import * as api from '../../../services/api';
 import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
@@ -63,6 +63,10 @@ export default function DailyLogTab() {
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(null);
   const [vaults, setVaults] = useState([]);
+  // Activity-digest (auto-draft) config + provider list for the picker (#2155).
+  const [digestSettings, setDigestSettings] = useState(null);
+  const [providers, setProviders] = useState([]);
+  const [drafting, setDrafting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -104,12 +108,16 @@ export default function DailyLogTab() {
   }, []);
 
   const loadSettings = useCallback(async () => {
-    const [s, v] = await Promise.all([
+    const [s, v, d, p] = await Promise.all([
       api.getDailyLogSettings().catch(() => null),
       getNotesVaults().catch(() => []),
+      api.getActivityDigestSettings().catch(() => null),
+      api.getProviders({ silent: true }).catch(() => null),
     ]);
     if (s) setSettings(s);
     setVaults(v || []);
+    if (d) setDigestSettings(d);
+    setProviders(p?.providers || (Array.isArray(p) ? p : []));
   }, []);
 
   useEffect(() => { loadEntry(date); }, [date, loadEntry]);
@@ -332,6 +340,44 @@ export default function DailyLogTab() {
     }
   };
 
+  const saveDigestSettings = async (partial) => {
+    // Optimistic local merge so the control reflects the change immediately;
+    // the server response is authoritative and replaces it on success.
+    setDigestSettings((prev) => ({ ...(prev || {}), ...partial }));
+    const next = await api.updateActivityDigestSettings(partial).catch(() => null);
+    if (next) {
+      setDigestSettings(next);
+      toast.success('Digest settings saved');
+    }
+  };
+
+  const handleDraft = async () => {
+    // The draft splices its section into the SERVER's persisted entry, so
+    // unsaved edits in the textarea would be clobbered by the returned content.
+    // Make the user save (or discard) first rather than silently losing them.
+    if (dirty) {
+      toast('Save or discard your edits before drafting.', { icon: '📝' });
+      return;
+    }
+    setDrafting(true);
+    const res = await api.draftActivityDigest(date).catch(() => null);
+    setDrafting(false);
+    if (!res) {
+      toast.error('Draft failed');
+      return;
+    }
+    if (res.entry) applyEntry(res.entry);
+    if (res.drafted) {
+      toast.success(res.usedLlm ? 'Drafted with AI narrative' : 'Drafted from your timeline');
+    } else {
+      toast('No tracked activity for this day yet.', { icon: '🗓️' });
+    }
+  };
+
+  // The provider whose id is currently configured — used to name it in the UI
+  // (AI policy: the surface that can trigger LLM work must name the provider).
+  const digestProvider = providers.find((p) => p.id === digestSettings?.provider) || null;
+
   const isToday = date === serverToday;
   const segmentCount = entry?.segments?.length ?? entry?.segmentCount ?? 0;
 
@@ -420,6 +466,68 @@ export default function DailyLogTab() {
               Entries embed into the Chief-of-Staff memory system automatically so agents can search
               across daily logs.
             </p>
+
+            <div className="pt-3 border-t border-port-border space-y-3">
+              <div className="flex items-center gap-2">
+                <Sparkles size={13} className="text-port-accent" />
+                <span className="text-xs font-medium text-white">Activity Digest auto-drafts</span>
+              </div>
+              <p className="text-[10px] text-gray-600">
+                Summarizes each day&apos;s activity timeline (conversations, meetings, media) into a
+                clearly-marked section of that day&apos;s log. Your typed and dictated text is never
+                changed. Runs only when enabled below.
+              </p>
+              <label htmlFor="digest-enabled" className="flex items-center gap-2 text-xs text-gray-400">
+                <input
+                  id="digest-enabled"
+                  type="checkbox"
+                  checked={!!digestSettings?.enabled}
+                  onChange={(e) => saveDigestSettings({ enabled: e.target.checked })}
+                />
+                Enable the scheduled evening draft
+              </label>
+              <FormField label="AI provider (optional — narrative summary)" labelClassName="block text-xs text-gray-400 mb-1">
+                <select
+                  id="digest-provider"
+                  value={digestSettings?.provider || ''}
+                  onChange={(e) => saveDigestSettings({ provider: e.target.value || null })}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                >
+                  <option value="">None — structured summary only (no AI)</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                  ))}
+                </select>
+              </FormField>
+              {digestProvider && (
+                <FormField label="Model (optional)" labelClassName="block text-xs text-gray-400 mb-1">
+                  <input
+                    id="digest-model"
+                    type="text"
+                    value={digestSettings?.model || ''}
+                    onChange={(e) => setDigestSettings((s) => ({ ...(s || {}), model: e.target.value }))}
+                    onBlur={(e) => saveDigestSettings({ model: e.target.value || null })}
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                    placeholder={digestProvider.defaultModel || 'provider default'}
+                  />
+                </FormField>
+              )}
+              <FormField label="Evening run time" labelClassName="block text-xs text-gray-400 mb-1">
+                <input
+                  id="digest-runtime"
+                  type="time"
+                  value={digestSettings?.runTime || '21:00'}
+                  onChange={(e) => setDigestSettings((s) => ({ ...(s || {}), runTime: e.target.value }))}
+                  onBlur={(e) => e.target.value && saveDigestSettings({ runTime: e.target.value })}
+                  className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+                />
+              </FormField>
+              <p className="text-[10px] text-gray-600">
+                {digestProvider
+                  ? `Scheduled drafts will call ${digestProvider.name || digestProvider.id}. Use the Draft button in the toolbar to run it now.`
+                  : 'No AI provider selected — drafts are a deterministic structured summary with zero AI calls.'}
+              </p>
+            </div>
           </div>
         )}
 
@@ -498,6 +606,18 @@ export default function DailyLogTab() {
               {entry?.obsidianPath ? ` · ${entry.obsidianPath}` : ''}
             </div>
           </div>
+          <button
+            onClick={handleDraft}
+            disabled={drafting}
+            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white disabled:opacity-50"
+            title={digestProvider
+              ? `Draft an activity-digest section for this day using ${digestProvider.name || digestProvider.id}`
+              : 'Draft an activity-digest section for this day (structured summary — no AI provider)'}
+            aria-label="Draft activity digest"
+          >
+            <Sparkles size={14} className={drafting ? 'animate-pulse' : ''} />
+            <span className="hidden sm:inline">{drafting ? 'Drafting…' : 'Draft'}</span>
+          </button>
           <button
             onClick={readBack}
             className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"

@@ -21,7 +21,7 @@ import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
 import ReaderPanelView from '../components/pipeline/ReaderPanelView';
 import TabPills from '../components/ui/TabPills';
 import {
-  getPipelineSeries, getIssueEditorial, analyzeIssueEditorial,
+  getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
 } from '../services/api';
 import { useSeriesEditorial } from '../hooks/useSeriesEditorial';
 
@@ -76,7 +76,14 @@ function SectionRow({ section, index }) {
   );
 }
 
-function IssueRow({ entry, onAnalyze, analyzing }) {
+const qualityTone = (v) => {
+  if (v == null) return 'text-gray-400 border-port-border';
+  if (v >= 7) return 'text-port-success border-port-success/40';
+  if (v >= 5) return 'text-port-warning border-port-warning/40';
+  return 'text-port-error border-port-error/40';
+};
+
+function IssueRow({ entry, quality, onAnalyze, analyzing }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -106,6 +113,14 @@ function IssueRow({ entry, onAnalyze, analyzing }) {
           <span className="text-sm text-gray-200 truncate">{entry.title || 'Untitled'}</span>
           {entry.stale ? <AlertTriangle size={12} className="text-port-warning shrink-0" title="Content changed since this was analyzed — re-run" /> : null}
         </button>
+        {quality && quality.judged ? (
+          <span
+            className={`text-[10px] font-bold rounded border px-1.5 py-0.5 shrink-0 ${qualityTone(quality.qualityScore)} ${quality.stale ? 'opacity-60' : ''}`}
+            title={`Quality judge${quality.stale ? ' (stale)' : ''}: overall ${quality.overall} − slop ${quality.slopPenalty}${quality.oneLineVerdict ? `\n${quality.oneLineVerdict}` : ''}`}
+          >
+            Q{quality.qualityScore?.toFixed(1)}
+          </span>
+        ) : null}
         {entry.analyzed ? (
           <div className="flex items-center gap-3 shrink-0">
             <span className="text-[10px] text-gray-500" title="Plot tension / Character progress / Reader valence">
@@ -194,6 +209,22 @@ export default function PipelineSeriesRoadmap() {
   const [series, setSeries] = useState(null);
   const [loading, setLoading] = useState(true);
   const [perIssueBusy, setPerIssueBusy] = useState(null); // issueId currently analyzing solo
+  const [judgeById, setJudgeById] = useState({}); // issueId → quality-judge score (#2167)
+
+  // Load the series quality-judge scores (composite qualityScore per issue) so
+  // the roadmap shows a Q chip next to each issue. Silent — the judge column is
+  // supplementary, and an un-judged series simply shows no chips.
+  useEffect(() => {
+    let canceled = false;
+    if (!seriesId) return undefined;
+    getSeriesJudge(seriesId, { silent: true })
+      .then((res) => {
+        if (canceled || !res?.scores) return;
+        setJudgeById(Object.fromEntries(res.scores.filter((s) => s.judged).map((s) => [s.issueId, s])));
+      })
+      .catch(() => { /* supplementary — ignore */ });
+    return () => { canceled = true; };
+  }, [seriesId]);
 
   // A stale/typo'd deep link degrades to the roadmap tab rather than a blank view.
   const activeTab = TAB_IDS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'roadmap';
@@ -337,6 +368,7 @@ export default function PipelineSeriesRoadmap() {
               <IssueRow
                 key={entry.issueId}
                 entry={entry}
+                quality={judgeById[entry.issueId]}
                 onAnalyze={analyzeOne}
                 analyzing={perIssueBusy === entry.issueId || running}
               />

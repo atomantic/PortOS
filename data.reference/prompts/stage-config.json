@@ -310,6 +310,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-judge-issue": {
+      "name": "Pipeline — Calibrated Issue Quality Judge",
+      "description": "CWQE Phase 3 (#2167): a harsh, calibrated LLM judge that scores one drafted issue across 9 dimensions (voice adherence, beat coverage, character voice, plants seeded, prose quality, continuity, canon compliance, lore integration, engagement) against the same brief the writer received. Uses an anti-inflation calibration ladder (median AI chapter = 6; no 10 for a draft) plus a QUOTE TEST (3 strongest / 3 weakest sentences) and a scene-vs-summary ratio. qualityScore = judge overall − deterministic slop penalty (#2165). Provider/model resolve via the writer stage judgeProvider/judgeModel (writer/judge split) — configure a DIFFERENT model to avoid self-congratulation.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-panel-editor": {
       "name": "Pipeline — Reader Panel: The Editor",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
