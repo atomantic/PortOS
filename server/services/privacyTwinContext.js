@@ -22,6 +22,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { PRIVACY_SENSITIVE_TYPES } from '../lib/privacyValidation.js';
 // vaultCrypto is imported lazily (inside getPrivacyTwinContext) so merely
 // importing this module — which digital-twin-context.js does at top level —
 // doesn't eagerly evaluate vaultCrypto's install-root .env path resolution.
@@ -81,11 +82,17 @@ export async function getPrivacyTwinContext() {
   const sections = [];
 
   // Per-field gate: only records the user explicitly flagged for the twin.
+  // Sensitive types (SSN, passport, driver's license, financial account) are
+  // NEVER injected into a prompt even if flagged — the same never-disclose
+  // posture as broker scans (use_for_scans), enforced here so an already-stored
+  // flag on a sensitive record can't leak highly-sensitive IDs into an LLM.
   const { rows: records } = await query(
     `SELECT type, label, status, value_enc
      FROM privacy_vault_records
      WHERE share_with_twin = true
+       AND type <> ALL($1::text[])
      ORDER BY type, label`,
+    [PRIVACY_SENSITIVE_TYPES],
   );
   if (records.length > 0) {
     const { decryptValue } = await import('../lib/vaultCrypto.js');

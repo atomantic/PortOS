@@ -239,6 +239,11 @@ export async function setHoldingsStatus(vaultRecordId, fromStatus, toStatus) {
  * Returns `[{ socialAccountId, orgId, orgName }]`.
  */
 export async function getOrgsBySocialAccounts() {
+  // Degrade gracefully to an empty index when Privacy Center isn't provisioned
+  // yet (fresh install pre-migration) — the twin's Accounts tab calls this on
+  // load, so a missing table must yield no badges rather than a 500.
+  const { rows: tableRows } = await query(`SELECT to_regclass('public.privacy_orgs') AS orgs`);
+  if (!tableRows[0]?.orgs) return [];
   const { rows } = await query(
     `SELECT id, name, social_account_id
      FROM privacy_orgs

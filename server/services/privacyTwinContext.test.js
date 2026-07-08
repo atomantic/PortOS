@@ -20,7 +20,7 @@ const { decryptValue } = await import('../lib/vaultCrypto.js');
 function routeQueries(map) {
   query.mockImplementation((sql) => {
     for (const [needle, rows] of map) {
-      if (sql.includes(needle)) return Promise.resolve({ rows });
+      if (sql?.includes(needle)) return Promise.resolve({ rows });
     }
     return Promise.resolve({ rows: [] });
   });
@@ -50,9 +50,12 @@ describe('getPrivacyTwinContext', () => {
       ]],
     ]);
     const out = await getPrivacyTwinContext();
-    // Per-field gate is enforced in SQL.
+    // Per-field gate + sensitive-type exclusion are enforced in SQL.
     const recordCall = query.mock.calls.find(([sql]) => sql.includes('FROM privacy_vault_records'));
     expect(recordCall[0]).toContain('share_with_twin = true');
+    expect(recordCall[0]).toContain('type <> ALL');
+    // Sensitive types (ssn/passport/drivers_license/financial_account) never inject.
+    expect(recordCall[1][0]).toEqual(expect.arrayContaining(['ssn', 'passport', 'drivers_license', 'financial_account']));
     // Decrypted values present; masked/ciphertext never leaks.
     expect(out).toContain('Ada Lovelace');
     expect(out).toContain('address (previous): 1 Old St');
