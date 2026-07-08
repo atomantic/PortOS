@@ -415,8 +415,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   // PortOS's plain-HTTP origin). An existing key just reopens the same canvas.
   // The sketch page returns here (?returnTo=) at the same stage.
   const openSceneSketch = async (i) => {
-    const scene = scenes[i];
-    let key = scene.sketchKey;
+    let key = scenesRef.current[i]?.sketchKey;
     if (!key) {
       setSketchingIdx(i);
       const res = await createBlankSketch({ silent: true }).catch((err) => {
@@ -427,8 +426,12 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       if (!res?.key) return;
       key = res.key;
       // Persist the key on the scene BEFORE navigating so a reload/return lands
-      // on the same canvas. persist() resolves once the PATCH settles.
-      const ok = await persist(scenes.map((s, j) => j === i ? { ...s, sketchKey: key } : s));
+      // on the same canvas. Merge against scenesRef.current (not the render-scope
+      // `scenes` captured before the await) so an edit made while the key was
+      // minting isn't clobbered under last-write-wins. Bail if the scene was
+      // removed mid-flight. persist() resolves once the PATCH settles.
+      if (!scenesRef.current[i]) return;
+      const ok = await persist(scenesRef.current.map((s, j) => j === i ? { ...s, sketchKey: key } : s));
       if (!ok) return;
     }
     const returnTo = `/pipeline/issues/${issue.id}/storyboards`;
@@ -601,7 +604,11 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                         src={sketchSrc(scene.sketchKey)}
                         alt={`Scene ${i + 1} sketch`}
                         className="w-full h-auto"
+                        // Hide until the PNG exists (a freshly-minted, not-yet-saved
+                        // sketch 404s); restore on a later successful load so a
+                        // nonce-bump src swap after the first save shows it again.
                         onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        onLoad={(e) => { e.currentTarget.style.display = ''; }}
                       />
                     </button>
                   ) : null}

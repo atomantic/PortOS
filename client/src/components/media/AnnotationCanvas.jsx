@@ -147,12 +147,18 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
   }), [dims, isBlank, backgroundColor]);
 
   return (
-    <div className="relative inline-block max-w-full bg-port-bg rounded-lg overflow-hidden">
+    <div className={`relative max-w-full bg-port-bg rounded-lg overflow-hidden ${isBlank ? 'block' : 'inline-block'}`}>
       {isBlank ? (
-        // A sized spacer establishes the natural aspect ratio so the absolutely
-        // positioned canvas below scales to it (matches the <img> layout in
-        // overlay mode). No <img> element exists in blank mode.
-        <div style={{ aspectRatio: `${dims?.w || blankWidth} / ${dims?.h || blankHeight}` }} className="w-full max-w-full" />
+        // A sized spacer establishes the natural size + aspect ratio so the
+        // absolutely-positioned canvas below scales to it (in overlay mode the
+        // <img>'s intrinsic size does this). The block wrapper has no in-flow
+        // content otherwise, so the spacer needs a definite width — clamped to
+        // the canvas's natural pixels and never wider than the container — or
+        // the surface collapses to 0×0.
+        <div
+          style={{ width: dims?.w || blankWidth, aspectRatio: `${dims?.w || blankWidth} / ${dims?.h || blankHeight}` }}
+          className="max-w-full"
+        />
       ) : (
         <img
           ref={imgRef}
