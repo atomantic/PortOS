@@ -39,6 +39,16 @@ export const spotifyConfigSchema = z.object({
   intervalMinutes: z.number().int().min(1).max(1440).optional()
 });
 
+// YouTube watch-history ingestion config (#2153) — the `settings.youtube` slice.
+// The scrape is OFF by default and only reads the signed-in history page in the
+// managed browser when enabled. Validated as a settings slice on PUT /api/settings;
+// service-side DEFAULT_CONFIG fills any absent field (default cadence ~8h, since
+// the history page is day-bucketed) so an install with no `youtube` key resolves.
+export const youtubeConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
 // Shared LoRA-training parameter bounds — used by both the settings-slice
 // defaults and the per-run override on POST /api/lora-training/runs.
 const loraTrainingParamsSchema = z.object({

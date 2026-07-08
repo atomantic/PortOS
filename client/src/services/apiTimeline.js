@@ -64,3 +64,9 @@ export const importWhatsappHistory = (file, { yourName, chatLabel, ...options } 
 // visit-instant + URL). Subframe (iframe) loads are dropped server-side.
 export const importBrowserHistory = (file, options = {}) =>
   importFile('/timeline/import/browser', file, options);
+
+// Google Takeout YouTube `watch-history.json` (standalone or zipped) — each watch
+// becomes a `media.watch` event (dedupe on video id + local day, shared with the
+// live scrape so the backfill and scrape reconcile).
+export const importYoutubeHistory = (file, options = {}) =>
+  importFile('/timeline/import/youtube', file, options);

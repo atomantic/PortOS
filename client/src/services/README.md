@@ -78,6 +78,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications. |
 | `apiSpotify.js` | Spotify OAuth + listening-history sync. |
+| `apiYoutube.js` | YouTube watch-history scrape sync + setup check. |
 | `apiPersonalities.js` | Agent personality profiles. |
 
 ## Media / creative

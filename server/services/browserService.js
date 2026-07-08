@@ -23,8 +23,8 @@ const LOGS_TIMEOUT_MS = 5000;
 const CDP_DEFAULT_TIMEOUT_MS = 10000;
 const CDP_EVALUATE_TIMEOUT_MS = 60000;
 
-// Auth/login redirect detection across providers (Microsoft, Okta, generic)
-const AUTH_PATTERNS = ['login.microsoftonline.com', 'okta.com', 'login.live.com', 'Sign in'];
+// Auth/login redirect detection across providers (Microsoft, Okta, Google, generic)
+const AUTH_PATTERNS = ['login.microsoftonline.com', 'okta.com', 'login.live.com', 'accounts.google.com', 'Sign in'];
 
 const CONFIG_FILE = join(PATHS.data, 'browser-config.json');
 const ECOSYSTEM_FILE = join(PATHS.root, 'ecosystem.config.cjs');

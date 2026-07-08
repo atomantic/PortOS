@@ -27,7 +27,8 @@ export const TABS = [
   { id: 'sharing', label: 'Sharing', to: '/settings/sharing' },
   { id: 'spotify', label: 'Spotify', to: '/settings/spotify' },
   { id: 'telegram', label: 'Telegram', to: '/settings/telegram' },
-  { id: 'voice', label: 'Voice', to: '/settings/voice' }
+  { id: 'voice', label: 'Voice', to: '/settings/voice' },
+  { id: 'youtube', label: 'YouTube', to: '/settings/youtube' }
 ];
 
 export default function SettingsTabsHeader({ activeTab }) {
