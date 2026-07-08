@@ -12,8 +12,8 @@
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { creativeDirectorTreatmentSchema } from '../../lib/validation.js';
-import { PROJECT_STATUSES } from '../../lib/creativeDirectorPresets.js';
+import { creativeDirectorTreatmentSchema, creativeDirectorPlanSchema } from '../../lib/validation.js';
+import { PROJECT_STATUSES, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
@@ -86,7 +86,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     name, aspectRatio, quality, modelId, targetDurationSeconds,
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null,
-    cast = [], generateFirstPass = false,
+    cast = [], generateFirstPass = false, directive = null,
   } = input;
   return {
     id,
@@ -131,6 +131,16 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // needs no schema-version bump.
     musicBed: null,
     treatment: null,
+    // Production directive + plan (CDO Phase 2, #2184). A directive-driven
+    // project turns `directive` into `plan.steps[]` via the planner agent, then
+    // the generalized advance loop executes them through the gated tool
+    // registry. Both null on a legacy video project — the treatment/scene flow
+    // never touches them, so `plan === null` is the back-compat discriminator
+    // the advance loop keys on (schema-version gated for federation; see
+    // schemaVersions.js creativeDirectorProjects v2 + migration 175). Additive —
+    // the whole record round-trips through the JSONB column verbatim.
+    directive: directive && typeof directive === 'object' ? directive : null,
+    plan: null,
     runs: [],
     // Soft-delete / LWW tombstone trio (#1564) — projects federate across peers
     // via the per-record push pipeline (record kind `creativeDirectorProject`,
@@ -230,6 +240,83 @@ export function applyTreatment(project, treatmentInput) {
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Validate + apply a production plan to a project (CDO Phase 2, #2184). Returns
+ * the next record. Normalizes each step's runtime fields (status→pending unless
+ * the agent supplied one, retryCount→0, result→null) and, on a RE-PLAN (a plan
+ * already exists), PRESERVES the status/result/retryCount of any incoming step
+ * whose `stepId` matches an already terminal-SUCCESS local step — so the bounded
+ * re-planner can revise remaining steps without re-running work already done.
+ * `plan.replanRounds` counts how many times a plan has been (re)written: 0 for
+ * the first plan, +1 each subsequent one — the advance loop's MAX_REPLAN_ROUNDS
+ * gate reads it. Flips a draft/planning project to `rendering` so the advance
+ * loop starts executing; preserves paused/failed (a human parked it).
+ */
+export function applyPlan(project, planInput) {
+  const parsed = creativeDirectorPlanSchema.safeParse(planInput);
+  if (!parsed.success) {
+    throw new ServerError(
+      `Plan validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
+  }
+  const prevSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
+  const prevById = new Map(prevSteps.map((s) => [s.stepId, s]));
+  const steps = parsed.data.steps.map((s) => {
+    const prior = prevById.get(s.stepId);
+    // Preserve a step the prior plan already finished successfully — a re-plan
+    // must not re-run a completed render or re-issue a created record.
+    if (prior && PLAN_STEP_TERMINAL_SUCCESS.has(prior.status)) {
+      return {
+        ...s,
+        status: prior.status,
+        result: prior.result ?? null,
+        retryCount: prior.retryCount ?? 0,
+        dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : [],
+      };
+    }
+    return {
+      ...s,
+      status: s.status || 'pending',
+      retryCount: s.retryCount ?? 0,
+      result: s.result ?? null,
+      dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : [],
+    };
+  });
+  const replanRounds = project.plan ? (project.plan.replanRounds || 0) + 1 : 0;
+  const nextStatus = (project.status === 'paused' || project.status === 'failed')
+    ? project.status
+    : 'rendering';
+  return {
+    ...project,
+    plan: { steps, replanRounds, updatedAt: new Date().toISOString() },
+    status: nextStatus,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Patch a single plan step. Returns `{ project, updated }`; `updated` is null
+ * (and `project` unchanged) when the project has no plan or the stepId is
+ * unknown — mirrors applyRunUpdate's "return null, don't throw" contract so the
+ * advance loop's fire-and-forget writes never 500 on a raced delete/replan.
+ */
+export function applyPlanStepUpdate(project, stepId, patch) {
+  const steps = Array.isArray(project.plan?.steps) ? project.plan.steps : null;
+  if (!steps) return { project, updated: null };
+  const idx = steps.findIndex((s) => s.stepId === stepId);
+  if (idx < 0) return { project, updated: null };
+  const updated = { ...steps[idx], ...patch };
+  const nextSteps = steps.slice();
+  nextSteps[idx] = updated;
+  const next = {
+    ...project,
+    plan: { ...project.plan, steps: nextSteps, updatedAt: new Date().toISOString() },
+    updatedAt: new Date().toISOString(),
+  };
+  return { project: next, updated };
 }
 
 /**

@@ -687,6 +687,27 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
 
+// ---- Calibrated issue quality judge (#2167 — qualityScore = judge − slop) ----
+// One issue's stored judge score: { status, overall, dimensions, slopPenalty,
+// qualityScore, strongestSentences, weakestSentences, topRevisions, stale, ... }
+// or { status: 'none' }.
+export const getIssueJudge = (issueId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/judge`, options);
+
+// Judge ONE issue (synchronous; returns the finished snapshot). opts:
+// { stageId?, providerId?, model?, force? }.
+export const judgeIssue = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/judge`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Series quality roadmap: { coverage, scores[], weakest[], ... } — scores carry
+// per-issue qualityScore; `weakest` is the ascending-quality revision priority.
+export const getSeriesJudge = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/judge`, options);
+
 // ---- Reader panel (#2170 — four-persona panel + disagreement mining) ----
 // Stored panel: { status, personas[], disagreements:{consensus,attention,polarizing,totalPersonas}, seededFindings, stale } or { status: 'none' }.
 export const getReaderPanel = (seriesId, options = {}) =>
