@@ -61,6 +61,33 @@ export const runWritersRoomAnalysis = (workId, data) =>
 export const getWritersRoomAnalysis = (workId, analysisId) =>
   request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
 
+// Polish loop (Phase 9): user-triggered multi-pass cut → revise → keep/revert.
+// `startWritersRoomPolish` returns { runId, alreadyRunning, sseUrl }; live
+// progress streams from the SSE URL below. Callers own their own error UI on the
+// action buttons (useAsyncAction), so pass { silent: true } to avoid a double toast.
+export const startWritersRoomPolish = (workId, data, options) =>
+  request(`/writers-room/works/${enc(workId)}/polish`, {
+    method: 'POST',
+    body: JSON.stringify(data || {}),
+    ...options,
+  });
+export const getWritersRoomPolishStatus = (workId, options) =>
+  request(`/writers-room/works/${enc(workId)}/polish/status`, options);
+export const cancelWritersRoomPolish = (workId, options) =>
+  request(`/writers-room/works/${enc(workId)}/polish/cancel`, { method: 'POST', ...options });
+export const getWritersRoomPolishHistory = (workId, options) =>
+  request(`/writers-room/works/${enc(workId)}/polish/history`, options);
+export const revertWritersRoomPolish = (workId, snapshotId, options) =>
+  request(`/writers-room/works/${enc(workId)}/polish/revert`, {
+    method: 'POST',
+    body: JSON.stringify({ snapshotId }),
+    ...options,
+  });
+// SSE progress URL — a plain string (bypasses apiCore's API_BASE), so it carries
+// the literal `/api` prefix like the pipeline autopilot stream.
+export const writersRoomPolishSseUrl = (workId) =>
+  `/api/writers-room/works/${enc(workId)}/polish/progress`;
+
 // Live continuation (Phase 5): opt-in, debounced Creative Director feedback
 // from the prose around the cursor. Returns { options, usage, budget }. The
 // server gates on the per-work live-mode toggle (409) and daily budget (429);

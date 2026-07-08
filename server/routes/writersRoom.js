@@ -16,6 +16,8 @@ import {
   writersRoomExerciseCreateSchema,
   writersRoomExerciseFinishSchema,
   writersRoomAnalysisCreateSchema,
+  writersRoomPolishStartSchema,
+  writersRoomPolishRevertSchema,
   writersRoomLiveSuggestSchema,
   writersRoomLiveRenderPreviewSchema,
   writersRoomCdBridgeSuggestSchema,
@@ -36,6 +38,10 @@ import {
 import {
   runAnalysis, listAnalyses, getAnalysis, persistSceneImage,
 } from '../services/writersRoom/evaluator.js';
+import {
+  startPolish, attachClient as attachPolishClient, isPolishActive, cancelPolish,
+  getPolishHistory, revertToSnapshot,
+} from '../services/writersRoom/polish.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
 import {
   suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector,
@@ -192,6 +198,48 @@ router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
   res.json(await getAnalysis(req.params.id, req.params.analysisId));
+}));
+
+// ---------- polish loop (Phase 9: autonomous cut → revise → keep/revert) ----------
+
+// Start a multi-pass Polish run. USER-TRIGGERED ONLY (explicit action from the
+// work page) — satisfies the AI-provider policy: no boot/background invocation.
+// Returns { runId, alreadyRunning, sseUrl }; live progress lands via SSE.
+router.post('/works/:id/polish', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomPolishStartSchema, req.body || {});
+  await getWorkWithBody(req.params.id); // 404 early if the work is missing
+  const result = startPolish(req.params.id, data);
+  res.status(result.alreadyRunning ? 200 : 202).json({
+    ...result,
+    sseUrl: `/api/writers-room/works/${encodeURIComponent(req.params.id)}/polish/progress`,
+  });
+}));
+
+router.get('/works/:id/polish/progress', (req, res) => {
+  const attached = attachPolishClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active polish run for this work', { status: 404 });
+  }
+});
+
+router.get('/works/:id/polish/status', (req, res) => {
+  res.json({ active: isPolishActive(req.params.id) });
+});
+
+router.post('/works/:id/polish/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: cancelPolish(req.params.id) });
+}));
+
+router.get('/works/:id/polish/history', asyncHandler(async (req, res) => {
+  res.json(await getPolishHistory(req.params.id));
+}));
+
+// Revert the active draft to a prior polish snapshot (pre-polish baseline or any
+// kept cycle). Returns the manifest + restored body, same shape as the draft PUT.
+router.post('/works/:id/polish/revert', asyncHandler(async (req, res) => {
+  const { snapshotId } = validateRequest(writersRoomPolishRevertSchema, req.body || {});
+  const { manifest, body } = await revertToSnapshot(req.params.id, snapshotId);
+  res.json({ ...manifest, activeDraftBody: body });
 }));
 
 // ---------- live continuation (Phase 5: opt-in Creative Director feedback) ----------

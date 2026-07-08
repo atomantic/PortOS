@@ -70,6 +70,7 @@ export * from './storyBuilderSteps.js';
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
 export * from './universePromptRenderers.js';
+export * from './writersRoomPolish.js';
 export * from './writersRoomPresets.js';
 export * from './writersRoomStylePresets.js';
 

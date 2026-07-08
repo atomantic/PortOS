@@ -75,6 +75,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `creativeDirectorPresets.js` | Locked-at-creation aspect ratio + quality presets for the Creative Director. |
 | `creativeDirectorPrompts.js` | Creative Director agent prompt builders. |
 | `universePromptRenderers.js` | Renderers that turn a universe's `categories` map + canon into prompt context. |
+| `writersRoomPolish.js` | Pure logic for the Writers Room multi-pass Polish loop (#2173): `scoreEvaluation`, `decideKeepRevert`, `shouldStopPolish`, `resolveCycles`, `SAFE_POLISH_CUT_TYPES`, `POLISH_DEFAULTS`. |
 | `writersRoomPresets.js` | Writers Room enums (WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS). |
 | `writersRoomStylePresets.js` | Curated style presets for storyboards + universe. |
 

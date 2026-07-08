@@ -21,6 +21,20 @@
       "returnsJson": false,
       "variables": []
     },
+    "writers-room-cuts": {
+      "name": "Writers Room — Adversarial Cuts",
+      "description": "Adversarial cut pass over a Writers Room draft: identify OVER-EXPLAIN / REDUNDANT / FAT passages to cut for prose tightening. The safe cut types (OVER-EXPLAIN + REDUNDANT) are auto-applied by the Polish loop; the rest are advisory. Powers the multi-pass Polish runner.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "writers-room-revise": {
+      "name": "Writers Room — Brief-Driven Revision",
+      "description": "Targeted revision pass over a Writers Room draft: rewrite the draft to address an evaluation-derived brief while preserving the strengths, voice, plot, and structure listed in a WHAT TO KEEP section. Returns revised prose only. Powers the multi-pass Polish runner.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "writers-room-script": {
       "name": "Writers Room — Adapt to Scene Script",
       "description": "Adapt a Writers Room prose draft into a scene-by-scene screenplay-style breakdown with sluglines, action, dialogue, and per-scene visual prompts the image-gen pipeline can render.",

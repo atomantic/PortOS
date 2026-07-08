@@ -12,6 +12,7 @@
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
+import { POLISH_DEFAULTS } from './writersRoomPolish.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
@@ -311,6 +312,20 @@ export const writersRoomExerciseFinishSchema = z.object({
 
 export const writersRoomAnalysisCreateSchema = z.object({
   kind: z.enum(ANALYSIS_KINDS)
+}).strict();
+
+// Polish loop (#2173). `cycles` is clamped to [1, maxCycles] in the runner too
+// (resolveCycles), but bound it here so a wild value 400s at the route. The
+// gate/plateau knobs are optional (the runner defaults them) and kept small so a
+// hand-crafted request can't turn Polish into an unbounded LLM spend.
+export const writersRoomPolishStartSchema = z.object({
+  cycles: z.number().int().min(1).max(POLISH_DEFAULTS.maxCycles).optional(),
+  minKeepDelta: z.number().min(0).max(100).optional(),
+  plateauDelta: z.number().min(0).max(100).optional(),
+}).strict();
+
+export const writersRoomPolishRevertSchema = z.object({
+  snapshotId: z.string().trim().regex(/^wr-snap-[0-9a-f-]+$/i, 'Invalid snapshot id'),
 }).strict();
 
 // Character profile fields are all optional on update so the UI can PATCH

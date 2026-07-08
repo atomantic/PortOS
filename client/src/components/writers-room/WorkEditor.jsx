@@ -23,6 +23,7 @@ import {
   Film,
   ExternalLink,
   Zap,
+  Wand2,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
@@ -48,6 +49,7 @@ import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';
 import CdBridgePanel from './CdBridgePanel';
 import AnalysisHistory from './AnalysisHistory';
+import PolishPanel from './PolishPanel';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
 import ProseTokenPopover from './ProseTokenPopover';
@@ -55,7 +57,7 @@ import WritersRoomDock from './WritersRoomDock';
 import useImageGenQueue from '../../hooks/useImageGenQueue';
 
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
-const DRAWER = { VERSIONS: 'versions', HISTORY: 'history' };
+const DRAWER = { VERSIONS: 'versions', HISTORY: 'history', POLISH: 'polish' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
 const ANALYSIS_LABELS = {
@@ -648,6 +650,19 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     toast('Applied to editor — save to persist', { icon: '💾' });
   };
 
+  // The Polish loop and its revert control both persist a new body to the server
+  // active draft, then hand back the refreshed work. Fold it into the editor:
+  // replace the prose buffer with the persisted body (already saved server-side,
+  // so this is NOT a dirty edit) and propagate the manifest upward.
+  const applyPolishResult = useCallback((updated) => {
+    if (!updated) return;
+    if (typeof updated.activeDraftBody === 'string') {
+      setBody(updated.activeDraftBody);
+      setSavedBody(updated.activeDraftBody); // already persisted server-side — not a dirty edit
+    }
+    onChange?.(updated);
+  }, [onChange]);
+
   const activeDraft = useMemo(
     () => work.drafts?.find((d) => d.id === work.activeDraftVersionId),
     [work.drafts, work.activeDraftVersionId]
@@ -867,6 +882,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Wand2} label="Polish (multi-pass)" onClick={closeOverflowAnd(() => setDrawer(DRAWER.POLISH))} />
                 <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
               </MenuSection>
               <MenuSection label="Open">
@@ -1092,6 +1108,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       </Drawer>
       <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
+      </Drawer>
+      <Drawer open={drawer === DRAWER.POLISH} onClose={() => setDrawer(null)} title="Polish" size="md">
+        <PolishPanel work={work} dirty={dirty} onApplied={applyPolishResult} />
       </Drawer>
     </div>
   );

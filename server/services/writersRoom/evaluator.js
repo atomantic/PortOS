@@ -23,13 +23,20 @@ import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 export { ANALYSIS_KINDS };
 
-const KIND_META = {
+// KIND_META is the catalog of every Writers Room stage this module knows how to
+// resolve. `bodyPass: true` marks a stage that TRANSFORMS the draft body (cuts /
+// revise) rather than producing a durable analysis snapshot — those are driven
+// only by the Polish runner (polish.js) and are intentionally NOT in
+// ANALYSIS_KINDS, so the single-shot `/analysis` endpoint rejects them.
+export const KIND_META = {
   evaluate:   { stage: 'writers-room-evaluate',   returnsJson: true },
   format:     { stage: 'writers-room-format',     returnsJson: false },
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
   places:     { stage: 'writers-room-places',     returnsJson: true },
   objects:    { stage: 'writers-room-objects',    returnsJson: true },
+  cuts:       { stage: 'writers-room-cuts',       returnsJson: true,  bodyPass: true },
+  revise:     { stage: 'writers-room-revise',     returnsJson: false, bodyPass: true },
 };
 
 // Analysis id == kind. Each work keeps at most one snapshot per kind on disk
@@ -87,6 +94,32 @@ const BIBLE_ANALYSIS = Object.freeze({
 });
 
 const isBibleKind = (k) => k in BIBLE_ANALYSIS;
+
+// The prompt-variable `work` context shared by every stage. Extracted so the
+// single-shot runAnalysis and the Polish runner (polish.js) build it identically.
+export function buildWorkContext(manifest, draft) {
+  return {
+    id: manifest.id,
+    title: manifest.title,
+    kind: manifest.kind,
+    status: manifest.status,
+    wordCount: draft?.wordCount || 0,
+  };
+}
+
+// Run the `evaluate` stage over an ARBITRARY body (not necessarily the active
+// draft) WITHOUT persisting an analysis snapshot. Returns the shaped result plus
+// the provider/model that produced it. Used by the Polish runner to score a
+// candidate revision before deciding keep-vs-revert. Kept here (next to the
+// SHAPERS.evaluate it reuses) so the evaluate prompt has exactly one shaper.
+export async function evaluateProse({ body, work }) {
+  const { content, model, providerId } = await runStagedLLM(
+    KIND_META.evaluate.stage,
+    { work, draftBody: body, returnsJson: true },
+    { source: 'writers-room-evaluate' },
+  );
+  return { result: SHAPERS.evaluate(content), model, providerId };
+}
 
 // ---------- storage ----------
 
@@ -296,13 +329,7 @@ export async function runAnalysis(workId, { kind } = {}) {
   // back in one round-trip. A failure mid-call is persisted as a `failed`
   // snapshot so partial work never silently disappears.
   try {
-    const workCtx = {
-      id: manifest.id,
-      title: manifest.title,
-      kind: manifest.kind,
-      status: manifest.status,
-      wordCount: draft?.wordCount || 0,
-    };
+    const workCtx = buildWorkContext(manifest, draft);
 
     if (isBibleKind(kind)) {
       const { kind: bibleKind, list, merge } = BIBLE_ANALYSIS[kind];
