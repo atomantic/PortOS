@@ -3,11 +3,41 @@ import {
   sanitizeStyleGuide,
   renderStyleGuide,
   composeStyleNotes,
+  sanitizeVoiceExemplars,
+  renderVoiceExemplars,
   PROSE_CRAFT_DOCTRINE,
   STYLE_GUIDE_LIMITS,
   VOICE_REGISTERS,
   VOICE_REGISTER_IDS,
 } from './styleGuide.js';
+
+describe('sanitizeVoiceExemplars / renderVoiceExemplars (shared with Writers Room — #2179)', () => {
+  it('drops empty passages, trims to caps, and caps the list at 3', () => {
+    const cleaned = sanitizeVoiceExemplars([
+      { passage: '  a real passage  ', note: '  what it shows  ' },
+      { passage: '   ' }, // dropped
+      null, // dropped
+      { passage: 'p2' }, { passage: 'p3' }, { passage: 'p4' }, // 4th capped off
+    ]);
+    expect(cleaned).toHaveLength(3);
+    expect(cleaned[0]).toEqual({ passage: 'a real passage', note: 'what it shows' });
+    expect(cleaned[1]).toEqual({ passage: 'p2' }); // no note key when absent
+    expect(sanitizeVoiceExemplars('not-an-array')).toEqual([]);
+  });
+
+  it('renders MATCH / NEVER blocks from a plain carrier, and empty string when absent', () => {
+    expect(renderVoiceExemplars(null)).toBe('');
+    expect(renderVoiceExemplars({})).toBe('');
+    const block = renderVoiceExemplars({
+      voiceExemplars: [{ passage: 'terse, exact', note: 'the target' }],
+      voiceAntiExemplars: [{ passage: 'ornate and purple', note: 'too much' }],
+    });
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('terse, exact');
+    expect(block).toContain('NEVER drift toward this');
+    expect(block).toContain('too much');
+  });
+});
 
 describe('VOICE_REGISTERS (voice discovery — #2179)', () => {
   it('exposes a small, non-empty set of registers with stable ids + labels + hints', () => {

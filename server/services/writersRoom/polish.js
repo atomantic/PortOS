@@ -23,7 +23,7 @@ import { createSseRunner } from '../../lib/sseUtils.js';
 import { computeSlopPenalty } from '../../lib/editorial/slopScore.js';
 import { planCutsForSection, applyCutsToText, SAFE_CUT_TYPES } from '../../lib/editorial/cutApplier.js';
 import { runProsePass } from './evaluator.js';
-import { getWorkWithBody, saveDraftBody, countWords } from './local.js';
+import { getWorkWithBody, saveDraftBody, countWords, renderWorkVoiceGuide } from './local.js';
 import { nowIso, badRequest, notFound, assertValidWorkId, wrWorkDir } from './_shared.js';
 
 // ---------- tunables ----------
@@ -86,8 +86,14 @@ export function mapFindingsToCuts(findings) {
  * evaluate result and the cut pass. The WHAT TO KEEP section (strengths +
  * protected passage) is what stops the rewrite from destroying good material.
  * Pure — no I/O — so the composition is unit-testable.
+ *
+ * `voiceGuide` (#2179 Writers Room parity) is the rendered "MATCH this voice /
+ * NEVER drift toward this" exemplar block for the work — when present it's
+ * folded into the VOICE RULES section so the rewrite is anchored to the chosen
+ * voice (the tuning fork), not just told to "match the existing voice." Empty
+ * string (a work with no exemplars) adds nothing.
  */
-export function buildRevisionBrief({ evaluate = {}, cuts = {}, wordCount = 0 } = {}) {
+export function buildRevisionBrief({ evaluate = {}, cuts = {}, wordCount = 0, voiceGuide = '' } = {}) {
   const lines = [];
   const issues = Array.isArray(evaluate.issues) ? evaluate.issues : [];
   const strengths = Array.isArray(evaluate.strengths) ? evaluate.strengths : [];
@@ -133,6 +139,9 @@ export function buildRevisionBrief({ evaluate = {}, cuts = {}, wordCount = 0 } =
   if (evaluate.logline) lines.push(`- Keep the logline true: ${evaluate.logline}`);
   if (themes.length) lines.push(`- Preserve the established themes: ${themes.join(', ')}`);
   lines.push('- Match the existing narrative voice, tense, and POV exactly.');
+  if (typeof voiceGuide === 'string' && voiceGuide.trim()) {
+    lines.push('', voiceGuide.trim());
+  }
 
   lines.push('', '## TARGET');
   lines.push(`- Aim for roughly ${wordCount} words — tightened. Do NOT pad back the fat that was cut.`);
@@ -274,6 +283,9 @@ export function startPolish(workId, opts = {}) {
     const loaded = await getWorkWithBody(workId);
     let body = loaded.body || '';
     const ctx = () => workContext(loaded.manifest, body);
+    // The work's voice exemplars (#2179) — rendered once and folded into every
+    // cycle's revision brief so the rewrite is anchored to the chosen voice.
+    const voiceGuide = renderWorkVoiceGuide(loaded.manifest);
 
     // Baseline evaluation + snapshot.
     broadcast({ type: 'phase', cycle: 0, phase: 'evaluate', label: 'Baseline evaluation' });
@@ -319,7 +331,7 @@ export function startPolish(workId, opts = {}) {
 
       // 3. Brief-driven revision (receives the cut body as raw material).
       broadcast({ type: 'phase', cycle: c, phase: 'revise', label: 'Brief-driven revision' });
-      const brief = buildRevisionBrief({ evaluate: preEval, cuts: cutsResult, wordCount: countWords(cutBody) });
+      const brief = buildRevisionBrief({ evaluate: preEval, cuts: cutsResult, wordCount: countWords(cutBody), voiceGuide });
       const revised = (await runProsePass('revise', { work: ctx(), draftBody: cutBody, brief })).result;
       const revisedBody = (revised.revisedBody && revised.revisedBody.trim()) ? revised.revisedBody : cutBody;
       if (isCanceled()) { emitCanceled(); return; }

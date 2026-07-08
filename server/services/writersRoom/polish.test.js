@@ -123,6 +123,25 @@ describe('buildRevisionBrief', () => {
     // A safe-type cut is auto-applied elsewhere; only NON-safe types land in the brief.
     expect(brief).toContain('gilded gossamer glory');
   });
+
+  it('folds the work voice guide into VOICE RULES when present (#2179)', () => {
+    const voiceGuide = 'MATCH this voice — these passages are the tuning fork:\n> She counted the exits, then the lies.';
+    const brief = buildRevisionBrief({ evaluate: {}, cuts: {}, wordCount: 800, voiceGuide });
+    const voiceIdx = brief.indexOf('## VOICE RULES');
+    expect(voiceIdx).toBeGreaterThan(-1);
+    // The exemplar block lands inside the VOICE RULES section, after the generic
+    // "match the existing voice" line — not spilling into TARGET.
+    expect(brief.indexOf('the tuning fork')).toBeGreaterThan(voiceIdx);
+    expect(brief.indexOf('the tuning fork')).toBeLessThan(brief.indexOf('## TARGET'));
+    expect(brief).toContain('She counted the exits, then the lies.');
+  });
+
+  it('adds nothing to VOICE RULES when the voice guide is empty (#2179)', () => {
+    const withEmpty = buildRevisionBrief({ evaluate: {}, cuts: {}, wordCount: 800, voiceGuide: '   ' });
+    const without = buildRevisionBrief({ evaluate: {}, cuts: {}, wordCount: 800 });
+    expect(withEmpty).toBe(without);
+    expect(without).not.toContain('tuning fork');
+  });
 });
 
 describe('resolvePolishOptions', () => {

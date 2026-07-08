@@ -25,6 +25,14 @@ You are a Creative Director sitting beside the writer as they draft. They have p
 ```
 {{selection}}
 ```
+{{#voiceGuide}}
+
+## Voice (the tuning fork)
+
+These passages define the target voice for this work. Any drafted prose you propose (`kind: "prose"` or `"dialogue"`) must echo their rhythm, diction, and register — do not copy their content.
+
+{{voiceGuide}}
+{{/voiceGuide}}
 
 ## Task
 
