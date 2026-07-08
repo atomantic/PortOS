@@ -417,6 +417,11 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   const openSceneSketch = async (i) => {
     let key = scenesRef.current[i]?.sketchKey;
     if (!key) {
+      // Capture the reindex generation before minting. removeScene / runExtract
+      // bump candidateGenRef whenever the scene list is reindexed or replaced,
+      // so if that happens while the POST is in flight, index `i` no longer
+      // names the same scene and we must NOT stamp the new key onto the wrong row.
+      const gen = candidateGenRef.current;
       setSketchingIdx(i);
       const res = await createBlankSketch({ silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to create sketch');
@@ -424,13 +429,15 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       });
       setSketchingIdx(null);
       if (!res?.key) return;
+      // Scene list reindexed/replaced (or this scene removed) mid-flight — drop
+      // the freshly-minted key rather than attach it to a now-different scene.
+      if (gen !== candidateGenRef.current || !scenesRef.current[i]) return;
       key = res.key;
       // Persist the key on the scene BEFORE navigating so a reload/return lands
       // on the same canvas. Merge against scenesRef.current (not the render-scope
-      // `scenes` captured before the await) so an edit made while the key was
-      // minting isn't clobbered under last-write-wins. Bail if the scene was
-      // removed mid-flight. persist() resolves once the PATCH settles.
-      if (!scenesRef.current[i]) return;
+      // `scenes` captured before the await) so a same-index edit made while the
+      // key was minting isn't clobbered under last-write-wins. persist() resolves
+      // once the PATCH settles.
       const ok = await persist(scenesRef.current.map((s, j) => j === i ? { ...s, sketchKey: key } : s));
       if (!ok) return;
     }
