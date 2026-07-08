@@ -20,7 +20,7 @@
  */
 
 import {
-  ASPECT_PRESETS,
+  resolveAspectDimensions,
   QUALITY_PRESETS,
   presetToRenderParams,
 } from './creativeDirectorPresets.js';
@@ -52,7 +52,7 @@ function buildProjectView(project) {
 }
 
 function buildTreatmentView(project) {
-  const aspect = ASPECT_PRESETS[project.aspectRatio] || { width: 0, height: 0 };
+  const aspect = resolveAspectDimensions(project.aspectRatio);
   const quality = QUALITY_PRESETS[project.quality] || { steps: 0, guidance: 0, fps: 0 };
   // The example block in the JSON output contract shows a literal value
   // for `sourceImageFile` — either a quoted filename or `null`. Precompute
@@ -125,7 +125,7 @@ function frameTimelineLabel(i, total) {
 }
 
 function buildEvaluateView(project, scene) {
-  const aspect = ASPECT_PRESETS[project.aspectRatio] || { width: 0, height: 0 };
+  const aspect = resolveAspectDimensions(project.aspectRatio);
   const quality = QUALITY_PRESETS[project.quality] || { steps: 0, guidance: 0, fps: 0 };
   const renderParams = presetToRenderParams({
     aspectRatio: project.aspectRatio,

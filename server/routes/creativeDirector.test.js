@@ -176,20 +176,9 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(200);
       expect(cdService.setTreatment).toHaveBeenCalled();
     });
-
-    it('seeds first-pass scene frames when the project opted in (#1867)', async () => {
-      cdService.setTreatment.mockResolvedValue({ id: 'cd-1', generateFirstPass: true, treatment: { scenes: [] } });
-      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
-      expect(r.status).toBe(200);
-      expect(firstPass.enqueueFirstPassSceneFrames).toHaveBeenCalledWith({ id: 'cd-1', generateFirstPass: true, treatment: { scenes: [] } });
-    });
-
-    it('does not seed first-pass scene frames when the project never opted in', async () => {
-      cdService.setTreatment.mockResolvedValue({ id: 'cd-1', treatment: { scenes: [] } });
-      const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
-      expect(r.status).toBe(200);
-      expect(firstPass.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();
-    });
+    // First-pass scene-frame seeding now fires from `setTreatment` itself
+    // (the domain write, #1938) rather than this route, so its behavior is
+    // asserted in services/creativeDirector/local.test.js.
   });
 
   describe('POST /:id/start', () => {
@@ -382,32 +371,37 @@ describe('creativeDirector routes', () => {
       expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
     });
 
-    it('persists generateFirstPass on the project when composing with the flag set (#1867)', async () => {
+    // The opt-in flag is now threaded into applyAutoCastToProject's options
+    // (#1938) so the cast merge + flag persist in a single write, rather than
+    // the route issuing a second updateProject. The route's job here is to
+    // forward the flag; the actual persist is asserted in autoCast.test.js.
+    it('forwards generateFirstPass to auto-cast when composing with the flag set (#1867)', async () => {
       autoCast.applyAutoCastToProject.mockResolvedValue({
         project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
       });
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true, generateFirstPass: true });
       expect(r.status).toBe(200);
-      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
+      expect(autoCast.applyAutoCastToProject).toHaveBeenCalledWith('cd-1', expect.objectContaining({ generateFirstPass: true }));
+      expect(cdService.updateProject).not.toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
     });
 
-    it('persists generateFirstPass even when not composing this request (#1867) — the toggles are independent, and the project may only be started later via /:id/start', async () => {
+    it('forwards generateFirstPass even when not composing this request (#1867) — the toggles are independent, and the project may only be started later via /:id/start', async () => {
       autoCast.applyAutoCastToProject.mockResolvedValue({
         project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
       });
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ generateFirstPass: true });
       expect(r.status).toBe(200);
-      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
+      expect(autoCast.applyAutoCastToProject).toHaveBeenCalledWith('cd-1', expect.objectContaining({ generateFirstPass: true }));
       expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
     });
 
-    it('does not persist generateFirstPass when the flag is omitted', async () => {
+    it('does not forward a truthy generateFirstPass when the flag is omitted', async () => {
       autoCast.applyAutoCastToProject.mockResolvedValue({
         project: { id: 'cd-1', cast: [{ ingredientId: 'p1' }] }, added: [{ ingredientId: 'p1' }], suggestions: [],
       });
       const r = await request(app).post('/api/creative-director/cd-1/auto-cast').send({ compose: true });
       expect(r.status).toBe(200);
-      expect(cdService.updateProject).not.toHaveBeenCalledWith('cd-1', { generateFirstPass: true });
+      expect(autoCast.applyAutoCastToProject).toHaveBeenCalledWith('cd-1', expect.objectContaining({ generateFirstPass: undefined }));
     });
   });
 
