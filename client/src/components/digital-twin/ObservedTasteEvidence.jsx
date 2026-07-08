@@ -104,7 +104,8 @@ export default function ObservedTasteEvidence() {
 
   const handleRecompute = async () => {
     setRecomputing(true);
-    const res = await api.recomputeTwinEvidence().catch(() => null);
+    // silent: this handler owns its own failure toast (avoid a double toast).
+    const res = await api.recomputeTwinEvidence({ silent: true }).catch(() => null);
     setRecomputing(false);
     if (!res) { toast('Recompute failed', { icon: '⚠️' }); return; }
     setEvidence(res.evidence);
@@ -114,7 +115,8 @@ export default function ObservedTasteEvidence() {
   const handleInterpret = async () => {
     if (!selected?.providerId) { toast('Select an AI provider first', { icon: '⚠️' }); return; }
     setInterpreting(true);
-    const res = await api.interpretTwinConsumption(selected.providerId, selected.model || undefined)
+    // silent: this handler surfaces the error message itself (avoid a double toast).
+    const res = await api.interpretTwinConsumption(selected.providerId, selected.model || undefined, { silent: true })
       .catch((err) => { toast(err?.message || 'Interpretation failed', { icon: '⚠️' }); return null; });
     setInterpreting(false);
     if (!res?.interpretation) return;

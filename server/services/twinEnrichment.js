@@ -84,13 +84,21 @@ export function noveltyRatio(keys) {
   return { total, distinct, repeats: total - distinct, noveltyRatio: ratio };
 }
 
-// Flatten a listen event's artist names. Accepts metadata.artists as
-// [{ name }] or [string], falling back to the summary line (spotifySync stores
-// the comma-joined artist names there) so a leaner event still contributes.
+// Flatten a listen event's artist names across the live-sync AND import shapes:
+//   - spotifySync:   metadata.artists = [{ id, name }]
+//   - spotifyImport: metadata.artist  = single (album-artist) string
+// falling back to the comma-joined summary line only when neither is present.
+// Reading metadata.artist directly avoids the import summary's "Artist — Album"
+// form leaking the album into the artist tally.
 export function listenArtistNames(ev) {
   const artists = ev?.metadata?.artists;
   if (Array.isArray(artists)) {
     const names = artists.map((a) => String((typeof a === 'string' ? a : a?.name) || '').trim()).filter(Boolean);
+    if (names.length) return names;
+  }
+  const single = ev?.metadata?.artist;
+  if (single) {
+    const names = String(single).split(',').map((s) => s.trim()).filter(Boolean);
     if (names.length) return names;
   }
   const summary = String(ev?.summary || '').trim();
@@ -106,9 +114,13 @@ export function listenGenreNames(ev) {
   return genres.map((g) => String((typeof g === 'string' ? g : g?.name) || '').trim()).filter(Boolean);
 }
 
-// A stable per-play key for novelty counting (track id preferred, title fallback).
+// A stable per-play key for novelty counting. Track identity across both source
+// shapes: sync's `trackId`, import's `trackUri`, then isrc, then title —
+// falling to dedupeKey only as a last resort (per-play, so it never collapses
+// repeats, which is the safe direction). Using trackUri keeps two different
+// imported tracks that share a title from collapsing into one "repeat".
 function listenNoveltyKey(ev) {
-  return ev?.metadata?.trackId || ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
+  return ev?.metadata?.trackId || ev?.metadata?.trackUri || ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
 }
 function watchNoveltyKey(ev) {
   return ev?.metadata?.videoId || ev?.url || ev?.title || ev?.dedupeKey || '';

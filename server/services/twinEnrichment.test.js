@@ -63,6 +63,12 @@ describe('listenArtistNames / listenGenreNames', () => {
   it('accepts bare-string artists', () => {
     expect(listenArtistNames({ metadata: { artists: ['Solo'] } })).toEqual(['Solo']);
   });
+  it('reads the import shape (metadata.artist single string) without leaking the album', () => {
+    // spotifyImport stores metadata.artist + a "Artist — Album" summary; the
+    // artist tally must be just the artist, never "Artist — Album".
+    expect(listenArtistNames({ metadata: { artist: 'Radiohead' }, summary: 'Radiohead — OK Computer' }))
+      .toEqual(['Radiohead']);
+  });
   it('falls back to the comma-joined summary line when metadata is lean', () => {
     expect(listenArtistNames({ summary: 'A, B , C' })).toEqual(['A', 'B', 'C']);
   });
@@ -88,6 +94,20 @@ describe('rollupListen / rollupWatch', () => {
     expect(r.topArtists).toEqual([{ name: 'A', count: 2 }, { name: 'B', count: 1 }]);
     expect(r.topGenres).toEqual([{ name: 'ambient', count: 2 }]);
     // 3 plays, t1 twice → 2 distinct.
+    expect(r.novelty).toEqual({ total: 3, distinct: 2, repeats: 1, noveltyRatio: 0.667 });
+  });
+  it('handles imported listens (metadata.artist + trackUri) — artist tally + novelty by uri', () => {
+    // Two DIFFERENT tracks that happen to share a title must not collapse as a
+    // repeat — novelty keys on trackUri, not the title.
+    const imported = [
+      { kind: 'media.listen', title: 'Intro', metadata: { artist: 'A', trackUri: 'spotify:track:1' }, summary: 'A — Album1' },
+      { kind: 'media.listen', title: 'Intro', metadata: { artist: 'B', trackUri: 'spotify:track:2' }, summary: 'B — Album2' },
+      { kind: 'media.listen', title: 'Intro', metadata: { artist: 'A', trackUri: 'spotify:track:1' }, summary: 'A — Album1' },
+    ];
+    const r = rollupListen(imported);
+    expect(r.total).toBe(3);
+    expect(r.topArtists).toEqual([{ name: 'A', count: 2 }, { name: 'B', count: 1 }]);
+    // 3 plays, 2 distinct URIs → not collapsed by shared title.
     expect(r.novelty).toEqual({ total: 3, distinct: 2, repeats: 1, noveltyRatio: 0.667 });
   });
   it('rolls up only media.watch events with channels + novelty', () => {
