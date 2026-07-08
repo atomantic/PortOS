@@ -76,6 +76,9 @@ beforeEach(() => {
   stageRunner.resolveJudgeForStage.mockResolvedValue({ provider: { id: 'judge-x' }, model: 'jm-heavy' });
   seriesSvc.getSeries.mockResolvedValue({ id: 'ser-1', name: 'S', logline: 'L', premise: 'P', universeId: 'uni-1' });
   universeBuilder.getUniverse.mockResolvedValue(null);
+  // Restore the default authored-scalar echo so a test that overrides it (blank
+  // /null values) doesn't leak into later order-dependent tests.
+  universeBuilderExpand.expandWorldTemplate.mockResolvedValue({ logline: 'L2', premise: 'P2', styleNotes: 'S2', influences: null });
 });
 
 describe('computeWeightedScore — weighted composite', () => {
@@ -252,6 +255,21 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
     // logline is locked → the refreshed logline must NOT be in the write patch.
     expect(writtenPatch).not.toHaveProperty('logline');
     expect(writtenPatch).toMatchObject({ premise: 'P2', styleNotes: 'S2' });
+    expect(r.applied).toBe(true);
+  });
+
+  it('worldbuilding refine OMITS an unlocked field the LLM returned blank/null (preserves existing, no erase)', async () => {
+    const uni = { id: 'uni-1', name: 'U' };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    // LLM omitted logline (null) and returned an empty premise → neither should
+    // be written; only the authored styleNotes lands.
+    universeBuilderExpand.expandWorldTemplate.mockResolvedValue({ logline: null, premise: '   ', styleNotes: 'S2', influences: null });
+    let writtenPatch = null;
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { writtenPatch = typeof m === 'function' ? m(uni) : m; return { id, ...(writtenPatch || {}) }; });
+    const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
+    expect(writtenPatch).not.toHaveProperty('logline');
+    expect(writtenPatch).not.toHaveProperty('premise');
+    expect(writtenPatch).toMatchObject({ styleNotes: 'S2' });
     expect(r.applied).toBe(true);
   });
 

@@ -485,11 +485,17 @@ async function refineWorld(universeId, { providerId, model }) {
   await updateUniverse(universeId, (latest) => {
     const locked = latest?.locked || {};
     const patch = {};
-    if (locked.logline !== true) patch.logline = expanded.logline;
-    if (locked.premise !== true) patch.premise = expanded.premise;
-    if (locked.styleNotes !== true) patch.styleNotes = expanded.styleNotes;
-    if (expanded.influences && locked.influences !== true) patch.influences = expanded.influences;
-    if (!Object.keys(patch).length) return null; // every field locked → no-op
+    // Only write a scalar the LLM actually authored: expandWorldTemplate returns
+    // null (or blank) for an OMITTED field, which is "nothing to add" — NOT a
+    // clear. Writing it would erase the existing unlocked value (sanitize turns a
+    // non-string into ''). Skip locked fields AND absent/blank ones; preserve the
+    // current value in both cases (the CLAUDE.md absent-vs-empty rule).
+    const filled = (v) => typeof v === 'string' && v.trim() !== '';
+    if (locked.logline !== true && filled(expanded.logline)) patch.logline = expanded.logline;
+    if (locked.premise !== true && filled(expanded.premise)) patch.premise = expanded.premise;
+    if (locked.styleNotes !== true && filled(expanded.styleNotes)) patch.styleNotes = expanded.styleNotes;
+    if (locked.influences !== true && expanded.influences && typeof expanded.influences === 'object') patch.influences = expanded.influences;
+    if (!Object.keys(patch).length) return null; // all locked or nothing authored → no-op
     wrote = true;
     return patch;
   });
