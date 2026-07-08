@@ -32,13 +32,23 @@ export function useOnDemandTaskToast() {
       const task = data?.taskType || 'task';
       const scope = data?.appName ? ` for ${data.appName}` : '';
 
-      // No park record ⇒ the detector did NOT park this run — a transient probe
-      // failure (gh/glab down) or a non-perpetual skip. Never claim "nothing to
-      // do" here; the check didn't complete.
-      if (!data?.parked) {
+      // A perpetual task that did NOT park ⇒ the detector couldn't complete (a
+      // transient gh/glab probe failure). Never claim "nothing to do" — the
+      // check didn't finish.
+      if (data?.outcome === 'transient') {
         toast(`${task}${scope}: couldn't complete the check just now (a transient forge/network issue) — try again shortly.`, {
           duration: 7000,
           icon: '⚠️'
+        });
+        return;
+      }
+
+      // A non-perpetual task produced no task ⇒ genuinely nothing to do right
+      // now (not a failure, not a park). Keep it calm and neutral.
+      if (data?.outcome === 'idle') {
+        toast(`${task}${scope}: re-checked now — nothing to do right now.`, {
+          duration: 6000,
+          icon: '💤'
         });
         return;
       }
