@@ -142,6 +142,30 @@ describe('whatsappMessageToCandidate', () => {
     expect(whatsappMessageToCandidate(sys, { timezone: UTC })).toBeNull();
     expect(whatsappMessageToCandidate(null, { timezone: UTC })).toBeNull();
   });
+
+  it('stays a neutral message with no direction when no yourName is given', () => {
+    const c = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC });
+    expect(c.kind).toBe('message');
+    expect(c.metadata.direction).toBeNull();
+  });
+
+  it('classifies a sender matching yourName as message.sent (case/space-insensitive)', () => {
+    const c = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, yourName: '  alice ' });
+    expect(c.kind).toBe('message.sent');
+    expect(c.metadata.direction).toBe('sent');
+  });
+
+  it('classifies a non-matching sender as message.received', () => {
+    const c = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, yourName: 'Bob' });
+    expect(c.kind).toBe('message.received');
+    expect(c.metadata.direction).toBe('received');
+  });
+
+  it('keeps the dedupe key independent of direction so re-import with a name is a no-op', () => {
+    const neutral = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC });
+    const sent = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, yourName: 'Alice' });
+    expect(sent.dedupeKey).toBe(neutral.dedupeKey);
+  });
 });
 
 describe('whatsappActivityCandidates', () => {
@@ -151,6 +175,13 @@ describe('whatsappActivityCandidates', () => {
     expect(out).toHaveLength(2);
     expect(out.every((c) => c.source === 'whatsapp' && c.kind === 'message')).toBe(true);
     expect(out.every((c) => c.metadata.dateOrder === 'mdy')).toBe(true);
+  });
+  it('classifies direction across the batch when yourName is supplied', () => {
+    const out = whatsappActivityCandidates(parseWhatsappChat(androidChat), { timezone: UTC, yourName: 'Alice' });
+    const alice = out.find((c) => c.metadata.sender === 'Alice');
+    const bob = out.find((c) => c.metadata.sender === 'Bob');
+    expect(alice.kind).toBe('message.sent');
+    expect(bob.kind).toBe('message.received');
   });
   it('returns [] for non-arrays', () => {
     expect(whatsappActivityCandidates(null)).toEqual([]);
@@ -168,10 +199,18 @@ describe('summarizeWhatsappCandidates', () => {
     expect(s.to).toBe('2024-01-15T18:32:10.000Z');
     expect(s.topSenders[0]).toEqual({ name: 'Alice', count: 2 });
     expect(s.chatTitle).toBe('Group');
+    expect(s.directionKnown).toBe(false);
+  });
+  it('tallies sent/received when direction is classified', () => {
+    const candidates = whatsappActivityCandidates(parseWhatsappChat(iosChat), { timezone: UTC, yourName: 'Alice' });
+    const s = summarizeWhatsappCandidates(candidates);
+    expect(s.directionKnown).toBe(true);
+    expect(s.sent).toBe(2); // Alice x2
+    expect(s.received).toBe(1); // Bob x1
   });
   it('handles an empty batch', () => {
     const s = summarizeWhatsappCandidates([]);
-    expect(s).toMatchObject({ messages: 0, uniqueSenders: 0, from: null, to: null });
+    expect(s).toMatchObject({ messages: 0, uniqueSenders: 0, from: null, to: null, sent: 0, received: 0, directionKnown: false });
     expect(s.topSenders).toEqual([]);
   });
 });

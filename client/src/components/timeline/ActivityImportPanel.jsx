@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Upload, Loader2, CheckCircle2 } from 'lucide-react';
 import toast from '../ui/Toast';
 
@@ -20,8 +20,14 @@ import toast from '../ui/Toast';
 //                  also takes another single-file shape (e.g. Discord's older
 //                  `messages.csv`) widens it so the OS file picker doesn't hide
 //                  a file the server would actually accept.
+//   controls     — optional JSX rendered under the help text for source-specific
+//                  inputs (e.g. WhatsApp's "your name"). Given `{ disabled }` so
+//                  the input greys out while a request is in flight.
+//   importOptions— optional extra options spread into every importFn call (both
+//                  preview and import), so a control's value reaches the server.
+//                  Changing it invalidates a stale preview so counts can't lie.
 const DEFAULT_ACCEPT = '.zip,.json,application/zip,application/json';
-export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported, accept = DEFAULT_ACCEPT }) {
+export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported, accept = DEFAULT_ACCEPT, controls, importOptions }) {
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -33,6 +39,16 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
   const reqIdRef = useRef(0);
 
   const reset = () => { reqIdRef.current += 1; setFile(null); setPreview(null); setResult(null); };
+
+  // A control (e.g. WhatsApp's "your name") changing after a preview would make
+  // the shown counts stale — invalidate any in-flight response and clear the
+  // preview so the user re-previews with the new option before importing.
+  const optionsKey = JSON.stringify(importOptions ?? null);
+  useEffect(() => {
+    reqIdRef.current += 1;
+    setPreview(null);
+    setResult(null);
+  }, [optionsKey]);
 
   const pickFile = (e) => {
     const next = e.target.files?.[0] || null;
@@ -47,7 +63,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
     const rid = ++reqIdRef.current;
     setBusy(true);
     setResult(null);
-    importFn(file, { preview: true, silent: true })
+    importFn(file, { preview: true, silent: true, ...importOptions })
       .then((res) => {
         if (rid !== reqIdRef.current) return;
         setPreview(res);
@@ -61,7 +77,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
     if (!file || busy) return;
     const rid = ++reqIdRef.current;
     setBusy(true);
-    importFn(file, { preview: false, silent: true })
+    importFn(file, { preview: false, silent: true, ...importOptions })
       .then((res) => {
         if (rid !== reqIdRef.current) return;
         setResult(res);
@@ -88,6 +104,8 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
       {open && (
         <div className="flex flex-col gap-3 border-t border-port-border p-3">
           <p className="text-xs text-gray-500">{help}</p>
+
+          {typeof controls === 'function' ? controls({ disabled: busy }) : controls}
 
           <div className="flex flex-wrap items-center gap-2">
             <label className={`inline-flex items-center gap-2 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm text-gray-200 ${busy ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:border-port-accent'}`}>

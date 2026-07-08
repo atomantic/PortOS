@@ -15,12 +15,17 @@
  * end-to-end encrypted", "Alice created group …") have no `Sender: ` segment and
  * are skipped — they aren't activity the user authored or received.
  *
- * Direction (sent vs received) is NOT recoverable from a WhatsApp export — it
- * labels every line with the sender's saved display name, with no marker for
- * "you". Rather than guess and mislabel half the events, each message maps to a
- * neutral `message` activity event under source `whatsapp`, with the sender kept
- * in `participants`/`metadata` so a later pass (given the user's own name) can
- * reclassify without re-importing. (See the #2160 follow-up.)
+ * Direction (sent vs received) is NOT marked in a WhatsApp export — every line
+ * carries the sender's saved display name, with no flag for "you". The importer
+ * therefore takes an OPTIONAL `yourName`: when supplied, a line whose sender
+ * matches it (case-insensitive, trimmed) becomes a `message.sent` event and every
+ * other line a `message.received` event (the same kinds the email importer uses);
+ * when omitted, each message stays a neutral `message` event under source
+ * `whatsapp`. The sender is always kept in `participants`/`metadata`. Direction is
+ * NOT part of the dedupe key, so re-importing the same export with a `yourName`
+ * this time inserts nothing over an earlier neutral import (the rows already
+ * exist) — clearing the source's events and re-importing applies the new
+ * classification.
  *
  * Timestamps are LOCAL wall-clock with no offset — unlike the UTC Spotify/Discord
  * exports — so they're interpreted in the user's configured timezone via
@@ -140,10 +145,18 @@ function resolveYmd(msg, order) {
 // the word "omitted" ("I omitted that detail") isn't mis-flagged.
 const MEDIA_RE = /^\s*(<[^>]*\bomitted\b[^>]*>|(?:image|video|audio|gif|sticker|document|contact card|media)\s+omitted|<attached:[^>]*>)\s*$|<attached:/i;
 
+// Normalize a display name for direction matching: trimmed + lower-cased, or ''
+// for a non-string / empty value (never matches a real sender).
+export function normalizeName(name) {
+  return typeof name === 'string' ? name.trim().toLowerCase() : '';
+}
+
 // Map ONE raw WhatsApp message to an activity candidate, or null if it's a system
 // notice, lacks a sender, or has an unresolvable timestamp. `timezone` anchors the
-// offset-less local wall-clock; `chatTitle` labels the conversation.
-export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = null, timezone = null } = {}) {
+// offset-less local wall-clock; `chatTitle` labels the conversation. `yourName`
+// (optional) classifies direction: a sender matching it → `message.sent`, others
+// → `message.received`; when absent, the event stays a neutral `message`.
+export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = null, timezone = null, yourName = null } = {}) {
   if (!msg || msg.isSystem || !msg.sender) return null;
   const { year, month, day } = resolveYmd(msg, order);
   const iso = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -183,9 +196,17 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
     .digest('hex')
     .slice(0, 24);
 
+  // Direction: match the sender against `yourName` (if given) to pick sent vs
+  // received; a neutral `message` when no name is supplied. Deliberately NOT part
+  // of the dedupe key (see the file header) so re-importing with a name over an
+  // earlier neutral import is a no-op rather than a duplicate.
+  const normalizedYou = normalizeName(yourName);
+  const isSelf = normalizedYou !== '' && normalizeName(msg.sender) === normalizedYou;
+  const kind = normalizedYou === '' ? 'message' : (isSelf ? 'message.sent' : 'message.received');
+
   return {
     source: 'whatsapp',
-    kind: 'message',
+    kind,
     happenedAt,
     title,
     summary: shortSummary(summaryText),
@@ -196,17 +217,18 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
       sender: msg.sender,
       hasMedia,
       dateOrder: order,
+      direction: normalizedYou === '' ? null : (isSelf ? 'sent' : 'received'),
     },
   };
 }
 
 // Map a full parsed chat to candidates: detect the date order once, then map +
-// filter every message under it.
-export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null } = {}) {
+// filter every message under it. `yourName` (optional) classifies direction.
+export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null, yourName = null } = {}) {
   if (!Array.isArray(messages)) return [];
   const order = detectDateOrder(messages);
   return messages
-    .map((msg) => whatsappMessageToCandidate(msg, { order, chatTitle, timezone }))
+    .map((msg) => whatsappMessageToCandidate(msg, { order, chatTitle, timezone, yourName }))
     .filter(Boolean);
 }
 
@@ -216,12 +238,16 @@ export function summarizeWhatsappCandidates(candidates = []) {
   const list = Array.isArray(candidates) ? candidates : [];
   let earliest = null;
   let latest = null;
+  let sent = 0;
+  let received = 0;
   const senderCounts = new Map();
   for (const c of list) {
     if (c.happenedAt) {
       if (!earliest || c.happenedAt < earliest) earliest = c.happenedAt;
       if (!latest || c.happenedAt > latest) latest = c.happenedAt;
     }
+    if (c.metadata?.direction === 'sent') sent += 1;
+    else if (c.metadata?.direction === 'received') received += 1;
     const sender = c.metadata?.sender || c.participants?.[0]?.name;
     if (sender) senderCounts.set(sender, (senderCounts.get(sender) || 0) + 1);
   }
@@ -235,6 +261,11 @@ export function summarizeWhatsappCandidates(candidates = []) {
     from: earliest,
     to: latest,
     topSenders,
+    // sent/received are 0 when no `yourName` was supplied (all neutral); the UI
+    // only shows the breakdown when a direction was actually classified.
+    sent,
+    received,
+    directionKnown: sent > 0 || received > 0,
     chatTitle: list[0]?.metadata?.chatTitle || null,
   };
 }
@@ -315,12 +346,12 @@ export async function readWhatsappText(file) {
 // Returns counts + a preview summary. `dryRun` parses and summarizes WITHOUT
 // writing so the UI can show what will be imported before committing. Because
 // `recordEvents` is idempotent, committing (or re-committing) is always safe.
-export async function importWhatsappHistory(file, { dryRun = false } = {}) {
+export async function importWhatsappHistory(file, { dryRun = false, yourName = null } = {}) {
   const text = await readWhatsappText(file);
   const messages = parseWhatsappChat(text);
   const timezone = await getUserTimezone();
   const chatTitle = deriveChatTitle(file?.originalname);
-  const candidates = whatsappActivityCandidates(messages, { chatTitle, timezone });
+  const candidates = whatsappActivityCandidates(messages, { chatTitle, timezone, yourName });
   const summary = summarizeWhatsappCandidates(candidates);
   if (dryRun) {
     console.log(`💬 WhatsApp import preview: ${candidates.length} message(s) from ${messages.length} line-record(s)`);

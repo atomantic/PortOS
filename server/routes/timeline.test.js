@@ -263,7 +263,7 @@ describe('timeline import routes', () => {
     expect(r.body.recorded).toBe(2);
     expect(importWhatsappHistory).toHaveBeenCalledWith(
       expect.objectContaining({ originalname: 'WhatsApp Chat with Alice.txt' }),
-      { dryRun: false },
+      { dryRun: false, yourName: null },
     );
   });
 
@@ -277,7 +277,31 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(200);
     expect(r.body.dryRun).toBe(true);
-    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true });
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true, yourName: null });
+  });
+
+  it('whatsapp threads yourName through for direction inference', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false', yourName: 'Alice' },
+      { filename: 'WhatsApp Chat with Bob.txt', contentType: 'text/plain', content: '[2024-01-15, 6:30:45 PM] Alice: hi\n' },
+    );
+    const r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: 'Alice' });
+  });
+
+  it('whatsapp treats a blank yourName field as not provided (neutral)', async () => {
+    const { boundary, body } = multipart(
+      { preview: 'false', yourName: '   ' },
+      { filename: 'WhatsApp Chat with Bob.txt', contentType: 'text/plain', content: '[2024-01-15, 6:30:45 PM] Alice: hi\n' },
+    );
+    const r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(body);
+    expect(r.status).toBe(200);
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: null });
   });
 
   it('whatsapp rejects a disallowed file type with 400', async () => {
