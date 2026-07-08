@@ -48,8 +48,11 @@ import {
   compareSnapshotsInputSchema,
   createPersonaInputSchema,
   updatePersonaInputSchema,
-  setActivePersonaInputSchema
+  setActivePersonaInputSchema,
+  twinEvidenceRecomputeInputSchema,
+  twinEvidenceInterpretInputSchema
 } from '../lib/digitalTwinValidation.js';
+import * as twinEnrichment from '../services/twinEnrichment.js';
 import * as timeCapsuleService from '../services/timeCapsule.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { z } from 'zod';
@@ -944,6 +947,44 @@ router.post('/snapshots/compare', asyncHandler(async (req, res) => {
     throw new ServerError('One or both snapshots not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json(diff);
+}));
+
+// =============================================================================
+// TWIN ENRICHMENT — observed taste + chronotype evidence (Phase 7, #2156)
+// =============================================================================
+
+/**
+ * GET /api/digital-twin/twin-evidence
+ * Observed taste + chronotype evidence, plus the stated-vs-observed chronotype
+ * divergence flag. Read-only, LLM-free. `taste`/`chronotype` are null until the
+ * first aggregation runs (sentinel: null = never computed, not empty).
+ */
+router.get('/twin-evidence', asyncHandler(async (req, res) => {
+  const evidence = await twinEnrichment.getObservedEvidence();
+  res.json(evidence);
+}));
+
+/**
+ * POST /api/digital-twin/twin-evidence/recompute
+ * Recompute the LLM-free rollups from the activity timeline. No provider calls.
+ */
+router.post('/twin-evidence/recompute', asyncHandler(async (req, res) => {
+  validateRequest(twinEvidenceRecomputeInputSchema, req.body ?? {});
+  const summary = await twinEnrichment.aggregateTwinEvidence();
+  const evidence = await twinEnrichment.getObservedEvidence();
+  res.json({ summary, evidence });
+}));
+
+/**
+ * POST /api/digital-twin/twin-evidence/interpret
+ * Generate an AI interpretation of the observed evidence — EXPLICIT user action
+ * only (per the AI-provider policy). Persists the narrative onto the taste
+ * evidence record.
+ */
+router.post('/twin-evidence/interpret', asyncHandler(async (req, res) => {
+  const { providerId, model } = validateRequest(twinEvidenceInterpretInputSchema, req.body);
+  const interpretation = await twinEnrichment.interpretConsumption({ providerId, model });
+  res.json({ interpretation });
 }));
 
 export default router;

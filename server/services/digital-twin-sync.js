@@ -46,6 +46,12 @@ const CHRONOTYPE_FILE = join(DIR, 'chronotype.json');
 const LONGEVITY_FILE = join(DIR, 'longevity.json');
 const FEEDBACK_FILE = join(DIR, 'feedback.json');
 const TASTE_FILE = join(DIR, 'taste-profile.json');
+// Observed-behavior evidence records (Phase 7, #2156) — supplement, never
+// overwrite, the questionnaire/genome twin. Regenerated on each aggregation, so
+// they federate LWW on `derivedAt` (newest observation wins wholesale — a
+// per-key union would splice one machine's top-artists into another's).
+const TASTE_OBSERVED_FILE = join(DIR, 'taste-observed.json');
+const CHRONOTYPE_OBSERVED_FILE = join(DIR, 'chronotype-observed.json');
 const META_FILE = join(DIR, 'meta.json');
 const AUTOBIO_DIR = join(DIR, 'autobiography');
 const AUTOBIO_STORIES_FILE = join(AUTOBIO_DIR, 'stories.json');
@@ -402,19 +408,21 @@ export async function getDigitalTwinSnapshot() {
   // lastPromptAt) is deliberately NOT in the snapshot — it is machine-local
   // scheduling state, and a fresh peer must not inherit another machine's
   // cadence or have prompts enabled without local opt-in. Only the stories sync.
-  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories, socialAccounts] =
+  const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, stories, socialAccounts] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null),
       readJSONFile(CHRONOTYPE_FILE, null),
       readJSONFile(LONGEVITY_FILE, null),
       readJSONFile(FEEDBACK_FILE, null),
       readJSONFile(TASTE_FILE, null),
+      readJSONFile(TASTE_OBSERVED_FILE, null),
+      readJSONFile(CHRONOTYPE_OBSERVED_FILE, null),
       readJSONFile(META_FILE, null),
       readMarkdownDocuments(),
       readJSONFile(AUTOBIO_STORIES_FILE, null),
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories }, socialAccounts };
+  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -501,6 +509,9 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
   count += await applyMerge(FEEDBACK_FILE, remoteData.feedback, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
   count += await applyTaste(remoteData.taste);
+  // Observed evidence (Phase 7): regenerated derived records — newest wins.
+  count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, (l, r) => mergeObjectLWW(l, r, 'derivedAt'));
+  count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, (l, r) => mergeObjectLWW(l, r, 'derivedAt'));
   // Meta BEFORE documents: applyMeta()'s loadMeta() rebuilds meta from a disk
   // .md scan when no meta.json exists, creating DEFAULT document entries. If the
   // peer's .md files were written first, that rebuild would manufacture default

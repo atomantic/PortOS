@@ -27,6 +27,16 @@ describe('mergeObjectLWW', () => {
     expect(mergeObjectLWW(local, { v: 'R', updatedAt: '2026-01-03' }).merged.v).toBe('R');
     expect(mergeObjectLWW(local, { v: 'R', updatedAt: '2026-01-02' }).changed).toBe(false);
   });
+  it('federates observed evidence (#2156) LWW on derivedAt — newest observation wins', () => {
+    // taste-observed.json / chronotype-observed.json are regenerated derived
+    // records, so the sync merges them wholesale on the derivedAt stamp.
+    const local = { source: 'observed', derivedAt: '2026-07-01T00:00:00Z', observedType: 'morning' };
+    const remote = { source: 'observed', derivedAt: '2026-07-05T00:00:00Z', observedType: 'evening' };
+    expect(mergeObjectLWW(local, remote, 'derivedAt').merged.observedType).toBe('evening');
+    expect(mergeObjectLWW(remote, local, 'derivedAt').merged.observedType).toBe('evening');
+    // A peer that sends no observed evidence can't blank the local record.
+    expect(mergeObjectLWW(local, null, 'derivedAt')).toEqual({ merged: local, changed: false });
+  });
 });
 
 describe('mergeDeepUnion', () => {
