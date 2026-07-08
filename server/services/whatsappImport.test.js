@@ -6,6 +6,7 @@ import {
   whatsappActivityCandidates,
   summarizeWhatsappCandidates,
   deriveChatTitle,
+  normalizeChatScope,
 } from './whatsappImport.js';
 
 // A UTC timezone keeps the offset-less-local → instant resolution deterministic
@@ -166,6 +167,32 @@ describe('whatsappMessageToCandidate', () => {
     const sent = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, yourName: 'Alice' });
     expect(sent.dedupeKey).toBe(neutral.dedupeKey);
   });
+
+  it('leaves the dedupe key byte-identical to the legacy key when no chatScope is given', () => {
+    const withNullScope = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: null });
+    const withBlankScope = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: '   ' });
+    const legacy = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC });
+    expect(withNullScope.dedupeKey).toBe(legacy.dedupeKey);
+    expect(withBlankScope.dedupeKey).toBe(legacy.dedupeKey);
+    expect(legacy.metadata.chatScope).toBeNull();
+  });
+
+  it('scopes the dedupe key by chatScope so distinct chats do not collide', () => {
+    const unscoped = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC });
+    const family = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: 'Family group' });
+    const work = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: 'Work chat' });
+    // Same message, different chat scopes → three distinct dedupe keys.
+    expect(family.dedupeKey).not.toBe(unscoped.dedupeKey);
+    expect(work.dedupeKey).not.toBe(unscoped.dedupeKey);
+    expect(family.dedupeKey).not.toBe(work.dedupeKey);
+    expect(family.metadata.chatScope).toBe('family group');
+  });
+
+  it('normalizes chatScope (case/space-insensitive) so a chat labels stably across imports', () => {
+    const a = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: 'Family Group' });
+    const b = whatsappMessageToCandidate(msg, { order: 'ymd', timezone: UTC, chatScope: '  family group ' });
+    expect(a.dedupeKey).toBe(b.dedupeKey);
+  });
 });
 
 describe('whatsappActivityCandidates', () => {
@@ -182,6 +209,15 @@ describe('whatsappActivityCandidates', () => {
     const bob = out.find((c) => c.metadata.sender === 'Bob');
     expect(alice.kind).toBe('message.sent');
     expect(bob.kind).toBe('message.received');
+  });
+  it('threads chatScope through the batch so the same messages key apart per chat', () => {
+    const msgs = parseWhatsappChat(androidChat);
+    const chatA = whatsappActivityCandidates(msgs, { timezone: UTC, chatScope: 'Chat A' });
+    const chatB = whatsappActivityCandidates(msgs, { timezone: UTC, chatScope: 'Chat B' });
+    const unscoped = whatsappActivityCandidates(msgs, { timezone: UTC });
+    expect(chatA.map((c) => c.dedupeKey)).not.toEqual(chatB.map((c) => c.dedupeKey));
+    expect(chatA.map((c) => c.dedupeKey)).not.toEqual(unscoped.map((c) => c.dedupeKey));
+    expect(chatA.every((c) => c.metadata.chatScope === 'chat a')).toBe(true);
   });
   it('returns [] for non-arrays', () => {
     expect(whatsappActivityCandidates(null)).toEqual([]);
@@ -227,5 +263,19 @@ describe('deriveChatTitle', () => {
   });
   it('falls back to the bare basename when no known prefix matches', () => {
     expect(deriveChatTitle('my-export.txt')).toBe('my-export');
+  });
+});
+
+describe('normalizeChatScope', () => {
+  it('trims and lower-cases a label so it is stable across casing/space', () => {
+    expect(normalizeChatScope('  Family Group ')).toBe('family group');
+    expect(normalizeChatScope('WORK')).toBe('work');
+  });
+  it('returns "" for a blank or non-string value (→ legacy un-scoped key)', () => {
+    expect(normalizeChatScope('')).toBe('');
+    expect(normalizeChatScope('   ')).toBe('');
+    expect(normalizeChatScope(null)).toBe('');
+    expect(normalizeChatScope(undefined)).toBe('');
+    expect(normalizeChatScope(42)).toBe('');
   });
 });

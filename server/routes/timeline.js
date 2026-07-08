@@ -70,15 +70,19 @@ const previewField = z.preprocess((v) => {
 const importBodySchema = z.object({ preview: previewField });
 
 // WhatsApp adds an optional "your name" so a sender matching it is classified as
-// a sent (vs received) message. A blank multipart field means "not provided" →
-// neutral events, so an empty string is coerced to undefined rather than matching
-// the empty sender. Capped to keep the metadata payload bounded.
+// a sent (vs received) message, plus an optional "chat label" — a stable name for
+// the conversation that scopes the content-hash dedupe key so distinct chats don't
+// collide. Both are blank-to-undefined (a blank multipart field means "not
+// provided": yourName → neutral events, chatLabel → legacy un-scoped key) and
+// capped to keep the metadata payload bounded.
+const blankToUndefinedName = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().max(200).optional(),
+);
 const whatsappImportBodySchema = z.object({
   preview: previewField,
-  yourName: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().max(200).optional(),
-  ),
+  yourName: blankToUndefinedName,
+  chatLabel: blankToUndefinedName,
 });
 
 const dayQuerySchema = z.object({
@@ -148,10 +152,12 @@ router.post('/import/discord', uploadDiscord, importHandler(importDiscordHistory
 // POST /api/timeline/import/whatsapp — bulk-backfill a WhatsApp "Export chat"
 // transcript (`_chat.txt`, standalone or zipped) → message events (dedupe on a
 // content hash, since WhatsApp lines carry no message id). An optional `yourName`
-// classifies direction (sent vs received); absent → neutral `message` events.
+// classifies direction (sent vs received); absent → neutral `message` events. An
+// optional `chatLabel` scopes the dedupe key to a stable chat name so distinct
+// chats don't collide; absent → the legacy un-scoped key.
 router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHistory, {
   schema: whatsappImportBodySchema,
-  toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null }),
+  toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null, chatLabel: body.chatLabel ?? null }),
 }));
 
 // POST /api/timeline/import/browser — bulk-backfill a Google Takeout Chrome
