@@ -16,9 +16,10 @@
  * extractor against the corresponding text stage and replace the list.
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil } from 'lucide-react';
+import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
@@ -46,6 +47,23 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
   // Scene index currently minting a blank sketch (so its button shows a spinner
   // and can't be double-clicked while the POST is in flight).
   const [sketchingIdx, setSketchingIdx] = useState(null);
+  // Cache-bust token per sketch key so the inline `/png` thumbnail refreshes
+  // after an edit. Seeded once at mount (so a return from the annotate page
+  // re-fetches) and bumped live when the server broadcasts `media:sketch:updated`.
+  const [sketchNonces, setSketchNonces] = useState({});
+  const mountNonceRef = useRef(0);
+  if (mountNonceRef.current === 0) mountNonceRef.current = Date.now();
+
+  useEffect(() => {
+    const onSketchUpdated = ({ key }) => {
+      if (!key) return;
+      setSketchNonces((prev) => ({ ...prev, [key]: (prev[key] || mountNonceRef.current) + 1 }));
+    };
+    socket.on('media:sketch:updated', onSketchUpdated);
+    return () => socket.off('media:sketch:updated', onSketchUpdated);
+  }, []);
+  const sketchSrc = (key) =>
+    `/api/media/sketches/${encodeURIComponent(key)}/png?v=${sketchNonces[key] || mountNonceRef.current}`;
   // Per-stage gen config — edited from the page-level settings modal.
   const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
@@ -576,10 +594,11 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                       title="Open this scene’s storyboard sketch"
                       className="block rounded border border-port-border overflow-hidden hover:border-port-accent/50"
                     >
-                      {/* The flattened PNG sidecar is served at /png; the query
-                          key busts the cache after each save (updatedAt broadcast). */}
+                      {/* The flattened PNG sidecar is served at /png; the ?v
+                          nonce (seeded at mount, bumped on media:sketch:updated)
+                          busts the browser cache after each save. */}
                       <img
-                        src={`/api/media/sketches/${encodeURIComponent(scene.sketchKey)}/png`}
+                        src={sketchSrc(scene.sketchKey)}
                         alt={`Scene ${i + 1} sketch`}
                         className="w-full h-auto"
                         onError={(e) => { e.currentTarget.style.display = 'none'; }}
