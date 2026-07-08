@@ -82,6 +82,50 @@ export const markChangeOrgRemoved = (id, orgId, options) =>
 export const draftChangeUpdateEmail = (id, orgId, options) =>
   request(`/privacy/changes/${id}/orgs/${orgId}/draft-email`, { method: 'POST', ...options });
 
+// ── Data-broker database + case ledger + opt-out engine (#2144/#2145; UI #2146) ─
+/** Broker database rows. `enabled` filters to enabled-only when true/false. */
+export const getPrivacyBrokers = (enabled, options) =>
+  request(`/privacy/brokers${enabled === undefined ? '' : `?enabled=${enabled ? 'true' : 'false'}`}`, options);
+/** Toggle a broker on/off (skips it in scan + opt-out passes). */
+export const setPrivacyBrokerEnabled = (id, enabled, options) => request(`/privacy/brokers/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled }),
+  ...options,
+});
+/** User-triggered broker-list refresh (BADBOOL + CA registry; never clobbers curated). */
+export const refreshPrivacyBrokers = (options) => request('/privacy/brokers/refresh', {
+  method: 'POST',
+  ...options,
+});
+/** Case ledger rows (joined with broker name/tier). `state` filters when set. */
+export const getPrivacyBrokerCases = (state, options) =>
+  request(`/privacy/broker-cases${state ? `?state=${encodeURIComponent(state)}` : ''}`, options);
+/** Force a case due for recheck now. */
+export const recheckPrivacyCase = (id, options) =>
+  request(`/privacy/broker-cases/${id}/recheck`, { method: 'POST', ...options });
+/** Manual case transition (digest done/dismiss, drawer controls): { toState, reason? }. */
+export const transitionPrivacyCase = (id, toState, reason, options) => request(`/privacy/broker-cases/${id}/transition`, {
+  method: 'POST',
+  body: JSON.stringify(reason ? { toState, reason } : { toState }),
+  ...options,
+});
+/** Aggregate exposure readout: enabledBrokers, caseCounts (per state), dueForRecheck. */
+export const getPrivacyScanStatus = (options) => request('/privacy/scan/status', options);
+/** Run a read-only exposure scan pass over enabled brokers. */
+export const runPrivacyScan = (options) => request('/privacy/scan', { method: 'POST', ...options });
+/** Run one opt-out pass (submit found/indirect cases via the chosen lane, poll verifications). */
+export const runPrivacyOptOut = (options) => request('/privacy/optout', { method: 'POST', ...options });
+/** Human-task digest: cases needing a person (blocked / human-only channels). */
+export const getPrivacyOptOutDigest = (options) => request('/privacy/optout/digest', options);
+/** Recheck-schedule status: { enabled, cronExpression, autoApproveOptOutEmails, autoSubmitWebForms, nextRun }. */
+export const getPrivacyOptOutSchedule = (options) => request('/privacy/optout/schedule', options);
+/** Update the recheck cron + autonomy toggles; restarts the scheduler. Returns the new status. */
+export const updatePrivacyOptOutSchedule = (patch, options) => request('/privacy/optout/schedule', {
+  method: 'PUT',
+  body: JSON.stringify(patch),
+  ...options,
+});
+
 // ── Digital Twin cross-link (#2147) ─────────────────────────────────────────
 /** Social-account → org links for the Twin's "in org registry" badges. */
 export const getSocialAccountOrgLinks = (options) =>

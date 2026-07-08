@@ -1,19 +1,26 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, ShieldAlert, KeyRound, Building2, ArrowRight } from 'lucide-react';
-import { getPrivacyStatus, getPrivacyOrgs } from '../../services/api';
-import { VAULT_TYPES, ORG_TRUST_LEVELS, TRUST_TONE, labelFor } from './constants';
+import { ShieldCheck, ShieldAlert, KeyRound, Building2, ArrowRight, ShieldOff } from 'lucide-react';
+import { getPrivacyStatus, getPrivacyOrgs, getPrivacyScanStatus } from '../../services/api';
+import {
+  VAULT_TYPES, ORG_TRUST_LEVELS, TRUST_TONE, labelFor, CASE_STATES, CASE_STATE_TONE,
+} from './constants';
+
+// Broker case states surfaced on the Overview summary (#2146).
+const OVERVIEW_BROKER_STATES = ['found', 'optout_in_progress', 'human_task_queued', 'confirmed_removed'];
 
 export default function PrivacyOverviewTab() {
   const navigate = useNavigate();
   const [status, setStatus] = useState(null);
   const [orgs, setOrgs] = useState([]);
+  const [scanStatus, setScanStatus] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.allSettled([getPrivacyStatus(), getPrivacyOrgs()]).then(([s, o]) => {
+    Promise.allSettled([getPrivacyStatus(), getPrivacyOrgs(), getPrivacyScanStatus()]).then(([s, o, b]) => {
       setStatus(s.status === 'fulfilled' ? s.value : { keyConfigured: false, recordCounts: {} });
       setOrgs(o.status === 'fulfilled' ? o.value : []);
+      setScanStatus(b.status === 'fulfilled' ? b.value : { caseCounts: {}, enabledBrokers: 0 });
       setLoading(false);
     });
   }, []);
@@ -28,6 +35,9 @@ export default function PrivacyOverviewTab() {
     ...t,
     count: orgs.filter((o) => o.trust === t.id).length,
   }));
+
+  const caseCounts = scanStatus?.caseCounts || {};
+  const totalCases = Object.values(caseCounts).reduce((a, b) => a + b, 0);
 
   return (
     <div className="space-y-6">
@@ -99,6 +109,32 @@ export default function PrivacyOverviewTab() {
           </div>
         </button>
       </div>
+
+      {/* Data-broker exposure summary (#2146) */}
+      <button
+        onClick={() => navigate('/privacy/brokers')}
+        className="w-full text-left bg-port-card border border-port-border rounded-lg p-5 hover:border-port-accent/50 transition-colors group"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-white">
+            <ShieldOff size={16} className="text-gray-500" /> Data brokers
+          </span>
+          <ArrowRight size={16} className="text-gray-600 group-hover:text-port-accent transition-colors" />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {totalCases === 0 ? (
+            <span className="text-xs text-gray-500">
+              {scanStatus?.enabledBrokers || 0} brokers tracked — no scan run yet
+            </span>
+          ) : (
+            OVERVIEW_BROKER_STATES.filter((st) => caseCounts[st]).map((st) => (
+              <span key={st} className={`text-[10px] px-1.5 py-0.5 rounded border ${CASE_STATE_TONE[st] || ''}`}>
+                {caseCounts[st]} {labelFor(CASE_STATES, st).toLowerCase()}
+              </span>
+            ))
+          )}
+        </div>
+      </button>
 
       <div className="flex flex-wrap gap-2">
         <button onClick={() => navigate('/privacy/vault')} className="px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">

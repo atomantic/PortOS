@@ -1,0 +1,155 @@
+import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks } from 'lucide-react';
+import Drawer from '../Drawer';
+import { timeAgo, formatDateShort } from '../../utils/formatters';
+import { CASE_STATE_TONE, labelFor, CASE_STATES } from './constants';
+
+// Read-only case inspector + manual controls (issue #2146). Deep-linked open
+// state is owned by the parent (a `?case=<id>` search param), so this component
+// is a pure controlled view. The backend does not persist a full state-history
+// log, so "history" here is the timeline we DO have: created → last-updated →
+// next-recheck, plus the current reason/channel/disclosure/evidence.
+export default function BrokerCaseDrawer({
+  open, onClose, caseData, broker, onRecheck, onTransition, busy = false,
+}) {
+  // Stale/deleted deep link — the case is gone but the URL still points at it.
+  const notFound = open && !caseData;
+
+  const evidence = caseData?.evidence || {};
+  const listingUrls = Array.isArray(evidence.listing_urls) ? evidence.listing_urls : [];
+  const playbook = Array.isArray(broker?.optout?.playbook) ? broker.optout.playbook : [];
+  const optoutUrl = broker?.optout?.url || evidence.optout_url || null;
+
+  // Which manual transitions make sense from the current state.
+  const state = caseData?.state;
+  const canMarkDone = state === 'human_task_queued' || state === 'blocked';
+  const canDismiss = state === 'human_task_queued' || state === 'blocked' || state === 'found' || state === 'indirect_exposure';
+
+  const Row = ({ label, children }) => (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
+      <div className="text-sm text-gray-200 break-words">{children}</div>
+    </div>
+  );
+
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title="Broker case"
+      subtitle={caseData?.brokerName || broker?.name}
+      size="md"
+    >
+      {notFound ? (
+        <div className="text-center text-sm text-gray-500 py-10">
+          This case no longer exists. It may have been re-scanned or removed.
+        </div>
+      ) : caseData ? (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-xs px-2 py-0.5 rounded border ${CASE_STATE_TONE[state] || ''}`}>
+              {labelFor(CASE_STATES, state)}
+            </span>
+            {broker?.tier !== undefined && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">Tier {broker.tier}</span>
+            )}
+            {broker?.clusterParent && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-port-accent/30 text-port-accent">
+                child of {broker.clusterParent}
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Row label="First seen">{caseData.createdAt ? formatDateShort(caseData.createdAt) : '—'}</Row>
+            <Row label="Last updated">{caseData.updatedAt ? timeAgo(caseData.updatedAt) : '—'}</Row>
+            <Row label="Next re-check">{caseData.nextRecheckAt ? formatDateShort(caseData.nextRecheckAt) : '—'}</Row>
+            <Row label="Channel">{caseData.channel || '—'}</Row>
+          </div>
+
+          {caseData.reason && <Row label="Reason">{caseData.reason}</Row>}
+
+          <Row label="Disclosed fields">
+            {(caseData.disclosedFields || []).length
+              ? (caseData.disclosedFields || []).map((f) => (
+                <span key={f} className="inline-block text-[10px] px-1.5 py-0.5 mr-1 mb-1 rounded border border-port-border text-gray-400">{f}</span>
+              ))
+              : <span className="text-gray-500">None disclosed</span>}
+          </Row>
+
+          <Row label="Evidence">
+            {evidence.match_basis && (
+              <div className="text-xs text-gray-400 mb-1">Match basis: {evidence.match_basis}</div>
+            )}
+            {listingUrls.length ? (
+              <ul className="space-y-1">
+                {listingUrls.map((u) => (
+                  <li key={u}>
+                    <a href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline break-all">
+                      <ExternalLink size={12} /> {u}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className="text-gray-500 text-xs">No listing URLs recorded</span>
+            )}
+            {evidence.screenshot && (
+              <a href={evidence.screenshot} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline mt-1">
+                <ExternalLink size={12} /> Confirmation screenshot
+              </a>
+            )}
+          </Row>
+
+          {playbook.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                <ListChecks size={13} /> Broker opt-out playbook
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs text-gray-300">
+                {playbook.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-port-border">
+            <button
+              onClick={() => onRecheck?.(caseData)}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-card disabled:opacity-50"
+            >
+              <RotateCw size={14} /> Force re-check
+            </button>
+            {canMarkDone && (
+              <button
+                onClick={() => onTransition?.(caseData, 'submitted')}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-success/40 text-port-success hover:bg-port-success/10 disabled:opacity-50"
+              >
+                <CheckCircle2 size={14} /> Mark submitted
+              </button>
+            )}
+            {canDismiss && (
+              <button
+                onClick={() => onTransition?.(caseData, 'not_found')}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-400 hover:text-white hover:bg-port-card disabled:opacity-50"
+              >
+                <XCircle size={14} /> Dismiss (not found)
+              </button>
+            )}
+            {optoutUrl && (
+              <a
+                href={optoutUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-card"
+              >
+                <ExternalLink size={14} /> Open opt-out page
+              </a>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </Drawer>
+  );
+}

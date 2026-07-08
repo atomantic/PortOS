@@ -25,6 +25,8 @@ vi.mock('../services/api', () => ({
   getPrivacyOrgs: vi.fn().mockResolvedValue([
     { id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active', website: '', contact: {} },
   ]),
+  // Broker case summary chips on the Overview tab (#2146).
+  getPrivacyScanStatus: vi.fn().mockResolvedValue({ enabledBrokers: 2, caseCounts: { found: 1 }, dueForRecheck: 0 }),
   getPrivacyOrg: vi.fn(),
   createPrivacyOrg: vi.fn(),
   updatePrivacyOrg: vi.fn(),

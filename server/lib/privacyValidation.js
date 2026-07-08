@@ -229,6 +229,35 @@ export const privacyBrokerCaseListQuerySchema = z.object({
 // POST /api/privacy/brokers/refresh — no body; empty object.
 export const privacyBrokerRefreshSchema = z.object({}).strict();
 
+// PUT /api/privacy/brokers/:id — broker ids are slugs (curated) or `ca-`/badbool
+// tokens (auto), NOT uuids. Only the `enabled` toggle is user-writable — the
+// rest of a broker row is curated seed / auto-refresh, never user-edited (#2146).
+export const privacyBrokerIdParamsSchema = z.object({
+  id: z.string().min(1).max(128),
+}).strict();
+
+export const privacyBrokerUpdateSchema = z.object({
+  enabled: z.boolean(),
+}).strict();
+
+// Case-id path param (a uuid) — force-recheck + manual transition controls.
+export const privacyCaseIdParamsSchema = z.object({
+  id: z.string().uuid(),
+}).strict();
+
+// POST /api/privacy/broker-cases/:id/transition — manual case controls from the
+// digest / case drawer. Only the human-reachable targets are exposed here; the
+// verification-only targets (`confirmed_removed`, `reappeared`) are NOT — they
+// stay reachable ONLY from a verifying re-scan inside the engine. The service's
+// assertTransition still enforces the full state machine on top of this.
+export const PRIVACY_MANUAL_CASE_TARGETS = Object.freeze([
+  'submitted', 'not_found', 'human_task_queued', 'optout_in_progress', 'blocked',
+]);
+export const privacyCaseTransitionSchema = z.object({
+  toState: z.enum(PRIVACY_MANUAL_CASE_TARGETS),
+  reason: z.string().max(2000).optional(),
+}).strict();
+
 // POST /api/privacy/scan — optional concurrency knob.
 export const privacyScanStartSchema = z.object({
   concurrency: z.number().int().min(1).max(6).optional(),

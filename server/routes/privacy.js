@@ -24,12 +24,17 @@ import {
   privacyBrokerListQuerySchema,
   privacyBrokerCaseListQuerySchema,
   privacyBrokerRefreshSchema,
+  privacyBrokerIdParamsSchema,
+  privacyBrokerUpdateSchema,
+  privacyCaseIdParamsSchema,
+  privacyCaseTransitionSchema,
   privacyScanStartSchema,
   privacyChangeDeclareSchema,
   privacyChangeIdParamsSchema,
   privacyChangeOrgParamsSchema,
   privacyOptOutPassSchema,
   privacyOptOutVerifySchema,
+  privacyRecheckConfigSchema,
 } from '../lib/privacyValidation.js';
 import {
   createVaultRecord,
@@ -55,9 +60,17 @@ import {
   refreshBrokers,
   listBrokerCases,
   getScanStatus,
+  setBrokerEnabled,
+  forceRecheckCase,
+  transitionCase,
 } from '../services/privacyBrokers.js';
 import { runScanPass } from '../services/privacyScan.js';
 import { runOptOutPass, runVerificationPass, getOptOutDigest } from '../services/privacyOptOut.js';
+import {
+  getPrivacyRecheckStatus,
+  restartPrivacyRecheckScheduler,
+} from '../services/privacyRecheckScheduler.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
 import {
   declareChange,
   listChangeEvents,
@@ -200,9 +213,32 @@ router.post('/brokers/refresh', asyncHandler(async (req, res) => {
   res.json(await refreshBrokers());
 }));
 
+// Per-broker enable/disable toggle (Brokers-tab, #2146). A disabled broker is
+// skipped by the scan + opt-out passes.
+router.put('/brokers/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyBrokerIdParamsSchema, req.params);
+  const { enabled } = validateRequest(privacyBrokerUpdateSchema, req.body);
+  res.json(await setBrokerEnabled(id, enabled));
+}));
+
 router.get('/broker-cases', asyncHandler(async (req, res) => {
   const { state } = validateRequest(privacyBrokerCaseListQuerySchema, req.query);
   res.json(await listBrokerCases({ state }));
+}));
+
+// Force a case due for recheck NOW (case drawer "Re-check" control, #2146).
+router.post('/broker-cases/:id/recheck', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyCaseIdParamsSchema, req.params);
+  res.json(await forceRecheckCase(id));
+}));
+
+// Manual case transition (digest done/dismiss, case-drawer controls, #2146).
+// Only human-reachable targets are accepted (schema); the service's state
+// machine enforces validity of the specific from→to move on top of that.
+router.post('/broker-cases/:id/transition', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyCaseIdParamsSchema, req.params);
+  const { toState, reason } = validateRequest(privacyCaseTransitionSchema, req.body);
+  res.json(await transitionCase(id, toState, reason === undefined ? {} : { reason }));
 }));
 
 router.get('/scan/status', asyncHandler(async (_req, res) => {
@@ -235,6 +271,28 @@ router.post('/optout/verify', asyncHandler(async (req, res) => {
 // forms, fax/phone/gov-ID channels) with the prepared request + playbook.
 router.get('/optout/digest', asyncHandler(async (_req, res) => {
   res.json(await getOptOutDigest());
+}));
+
+// Recheck-schedule status: enabled, cron, autonomy toggles, next fire time.
+router.get('/optout/schedule', asyncHandler(async (_req, res) => {
+  res.json(await getPrivacyRecheckStatus());
+}));
+
+// Enable/disable the recheck cron + autonomy toggles (Brokers-tab run controls,
+// #2146). Deep-merges the `privacy.recheck` settings slice, then restarts the
+// scheduler so the change takes effect immediately (the cron expression is
+// locked in at registration). Enabling creates the cron; disabling removes it.
+router.put('/optout/schedule', asyncHandler(async (req, res) => {
+  const patch = validateRequest(privacyRecheckConfigSchema, req.body ?? {});
+  await updateSettingsWith((current) => ({
+    ...current,
+    privacy: {
+      ...(current.privacy || {}),
+      recheck: { ...(current.privacy?.recheck || {}), ...patch },
+    },
+  }));
+  await restartPrivacyRecheckScheduler();
+  res.json(await getPrivacyRecheckStatus());
 }));
 
 export default router;

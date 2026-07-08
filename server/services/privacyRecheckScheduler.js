@@ -13,13 +13,14 @@
  * without a restart.
  */
 
-import { schedule, cancel } from './eventScheduler.js';
+import { schedule, cancel, parseCronToNextRun } from './eventScheduler.js';
 import { getSettings } from './settings.js';
 import { getUserTimezone } from '../lib/timezone.js';
 import { runScanPass } from './privacyScan.js';
 import { runOptOutPass } from './privacyOptOut.js';
 
 const EVENT_ID = 'privacy-recheck';
+const DEFAULT_CRON = '0 4 * * 0'; // weekly, Sun 4am
 
 export async function startPrivacyRecheckScheduler() {
   const settings = await getSettings();
@@ -30,7 +31,7 @@ export async function startPrivacyRecheckScheduler() {
     return;
   }
 
-  const cronExpression = recheck.cronExpression || '0 4 * * 0'; // weekly, Sun 4am
+  const cronExpression = recheck.cronExpression || DEFAULT_CRON;
   const timezone = await getUserTimezone();
 
   schedule({
@@ -59,4 +60,40 @@ export async function startPrivacyRecheckScheduler() {
 export function stopPrivacyRecheckScheduler() {
   cancel(EVENT_ID);
   console.log('🛡️ Privacy recheck scheduler: stopped');
+}
+
+/**
+ * Restart the scheduler so a Settings save (enable/disable, new cron) takes
+ * effect immediately without a server restart — the cron expression is locked
+ * in at registration, so a change needs a cancel + re-register. Called by the
+ * PUT /api/privacy/optout/schedule route after it persists the settings slice.
+ */
+export async function restartPrivacyRecheckScheduler() {
+  stopPrivacyRecheckScheduler();
+  await startPrivacyRecheckScheduler();
+}
+
+/**
+ * Read-only schedule status for the Brokers-tab run controls: whether the cron
+ * is enabled, its expression, the autonomy toggles, and the next fire time
+ * (null when disabled or the cron can't be parsed). Never triggers work.
+ */
+export async function getPrivacyRecheckStatus() {
+  const settings = await getSettings();
+  const recheck = settings.privacy?.recheck || {};
+  const enabled = recheck.enabled === true;
+  const cronExpression = recheck.cronExpression || DEFAULT_CRON;
+  const timezone = await getUserTimezone();
+  let nextRun = null;
+  if (enabled) {
+    // parseCronToNextRun returns null on an unparseable expression — never throw.
+    nextRun = parseCronToNextRun(cronExpression, new Date(), timezone)?.toISOString?.() ?? null;
+  }
+  return {
+    enabled,
+    cronExpression,
+    autoApproveOptOutEmails: recheck.autoApproveOptOutEmails === true,
+    autoSubmitWebForms: recheck.autoSubmitWebForms === true,
+    nextRun,
+  };
 }
