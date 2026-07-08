@@ -46,6 +46,12 @@ const CHRONOTYPE_FILE = join(DIR, 'chronotype.json');
 const LONGEVITY_FILE = join(DIR, 'longevity.json');
 const FEEDBACK_FILE = join(DIR, 'feedback.json');
 const TASTE_FILE = join(DIR, 'taste-profile.json');
+// Observed-behavior evidence records (Phase 7, #2156) — supplement, never
+// overwrite, the questionnaire/genome twin. Regenerated on each aggregation, so
+// they federate LWW on `derivedAt` (newest observation wins wholesale — a
+// per-key union would splice one machine's top-artists into another's).
+const TASTE_OBSERVED_FILE = join(DIR, 'taste-observed.json');
+const CHRONOTYPE_OBSERVED_FILE = join(DIR, 'chronotype-observed.json');
 const META_FILE = join(DIR, 'meta.json');
 const AUTOBIO_DIR = join(DIR, 'autobiography');
 const AUTOBIO_STORIES_FILE = join(AUTOBIO_DIR, 'stories.json');
@@ -134,6 +140,62 @@ export function unionByKey(localArr, remoteArr, keyField, timestampField = null)
     }
   }
   return { merged: Array.from(map.values()), changed };
+}
+
+// True when an observed-taste record actually rolled up media (either window
+// signal). The observed evidence is per-machine, so a machine with no media
+// sources produces an empty rollup — and an empty rollup with a newer derivedAt
+// must NOT clobber a peer's populated one under plain LWW (#2156 HIGH).
+function tasteObservedHasSignal(rec) {
+  const m = isPlainObject(rec) ? rec.windows?.month : null;
+  return Boolean((m?.listen?.total || 0) > 0 || (m?.watch?.total || 0) > 0);
+}
+
+// True when an observed-chronotype record captured any activity.
+function chronotypeObservedHasSignal(rec) {
+  return isPlainObject(rec) && (rec.sampleSize || 0) > 0;
+}
+
+// LWW on `timestampField`, EXCEPT a record with signal always beats an empty
+// one regardless of recency — so an idle/fresh peer's empty rollup can't
+// overwrite a populated record. When both sides have signal (or both are
+// empty) it degrades to plain LWW.
+function signalAwareLWW(local, remote, hasSignal, timestampField) {
+  if (isPlainObject(remote) && hasSignal(remote) && !hasSignal(local)) return { merged: remote, changed: true };
+  if (isPlainObject(local) && hasSignal(local) && !hasSignal(remote)) return { merged: local, changed: false };
+  return mergeObjectLWW(local, remote, timestampField);
+}
+
+/**
+ * Merge observed taste evidence (#2156). The rollup BODY is signal-aware LWW on
+ * `derivedAt` (newest observation wins, but a populated record always beats an
+ * empty one — see signalAwareLWW), and the AI `interpretation` block is the one
+ * piece of EXPLICIT user-triggered content on the record, preserved separately:
+ * whichever side carries the newest interpretation (by its own `generatedAt`)
+ * is kept regardless of which body won. Without that, an unattended LLM-free
+ * recompute on another peer (newer `derivedAt`, no interpretation) would
+ * silently drop the user's interpretation cross-machine.
+ */
+export function mergeTasteObserved(local, remote) {
+  const { merged, changed } = signalAwareLWW(local, remote, tasteObservedHasSignal, 'derivedAt');
+  const li = isPlainObject(local) && isPlainObject(local.interpretation) ? local.interpretation : null;
+  const ri = isPlainObject(remote) && isPlainObject(remote.interpretation) ? remote.interpretation : null;
+  const newest = (ri?.generatedAt || '') > (li?.generatedAt || '') ? ri : li;
+  if (!newest) return { merged, changed };
+  const surviving = isPlainObject(merged) ? merged.interpretation : null;
+  if (surviving === newest) return { merged, changed };
+  // Only overlay when the newest interpretation is strictly newer than whatever
+  // survived on the winning body (or the body has none).
+  if ((surviving?.generatedAt || '') >= newest.generatedAt) return { merged, changed };
+  return { merged: { ...merged, interpretation: newest }, changed: true };
+}
+
+/**
+ * Merge observed chronotype evidence (#2156): signal-aware LWW on `derivedAt`
+ * so an idle peer's empty histogram can't overwrite a populated one.
+ */
+export function mergeChronotypeObserved(local, remote) {
+  return signalAwareLWW(local, remote, chronotypeObservedHasSignal, 'derivedAt');
 }
 
 const TASTE_STATUS_RANK = { pending: 0, in_progress: 1, completed: 2 };
@@ -402,19 +464,21 @@ export async function getDigitalTwinSnapshot() {
   // lastPromptAt) is deliberately NOT in the snapshot — it is machine-local
   // scheduling state, and a fresh peer must not inherit another machine's
   // cadence or have prompts enabled without local opt-in. Only the stories sync.
-  const [identity, chronotype, longevity, feedback, taste, meta, documents, stories, socialAccounts] =
+  const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, stories, socialAccounts] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null),
       readJSONFile(CHRONOTYPE_FILE, null),
       readJSONFile(LONGEVITY_FILE, null),
       readJSONFile(FEEDBACK_FILE, null),
       readJSONFile(TASTE_FILE, null),
+      readJSONFile(TASTE_OBSERVED_FILE, null),
+      readJSONFile(CHRONOTYPE_OBSERVED_FILE, null),
       readJSONFile(META_FILE, null),
       readMarkdownDocuments(),
       readJSONFile(AUTOBIO_STORIES_FILE, null),
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, meta, documents, autobiography: { stories }, socialAccounts };
+  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
   return { data, checksum: computeChecksum(data) };
 }
 
@@ -501,6 +565,10 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
   count += await applyMerge(FEEDBACK_FILE, remoteData.feedback, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
   count += await applyTaste(remoteData.taste);
+  // Observed evidence (Phase 7): regenerated derived records — body is LWW on
+  // derivedAt; taste also preserves the newest user-triggered AI interpretation.
+  count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, mergeTasteObserved);
+  count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved);
   // Meta BEFORE documents: applyMeta()'s loadMeta() rebuilds meta from a disk
   // .md scan when no meta.json exists, creating DEFAULT document entries. If the
   // peer's .md files were written first, that rebuild would manufacture default

@@ -171,6 +171,7 @@ import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
 import { startSignalScheduler } from './services/signalScheduler.js';
@@ -186,6 +187,7 @@ import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { startActivityDigestScheduler } from './services/activityDigestScheduler.js';
+import { startTwinEnrichmentScheduler } from './services/twinEnrichmentScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
@@ -599,6 +601,10 @@ startBrainScheduler();
 // auto-summaries from the Human Activity timeline only when the user enables it
 // (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
 startActivityDigestScheduler();
+// Initialize twin-enrichment scheduler — LLM-free daily rollup of observed
+// taste + chronotype evidence from the Human Activity timeline (#2156). No
+// provider calls; the AI interpretation is a separate explicit-button action.
+startTwinEnrichmentScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
 // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
@@ -612,6 +618,10 @@ initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: $
 registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
+// re-runs the broker scan + opt-out pass when the user opts in via
+// Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
+startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));

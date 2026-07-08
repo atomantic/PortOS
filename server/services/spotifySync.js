@@ -206,6 +206,13 @@ async function doRunSync() {
     return { recorded: 0, skipped: candidates.length };
   });
 
+  // Incrementally refresh observed twin evidence when new listens landed (#2156).
+  // LLM-free + self-guarded — never blocks or fails the sync.
+  if (!persistFailed && recordResult.recorded > 0) {
+    const { refreshTwinEvidenceAfterSync } = await import('./twinEnrichment.js');
+    await refreshTwinEvidenceAfterSync();
+  }
+
   // Prefer the response's own `cursors.after` (Spotify's canonical next cursor),
   // falling back to the computed max — but never regress below the stored cursor.
   const responseCursor = Number(payload?.cursors?.after);
