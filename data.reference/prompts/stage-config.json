@@ -49,6 +49,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-cuts": {
+      "name": "Writers Room — Adversarial Cut Pass",
+      "description": "Ruthless-editor pass over a Writers Room work body: identifies 8–12% of the prose to cut as typed passages (FAT/REDUNDANT/OVER-EXPLAIN/GENERIC/TELL/STRUCTURAL) plus fat_percentage and a protected tightest passage. Drives the Polish loop's mechanical safe-cut application (#2173).",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "writers-room-revise": {
+      "name": "Writers Room — Brief-Driven Revision",
+      "description": "Rewrites a Writers Room draft against a PROBLEM / WHAT TO KEEP / WHAT TO CHANGE / VOICE RULES / TARGET brief, receiving the old draft as raw material. The revision half of the Polish loop's cut → revise → keep/revert cycle (#2173). Returns revised prose only.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "writers-room-continue": {
       "name": "Writers Room — Live Continuation",
       "description": "Live Creative Director feedback: from the prose around the cursor, propose 2–4 short optional continuation beats, prose snippets, or dialogue lines the writer can accept. Drives the opt-in live-mode side panel in the editor.",

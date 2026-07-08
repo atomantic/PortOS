@@ -61,6 +61,29 @@ export const runWritersRoomAnalysis = (workId, data) =>
 export const getWritersRoomAnalysis = (workId, analysisId) =>
   request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
 
+// Polish loop (#2173): autonomous cuts → revise → keep/revert, multi-pass.
+// startWritersRoomPolish returns { runId, alreadyRunning, sseUrl }; subscribe to
+// the sseUrl with useSseProgress for live per-cycle progress. Snapshots are the
+// immutable revert points (the keep/revert gate + the manual revert control).
+export const startWritersRoomPolish = (workId, opts = {}) =>
+  request(`/writers-room/works/${enc(workId)}/polish/start`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+export const cancelWritersRoomPolish = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/polish/cancel`, { method: 'POST' });
+export const getWritersRoomPolishStatus = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/polish/status`);
+export const listWritersRoomPolishSnapshots = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/polish/snapshots`);
+export const getWritersRoomPolishSnapshot = (workId, snapshotId) =>
+  request(`/writers-room/works/${enc(workId)}/polish/snapshots/${enc(snapshotId)}`);
+export const revertWritersRoomPolishSnapshot = (workId, snapshotId) =>
+  request(`/writers-room/works/${enc(workId)}/polish/revert`, {
+    method: 'POST',
+    body: JSON.stringify({ snapshotId }),
+  });
+
 // Live continuation (Phase 5): opt-in, debounced Creative Director feedback
 // from the prose around the cursor. Returns { options, usage, budget }. The
 // server gates on the per-work live-mode toggle (409) and daily budget (429);

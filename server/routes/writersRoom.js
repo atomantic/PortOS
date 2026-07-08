@@ -16,6 +16,8 @@ import {
   writersRoomExerciseCreateSchema,
   writersRoomExerciseFinishSchema,
   writersRoomAnalysisCreateSchema,
+  writersRoomPolishStartSchema,
+  writersRoomPolishRevertSchema,
   writersRoomLiveSuggestSchema,
   writersRoomLiveRenderPreviewSchema,
   writersRoomCdBridgeSuggestSchema,
@@ -36,6 +38,10 @@ import {
 import {
   runAnalysis, listAnalyses, getAnalysis, persistSceneImage,
 } from '../services/writersRoom/evaluator.js';
+import {
+  startPolish, attachClient as attachPolishClient, cancelPolish, isPolishActive,
+  listSnapshots, getSnapshot, revertToSnapshot,
+} from '../services/writersRoom/polish.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
 import {
   suggestContinuation, reserveRenderPreview, suggestCdBridge, sendToCreativeDirector,
@@ -192,6 +198,50 @@ router.post('/works/:id/analysis', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/analysis/:analysisId', asyncHandler(async (req, res) => {
   res.json(await getAnalysis(req.params.id, req.params.analysisId));
+}));
+
+// ---------- polish loop (#2173): cuts → revise → keep/revert, multi-pass ----------
+
+// Start an autonomous Polish run. Explicit user action (satisfies the AI
+// provider policy — no boot/background invocation). Pre-validate the work has a
+// non-empty body so an empty draft gets a clean 400 rather than an SSE error
+// frame, then hand off to the streaming runner and return the SSE URL.
+router.post('/works/:id/polish/start', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomPolishStartSchema, req.body || {});
+  const { body } = await getWorkWithBody(req.params.id);
+  if (!body || !body.trim()) {
+    throw new ServerError('Cannot polish an empty draft — write some prose first', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = startPolish(req.params.id, data);
+  res.json({ ...result, sseUrl: `/api/writers-room/works/${req.params.id}/polish/progress` });
+}));
+
+router.get('/works/:id/polish/progress', (req, res) => {
+  const attached = attachPolishClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active polish run for this work', { status: 404 });
+  }
+});
+
+router.post('/works/:id/polish/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: cancelPolish(req.params.id) });
+}));
+
+router.get('/works/:id/polish/status', asyncHandler(async (req, res) => {
+  res.json({ active: isPolishActive(req.params.id) });
+}));
+
+router.get('/works/:id/polish/snapshots', asyncHandler(async (req, res) => {
+  res.json(await listSnapshots(req.params.id));
+}));
+
+router.get('/works/:id/polish/snapshots/:snapshotId', asyncHandler(async (req, res) => {
+  res.json(await getSnapshot(req.params.id, req.params.snapshotId));
+}));
+
+router.post('/works/:id/polish/revert', asyncHandler(async (req, res) => {
+  const { snapshotId } = validateRequest(writersRoomPolishRevertSchema, req.body || {});
+  res.json(await revertToSnapshot(req.params.id, snapshotId));
 }));
 
 // ---------- live continuation (Phase 5: opt-in Creative Director feedback) ----------
