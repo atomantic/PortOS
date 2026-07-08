@@ -100,10 +100,10 @@ beforeEach(() => {
 });
 
 describe('registry shape', () => {
-  it('registers the six-domain tool inventory with unique names', () => {
+  it('registers the seven-domain tool inventory with unique names', () => {
     const names = getAllCreativeToolNames();
     expect(new Set(names).size).toBe(names.length);
-    for (const prefix of ['universe_', 'storyBuilder_', 'writersRoom_', 'pipeline_', 'media_', 'catalog_']) {
+    for (const prefix of ['universe_', 'storyBuilder_', 'writersRoom_', 'pipeline_', 'media_', 'catalog_', 'cd_']) {
       expect(names.some((n) => n.startsWith(prefix))).toBe(true);
     }
   });

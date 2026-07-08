@@ -79,6 +79,21 @@ const mockEnqueuePlanTask = vi.fn();
 const mockDispatch = vi.fn();
 const mockListJobs = vi.fn();
 
+// Shared in-process autopilot bus + controls (CDO Phase 3, #2185). A minimal
+// hand-rolled emitter (on/off/emit) built in vi.hoisted so the vi.mock factory
+// closes over the SAME instance the tests emit on. Controls (`active`, `marker`)
+// are mutated per-test to drive the already-terminal race + attach paths.
+const ap = vi.hoisted(() => {
+  const listeners = new Map();
+  const autopilotEvents = {
+    on(name, fn) { (listeners.get(name) || listeners.set(name, new Set()).get(name)).add(fn); },
+    off(name, fn) { listeners.get(name)?.delete(fn); },
+    emit(name, payload) { for (const fn of [...(listeners.get(name) || [])]) fn(payload); },
+  };
+  const ctl = { active: true, marker: null };
+  return { autopilotEvents, ctl, AUTOPILOT_TERMINAL_TYPES: new Set(['complete', 'paused', 'canceled', 'error']) };
+});
+
 vi.mock('./local.js', () => ({
   getProject: (...a) => mockGetProject(...a),
   updateProject: (...a) => mockUpdateProject(...a),
@@ -96,8 +111,21 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   listJobs: (...a) => mockListJobs(...a),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
+vi.mock('../pipeline/seriesAutopilot.js', () => ({
+  autopilotEvents: ap.autopilotEvents,
+  isAutopilotActive: () => ap.ctl.active,
+  AUTOPILOT_TERMINAL_TYPES: ap.AUTOPILOT_TERMINAL_TYPES,
+}));
+vi.mock('../pipeline/series.js', () => ({
+  getSeries: async () => ap.ctl.marker && { autopilot: ap.ctl.marker },
+}));
 
 const { advanceAfterPlanStepSettled, __resetPlanInflightState } = await import('./planAdvance.js');
+
+// Drain the fire-and-forget async settle chain a terminal frame / marker read
+// kicks off (finishRun → updatePlanStep → advanceAfterPlanStepSettled → pause),
+// which spans several microtask hops the emit doesn't await.
+const flush = async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); };
 
 // A tiny in-memory project the mocked store mutates so recursion sees fresh state.
 function makeStore(initial) {
@@ -131,6 +159,8 @@ beforeEach(() => {
   __resetPlanInflightState();
   mockListJobs.mockReturnValue([]);
   mockEnqueuePlanTask.mockResolvedValue(undefined);
+  ap.ctl.active = true;
+  ap.ctl.marker = null;
 });
 
 const planProject = (steps, over = {}) => ({
@@ -230,5 +260,94 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     }));
     await advanceAfterPlanStepSettled('cd-1');
     expect(mockDispatch).not.toHaveBeenCalled();
+  });
+});
+
+// ---- CD → Autopilot bridge (CDO Phase 3, #2185) ----------------------------
+
+const autopilotStep = (over = {}) => step('a', { toolName: 'pipeline_startSeriesAutopilot', args: { seriesId: 'ser-1' }, ...over });
+const autopilotDispatch = (result = {}) => ({
+  ok: true, mode: 'execute', longRunning: true, result: { runId: 'r1', alreadyRunning: false, mode: 'execute', ...result },
+});
+
+describe('advanceAfterPlanStepSettled — runAutopilot plan step', () => {
+  it('a running autopilot step stays running until a terminal frame arrives (no jobId)', async () => {
+    const read = makeStore(planProject([
+      autopilotStep(),
+      step('b', { toolName: 'pipeline_generateStage', dependsOn: ['a'] }),
+    ]));
+    mockDispatch.mockResolvedValue(autopilotDispatch());
+    await advanceAfterPlanStepSettled('cd-1');
+    const p = read();
+    expect(p.plan.steps[0].status).toBe('running');
+    expect(p.plan.steps[1].status).toBe('pending');
+    expect(p.status).not.toBe('complete');
+  });
+
+  it('a `complete` frame settles the step done and advances the plan', async () => {
+    const read = makeStore(planProject([
+      autopilotStep(),
+      step('b', { toolName: 'pipeline_generateStage', dependsOn: ['a'] }),
+    ]));
+    mockDispatch.mockResolvedValueOnce(autopilotDispatch()); // start autopilot
+    mockDispatch.mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'x' } }); // step b
+    await advanceAfterPlanStepSettled('cd-1');
+    // Emit the terminal frame the live autopilot run would broadcast.
+    ap.autopilotEvents.emit('ser-1', { type: 'complete', runId: 'r1', steps: 7, craftGapIssues: 1 });
+    await flush();
+    const p = read();
+    expect(p.plan.steps[0].status).toBe('done');
+    // The complete frame's qualifier counters land in the step result.
+    expect(p.plan.steps[0].result).toMatchObject({ runId: 'r1', steps: 7, craftGapIssues: 1 });
+    expect(p.plan.steps[1].status).toBe('done');
+    expect(p.status).toBe('complete');
+  });
+
+  it('a `paused` frame BLOCKS the step and pauses the plan (never auto-retried)', async () => {
+    const read = makeStore(planProject([autopilotStep()]));
+    mockDispatch.mockResolvedValue(autopilotDispatch());
+    await advanceAfterPlanStepSettled('cd-1');
+    ap.autopilotEvents.emit('ser-1', { type: 'paused', runId: 'r1', reason: 'editorial review paused', residualFindings: [{ severity: 'high' }], pauseKind: 'maxRounds' });
+    await flush();
+    const p = read();
+    expect(p.plan.steps[0].status).toBe('blocked');
+    expect(p.plan.steps[0].result).toMatchObject({ reason: 'editorial review paused', pauseKind: 'maxRounds' });
+    expect(p.status).toBe('paused');
+    expect(p.failureReason).toMatch(/blocked/);
+    // The planner is NEVER re-enqueued around a human-review pause.
+    expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
+  });
+
+  it('an `error` frame fails the step and routes through bounded re-plan', async () => {
+    const read = makeStore(planProject([autopilotStep()]));
+    mockDispatch.mockResolvedValue(autopilotDispatch());
+    await advanceAfterPlanStepSettled('cd-1');
+    ap.autopilotEvents.emit('ser-1', { type: 'error', runId: 'r1', error: 'run crashed' });
+    await flush();
+    const p = read();
+    expect(p.plan.steps[0].status).toBe('failed');
+    expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1); // under the replan budget
+  });
+
+  it('attaches to a live run (alreadyRunning) and settles on its terminal frame', async () => {
+    const read = makeStore(planProject([autopilotStep()]));
+    mockDispatch.mockResolvedValue(autopilotDispatch({ alreadyRunning: true }));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(read().plan.steps[0].status).toBe('running');
+    ap.autopilotEvents.emit('ser-1', { type: 'complete', runId: 'r1', steps: 3 });
+    await flush();
+    expect(read().plan.steps[0].status).toBe('done');
+  });
+
+  it('settles immediately off the persisted marker when the run already finished (attach race)', async () => {
+    ap.ctl.active = false; // run is no longer active by the time we attach
+    ap.ctl.marker = { status: 'paused', runId: 'r1', lastError: 'canon gate', residualFindings: [], pauseKind: 'canon' };
+    const read = makeStore(planProject([autopilotStep()]));
+    mockDispatch.mockResolvedValue(autopilotDispatch());
+    await advanceAfterPlanStepSettled('cd-1');
+    await flush();
+    const p = read();
+    expect(p.plan.steps[0].status).toBe('blocked');
+    expect(p.status).toBe('paused');
   });
 });

@@ -66,6 +66,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { broadcastSse, attachSseClient, SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
@@ -105,6 +106,25 @@ import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
 //   cleanupTimer, startedAt, mode, options, runState, activeChild }>
 const runs = new Map();
+
+// In-process progress bus (CDO Phase 3, #2185). Every SSE frame the run
+// broadcasts to attached HTTP clients is ALSO emitted here keyed by seriesId, so
+// a SERVER-SIDE consumer — the Creative Director plan-advance loop running an
+// autopilot as one plan step — can observe progress/pause/terminal frames
+// without opening an HTTP/SSE client. SSE behavior is unchanged; this is a
+// parallel tap, not a replacement. Listeners are per-seriesId and short-lived
+// (attached for the life of one plan step), but a busy install could run several
+// concurrently, so lift the default 10-listener cap to avoid a spurious leak
+// warning. The payloads are the exact SSE frames (they carry `type`).
+export const autopilotEvents = new EventEmitter();
+autopilotEvents.setMaxListeners(0);
+
+// The frame `type`s that mean the run reached a terminal/paused state — a
+// server-side consumer settles its plan step on any of these. `complete` (or a
+// dry-run `complete`), `paused` (convergence/budget/child pause), `canceled`
+// (user stop), and `error` (run-ending throw) are exhaustive of the run's exit
+// frames (see the fire-and-forget coordinator in startSeriesAutopilot).
+export const AUTOPILOT_TERMINAL_TYPES = new Set(['complete', 'paused', 'canceled', 'error']);
 
 // Bounded convergence loops — re-verify/re-review at most this many rounds, then
 // pause for human review with the residual findings (see module header). These
@@ -188,6 +208,29 @@ export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   if (typeof pec?.notifyOnPause === 'boolean') return pec.notifyOnPause;
   return DEFAULT_NOTIFY_ON_PAUSE;
+}
+
+// Autopilot → CD teaser deliverable (CDO Phase 3, #2185). Once a comic issue is
+// text-ready + drafted, the autopilot can OPTIONALLY mint + start a Creative
+// Director video project (a teaser/trailer) seeded from the issue — the reverse
+// of the CD→autopilot bridge. Defaults OFF: producing video is a fresh burst of
+// LLM + render spend the user must opt into, so existing runs are unchanged.
+// Per-run option wins, then the persisted setting, then false. Stamped onto run
+// options once at start so the resolver, the dry-run plan, and a later resume
+// all read the same effective flag.
+export const DEFAULT_PRODUCE_TEASER = false;
+export function resolveAutopilotProduceTeaser(options = {}, settings = null) {
+  if (typeof options?.produceTeaser === 'boolean') return options.produceTeaser;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (typeof pec?.produceTeaser === 'boolean') return pec.produceTeaser;
+  return DEFAULT_PRODUCE_TEASER;
+}
+
+// Does THIS run want to produce a teaser deliverable? Gated on the resolved
+// `produceTeaser` flag AND that visuals ran (a teaser is a visual deliverable —
+// pointless on a text-only run).
+export function wantsTeaser(options = {}) {
+  return options.produceTeaser === true && wantsVisual(options);
 }
 
 // Per-gate copy for the non-convergence pause — shared by the arc-verify and
@@ -558,6 +601,18 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     }
   }
 
+  // STEP 7 — teaser video deliverable (CDO Phase 3, #2185, opt-in, default off).
+  // After every issue is text-ready + drafted, OPTIONALLY mint + start a Creative
+  // Director video project seeded from each issue. Gated on wantsTeaser (which
+  // itself requires visuals). Attempted-once per issue this run so a started (or
+  // failed) teaser can't re-loop the resolver back here.
+  if (VISUAL_DRAFT_ENABLED && wantsTeaser(options) && wantsComic(series, options)) {
+    for (const issue of ordered) {
+      if (setHas(runState.teaserProduced, issue.id)) continue;
+      return { kind: 'produceTeaser', issueId: issue.id, reason: 'teaser video not yet produced' };
+    }
+  }
+
   return { kind: 'done' };
 }
 
@@ -596,6 +651,15 @@ function broadcast(seriesId, payload) {
   const run = runs.get(seriesId);
   if (!run) return;
   broadcastSse(run, payload);
+  // Mirror every frame onto the in-process bus (CDO Phase 3, #2185) so a
+  // server-side consumer (CD plan step) sees the same progress/pause/terminal
+  // frames as an SSE client. Emit is best-effort — a listener throw must never
+  // abort the run (this runs inside the fire-and-forget coordinator).
+  try {
+    autopilotEvents.emit(seriesId, payload);
+  } catch (err) {
+    console.log(`⚠️ autopilot: event emit failed for ${seriesId.slice(0, 12)}: ${err.message}`);
+  }
 }
 
 function scheduleCleanup(seriesId, record) {
@@ -1486,6 +1550,41 @@ async function runCanonVerify(sId, record) {
   };
 }
 
+// Teaser deliverable (CDO Phase 3, #2185, opt-in). Mint + start a Creative
+// Director video project seeded from this issue — the autopilot→CD direction of
+// the bridge. Attempted-once per issue (marked up front so a failure can't
+// re-loop the resolver). Bills one cos action like every other autopilot step
+// (the CD project's own downstream render spend is gated by the creative/cos
+// budget on its side). A teaser is an OPTIONAL, terminal-phase deliverable, so a
+// failure is ADVISORY: it broadcasts a skip + files a gap, but does NOT pause the
+// whole run (the story is already done — a failed trailer shouldn't strand it).
+// bridgeFromIssue is imported dynamically to keep the pipeline↔creative-director
+// module graph acyclic (it transitively pulls the CD plan loop + tool registry).
+async function runProduceTeaser(sId, issueId, record) {
+  record.runState.teaserProduced.add(issueId);
+  const issue = await getIssue(issueId).catch(() => null);
+  try {
+    const { produceVideoFromIssue } = await import('../creativeDirector/bridgeFromIssue.js');
+    // The treatment-from-prose LLM call runs through stageRunner's soft channel,
+    // so thread the run's provider/model as providerDefault/modelDefault.
+    const { project } = await produceVideoFromIssue(issueId, providerOverrideOpts(record));
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(sId, { type: 'teaser:produced', issueId, projectId: project?.id });
+    console.log(`🎬 autopilot teaser — series=${sId.slice(0, 12)} issue=${issue?.number ?? issueId} → CD project ${project?.id?.slice(0, 8) ?? '?'}`);
+    return {};
+  } catch (err) {
+    const message = (err?.message || String(err)).slice(0, 300);
+    broadcast(sId, { type: 'step:skip', kind: 'produceTeaser', issueId, reason: `teaser production failed: ${message}` });
+    await fileGap(record, sId, {
+      gapKind: 'teaser-failed',
+      issueId,
+      summary: `The optional teaser video for issue ${issue?.number ?? issueId} could not be produced: ${message}. The story is complete — this deliverable can be retried from the Creative Director.`,
+      context: `issueId=${issueId}`,
+    });
+    return {};
+  }
+}
+
 async function dispatchStep(sId, step, record) {
   switch (step.kind) {
     case 'generateArc': {
@@ -1545,6 +1644,8 @@ async function dispatchStep(sId, step, record) {
       return runCanonVerify(sId, record);
     case 'visualDraft':
       return runVisualDraft(sId, step.issueId, record);
+    case 'produceTeaser':
+      return runProduceTeaser(sId, step.issueId, record);
     default:
       return {};
   }
@@ -1645,6 +1746,10 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
     // interior page. The interior-page count isn't known until the script parses,
     // so the estimate counts the two covers and notes the per-page additions.
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft) — +1 action per interior page', estActions: visualNeeded * 2 });
+    // Teaser deliverable (#2185, opt-in, default off): one CD video project per
+    // issue. Each mint+start bills one cos action for the treatment LLM call; the
+    // CD project's own render spend is gated on the creative/cos budget its side.
+    if (wantsTeaser(options)) plan.push({ kind: 'produceTeaser', count: ordered.length, note: 'mint + start a Creative Director teaser video per issue (opt-in)', estActions: ordered.length });
   }
   return plan;
 }
@@ -1689,6 +1794,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     readinessGate: resolveAutopilotReadinessGate(options, settings),
     checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
     notifyOnPause: resolveAutopilotNotifyOnPause(options, settings),
+    produceTeaser: resolveAutopilotProduceTeaser(options, settings),
     severityWeights: mergeSeverityWeights(seriesRecord?.severityWeights),
     blockingSets: {
       arc: resolveBlockingSet(seriesRecord?.blockingSeverities, 'arc'),
@@ -1729,6 +1835,9 @@ export async function startSeriesAutopilot(sId, options = {}) {
       textAttempted: new Set(),
       scriptChecked: new Set(),
       visualDrafted: new Set(),
+      // #2185 — issues whose optional teaser deliverable has been produced (or
+      // attempted) this run, so the resolver can't re-loop into produceTeaser.
+      teaserProduced: new Set(),
       // #1572 — issues whose ADVISORY craft gate filed a blocking gap task, and
       // the total blocking-finding count. Carried into the terminal `complete`
       // frame + persisted marker so a "clean complete" doesn't hide downstream

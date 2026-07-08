@@ -27,7 +27,14 @@ import { getProject, updateProject, updatePlanStep, recordRun, updateRun } from 
 import { enqueuePlanTask } from './agentBridge.js';
 import { dispatchCreativeTool } from '../creative/toolRegistry.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
+import { autopilotEvents, isAutopilotActive, AUTOPILOT_TERMINAL_TYPES } from '../pipeline/seriesAutopilot.js';
+import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
+
+// The registry tool that runs Series Autopilot as a plan step. A long-running
+// step whose dispatch returns a run handle (a `runId`, not a media `jobId`)
+// settles via the in-process autopilot event bus (CDO Phase 3, #2185).
+const AUTOPILOT_TOOL_NAME = 'pipeline_startSeriesAutopilot';
 
 const nowISO = () => new Date().toISOString();
 
@@ -244,11 +251,19 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
   if (dispatch.longRunning) {
     const jobId = dispatch.result?.jobId;
     if (jobId) return armPlanJobListener(projectId, step.stepId, jobId, runId);
-    // A long-running tool with no observable job handle — Series Autopilot returns
-    // a run handle, not a jobId; its in-process progress/pause event bridge lands
-    // in CDO Phase 3. For now a successful START counts as step completion so the
-    // plan makes progress; the underlying run continues on its own.
-    console.log(`⚠️ CD plan ${projectId}: step "${step.stepId}" (${step.toolName}) is long-running with no jobId — marking done on start (event bridge lands in Phase 3)`);
+    // Series Autopilot returns a run handle (`runId`), not a media jobId — settle
+    // this step off the in-process autopilot event bus (CDO Phase 3, #2185): the
+    // step stays `running` until the underlying autopilot run reaches a terminal
+    // frame. A pause surfaces as a BLOCKED step (never auto-retried); an error
+    // routes through the failure handler. `alreadyRunning` means the tool
+    // attached to a live run instead of double-starting — we observe it the same.
+    const seriesId = step.args?.seriesId;
+    if (step.toolName === AUTOPILOT_TOOL_NAME && seriesId && dispatch.result?.runId) {
+      return armAutopilotListener(projectId, step.stepId, seriesId, runId, dispatch.result);
+    }
+    // A long-running tool with no observable handle at all — mark done on start so
+    // the plan makes progress; the underlying work continues on its own.
+    console.log(`⚠️ CD plan ${projectId}: step "${step.stepId}" (${step.toolName}) is long-running with no observable handle — marking done on start`);
     await finishRun(projectId, runId, 'completed');
     await updatePlanStep(projectId, step.stepId, { status: 'done', result: summarizeResult(dispatch.result) });
     return advanceAfterPlanStepSettled(projectId);
@@ -321,6 +336,109 @@ function armPlanJobListener(projectId, stepId, jobId, runId) {
   const current = listJobs().find((j) => j.id === jobId);
   if (current && (current.status === 'completed' || current.status === 'failed' || current.status === 'canceled')) {
     settle(current);
+  }
+}
+
+// Compact summary of an autopilot terminal frame for the plan step `result` —
+// carries the run id + the "clean complete but with residual concerns" counters
+// the autopilot's own `complete` frame surfaces (#1572/#1573), so a plan reader
+// sees the same qualifications an SSE client would.
+function summarizeAutopilotResult(payload) {
+  const out = {};
+  for (const k of ['runId', 'steps', 'craftGapIssues', 'craftGapFindings', 'editorialCheckErrors']) {
+    if (payload?.[k] != null) out[k] = payload[k];
+  }
+  return out;
+}
+
+// Map an autopilot terminal frame onto the plan step's persisted state.
+//   - complete            → step `done`, advance the plan.
+//   - paused / canceled   → step `blocked` (human-review pause; never auto-retried).
+//   - error               → step `failed`, route through bounded re-plan.
+// Runs off the event bus / a marker read — outside any request lifecycle — so it
+// must never throw out (the caller wraps it, but keep it self-contained).
+async function settleAutopilotStep(projectId, stepId, runId, payload) {
+  const type = payload?.type;
+  if (type === 'complete') {
+    await finishRun(projectId, runId, 'completed');
+    await updatePlanStep(projectId, stepId, { status: 'done', result: summarizeAutopilotResult(payload) });
+    console.log(`✅ CD plan ${projectId}: autopilot step "${stepId}" complete`);
+    return advanceAfterPlanStepSettled(projectId);
+  }
+  if (type === 'paused' || type === 'canceled') {
+    const reason = payload?.reason
+      || (type === 'canceled' ? 'autopilot run was canceled' : 'autopilot paused for human review');
+    await finishRun(projectId, runId, 'failed', reason);
+    // BLOCKED, not failed — a pause is a human-review gate. The advance loop sees
+    // the blocked step and pauses the whole plan with the reason; it is never
+    // silently retried around (the autopilot pause contract).
+    await updatePlanStep(projectId, stepId, {
+      status: 'blocked',
+      result: { reason, residualFindings: payload?.residualFindings || [], pauseKind: payload?.pauseKind || null },
+    });
+    console.log(`⏸️  CD plan ${projectId}: autopilot step "${stepId}" blocked: ${reason}`);
+    return advanceAfterPlanStepSettled(projectId);
+  }
+  // error frame.
+  const error = payload?.error || 'autopilot run error';
+  await finishRun(projectId, runId, 'failed', error);
+  await updatePlanStep(projectId, stepId, { status: 'failed', result: { error } });
+  return handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
+}
+
+// Read the persisted autopilot marker for the race where the run reached a
+// terminal state between dispatch returning and our listener attaching (its
+// event fired and won't repeat). Returns a synthetic terminal frame or null when
+// the run is still `running`/absent (the live listener will catch the real one).
+async function readAutopilotMarker(seriesId) {
+  const series = await getSeries(seriesId).catch(() => null);
+  const marker = series?.autopilot;
+  if (!marker) return null;
+  if (marker.status === 'done') {
+    return { type: 'complete', runId: marker.runId, craftGapIssues: marker.craftGapIssues, craftGapFindings: marker.craftGapFindings, editorialCheckErrors: marker.editorialCheckErrors };
+  }
+  if (marker.status === 'paused') {
+    return { type: 'paused', runId: marker.runId, reason: marker.lastError, residualFindings: marker.residualFindings || [], pauseKind: marker.pauseKind || null };
+  }
+  if (marker.status === 'error') {
+    return { type: 'error', runId: marker.runId, error: marker.lastError };
+  }
+  return null; // 'running' or unknown — not terminal.
+}
+
+// Attach a listener to the in-process autopilot event bus for `seriesId`, settling
+// the plan step on the first terminal frame. Idempotent teardown (reuses the
+// shared planJobCleanups map so __resetPlanInflightState drops it too). Closes the
+// already-terminal race via the persisted marker, mirroring armPlanJobListener.
+function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
+  const key = `${projectId}:${stepId}`;
+  let fired = false;
+  const teardown = () => {
+    autopilotEvents.off(seriesId, handler);
+    planJobCleanups.delete(key);
+  };
+  function handler(payload) {
+    if (fired || !payload || !AUTOPILOT_TERMINAL_TYPES.has(payload.type)) return;
+    fired = true;
+    teardown();
+    settleAutopilotStep(projectId, stepId, runId, payload)
+      .catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot settle for ${stepId} failed: ${e.message}`));
+  }
+  autopilotEvents.on(seriesId, handler);
+  planJobCleanups.set(key, teardown);
+  console.log(`⏳ CD plan ${projectId}: step "${stepId}" attached to autopilot run for series ${String(seriesId).slice(0, 8)}${apResult?.alreadyRunning ? ' (already running)' : ''}`);
+  // The run may already have reached a terminal state (settled between dispatch
+  // returning and this attach) — its event fired and won't repeat. Re-check via
+  // isAutopilotActive + the persisted marker and settle immediately if so.
+  if (!isAutopilotActive(seriesId)) {
+    (async () => {
+      const marker = await readAutopilotMarker(seriesId);
+      if (marker && !fired) {
+        fired = true;
+        teardown();
+        await settleAutopilotStep(projectId, stepId, runId, marker);
+      }
+    })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot marker settle for ${stepId} failed: ${e.message}`));
   }
 }
 
