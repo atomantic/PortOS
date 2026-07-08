@@ -69,6 +69,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMemory.js` | Memory CRUD. |
 | `apiNotes.js` | Notes vault. |
 | `apiDigitalTwin.js` | Digital twin status + summary. |
+| `apiPrivacy.js` | Privacy Center — org registry ↔ Digital Twin social-account cross-link. |
 | `apiGoals.js` | Identity / goals tracking. |
 | `apiHealth.js` | Apple Health. |
 | `apiMeatspace.js` | MeatSpace (genome + location). |

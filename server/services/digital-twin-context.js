@@ -4,6 +4,7 @@ import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
+import { getPrivacyTwinContext } from './privacyTwinContext.js';
 
 // Twin document markdown is re-read on every agent prompt build
 // (getDigitalTwinForPrompt runs per prompt, per twin test). These files rarely
@@ -79,6 +80,22 @@ export async function getDigitalTwinForPrompt(options = {}) {
   let output = preamble;
   let tokenCount = preamble.length;
   const maxChars = maxTokens * 4; // Rough char-to-token estimate
+
+  // Privacy Vault identity dossier — opt-in TWICE: the GLOBAL gate here
+  // (includePrivacyContext, default false) plus the per-field share_with_twin
+  // gate inside getPrivacyTwinContext. Injected before documents as an
+  // authoritative identity block, counting toward the same token budget. Never
+  // cached to disk — decrypted at injection time only. Failures degrade to no
+  // block rather than failing the whole prompt (this also runs outside the
+  // request lifecycle for CoS agent spawns).
+  if (meta.settings?.includePrivacyContext === true) {
+    const privacyBlock = await getPrivacyTwinContext()
+      .catch(err => { console.log(`⚠️ Privacy twin context retrieval failed: ${err.message}`); return ''; });
+    if (privacyBlock && tokenCount + privacyBlock.length + 8 <= maxChars) {
+      output += `${privacyBlock}\n\n---\n\n`;
+      tokenCount += privacyBlock.length + 8;
+    }
+  }
 
   for (const doc of docs) {
     const filePath = join(DIGITAL_TWIN_DIR, doc.filename);

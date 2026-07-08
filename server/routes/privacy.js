@@ -39,6 +39,7 @@ import {
   deleteOrg,
   setOrgHoldings,
   getHoldingsForOrg,
+  getOrgsBySocialAccounts,
 } from '../services/privacyOrgs.js';
 
 const router = Router();
@@ -90,6 +91,12 @@ router.get('/orgs', asyncHandler(async (req, res) => {
 router.post('/orgs', asyncHandler(async (req, res) => {
   const data = validateRequest(privacyOrgCreateSchema, req.body);
   res.status(201).json(await createOrg(data));
+}));
+
+// Digital Twin ↔ org cross-link (issue #2147): which social accounts are in
+// the org registry. Declared before `/orgs/:id` so the literal path wins.
+router.get('/social-account-links', asyncHandler(async (_req, res) => {
+  res.json(await getOrgsBySocialAccounts());
 }));
 
 router.get('/orgs/:id', asyncHandler(async (req, res) => {

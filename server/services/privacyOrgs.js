@@ -232,6 +232,26 @@ export async function setHoldingsStatus(vaultRecordId, fromStatus, toStatus) {
   return { updated: rows.length };
 }
 
+/**
+ * Reverse index for the Digital Twin ↔ org cross-link (issue #2147): every org
+ * that references one of the twin's social accounts. Keyed by the Twin's
+ * Accounts tab so it can badge "in org registry" without N per-account calls.
+ * Returns `[{ socialAccountId, orgId, orgName }]`.
+ */
+export async function getOrgsBySocialAccounts() {
+  const { rows } = await query(
+    `SELECT id, name, social_account_id
+     FROM privacy_orgs
+     WHERE social_account_id IS NOT NULL
+     ORDER BY name`,
+  );
+  return rows.map((row) => ({
+    socialAccountId: row.social_account_id,
+    orgId: row.id,
+    orgName: row.name,
+  }));
+}
+
 /** Per-org holding counts + per-vault-record org counts — powers the inventory view. */
 export async function getHoldingsSummary() {
   const [byOrg, byRecord] = await Promise.all([

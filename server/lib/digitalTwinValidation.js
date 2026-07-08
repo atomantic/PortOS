@@ -150,6 +150,10 @@ export const enrichmentProgressSchema = z.object({
 export const digitalTwinSettingsSchema = z.object({
   autoInjectToCoS: z.boolean().default(true),
   maxContextTokens: z.number().int().min(1000).max(100000).default(4000),
+  // Global gate for injecting Privacy Vault identity facts into twin/CoS prompts
+  // (issue #2147). Default false — PII sharing is opt-in twice (this global
+  // toggle AND the per-record share_with_twin flag).
+  includePrivacyContext: z.boolean().default(false),
   // The persona currently driving the embodied-twin context (CoS agents, etc.).
   // null/absent = no persona (base twin). Tolerate the UI sentinel for "deactivate".
   activePersonaId: z.string().guid().nullable().optional()
@@ -286,7 +290,7 @@ export const digitalTwinMetaSchema = z.object({
   adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),
   multiTurnTestHistory: z.array(multiTurnTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
-  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
+  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000, includePrivacyContext: false }),
   personas: z.array(personaSchema).default([]),
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
