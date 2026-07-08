@@ -14,7 +14,7 @@
  * craft-anti-patterns) — per the drift-cross-sync convention, migration 166 is
  * resynced in this same change: its previous current hash
  * (`67663696…`) moved into its `ACCEPTED_OLD_MD5` and its `NEW_SHIPPED_MD5`
- * bumped to the post-179 hash, so 166's "NEW matches live data.reference"
+ * bumped to the post-181 hash, so 166's "NEW matches live data.reference"
  * drift-catch test stays green. The drift baseline in `setup-data-drift.test.js`
  * was updated to match the merged sweep.
  *

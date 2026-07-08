@@ -493,9 +493,16 @@
       "variables": []
     },
     "pipeline-series-generate": {
-      "name": "Pipeline — Generate Series Concept",
-      "description": "Invent a new series within a universe — returns a {name, logline, premise, shape} JSON concept that tells a different story from existing series in the same universe, using the universe premise / style / influences / canon as seed material. Drives the 'Generate with AI' button on the New Series form; the concept pre-fills the form for the user to edit before creating.",
+      "name": "Pipeline — Generate Series Concepts",
+      "description": "Multi-concept series ideation (#2180, CWQE Phase 15): invents SEVERAL genuinely distinct new series within a universe — each with a name / logline / premise / story shape PLUS craft facets (hook, world, conflict engine, cost, tension, theme) — under an anti-generic banlist that merges a shipped default list with the universe's own avoid-influences. Returns a {candidates:[...]} JSON payload. Interactive mode presents the candidates for user pick on the New Series form; autonomous invention judge-picks the winner via the forced-rank pipeline-series-concept-judge stage. Configure a judgeProvider/judgeModel here to drive the writer/judge split for the pick.",
       "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-series-concept-judge": {
+      "name": "Pipeline — Series Concept Judge (forced pick)",
+      "description": "Forced-pick ranker for autonomous multi-concept series ideation (#2180, CWQE Phase 15). Reads the candidate concepts and MUST pick the single one 'a reader who has seen a thousand pitches would stop scrolling for' — ties forbidden — rewarding freshness over the generic default, a generative conflict engine, real cost, and both scales of tension. Resolves via the pipeline-series-generate stage's judgeProvider/judgeModel (writer/judge split). Falls back to the first candidate when no judge is configured or the call fails.",
+      "model": "heavy",
       "returnsJson": true,
       "variables": []
     },

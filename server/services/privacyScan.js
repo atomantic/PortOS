@@ -208,15 +208,15 @@ async function httpFetchLane(url, fetchImpl) {
 }
 
 /**
- * Scan ONE broker for exposure and record the verdict. `deps` are injectable so
- * tests never hit the network/browser:
- *   - `fetchImpl` (default global fetch) — the HTTP lane.
- *   - `browserFetch` (default fetchUrlMainText) — the JS-required escalation.
- * Returns the recorded case, or `{ skipped: true, reason }` when the broker has
- * no usable search URL (blind scan not possible) or the URL is unsafe.
+ * READ-ONLY probe of ONE broker for exposure — fetch + classify, NO ledger
+ * write. Returns `{ verdict, found, evidence, url }` or `{ skipped, reason }`.
+ * Shared by scanBroker (which then records) and the opt-out verification
+ * re-scan (privacyOptOut.runVerificationPass) which must classify a broker's
+ * CURRENT listing WITHOUT overwriting an opt-out-owned case's ledger state.
+ * `deps` injectable so tests/verification never hit the network.
  */
-export async function scanBroker(broker, vectors, {
-  fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+export async function probeBroker(broker, vectors, {
+  fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe,
 } = {}) {
   const template = broker?.urls?.search;
   const name = (vectors.names || [])[0];
@@ -229,7 +229,7 @@ export async function scanBroker(broker, vectors, {
     return { skipped: true, reason: 'unsafe_or_unfillable_url' };
   }
 
-  let result = await httpFetchLane(url, fetchImpl);
+  const result = await httpFetchLane(url, fetchImpl);
   let html = result?.html ?? '';
   let status = result?.status ?? null;
 
@@ -240,17 +240,34 @@ export async function scanBroker(broker, vectors, {
   }
 
   if (!result && !html) {
-    // Total network failure — inconclusive, leave case unscanned.
+    // Total network failure — inconclusive.
     return { skipped: true, reason: 'fetch_failed' };
   }
 
   const classified = classifyScanResult({ status, html, vectors, broker });
   const evidence = { ...classified.evidence, listing_urls: classified.verdict === 'found' ? [url] : [] };
   if (classified.inconclusive || !classified.verdict) {
-    return { skipped: true, reason: classified.evidence?.match_basis || 'inconclusive' };
+    return { skipped: true, reason: classified.evidence?.match_basis || 'inconclusive', verdict: null, evidence };
   }
-  const kase = await recordScanVerdict(broker.id, classified.verdict, {
-    evidence, found: classified.found ?? null, now,
+  return { verdict: classified.verdict, found: classified.found ?? null, evidence, url };
+}
+
+/**
+ * Scan ONE broker for exposure and record the verdict. Thin wrapper over the
+ * read-only probeBroker that then writes the ledger verdict. `deps` are
+ * injectable so tests never hit the network/browser:
+ *   - `fetchImpl` (default global fetch) — the HTTP lane.
+ *   - `browserFetch` (default fetchUrlMainText) — the JS-required escalation.
+ * Returns the recorded case, or `{ skipped: true, reason }` when the broker has
+ * no usable search URL (blind scan not possible) or the URL is unsafe.
+ */
+export async function scanBroker(broker, vectors, {
+  fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+} = {}) {
+  const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
+  if (probed.skipped) return { skipped: true, reason: probed.reason };
+  const kase = await recordScanVerdict(broker.id, probed.verdict, {
+    evidence: probed.evidence, found: probed.found ?? null, now,
   });
   return kase;
 }

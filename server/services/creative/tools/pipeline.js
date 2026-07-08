@@ -134,7 +134,7 @@ export const PIPELINE_TOOLS = [
   },
   {
     name: 'pipeline_generateSeriesConcept',
-    description: 'Generate a series concept (name, logline, premise, shape) for a universe via the LLM.',
+    description: 'Invent several distinct series concepts (name, logline, premise, shape + craft facets) for a universe under an anti-generic banlist, then judge-pick the strongest via a forced rank. Returns the winning concept plus the rejected candidates.',
     costClass: COST_LLM,
     schema: z.object({ universeId: z.string().min(1), options: z.record(z.any()).optional() }),
     parameters: {

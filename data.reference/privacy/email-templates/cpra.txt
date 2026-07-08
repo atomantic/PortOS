@@ -1,0 +1,25 @@
+Subject: CPRA Request to Delete, Correct, and Limit — {{fullName}}
+
+To the {{brokerName}} Privacy / Data Rights team,
+
+I am a California resident exercising my rights under the California Privacy
+Rights Act (CPRA), which amends and expands the CCPA. I request that you:
+
+1. Delete all personal information you hold about me,
+2. Opt me out of the sale and sharing of my personal information,
+3. Limit the use of any sensitive personal information, and
+4. Suppress my information from your public people-search listings.
+
+Identifying information (provided solely to locate and match my records):
+{{disclosedSummary}}
+
+{{listingSection}}
+Please confirm completion in writing to this email address within the statutory
+response window.
+
+I am submitting this request on my own behalf. Do not use the information above
+for any purpose other than fulfilling this request.
+
+Regards,
+{{fullName}}
+{{requestDate}}
