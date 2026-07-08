@@ -7,6 +7,7 @@ import {
 import PageHeader from '../components/PageHeader';
 import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
 import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
+import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -39,6 +40,7 @@ const SOURCE_ICON = {
   spotify: Music,
   youtube: Play,
   location: MapPin,
+  discord: MessageSquare,
 };
 
 function kindIcon(kind, source) {
@@ -207,6 +209,7 @@ export default function Timeline() {
 
       <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
       <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />
 
       <Histogram histogram={histogram} />
 

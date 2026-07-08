@@ -16,7 +16,12 @@ import toast from '../ui/Toast';
 //   help         — JSX help text (where to get the export)
 //   importFn     — (file, { preview, silent }) => Promise<result>
 //   renderPreview— (summary) => JSX for the preview details block
-export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported }) {
+//   accept       — file-input accept list; defaults to ZIP/JSON. A source that
+//                  also takes another single-file shape (e.g. Discord's older
+//                  `messages.csv`) widens it so the OS file picker doesn't hide
+//                  a file the server would actually accept.
+const DEFAULT_ACCEPT = '.zip,.json,application/zip,application/json';
+export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported, accept = DEFAULT_ACCEPT }) {
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -88,7 +93,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
             <label className={`inline-flex items-center gap-2 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm text-gray-200 ${busy ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:border-port-accent'}`}>
               <Upload size={14} />
               <span>{file ? 'Change file' : 'Choose file'}</span>
-              <input type="file" accept=".zip,.json,application/zip,application/json" onChange={pickFile} disabled={busy} className="hidden" />
+              <input type="file" accept={accept} onChange={pickFile} disabled={busy} className="hidden" />
             </label>
             {file && <span className="truncate text-xs text-gray-400">{file.name}</span>}
           </div>

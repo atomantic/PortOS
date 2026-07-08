@@ -8,6 +8,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import * as humanActivity from '../services/humanActivity.js';
 import { importSpotifyHistory } from '../services/spotifyImport.js';
 import { importTakeoutLocationHistory } from '../services/takeoutLocationImport.js';
+import { importDiscordHistory } from '../services/discordImport.js';
 
 const router = Router();
 
@@ -26,6 +27,17 @@ const zipOrJsonUpload = (label) => uploadSingle('file', {
 
 const uploadSpotify = zipOrJsonUpload('Spotify');
 const uploadTakeoutLocation = zipOrJsonUpload('Google Takeout location');
+// The Discord data package ships `messages.csv` in older exports, so accept CSV
+// alongside the ZIP/JSON the other importers take.
+const uploadDiscord = uploadSingle('file', {
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(zip|json|csv)$/i.test(file.originalname)
+      || ['application/zip', 'application/x-zip-compressed', 'application/json', 'text/json', 'text/csv', 'application/csv'].includes(file.mimetype);
+    if (ok) return cb(null, true);
+    cb(new ServerError('Only Discord data-package ZIP, JSON, or CSV files are accepted', { status: 400, code: 'BAD_REQUEST' }));
+  },
+});
 
 // `preview` (a multipart text field, so it arrives as a string) toggles a
 // parse-only dry run — count what would be imported without writing. Only map
@@ -95,5 +107,10 @@ router.post('/import/spotify', uploadSpotify, importHandler(importSpotifyHistory
 // "Location History (Timeline)" semantic place visits → place.visit events
 // (dedupe on visit-start + place identity).
 router.post('/import/takeout-location', uploadTakeoutLocation, importHandler(importTakeoutLocationHistory));
+
+// POST /api/timeline/import/discord — bulk-backfill a Discord "data package"
+// (the messages you sent across every channel/DM) → message.sent events
+// (dedupe on the globally-unique Discord message snowflake id).
+router.post('/import/discord', uploadDiscord, importHandler(importDiscordHistory));
 
 export default router;

@@ -40,3 +40,8 @@ export const importSpotifyHistory = (file, options = {}) =>
 // visit-start + place identity).
 export const importTakeoutLocationHistory = (file, options = {}) =>
   importFile('/timeline/import/takeout-location', file, options);
+
+// Discord "data package" — the messages you sent across every channel/DM
+// (dedupe on the globally-unique Discord message snowflake id).
+export const importDiscordHistory = (file, options = {}) =>
+  importFile('/timeline/import/discord', file, options);
