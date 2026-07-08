@@ -85,6 +85,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff', aliases: ['feature-agents'] },
   { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', aliases: ['gsd', 'cos-gsd'] },
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', aliases: ['cos-health', 'health'] },
+  { id: 'nav.cos.layered-intelligence', path: '/layered-intelligence', label: 'Layered Intelligence', section: 'Chief of Staff', aliases: ['layered-intelligence', 'intelligence-loop', 'self-improvement', 'lil'], keywords: ['layered intelligence', 'self improvement loop', 'per-app improvement', 'proposals', 'autonomous improvement', 'loop status'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },

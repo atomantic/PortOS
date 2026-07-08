@@ -39,7 +39,9 @@ import {
   CLOSED_SUPPRESSION_MS,
   LI_LABEL,
   LI_BLOCKING_LABEL,
-  LI_JIRA_BLOCKING_LABEL
+  LI_JIRA_BLOCKING_LABEL,
+  LI_JOB_ID,
+  summarizeLoopStatus
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -91,6 +93,72 @@ describe('getEffectiveConfig', () => {
     const c = getEffectiveConfig({ layeredIntelligence: { sources: { custom: 'bad' }, allowedScopes: 'nope' } });
     expect(c.sources.custom).toEqual([]);
     expect(Array.isArray(c.allowedScopes)).toBe(true);
+  });
+});
+
+describe('summarizeLoopStatus (overview page shape)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.parse('2026-07-07T12:00:00Z');
+
+  it('summarizes a never-run enabled app as due with no lastRun/nextDue', () => {
+    const s = summarizeLoopStatus({
+      app: { id: 'a1', name: 'App One', layeredIntelligence: { enabled: true, intervalMs: DAY } },
+      now: NOW
+    });
+    expect(s).toMatchObject({ id: 'a1', name: 'App One', enabled: true, due: true, lastRunAt: null, nextDueAt: null });
+    expect(s.sources).toMatchObject({ goals: true, customCount: 0 });
+    expect(s.hasRules).toBe(false);
+  });
+
+  it('computes nextDueAt = lastRunAt + intervalMs and due=false before the interval elapses', () => {
+    const lastRunAt = new Date(NOW - DAY / 2).toISOString();
+    const s = summarizeLoopStatus({
+      app: { id: 'a2', name: 'App Two', layeredIntelligence: { enabled: true, intervalMs: DAY, lastRunAt } },
+      now: NOW
+    });
+    expect(s.lastRunAt).toBe(lastRunAt);
+    expect(s.nextDueAt).toBe(new Date(Date.parse(lastRunAt) + DAY).toISOString());
+    expect(s.due).toBe(false);
+  });
+
+  it('due is always false when the app is disabled, even past the interval', () => {
+    const lastRunAt = new Date(NOW - 2 * DAY).toISOString();
+    const s = summarizeLoopStatus({
+      app: { id: 'a3', name: 'Off', layeredIntelligence: { enabled: false, intervalMs: DAY, lastRunAt } },
+      now: NOW
+    });
+    expect(s.enabled).toBe(false);
+    expect(s.due).toBe(false);
+  });
+
+  it('reduces rules to a boolean and never leaks the free text', () => {
+    const s = summarizeLoopStatus({
+      app: { id: 'a4', name: 'Ruled', layeredIntelligence: { enabled: true, rules: 'never add deps' } },
+      now: NOW
+    });
+    expect(s.hasRules).toBe(true);
+    expect(JSON.stringify(s)).not.toContain('never add deps');
+  });
+
+  it('surfaces PortOS scopes + custom source count', () => {
+    const s = summarizeLoopStatus({
+      app: { id: 'portos-default', name: 'PortOS', layeredIntelligence: { enabled: true, sources: { custom: [{ type: 'file', ref: 'x.md' }] } } },
+      isPortos: true,
+      now: NOW
+    });
+    expect(s.isPortos).toBe(true);
+    expect(s.allowedScopes).toContain('portos-self');
+    expect(s.sources.customCount).toBe(1);
+  });
+
+  it('falls back to the app id when name is missing', () => {
+    expect(summarizeLoopStatus({ app: { id: 'no-name' }, now: NOW }).name).toBe('no-name');
+  });
+});
+
+describe('LI_JOB_ID', () => {
+  it('is the autonomous-job id the loop sweep runs under', () => {
+    expect(LI_JOB_ID).toBe('job-layered-intelligence');
   });
 });
 

@@ -6,6 +6,7 @@ import appsRoutes from './apps.js';
 // Mock the services
 vi.mock('../services/apps.js', () => ({
   getAllApps: vi.fn(),
+  getActiveApps: vi.fn(),
   getAppById: vi.fn(),
   createApp: vi.fn(),
   updateApp: vi.fn(),
@@ -33,6 +34,12 @@ vi.mock('../services/pm2.js', () => ({
 
 vi.mock('../services/history.js', () => ({
   logAction: vi.fn()
+}));
+
+// Mock the autonomous-jobs barrel so the layered-intelligence overview route can
+// read the global job's enabled state without pulling in the whole CoS graph.
+vi.mock('../services/autonomousJobs.js', () => ({
+  getJob: vi.fn()
 }));
 
 vi.mock('../services/streamingDetect.js', () => ({
@@ -85,6 +92,7 @@ import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
 import * as cos from '../services/cos.js';
+import * as autonomousJobs from '../services/autonomousJobs.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { installScripts } from '../services/xcodeScripts.js';
 import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'fs';
@@ -308,6 +316,42 @@ describe('Apps Routes', () => {
       appsService.getAppById.mockResolvedValue(null);
       const response = await request(app).get('/api/apps/app-999/layered-intelligence');
       expect(response.status).toBe(404);
+    });
+
+    it('GET /layered-intelligence/overview summarizes every active app + global job state', async () => {
+      appsService.getActiveApps.mockResolvedValue([
+        { id: 'off-app', name: 'Zeta Off', layeredIntelligence: { enabled: false } },
+        { id: 'on-app', name: 'Alpha On', layeredIntelligence: { enabled: true, intervalMs: 86400000 } },
+        { id: 'portos-default', name: 'PortOS', layeredIntelligence: { enabled: true } }
+      ]);
+      autonomousJobs.getJob.mockResolvedValue({ id: 'job-layered-intelligence', enabled: true });
+
+      const response = await request(app).get('/api/apps/layered-intelligence/overview');
+
+      expect(response.status).toBe(200);
+      expect(response.body.jobEnabled).toBe(true);
+      expect(response.body.jobExists).toBe(true);
+      expect(response.body.enabledCount).toBe(2);
+      // Enabled first, PortOS ahead of other enabled, disabled last.
+      expect(response.body.apps.map(a => a.id)).toEqual(['portos-default', 'on-app', 'off-app']);
+      const portos = response.body.apps.find(a => a.id === 'portos-default');
+      expect(portos.isPortos).toBe(true);
+      expect(portos.allowedScopes).toContain('portos-self');
+      // Free-text rules never leak into the list payload.
+      expect(JSON.stringify(response.body)).not.toContain('"rules"');
+      expect(appsService.getActiveApps).toHaveBeenCalled();
+    });
+
+    it('GET /layered-intelligence/overview reports jobEnabled:false when the job is missing', async () => {
+      appsService.getActiveApps.mockResolvedValue([]);
+      autonomousJobs.getJob.mockResolvedValue(null);
+
+      const response = await request(app).get('/api/apps/layered-intelligence/overview');
+
+      expect(response.status).toBe(200);
+      expect(response.body.jobEnabled).toBe(false);
+      expect(response.body.jobExists).toBe(false);
+      expect(response.body.enabledCount).toBe(0);
     });
 
     it('writes changed ports back to the ecosystem config (source of truth)', async () => {
