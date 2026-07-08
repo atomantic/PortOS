@@ -84,4 +84,10 @@ describe('mediaSketches routes', () => {
     const r = await request(makeApp()).get(`/api/media/sketches/${KEY}/png`);
     expect(r.status).toBe(404);
   });
+
+  it('POST / mints a fresh blank-canvas sketch key (phase 3)', async () => {
+    const r = await request(makeApp()).post('/api/media/sketches');
+    expect(r.status).toBe(201);
+    expect(r.body.key).toMatch(/^sketch:[a-f0-9-]{36}$/);
+  });
 });

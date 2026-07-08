@@ -116,4 +116,38 @@ describe('mediaSketches service', () => {
     expect(() => svc.sanitizeSketchInput({ width: 1, height: 1, strokes: [], png: 'data:image/jpeg;base64,AAAA' }))
       .toThrowError();
   });
+
+  describe('blank-canvas sketches (phase 3)', () => {
+    it('createBlankSketchKey mints a recognizable sketch:<uuid> key', () => {
+      const key = svc.createBlankSketchKey();
+      expect(key).toMatch(/^sketch:[a-f0-9-]{36}$/);
+      expect(svc.isBlankSketchKey(key)).toBe(true);
+      expect(svc.isValidKey(key)).toBe(true);
+    });
+
+    it('isBlankSketchKey rejects image/video/garbage keys', () => {
+      expect(svc.isBlankSketchKey('image:foo.png')).toBe(false);
+      expect(svc.isBlankSketchKey('video:abc')).toBe(false);
+      expect(svc.isBlankSketchKey('sketch:not-a-uuid')).toBe(false);
+      expect(svc.isBlankSketchKey('sketch:')).toBe(false);
+      expect(svc.isBlankSketchKey(null)).toBe(false);
+    });
+
+    it('saveSketch → getSketch round-trips a blank-canvas key', async () => {
+      const key = svc.createBlankSketchKey();
+      const saved = await svc.saveSketch(key, { width: 512, height: 512, strokes: sampleStrokes, png: PNG_DATA_URL });
+      expect(saved.strokes).toHaveLength(2);
+      expect(saved.hasPng).toBe(true);
+      const loaded = await svc.getSketch(key);
+      expect(loaded.strokes).toEqual(saved.strokes);
+      expect(loaded.width).toBe(512);
+      // The flattened PNG path resolves for the img2img feedback path too.
+      expect(await svc.getSketchPngPath(key)).not.toBeNull();
+    });
+
+    it('still rejects a video key (only image + blank sketch are supported)', async () => {
+      await expect(svc.saveSketch('video:abc', { width: 1, height: 1, strokes: sampleStrokes }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+  });
 });

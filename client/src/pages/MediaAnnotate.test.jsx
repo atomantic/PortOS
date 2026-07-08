@@ -106,3 +106,41 @@ describe('MediaAnnotate re-render with annotations', () => {
     expect(rerenderWithAnnotations).not.toHaveBeenCalled();
   });
 });
+
+describe('MediaAnnotate blank-canvas sketch (phase 3)', () => {
+  const renderBlank = (search = '') => render(
+    <MemoryRouter initialEntries={[`/media/annotate/sketch:11111111-1111-1111-1111-111111111111${search}`]}>
+      <Routes>
+        <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getMediaSketch.mockResolvedValue({ sketch: null });
+    saveMediaSketch.mockResolvedValue({ sketch: {} });
+  });
+
+  it('renders a canvas with no Re-render button and saves under the sketch key', async () => {
+    renderBlank();
+    // The canvas mounts (stub reports dims) but Re-render (img2img) is absent —
+    // a blank sketch has no source render to feed back.
+    await screen.findByTestId('stub-canvas');
+    expect(screen.queryByTitle('Re-render this image guided by your annotations')).toBeNull();
+    // No img2img availability probe for a blank canvas.
+    expect(getRegenAvailability).not.toHaveBeenCalled();
+
+    const saveBtn = await screen.findByTitle('Save sketch');
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledTimes(1));
+    expect(saveMediaSketch.mock.calls[0][0]).toBe('sketch:11111111-1111-1111-1111-111111111111');
+  });
+
+  it('routes the back link to ?returnTo when provided', async () => {
+    renderBlank('?returnTo=%2Fpipeline%2Fissues%2Fabc%2Fstoryboards');
+    const back = await screen.findByRole('link', { name: 'Back' });
+    expect(back).toHaveAttribute('href', '/pipeline/issues/abc/storyboards');
+  });
+});

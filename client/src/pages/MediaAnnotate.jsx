@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
 import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Wand2, Loader2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -14,9 +14,21 @@ import { getMediaSketch, saveMediaSketch, getRegenAvailability, rerenderWithAnno
 const DEFAULT_ANNOTATED_STRENGTH = 0.5;
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
-// Parse a media key `<kind>:<ref>` on the client (mirrors server/lib/mediaItemKey.js
-// rules loosely — the server re-validates authoritatively). Phase 1 only supports
-// annotating images.
+// Blank-canvas defaults (phase 3). A storyboard sketch opens at a square 1:1
+// unless the caller passes ?w=&h= (e.g. matching the scene's aspect ratio).
+const DEFAULT_BLANK_DIM = 1024;
+const MIN_BLANK_DIM = 64;
+const MAX_BLANK_DIM = 4096;
+const clampDim = (v, fallback) => {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_BLANK_DIM, Math.max(MIN_BLANK_DIM, n));
+};
+
+// Parse a sketch key on the client (mirrors server/services/mediaSketches.js
+// loosely — the server re-validates authoritatively). Supported kinds:
+//   image:<filename>  — annotate over a generated image (phases 1–2)
+//   sketch:<uuid>     — free-standing blank canvas (phase 3)
 function parseMediaKey(key) {
   if (typeof key !== 'string') return null;
   const idx = key.indexOf(':');
@@ -31,11 +43,22 @@ const COLOR_SWATCHES = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '
 
 export default function MediaAnnotate() {
   const { mediaKey } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const parsed = useMemo(() => parseMediaKey(mediaKey), [mediaKey]);
   const isImage = parsed?.kind === 'image';
+  const isBlank = parsed?.kind === 'sketch';
+  const isSupported = isImage || isBlank;
   // Images are served from /data/images/<filename>; the ref IS the filename.
+  // A blank sketch has no backing image (the canvas fills a solid background).
   const imageSrc = isImage ? `/data/images/${parsed.ref}` : null;
+
+  // Blank-canvas size + a return link, both driven by the URL so the page is
+  // reload-safe and shareable (the storyboard scene passes them when it opens
+  // a sketch). Falls back to a square default when absent/invalid.
+  const blankWidth = useMemo(() => clampDim(searchParams.get('w'), DEFAULT_BLANK_DIM), [searchParams]);
+  const blankHeight = useMemo(() => clampDim(searchParams.get('h'), DEFAULT_BLANK_DIM), [searchParams]);
+  const returnTo = searchParams.get('returnTo');
 
   const canvasApiRef = useRef(null);
   const [strokes, setStrokes] = useState([]);
@@ -76,7 +99,7 @@ export default function MediaAnnotate() {
   // transient view state synchronously before fetching — otherwise the previous
   // key's strokes / imageError / dims leak onto the new image.
   useEffect(() => {
-    if (!isImage) { setLoading(false); return; }
+    if (!isSupported) { setLoading(false); return; }
     let active = true;
     setStrokes([]);
     setDims(null);
@@ -92,7 +115,7 @@ export default function MediaAnnotate() {
       .catch(() => { if (active) toast.error('Failed to load saved annotation'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [mediaKey, isImage]);
+  }, [mediaKey, isSupported]);
 
   const tool = useMemo(() => ({ color, size, mode }), [color, size, mode]);
 
@@ -111,21 +134,25 @@ export default function MediaAnnotate() {
     return res;
   }, { errorMessage: 'Failed to save annotation' });
 
+  const noun = isBlank ? 'Sketch' : 'Annotation';
+  const backPath = returnTo || '/media/history';
+  const backLabel = returnTo ? 'Back' : 'Media History';
+
   const handleSave = useCallback(async () => {
     const res = await save();
-    if (res) toast.success(strokes.length ? 'Annotation saved' : 'Annotation cleared');
-  }, [save, strokes.length]);
+    if (res) toast.success(strokes.length ? `${noun} saved` : `${noun} cleared`);
+  }, [save, strokes.length, noun]);
 
   const handleExport = useCallback(() => {
     const dataUrl = canvasApiRef.current?.exportPng?.();
     if (!dataUrl) { toast.error('Nothing to export yet'); return; }
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `annotated-${parsed?.ref || 'image'}.png`;
+    a.download = isBlank ? `sketch-${parsed?.ref || 'canvas'}.png` : `annotated-${parsed?.ref || 'image'}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [parsed]);
+  }, [parsed, isBlank]);
 
   const strengthMin = regenInfo?.strengthMin ?? 0.02;
   const strengthMax = regenInfo?.strengthMax ?? 0.6;
@@ -160,7 +187,7 @@ export default function MediaAnnotate() {
     navigate('/media/history');
   }, [rerender, navigate]);
 
-  if (!isImage) {
+  if (!isSupported) {
     return (
       <div className="p-4 md:p-6 max-w-3xl mx-auto text-sm text-gray-400">
         <Link to="/media/history" className="text-port-accent hover:underline inline-flex items-center gap-1">
@@ -169,7 +196,7 @@ export default function MediaAnnotate() {
         <div className="mt-6 bg-port-card border border-port-border rounded-xl p-8 text-center">
           <ImageOff className="w-8 h-8 mx-auto mb-2 text-gray-600" />
           {mediaKey
-            ? 'Only generated images can be annotated. This link points at an unsupported or missing item.'
+            ? 'Only generated images or blank-canvas sketches can be annotated. This link points at an unsupported or missing item.'
             : 'Open a generated image from Media History or a Collection and choose “Annotate” to draw over it.'}
         </div>
       </div>
@@ -179,8 +206,8 @@ export default function MediaAnnotate() {
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="p-3 md:p-4 border-b border-port-border flex flex-wrap items-center gap-2 sticky top-0 bg-port-bg/95 backdrop-blur z-10">
-        <Link to="/media/history" className="text-gray-400 hover:text-white inline-flex items-center gap-1 text-sm mr-1" title="Back to Media History">
-          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">History</span>
+        <Link to={backPath} className="text-gray-400 hover:text-white inline-flex items-center gap-1 text-sm mr-1" title={`Back to ${backLabel}`}>
+          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">{backLabel}</span>
         </Link>
 
         {/* Draw / erase */}
@@ -275,19 +302,23 @@ export default function MediaAnnotate() {
             onClick={handleSave}
             disabled={saving || !dims}
             className="px-3 py-1.5 text-xs bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
-            title="Save annotation"
+            title={`Save ${noun.toLowerCase()}`}
           >
             <Save className="w-3.5 h-3.5" /> {saving ? 'Saving…' : 'Save'}
           </button>
-          <button
-            type="button"
-            onClick={openRerender}
-            disabled={!dims || strokes.length === 0}
-            className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
-            title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
-          >
-            <Wand2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Re-render</span>
-          </button>
+          {/* Re-render is img2img over an existing generated image — only for the
+              overlay (image) mode. A blank sketch has no source render to feed. */}
+          {isImage ? (
+            <button
+              type="button"
+              onClick={openRerender}
+              disabled={!dims || strokes.length === 0}
+              className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
+              title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
+            >
+              <Wand2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Re-render</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -302,10 +333,12 @@ export default function MediaAnnotate() {
           </div>
         ) : (
           <div className="w-full max-w-4xl">
-            {loading && <div className="text-gray-500 text-sm mb-2">Loading saved annotation…</div>}
+            {loading && <div className="text-gray-500 text-sm mb-2">Loading saved {noun.toLowerCase()}…</div>}
             <AnnotationCanvas
               ref={canvasApiRef}
               imageSrc={imageSrc}
+              blankWidth={blankWidth}
+              blankHeight={blankHeight}
               strokes={strokes}
               tool={tool}
               onStrokesChange={setStrokes}

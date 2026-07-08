@@ -17,7 +17,8 @@
  */
 
 import { useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil } from 'lucide-react';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
@@ -30,6 +31,7 @@ import {
   generatePipelineSceneImagePrompts,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
+  createBlankSketch,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
@@ -38,8 +40,12 @@ import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidate
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
+  const navigate = useNavigate();
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
+  // Scene index currently minting a blank sketch (so its button shows a spinner
+  // and can't be double-clicked while the POST is in flight).
+  const [sketchingIdx, setSketchingIdx] = useState(null);
   // Per-stage gen config — edited from the page-level settings modal.
   const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
@@ -385,6 +391,32 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     toast.success(`Queued scene video (${result.jobId.slice(0, 8)})`);
   };
 
+  // Attach a blank-canvas storyboard sketch to this scene (issue #2036 phase 3).
+  // The scene stores a `sketchKey` ("sketch:<uuid>") — a namespace the media
+  // sketch service owns, minted server-side (crypto.randomUUID is unavailable on
+  // PortOS's plain-HTTP origin). An existing key just reopens the same canvas.
+  // The sketch page returns here (?returnTo=) at the same stage.
+  const openSceneSketch = async (i) => {
+    const scene = scenes[i];
+    let key = scene.sketchKey;
+    if (!key) {
+      setSketchingIdx(i);
+      const res = await createBlankSketch({ silent: true }).catch((err) => {
+        toast.error(err.message || 'Failed to create sketch');
+        return null;
+      });
+      setSketchingIdx(null);
+      if (!res?.key) return;
+      key = res.key;
+      // Persist the key on the scene BEFORE navigating so a reload/return lands
+      // on the same canvas. persist() resolves once the PATCH settles.
+      const ok = await persist(scenes.map((s, j) => j === i ? { ...s, sketchKey: key } : s));
+      if (!ok) return;
+    }
+    const returnTo = `/pipeline/issues/${issue.id}/storyboards`;
+    navigate(`/media/annotate/${encodeURIComponent(key)}?returnTo=${encodeURIComponent(returnTo)}`);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -515,6 +547,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                     {renderingVideoIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Film size={12} />}
                     Scene video
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openSceneSketch(i)}
+                    disabled={sketchingIdx !== null}
+                    title={scene.sketchKey ? 'Open this scene’s storyboard sketch' : 'Draw a blank-canvas storyboard sketch for this scene'}
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {sketchingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Pencil size={12} />}
+                    {scene.sketchKey ? 'Edit sketch' : 'Sketch'}
+                  </button>
                   {scene.imageJobId ? (
                     <>
                       <MediaJobThumb jobId={scene.imageJobId} label={`Scene ${i + 1}`} size="md" />
@@ -526,6 +568,23 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                       <MediaJobThumb jobId={scene.sceneVideoJobId} label={`Scene ${i + 1} video`} size="md" kind="video" />
                       <span className="text-[10px] text-gray-500 font-mono break-all">vid {scene.sceneVideoJobId.slice(0, 8)}</span>
                     </>
+                  ) : null}
+                  {scene.sketchKey ? (
+                    <button
+                      type="button"
+                      onClick={() => openSceneSketch(i)}
+                      title="Open this scene’s storyboard sketch"
+                      className="block rounded border border-port-border overflow-hidden hover:border-port-accent/50"
+                    >
+                      {/* The flattened PNG sidecar is served at /png; the query
+                          key busts the cache after each save (updatedAt broadcast). */}
+                      <img
+                        src={`/api/media/sketches/${encodeURIComponent(scene.sketchKey)}/png`}
+                        alt={`Scene ${i + 1} sketch`}
+                        className="w-full h-auto"
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                      />
+                    </button>
                   ) : null}
                 </div>
               </div>

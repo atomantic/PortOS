@@ -1,18 +1,36 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { drawStrokes, createStroke, appendPoint } from '../../lib/sketchCanvas';
 
-// Drawing surface for the Sketch & Annotation Canvas (issue #2036, phase 1).
-// Renders the target image with a transparent <canvas> stroke layer on top.
+// Drawing surface for the Sketch & Annotation Canvas (issue #2036).
+// Two modes:
+//   - Overlay (phases 1–2): pass `imageSrc` — the target image renders with a
+//     transparent <canvas> stroke layer on top; export flattens image + strokes.
+//   - Blank canvas (phase 3): omit `imageSrc` and pass `blankWidth`/`blankHeight`
+//     (+ optional `backgroundColor`) — a solid-fill canvas the user draws on from
+//     scratch; export paints the background then the strokes.
 // Controlled: the parent owns `strokes` + the active `tool` and receives
 // committed strokes via `onStrokesChange`. Pointer events cover mouse, pen, AND
 // touch (the canvas sets `touch-action: none` so a drag doesn't scroll the page).
 //
-// The imperative handle exposes `exportPng()` (flattened image + strokes) and
+// The imperative handle exposes `exportPng()` (flattened output) and
 // `dimensions` so the parent can persist / download without reaching into refs.
+const DEFAULT_BLANK_BG = '#ffffff';
+
 const AnnotationCanvas = forwardRef(function AnnotationCanvas(
-  { imageSrc, strokes, tool, onStrokesChange, onImageLoad, onImageError },
+  {
+    imageSrc,
+    strokes,
+    tool,
+    onStrokesChange,
+    onImageLoad,
+    onImageError,
+    blankWidth = 1024,
+    blankHeight = 1024,
+    backgroundColor = DEFAULT_BLANK_BG,
+  },
   ref,
 ) {
+  const isBlank = !imageSrc;
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
   const drawingRef = useRef(null); // in-progress (uncommitted) stroke
@@ -29,17 +47,36 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
     onImageLoad?.({ w, h });
   }, [onImageLoad]);
 
+  // Blank mode has no <img> to fire onLoad — derive dims straight from the
+  // requested canvas size (clamped to a sane positive integer) and report them.
+  useEffect(() => {
+    if (!isBlank) return;
+    const w = Math.max(1, Math.round(blankWidth) || 1);
+    const h = Math.max(1, Math.round(blankHeight) || 1);
+    setDims({ w, h });
+    onImageLoad?.({ w, h });
+  }, [isBlank, blankWidth, blankHeight, onImageLoad]);
+
   // Redraw the whole layer from the committed strokes plus any in-progress
   // stroke. Full redraw (rather than incremental) keeps undo/erase trivially
-  // correct — the layer is a pure function of the stroke list.
+  // correct — the layer is a pure function of the stroke list. In blank mode the
+  // background fills first so erase (destination-out) reveals the paper, not the
+  // page behind the canvas.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !dims) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (isBlank) {
+      ctx.save();
+      ctx.fillStyle = backgroundColor;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
     const all = inProgress ? [...strokes, inProgress] : strokes;
     drawStrokes(ctx, all, canvas.width, canvas.height);
-  }, [strokes, inProgress, dims]);
+  }, [strokes, inProgress, dims, isBlank, backgroundColor]);
 
   // Map a pointer event to natural-pixel canvas coordinates, accounting for the
   // CSS scale between the displayed size and the canvas's internal resolution.
@@ -90,35 +127,49 @@ const AnnotationCanvas = forwardRef(function AnnotationCanvas(
 
   useImperativeHandle(ref, () => ({
     dimensions: dims,
-    // Flatten the image + stroke layer into a single PNG data URL at natural
-    // resolution. Same-origin image (/data/images/...) so the canvas isn't
-    // tainted and toDataURL succeeds.
+    // Flatten to a single opaque PNG data URL at natural resolution. Overlay
+    // mode composites the same-origin image (/data/images/...) under the strokes
+    // (so the canvas isn't tainted and toDataURL succeeds); blank mode fills the
+    // background color instead so the export is never transparent.
     exportPng: () => {
       const canvas = canvasRef.current;
-      const img = imgRef.current;
-      if (!canvas || !img || !dims) return null;
+      if (!canvas || !dims) return null;
       const out = document.createElement('canvas');
       out.width = dims.w;
       out.height = dims.h;
       const ctx = out.getContext('2d');
       if (!ctx) return null;
-      ctx.drawImage(img, 0, 0, dims.w, dims.h);
+      if (isBlank) {
+        ctx.fillStyle = backgroundColor;
+        ctx.fillRect(0, 0, dims.w, dims.h);
+      } else {
+        const img = imgRef.current;
+        if (!img) return null;
+        ctx.drawImage(img, 0, 0, dims.w, dims.h);
+      }
       ctx.drawImage(canvas, 0, 0, dims.w, dims.h);
       return out.toDataURL('image/png');
     },
-  }), [dims]);
+  }), [dims, isBlank, backgroundColor]);
 
   return (
     <div className="relative inline-block max-w-full bg-port-bg rounded-lg overflow-hidden">
-      <img
-        ref={imgRef}
-        src={imageSrc}
-        onLoad={handleImgLoad}
-        onError={onImageError}
-        alt="Media being annotated"
-        className="block max-w-full h-auto select-none"
-        draggable={false}
-      />
+      {isBlank ? (
+        // A sized spacer establishes the natural aspect ratio so the absolutely
+        // positioned canvas below scales to it (matches the <img> layout in
+        // overlay mode). No <img> element exists in blank mode.
+        <div style={{ aspectRatio: `${dims?.w || blankWidth} / ${dims?.h || blankHeight}` }} className="w-full max-w-full" />
+      ) : (
+        <img
+          ref={imgRef}
+          src={imageSrc}
+          onLoad={handleImgLoad}
+          onError={onImageError}
+          alt="Media being annotated"
+          className="block max-w-full h-auto select-none"
+          draggable={false}
+        />
+      )}
       {dims && (
         <canvas
           ref={canvasRef}
