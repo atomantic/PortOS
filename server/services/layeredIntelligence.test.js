@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// fetchHttpSource routes through the canonical SSRF-guarded fetch; mock it so the
+// http-source unit tests never hit the network and can assert the guard is used.
+vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicBinary: vi.fn() }));
+import { fetchPublicBinary } from '../lib/safeUrlFetch.js';
+
 import {
   defaultLayeredIntelligenceConfig,
   getEffectiveConfig,
@@ -485,59 +491,28 @@ describe('customSourceKey', () => {
 });
 
 describe('fetchHttpSource', () => {
-  it('returns response text on a 2xx', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('body text') });
-    expect(await fetchHttpSource('https://x', { fetchImpl })).toBe('body text');
-    expect(fetchImpl).toHaveBeenCalledWith('https://x', expect.objectContaining({ redirect: 'follow' }));
+  beforeEach(() => { fetchPublicBinary.mockReset(); });
+
+  it('returns the guarded body text on success and passes throwOnUnsafe:false', async () => {
+    fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('coverage 91%'), contentType: 'text/plain' });
+    expect(await fetchHttpSource('https://ci/metrics')).toBe('coverage 91%');
+    expect(fetchPublicBinary).toHaveBeenCalledWith('https://ci/metrics', expect.objectContaining({ throwOnUnsafe: false }));
   });
 
-  it('returns null on a non-2xx response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: () => Promise.resolve('nope') });
-    expect(await fetchHttpSource('https://x', { fetchImpl })).toBeNull();
+  it('returns null when the guarded fetch blocks/fails the URL (SSRF guard)', async () => {
+    fetchPublicBinary.mockResolvedValue(null); // e.g. a link-local / metadata / non-2xx target
+    expect(await fetchHttpSource('http://169.254.169.254/latest/meta-data')).toBeNull();
   });
 
-  it('returns null when fetch rejects (dead endpoint)', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
-    expect(await fetchHttpSource('https://x', { fetchImpl })).toBeNull();
+  it('slices the decoded body to maxBytes for the prompt', async () => {
+    fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('x'.repeat(9000)), contentType: '' });
+    expect(await fetchHttpSource('https://big', { maxBytes: 8000 })).toHaveLength(8000);
   });
 
-  it('returns null when no fetch implementation is available', async () => {
-    expect(await fetchHttpSource('https://x', { fetchImpl: undefined })).toBeNull();
-  });
-
-  it('byte-caps a large streamed body and stops reading', async () => {
-    // A body reader that would yield far more than the cap; readBodyCapped must
-    // stop and cancel once maxBytes is reached rather than draining the whole stream.
-    const chunk = new TextEncoder().encode('y'.repeat(400));
-    let reads = 0;
-    const cancel = vi.fn(() => Promise.resolve());
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      body: { getReader: () => ({
-        read: () => { reads++; return Promise.resolve(reads > 100 ? { done: true } : { done: false, value: chunk }); },
-        cancel
-      }) }
-    });
-    const text = await fetchHttpSource('https://big', { fetchImpl, maxBytes: 1000 });
-    expect(text).toHaveLength(1000);
-    expect(cancel).toHaveBeenCalled();
-    expect(reads).toBeLessThan(10); // stopped early, did not drain 100 chunks
-  });
-
-  it('falls back to res.text() when the Response has no stream body', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('z'.repeat(50)) });
-    expect(await fetchHttpSource('https://x', { fetchImpl, maxBytes: 20 })).toBe('z'.repeat(20));
-  });
-
-  it('aborts (returns null) when the body read hangs past the timeout', async () => {
-    // Headers resolve fast, but res.text() never settles until the abort signal fires.
-    const fetchImpl = vi.fn((_url, { signal }) => Promise.resolve({
-      ok: true,
-      text: () => new Promise((_res, rej) => {
-        signal.addEventListener('abort', () => rej(new Error('aborted')));
-      })
-    }));
-    expect(await fetchHttpSource('https://slow', { fetchImpl, timeoutMs: 20 })).toBeNull();
+  it('forwards fetchMaxBytes as the guard byte cap (peak-memory bound)', async () => {
+    fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('ok'), contentType: '' });
+    await fetchHttpSource('https://x', { fetchMaxBytes: 12345 });
+    expect(fetchPublicBinary).toHaveBeenCalledWith('https://x', expect.objectContaining({ maxBytes: 12345 }));
   });
 });
 
@@ -558,21 +533,19 @@ describe('runShellCommand', () => {
 
 describe('gatherSources http/cmd custom sources', () => {
   it('includes an http source body under its key', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve('coverage 91%') });
     const out = await gatherSources(
       { repoPath: '/repo' },
       { sources: { custom: [{ type: 'http', url: 'https://ci/metrics', label: 'CI' }] } },
-      { fetchImpl }
+      { fetchHttp: async () => 'coverage 91%' }
     );
     expect(out['custom:CI']).toBe('coverage 91%');
   });
 
   it('omits an http source that returns no data', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: () => Promise.resolve('') });
     const out = await gatherSources(
       { repoPath: '/repo' },
       { sources: { custom: [{ type: 'http', url: 'https://ci/down' }] } },
-      { fetchImpl }
+      { fetchHttp: async () => null }
     );
     expect(Object.keys(out).some(k => k.startsWith('custom:'))).toBe(false);
   });
@@ -607,7 +580,7 @@ describe('gatherSources http/cmd custom sources', () => {
         { type: 'cmd', cmd: 'dump', label: 'C' }
       ] } },
       {
-        fetchImpl: vi.fn().mockResolvedValue({ ok: true, text: () => Promise.resolve(big) }),
+        fetchHttp: vi.fn().mockResolvedValue(big),
         runCommand: vi.fn().mockResolvedValue({ code: 0, stdout: big, stderr: '' })
       }
     );

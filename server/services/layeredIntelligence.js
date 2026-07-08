@@ -24,6 +24,7 @@ import { join, resolve, relative, isAbsolute } from 'path';
 import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { fetchPublicBinary } from '../lib/safeUrlFetch.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -352,53 +353,20 @@ export function runShellCommand(cmd, { cwd, timeoutMs = 15000, maxBytes = 8000 }
 }
 
 /**
- * Fetch an `http` telemetry source, returning its response body text or null
- * (never throws — a dead/slow/erroring endpoint degrades to an omitted source).
- * Time-boxed GET, follows redirects; a non-2xx response is treated as no data.
- * The body is read as a byte-capped stream so a large-but-responsive endpoint
- * (CI logs, coverage HTML, an artifact) can't allocate far more than needed
- * before the caller slices it. `fetchImpl` is injectable so tests never hit the
- * network; a fetch impl whose Response has no stream body falls back to text().
+ * Fetch an `http` telemetry source's body as text, or null (never throws — a
+ * dead/blocked/erroring endpoint degrades to an omitted source). Routes through
+ * the repo's canonical SSRF-guarded fetch (`fetchPublicBinary`) rather than a
+ * bare fetch, so a configured URL can't reach loopback / link-local / cloud-
+ * metadata endpoints, redirects are revalidated, and the body is byte-capped
+ * while streaming (no unbounded buffer). The default posture ALLOWS LAN/Tailscale
+ * hosts — a single-user tool legitimately points telemetry at its own network
+ * services. `fetchMaxBytes` bounds peak memory; the returned text is then sliced
+ * to `maxBytes` for the prompt (a body over `fetchMaxBytes` is dropped, not fed).
  */
-export async function fetchHttpSource(url, { fetchImpl = globalThis.fetch, timeoutMs = 10000, maxBytes = 8000 } = {}) {
-  if (typeof fetchImpl !== 'function') return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  // Keep the abort timer armed across BOTH the fetch AND the body read: a server
-  // that returns headers fast but then dribbles (or never finishes) the body would
-  // otherwise hang the read forever if we cleared the timer on fetch-resolve. The
-  // signal aborts the body stream too, so a stalled read rejects → caught → null.
-  const text = await (async () => {
-    const res = await fetchImpl(url, { signal: controller.signal, redirect: 'follow' });
-    if (!res || !res.ok) return null;
-    return readBodyCapped(res, maxBytes);
-  })().catch(() => null);
-  clearTimeout(timer);
-  return typeof text === 'string' ? text : null;
-}
-
-/**
- * Read a fetch Response body as text, stopping once ~maxBytes of decoded text is
- * collected (then aborting the stream) so a huge body isn't buffered whole. Falls
- * back to res.text() when the Response exposes no readable stream (e.g. a test
- * double or a polyfill without `body.getReader`).
- */
-async function readBodyCapped(res, maxBytes) {
-  const reader = res.body?.getReader?.();
-  if (!reader) {
-    if (typeof res.text !== 'function') return null;
-    const t = await res.text();
-    return typeof t === 'string' ? t.slice(0, maxBytes) : null;
-  }
-  const decoder = new TextDecoder();
-  let out = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    out += decoder.decode(value, { stream: true });
-    if (out.length >= maxBytes) { reader.cancel().catch(() => {}); break; }
-  }
-  return out.slice(0, maxBytes);
+export async function fetchHttpSource(url, { timeoutMs = 10000, maxBytes = 8000, fetchMaxBytes = 2 * 1024 * 1024 } = {}) {
+  const result = await fetchPublicBinary(url, { timeoutMs, maxBytes: fetchMaxBytes, throwOnUnsafe: false });
+  if (!result?.buffer) return null;
+  return result.buffer.toString('utf-8').slice(0, maxBytes);
 }
 
 /**
@@ -423,7 +391,7 @@ export function customSourceKey(custom) {
  * files degrade to omitted keys, never throws. `openIssues` is gathered
  * separately by the handler (it shells out to the forge).
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos, fetchImpl = globalThis.fetch, runCommand = runShellCommand } = {}) {
+export async function gatherSources(app, config, { cosPath = PATHS.cos, fetchHttp = fetchHttpSource, runCommand = runShellCommand } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
@@ -459,7 +427,7 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, fetchImp
       const content = await tryReadFile(safe);
       if (content) out[key] = content.slice(0, 8000);
     } else if (custom.type === 'http' && typeof custom.url === 'string') {
-      const text = await fetchHttpSource(custom.url, { fetchImpl });
+      const text = await fetchHttp(custom.url);
       if (text && text.trim()) out[key] = text.slice(0, 8000);
       else console.warn(`⚠️ Layered Intelligence: custom http source "${custom.url}" returned no data — skipped`);
     } else if (custom.type === 'cmd' && typeof custom.cmd === 'string' && repo) {
