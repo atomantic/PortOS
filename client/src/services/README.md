@@ -77,6 +77,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiTribe.js` | Tribe people (relationship rings + contacts). |
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications. |
+| `apiSpotify.js` | Spotify OAuth + listening-history sync. |
 | `apiPersonalities.js` | Agent personality profiles. |
 
 ## Media / creative

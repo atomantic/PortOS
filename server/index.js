@@ -49,6 +49,7 @@ import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
 import timelineRoutes from './routes/timeline.js';
 import imessageRoutes from './routes/imessage.js';
+import spotifyRoutes from './routes/spotify.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
@@ -170,6 +171,7 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
+import { startSpotifyScheduler } from './services/spotifyScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
@@ -477,6 +479,7 @@ app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/imessage', imessageRoutes);
+app.use('/api/spotify', spotifyRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain/import', brainImportRoutes);
@@ -604,6 +607,10 @@ startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot sched
 // Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
 // the user opts in via Settings → iMessage (needs macOS Full Disk Access) (#2151).
 startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
+// Initialize Spotify sync scheduler — OFF by default; only polls the
+// recently-played API when the user connects Spotify + opts in via
+// Settings → Spotify (#2152).
+startSpotifyScheduler().catch(err => console.error(`❌ Spotify sync scheduler init failed: ${err.message}`));
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
