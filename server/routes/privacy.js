@@ -28,6 +28,8 @@ import {
   privacyChangeDeclareSchema,
   privacyChangeIdParamsSchema,
   privacyChangeOrgParamsSchema,
+  privacyOptOutPassSchema,
+  privacyOptOutVerifySchema,
 } from '../lib/privacyValidation.js';
 import {
   createVaultRecord,
@@ -55,6 +57,7 @@ import {
   getScanStatus,
 } from '../services/privacyBrokers.js';
 import { runScanPass } from '../services/privacyScan.js';
+import { runOptOutPass, runVerificationPass, getOptOutDigest } from '../services/privacyOptOut.js';
 import {
   declareChange,
   listChangeEvents,
@@ -210,6 +213,28 @@ router.get('/scan/status', asyncHandler(async (_req, res) => {
 router.post('/scan', asyncHandler(async (req, res) => {
   const { concurrency } = validateRequest(privacyScanStartSchema, req.body ?? {});
   res.json(await runScanPass(concurrency ? { concurrency } : {}));
+}));
+
+// ─── Opt-out automation engine (issue #2145) ───────────────────────────────
+
+// User-triggered opt-out pass: submit found/indirect cases via the chosen lane
+// (web-form / email), poll verifications. Submission autonomy (auto-send /
+// auto-submit) is read from settings.privacy.recheck — both default OFF.
+router.post('/optout', asyncHandler(async (req, res) => {
+  const { runVerification } = validateRequest(privacyOptOutPassSchema, req.body ?? {});
+  res.json(await runOptOutPass(runVerification === undefined ? {} : { runVerification }));
+}));
+
+// User-triggered verification-only pass (inbox confirmation scan + removal re-scan).
+router.post('/optout/verify', asyncHandler(async (req, res) => {
+  validateRequest(privacyOptOutVerifySchema, req.body ?? {});
+  res.json(await runVerificationPass());
+}));
+
+// Human-task digest: cases that need a person (blocked walls, auto-submit-off
+// forms, fax/phone/gov-ID channels) with the prepared request + playbook.
+router.get('/optout/digest', asyncHandler(async (_req, res) => {
+  res.json(await getOptOutDigest());
 }));
 
 export default router;

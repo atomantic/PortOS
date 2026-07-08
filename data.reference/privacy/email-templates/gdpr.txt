@@ -1,0 +1,25 @@
+Subject: GDPR Article 17 Erasure Request — {{fullName}}
+
+To the {{brokerName}} Data Protection Officer,
+
+I am exercising my right to erasure ("right to be forgotten") under Article 17
+of the EU General Data Protection Regulation (GDPR), and my right to object to
+processing under Article 21. I request that you:
+
+1. Erase all personal data you hold about me,
+2. Cease any further processing, including sale or transfer, and
+3. Remove my information from your public people-search listings.
+
+Identifying information (provided solely to locate and match my records):
+{{disclosedSummary}}
+
+{{listingSection}}
+Under Article 12(3) you must respond without undue delay and within one month.
+Please confirm completion in writing to this email address.
+
+I am submitting this request on my own behalf. Do not use the information above
+for any purpose other than fulfilling this request.
+
+Regards,
+{{fullName}}
+{{requestDate}}
