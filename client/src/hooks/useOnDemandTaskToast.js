@@ -66,7 +66,7 @@ export function useOnDemandTaskToast() {
         if (c.inFlight) parts.push(`${c.inFlight} in-flight`);
         if (c.filtered) parts.push(`${c.filtered} filtered`);
         const detail = parts.length ? ` — ${parts.join(', ')}` : '';
-        countSuffix = ` (0 of ${c.open} claimable${detail})`;
+        countSuffix = ` (0 of ${c.open} open${detail})`;
       }
 
       const recheckSuffix = data?.parkedUntil
