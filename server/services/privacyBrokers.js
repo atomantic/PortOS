@@ -258,6 +258,21 @@ export async function getBroker(id) {
   return rowToBroker(rows[0]);
 }
 
+/**
+ * Toggle a broker's `enabled` flag (Brokers-tab per-broker on/off, #2146). A
+ * disabled broker is skipped by the scan + opt-out passes. Returns the updated
+ * broker row (404 if the id is unknown).
+ */
+export async function setBrokerEnabled(id, enabled) {
+  const { rows } = await query(
+    `UPDATE privacy_brokers SET enabled = $1, updated_at = NOW() WHERE id = $2 RETURNING ${BROKER_COLUMNS}`,
+    [enabled, id],
+  );
+  if (!rows[0]) throw new ServerError('Broker not found', { status: 404, code: 'NOT_FOUND' });
+  console.log(`🗂️ Broker ${id}: enabled → ${enabled}`);
+  return rowToBroker(rows[0]);
+}
+
 // Parse the CA Data Broker Registry CSV (id/name-bearing rows) defensively.
 // Returns [] on any shape we can't recognize rather than throwing.
 export function parseCaRegistryCsv(csv) {
@@ -476,6 +491,23 @@ export async function transitionCase(caseId, toState, patch = {}) {
     console.log(`📋 Case ${caseId}: ${existing.rows[0].state} → ${toState}`);
     return rowToCase(rows[0]);
   });
+}
+
+/**
+ * Force a case due for recheck NOW (Brokers-tab manual "Re-check" control,
+ * #2146): stamp `next_recheck_at` in the past so the next scan/opt-out pass
+ * picks it up regardless of its backoff. Read-only otherwise — does not change
+ * the case state. Returns the updated case row (404 if unknown).
+ */
+export async function forceRecheckCase(caseId, { now = new Date() } = {}) {
+  const { rows } = await query(
+    `UPDATE privacy_broker_cases SET next_recheck_at = $1, updated_at = NOW()
+     WHERE id = $2 RETURNING ${CASE_COLUMNS}`,
+    [new Date(now.getTime() - 1000).toISOString(), caseId],
+  );
+  if (!rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+  console.log(`📋 Case ${caseId}: forced due for recheck`);
+  return rowToCase(rows[0]);
 }
 
 /**

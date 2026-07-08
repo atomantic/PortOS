@@ -36,6 +36,21 @@ vi.mock('../services/privacyBrokers.js', () => ({
   refreshBrokers: vi.fn(async () => ({ fetched: 3, added: 2, sources: { badbool: 2, caRegistry: 1 } })),
   listBrokerCases: vi.fn(async () => [{ id: 'case-1', brokerId: 'spokeo', state: 'found' }]),
   getScanStatus: vi.fn(async () => ({ enabledBrokers: 20, caseCounts: { found: 1 }, dueForRecheck: 3 })),
+  setBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled })),
+  forceRecheckCase: vi.fn(async (id) => ({ id, state: 'found', nextRecheckAt: '2020-01-01T00:00:00.000Z' })),
+  transitionCase: vi.fn(async (id, toState) => ({ id, state: toState })),
+}));
+
+vi.mock('../services/privacyRecheckScheduler.js', () => ({
+  getPrivacyRecheckStatus: vi.fn(async () => ({
+    enabled: false, cronExpression: '0 4 * * 0', autoApproveOptOutEmails: false, autoSubmitWebForms: false, nextRun: null,
+  })),
+  restartPrivacyRecheckScheduler: vi.fn(async () => {}),
+}));
+
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })),
+  updateSettingsWith: vi.fn(async (mutate) => mutate({ privacy: { recheck: {} } })),
 }));
 
 vi.mock('../services/privacyScan.js', () => ({
@@ -416,5 +431,67 @@ describe('GET /api/privacy/optout/digest', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ total: 1, humanTasks: 1 });
     expect(res.body.items[0].playbook).toEqual(['call back']);
+  });
+});
+
+describe('PUT /api/privacy/brokers/:id (#2146)', () => {
+  it('toggles a broker enabled flag', async () => {
+    const res = await request(makeApp()).put('/api/privacy/brokers/spokeo').send({ enabled: false });
+    expect(res.status).toBe(200);
+    expect(brokerService.setBrokerEnabled).toHaveBeenCalledWith('spokeo', false);
+    expect(res.body).toMatchObject({ id: 'spokeo', enabled: false });
+  });
+
+  it('rejects a non-boolean / unknown-key body', async () => {
+    expect((await request(makeApp()).put('/api/privacy/brokers/spokeo').send({ enabled: 'yes' })).status).toBe(400);
+    expect((await request(makeApp()).put('/api/privacy/brokers/spokeo').send({ enabled: true, x: 1 })).status).toBe(400);
+  });
+});
+
+describe('POST /api/privacy/broker-cases/:id/recheck (#2146)', () => {
+  it('forces a case due for recheck', async () => {
+    const res = await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/recheck`).send({});
+    expect(res.status).toBe(200);
+    expect(brokerService.forceRecheckCase).toHaveBeenCalledWith(VALID_UUID);
+  });
+
+  it('rejects a non-uuid id', async () => {
+    expect((await request(makeApp()).post('/api/privacy/broker-cases/not-a-uuid/recheck')).status).toBe(400);
+  });
+});
+
+describe('POST /api/privacy/broker-cases/:id/transition (#2146)', () => {
+  it('transitions a case to a manual target state', async () => {
+    const res = await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'submitted' });
+    expect(res.status).toBe(200);
+    expect(brokerService.transitionCase).toHaveBeenCalledWith(VALID_UUID, 'submitted', {});
+    expect(res.body).toMatchObject({ state: 'submitted' });
+  });
+
+  it('rejects a verification-only / unknown target state', async () => {
+    expect((await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'confirmed_removed' })).status).toBe(400);
+    expect((await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'bogus' })).status).toBe(400);
+  });
+});
+
+describe('privacy recheck schedule (#2146)', () => {
+  it('GET returns the schedule status', async () => {
+    const res = await request(makeApp()).get('/api/privacy/optout/schedule');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ enabled: false, cronExpression: '0 4 * * 0' });
+  });
+
+  it('PUT persists the slice + restarts the scheduler', async () => {
+    const res = await request(makeApp()).put('/api/privacy/optout/schedule').send({ enabled: true, cronExpression: '0 6 * * 1' });
+    expect(res.status).toBe(200);
+    const settingsService = await import('../services/settings.js');
+    const scheduler = await import('../services/privacyRecheckScheduler.js');
+    expect(settingsService.updateSettingsWith).toHaveBeenCalled();
+    expect(scheduler.restartPrivacyRecheckScheduler).toHaveBeenCalled();
+  });
+
+  it('PUT rejects a malformed cron / unknown key', async () => {
+    expect((await request(makeApp()).put('/api/privacy/optout/schedule').send({ cronExpression: 'nope' })).status).toBe(400);
+    expect((await request(makeApp()).put('/api/privacy/optout/schedule').send({ bogus: 1 })).status).toBe(400);
   });
 });

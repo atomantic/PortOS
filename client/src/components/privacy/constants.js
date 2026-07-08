@@ -89,4 +89,56 @@ export const HOLDING_TONE = {
   unknown: 'bg-gray-700/40 text-gray-400 border-gray-600/40',
 };
 
+// ── Data-broker opt-out (issue #2146) ───────────────────────────────────────
+// Case states — mirrors CASE_STATES / PRIVACY_BROKER_CASE_STATES on the server.
+export const CASE_STATES = [
+  { id: 'unscanned', label: 'Unscanned' },
+  { id: 'found', label: 'Found' },
+  { id: 'not_found', label: 'Not found' },
+  { id: 'indirect_exposure', label: 'Indirect exposure' },
+  { id: 'blocked', label: 'Blocked' },
+  { id: 'optout_in_progress', label: 'In progress' },
+  { id: 'submitted', label: 'Submitted' },
+  { id: 'verification_pending', label: 'Verifying' },
+  { id: 'awaiting_processing', label: 'Awaiting' },
+  { id: 'confirmed_removed', label: 'Removed' },
+  { id: 'human_task_queued', label: 'Human task' },
+  { id: 'reappeared', label: 'Reappeared' },
+];
+
+// Pre-composed Tailwind tone tokens per case state (JIT needs whole class names).
+export const CASE_STATE_TONE = {
+  unscanned: 'bg-gray-700/40 text-gray-400 border-gray-600/40',
+  found: 'bg-port-error/15 text-port-error border-port-error/30',
+  not_found: 'bg-gray-700/40 text-gray-400 border-gray-600/40',
+  indirect_exposure: 'bg-port-warning/15 text-port-warning border-port-warning/30',
+  blocked: 'bg-port-error/15 text-port-error border-port-error/30',
+  optout_in_progress: 'bg-port-accent/15 text-port-accent border-port-accent/30',
+  submitted: 'bg-port-accent/15 text-port-accent border-port-accent/30',
+  verification_pending: 'bg-port-accent/15 text-port-accent border-port-accent/30',
+  awaiting_processing: 'bg-port-warning/15 text-port-warning border-port-warning/30',
+  confirmed_removed: 'bg-port-success/15 text-port-success border-port-success/30',
+  human_task_queued: 'bg-port-warning/15 text-port-warning border-port-warning/30',
+  reappeared: 'bg-port-error/15 text-port-error border-port-error/30',
+};
+
+// The exposure-map header chips, in display order (a curated subset + grouping).
+export const EXPOSURE_MAP_STATES = [
+  'found', 'indirect_exposure', 'optout_in_progress', 'submitted',
+  'verification_pending', 'awaiting_processing', 'confirmed_removed',
+  'blocked', 'human_task_queued', 'not_found',
+];
+
+export const BROKER_SOURCES = [
+  { id: 'curated', label: 'Curated' },
+  { id: 'badbool', label: 'BADBOOL' },
+  { id: 'ca_registry', label: 'CA registry' },
+];
+
+export const BROKER_CONFIDENCE = [
+  { id: 'field_verified', label: 'Field-verified' },
+  { id: 'documented', label: 'Documented' },
+  { id: 'auto', label: 'Auto' },
+];
+
 export const labelFor = (list, id) => list.find((x) => x.id === id)?.label ?? id;
