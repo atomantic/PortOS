@@ -24,6 +24,7 @@ import { join, resolve, relative, isAbsolute } from 'path';
 import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -347,7 +348,7 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     } else if (custom.type === 'http' && typeof custom.url === 'string') {
       const content = await fetchHttpSource(custom.url);
       if (content) out[key] = content.slice(0, 8000);
-    } else if (custom.type === 'cmd' && typeof custom.cmd === 'string') {
+    } else if (custom.type === 'cmd' && typeof custom.cmd === 'string' && repo) {
       const content = await runShellCommand(custom.cmd, { cwd: repo });
       if (content) out[key] = content.slice(0, 8000);
     }
@@ -386,27 +387,17 @@ export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchImpl = fet
 /**
  * Run a user-configured shell command for a `cmd` custom source and return its
  * stdout. Deterministic read, no LLM. Runs the full command string through the
- * shell (e.g. `git log --oneline -20 | head`), bounded by a wall-clock timeout,
- * in the app's repo dir. Returns null on non-zero exit / no output so a failing
- * command just omits the key. `exec` is injectable for tests.
+ * shell (e.g. `git log --oneline -20 | head`) via the shared `bufferedSpawn`
+ * helper — which caps output, kills the whole process tree on timeout (so a
+ * hung pipeline grandchild can't linger), and never rejects. Returns null on
+ * non-zero exit / timeout / no output so a failing command just omits the key.
+ * `exec` is injectable for tests.
  */
-export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = runShell } = {}) {
+export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = bufferedSpawn } = {}) {
   if (typeof cmd !== 'string' || !cmd.trim()) return null;
-  const { code, stdout } = await exec(cmd, { cwd, timeout: timeoutMs });
+  const { code, stdout } = await exec(cmd, [], { cwd, timeoutMs, shell: true });
   if (code !== 0) return null;
-  return stdout.trim() || null;
-}
-
-/** Run a full command string through the shell, resolving `{ code, stdout, stderr }` (never rejects). */
-function runShell(cmd, options = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, { shell: true, windowsHide: true, ...options });
-    let stdout = '', stderr = '';
-    child.stdout?.on('data', d => { stdout += d.toString(); });
-    child.stderr?.on('data', d => { stderr += d.toString(); });
-    child.on('close', code => resolve({ code, stdout, stderr }));
-    child.on('error', err => resolve({ code: -1, stdout: '', stderr: err.message }));
-  });
+  return (stdout || '').trim() || null;
 }
 
 /**

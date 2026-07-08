@@ -489,14 +489,19 @@ describe('fetchHttpSource', () => {
 });
 
 describe('runShellCommand', () => {
-  it('returns trimmed stdout on exit 0', async () => {
+  it('returns trimmed stdout on exit 0, running through the shell in cwd', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '  out\n', stderr: '' });
     expect(await runShellCommand('echo out', { cwd: '/x', exec })).toBe('out');
-    expect(exec).toHaveBeenCalledWith('echo out', expect.objectContaining({ cwd: '/x' }));
+    // bufferedSpawn signature: (cmd, args, { cwd, timeoutMs, shell })
+    expect(exec).toHaveBeenCalledWith('echo out', [], expect.objectContaining({ cwd: '/x', shell: true }));
   });
   it('returns null on non-zero exit', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 1, stdout: 'partial', stderr: 'err' });
     expect(await runShellCommand('false', { cwd: '/x', exec })).toBeNull();
+  });
+  it('returns null on a timed-out command (code -1)', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: -1, stdout: '', stderr: '', timedOut: true });
+    expect(await runShellCommand('sleep 999', { cwd: '/x', exec })).toBeNull();
   });
   it('returns null on empty command without invoking exec', async () => {
     const exec = vi.fn();
