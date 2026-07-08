@@ -56,13 +56,25 @@ const uploadWhatsapp = uploadSingle('file', {
 // the recognized true/false tokens; any other string is left as-is so Zod
 // rejects it with a 400 rather than silently coercing an unknown value to a
 // (write-path) real import.
-const importBodySchema = z.object({
-  preview: z.preprocess((v) => {
-    if (typeof v !== 'string') return v;
-    if (v === 'true' || v === '1') return true;
-    if (v === 'false' || v === '0' || v === '') return false;
-    return v; // unrecognized → Zod boolean check fails → 400
-  }, z.boolean().optional().default(false)),
+const previewField = z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0' || v === '') return false;
+  return v; // unrecognized → Zod boolean check fails → 400
+}, z.boolean().optional().default(false));
+
+const importBodySchema = z.object({ preview: previewField });
+
+// WhatsApp adds an optional "your name" so a sender matching it is classified as
+// a sent (vs received) message. A blank multipart field means "not provided" →
+// neutral events, so an empty string is coerced to undefined rather than matching
+// the empty sender. Capped to keep the metadata payload bounded.
+const whatsappImportBodySchema = z.object({
+  preview: previewField,
+  yourName: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().max(200).optional(),
+  ),
 });
 
 const dayQuerySchema = z.object({
@@ -100,12 +112,16 @@ router.get('/events', asyncHandler(async (req, res) => {
 // are safe. The uploaded temp file is ALWAYS unlinked, success or not, and BOTH
 // validation and the import run inside the cleanup chain so a rejected `preview`
 // value still unlinks the already-staged temp upload.
-const importHandler = (importFn) => asyncHandler(async (req, res) => {
+// `schema` validates the multipart text fields (defaulting to just `preview`);
+// `toOptions` maps the validated body to the importer's option object so a source
+// with extra fields (WhatsApp's `yourName`) threads them through the same seam.
+const importHandler = (importFn, { schema = importBodySchema, toOptions } = {}) => asyncHandler(async (req, res) => {
   const file = req.file;
   if (!file?.path) throw new ServerError('No file uploaded', { status: 400, code: 'BAD_REQUEST' });
   const run = async () => {
-    const { preview } = validateRequest(importBodySchema, req.body);
-    return importFn(file, { dryRun: preview });
+    const body = validateRequest(schema, req.body);
+    const options = toOptions ? toOptions(body) : { dryRun: body.preview };
+    return importFn(file, options);
   };
   const result = await run().finally(() => unlink(file.path).catch(() => {}));
   res.json(result);
@@ -126,8 +142,12 @@ router.post('/import/takeout-location', uploadTakeoutLocation, importHandler(imp
 router.post('/import/discord', uploadDiscord, importHandler(importDiscordHistory));
 
 // POST /api/timeline/import/whatsapp — bulk-backfill a WhatsApp "Export chat"
-// transcript (`_chat.txt`, standalone or zipped) → neutral message events
-// (dedupe on a content hash, since WhatsApp lines carry no message id).
-router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHistory));
+// transcript (`_chat.txt`, standalone or zipped) → message events (dedupe on a
+// content hash, since WhatsApp lines carry no message id). An optional `yourName`
+// classifies direction (sent vs received); absent → neutral `message` events.
+router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHistory, {
+  schema: whatsappImportBodySchema,
+  toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null }),
+}));
 
 export default router;

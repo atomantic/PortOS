@@ -1,13 +1,17 @@
+import { useState } from 'react';
 import { MessagesSquare } from 'lucide-react';
 import * as api from '../../services/api';
 import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 
-// Bulk-backfill importer for a WhatsApp "Export chat" transcript (#2160) → every
-// message becomes a neutral timeline event, built on the shared
-// ActivityImportPanel seam. WhatsApp exports don't mark which sender is "you", so
-// direction (sent vs received) is left neutral for now — the sender is kept per
-// event for a later reclassification pass.
+// Bulk-backfill importer for a WhatsApp "Export chat" transcript (#2160), built on
+// the shared ActivityImportPanel seam. WhatsApp exports don't mark which sender is
+// "you", so an optional "your name" field classifies direction: a sender matching
+// it becomes a sent message, everyone else received. Left blank, every message is
+// a neutral event (the sender is always kept per event).
 export default function WhatsappImportPanel({ onImported }) {
+  const [yourName, setYourName] = useState('');
+  const trimmed = yourName.trim();
+
   return (
     <ActivityImportPanel
       icon={MessagesSquare}
@@ -16,6 +20,7 @@ export default function WhatsappImportPanel({ onImported }) {
       importFn={api.importWhatsappHistory}
       onImported={onImported}
       accept=".txt,.zip,text/plain,application/zip"
+      importOptions={trimmed ? { yourName: trimmed } : undefined}
       help={(
         <>
           In WhatsApp, open a chat → <span className="text-gray-300">⋯ More → Export chat</span> (without
@@ -24,9 +29,28 @@ export default function WhatsappImportPanel({ onImported }) {
           imported. Re-imports are safe.
         </>
       )}
+      controls={({ disabled }) => (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="whatsapp-your-name" className="text-xs text-gray-400">
+            Your name in this chat <span className="text-gray-600">(optional — marks your messages as sent)</span>
+          </label>
+          <input
+            id="whatsapp-your-name"
+            type="text"
+            value={yourName}
+            onChange={(e) => setYourName(e.target.value)}
+            disabled={disabled}
+            placeholder="e.g. how your contacts saved you"
+            className="w-full max-w-xs rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-gray-200 placeholder:text-gray-600 focus:border-port-accent focus:outline-none disabled:opacity-40"
+          />
+        </div>
+      )}
       renderPreview={(summary) => (
         <>
           <div>{summary.messages} message(s) from {summary.uniqueSenders} sender(s)</div>
+          {summary.directionKnown && (
+            <div>{summary.sent} sent, {summary.received} received</div>
+          )}
           {summary.chatTitle && <div>Chat: {summary.chatTitle}</div>}
           {dateRangeLabel(summary.from, summary.to) && (
             <div>Range: {dateRangeLabel(summary.from, summary.to)}</div>

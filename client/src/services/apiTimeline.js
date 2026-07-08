@@ -25,10 +25,15 @@ export const getTimelineEvents = (options = {}) => {
 // `preview: true` returns parse-only counts + a summary without writing; a real
 // import is idempotent so re-imports are safe. request() detects the FormData
 // body and lets the browser set the boundary.
-const importFile = (path, file, { preview = false, ...options } = {}) => {
+const importFile = (path, file, { preview = false, fields = {}, ...options } = {}) => {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('preview', preview ? 'true' : 'false');
+  // Source-specific extra text fields (e.g. WhatsApp's `yourName`). Blank values
+  // are dropped so the server sees "not provided" rather than an empty string.
+  for (const [name, value] of Object.entries(fields)) {
+    if (value != null && String(value).trim() !== '') formData.append(name, String(value));
+  }
   return request(path, { method: 'POST', body: formData, ...options });
 };
 
@@ -46,7 +51,9 @@ export const importTakeoutLocationHistory = (file, options = {}) =>
 export const importDiscordHistory = (file, options = {}) =>
   importFile('/timeline/import/discord', file, options);
 
-// WhatsApp "Export chat" transcript (`_chat.txt`, standalone or zipped) — every
-// message becomes a neutral timeline event (dedupe on a content hash).
-export const importWhatsappHistory = (file, options = {}) =>
-  importFile('/timeline/import/whatsapp', file, options);
+// WhatsApp "Export chat" transcript (`_chat.txt`, standalone or zipped) — each
+// message becomes a timeline event (dedupe on a content hash). An optional
+// `yourName` classifies direction: a sender matching it → sent, others →
+// received; absent → neutral `message` events.
+export const importWhatsappHistory = (file, { yourName, ...options } = {}) =>
+  importFile('/timeline/import/whatsapp', file, { ...options, fields: { yourName } });
