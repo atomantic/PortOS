@@ -238,8 +238,9 @@ export const setMediaAnnotation = (key, patch) => request(`/media/annotations/${
   body: JSON.stringify(patch),
 });
 
-// Media sketches — freehand annotation strokes drawn over a generated image,
-// keyed by "<kind>:<ref>" (only image:* is supported in phase 1 of #2036).
+// Media sketches — freehand strokes over a generated image ("image:<ref>",
+// phases 1–2 of #2036) OR a free-standing blank canvas ("sketch:<uuid>",
+// phase 3, attachable to a pipeline storyboard scene).
 // GET returns `{ key, sketch: { width, height, strokes, updatedAt, hasPng } | null }`.
 // PUT persists strokes + an optional flattened PNG data URL. The persisted PNG
 // is retrievable at GET /media/sketches/:key/png (consumed by phase 2's
@@ -252,6 +253,11 @@ export const saveMediaSketch = (key, payload, { silent = false } = {}) =>
     body: JSON.stringify(payload),
     silent,
   });
+// Mint a fresh blank-canvas sketch key ("sketch:<uuid>"). Server-generated
+// because PortOS is served over plain HTTP (crypto.randomUUID is unavailable on
+// an insecure origin). Returns `{ key }`.
+export const createBlankSketch = ({ silent = false } = {}) =>
+  request('/media/sketches', { method: 'POST', silent });
 
 // Models management (HF cache + LoRAs)
 export const listCachedModels = () => request('/image-video/models');

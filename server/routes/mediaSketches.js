@@ -1,4 +1,6 @@
 /**
+ *   POST   /api/media/sketches
+ *     → { key: 'sketch:<uuid>' }  (mint a fresh blank-canvas sketch key)
  *   GET    /api/media/sketches/:key
  *     → { key, sketch: { width, height, strokes, updatedAt, hasPng } | null }
  *   PUT    /api/media/sketches/:key
@@ -7,8 +9,9 @@
  *   GET    /api/media/sketches/:key/png
  *     → flattened PNG bytes (image + strokes), 404 when none saved
  *
- * Key shape: `<kind>:<ref>` (only `image:*` may be annotated in phase 1).
- * Phase 1 of the Sketch & Annotation Canvas — issue #2036.
+ * Key shape: `image:<ref>` (annotate over a generated image, phases 1–2) or
+ * `sketch:<uuid>` (a free-standing blank canvas, phase 3 — attachable to a
+ * pipeline storyboard scene). Both are issue #2036.
  */
 
 import { Router } from 'express';
@@ -24,6 +27,13 @@ const mapServiceError = (err) => {
   }
   return err;
 };
+
+// Mint a blank-canvas sketch key. The client can't rely on crypto.randomUUID
+// (PortOS is served over plain HTTP on Tailscale, an insecure origin), so the
+// server owns id generation.
+router.post('/', asyncHandler(async (_req, res) => {
+  res.status(201).json({ key: svc.createBlankSketchKey() });
+}));
 
 router.get('/:key', asyncHandler(async (req, res) => {
   const sketch = await svc.getSketch(req.params.key).catch((err) => { throw mapServiceError(err); });
