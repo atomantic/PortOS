@@ -126,16 +126,34 @@ export const layeredIntelligenceConfigSchema = z.object({
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),
     openIssues: z.boolean().optional(),
-    custom: z.array(z.object({
-      type: z.enum(['file']),
-      // A safe repo-relative path — reject absolute paths and `..` traversal so a
-      // custom source can't read files outside the app repo into the LLM prompt.
-      // gatherSources also enforces this at read time (defense in depth).
-      ref: z.string().min(1).max(500)
-        .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
-          message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
-        })
-    })).optional()
+    // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
+    // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
+    // `label`. gatherSources also re-enforces the file confinement + the
+    // http scheme + a cmd timeout at read time (defense in depth).
+    custom: z.array(z.discriminatedUnion('type', [
+      z.object({
+        type: z.literal('file'),
+        // A safe repo-relative path — reject absolute paths and `..` traversal so a
+        // custom source can't read files outside the app repo into the LLM prompt.
+        ref: z.string().min(1).max(500)
+          .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
+            message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
+          }),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('http'),
+        // Only http/https — gatherSources rejects any other scheme at read time too.
+        url: z.string().url().max(2000)
+          .refine(u => /^https?:\/\//i.test(u), { message: 'url must be http(s)' }),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('cmd'),
+        cmd: z.string().min(1).max(2000),
+        label: z.string().max(120).optional()
+      })
+    ])).optional()
   }).optional(),
   rules: z.string().max(8000).optional(),
   allowedScopes: z.array(z.enum(LAYERED_INTELLIGENCE_SCOPES)).optional(),

@@ -47,19 +47,46 @@ function sameScopes(a, b) {
   return a.every(s => sb.has(s));
 }
 
-// Sanitize a custom-source list to what actually gets persisted: file-type
-// entries with a trimmed, non-blank ref. Used both to compare against the
-// baseline and to build the emitted value, so a half-typed/blank row that
-// sanitizes away doesn't register as a change (and over-persist the config).
+// The per-row primary value field, keyed by source type. Mirrors the server's
+// discriminated union (server/lib/validation.js `layeredIntelligenceConfigSchema`).
+export const LI_CUSTOM_TYPES = [
+  { type: 'file', valueKey: 'ref', label: 'File', placeholder: 'repo-relative path, e.g. docs/metrics.md' },
+  { type: 'http', valueKey: 'url', label: 'URL', placeholder: 'https://example.com/status.json' },
+  { type: 'cmd', valueKey: 'cmd', label: 'Command', placeholder: 'git log --oneline -20' }
+];
+
+const CUSTOM_TYPE_BY_KEY = Object.fromEntries(LI_CUSTOM_TYPES.map(t => [t.type, t]));
+
+// The value field name for a source type ('ref' | 'url' | 'cmd'), defaulting to
+// the file `ref` for an unknown/legacy type.
+function customValueKey(type) {
+  return (CUSTOM_TYPE_BY_KEY[type] || CUSTOM_TYPE_BY_KEY.file).valueKey;
+}
+
+// Sanitize a custom-source list to what actually gets persisted: a `type`, its
+// trimmed, non-blank primary value, and an optional trimmed label. Used both to
+// compare against the baseline and to build the emitted value, so a half-typed/
+// blank row that sanitizes away doesn't register as a change (over-persist).
 function sanitizeCustom(list) {
   return (Array.isArray(list) ? list : [])
-    .map(s => ({ type: 'file', ref: String(s?.ref || '').trim() }))
-    .filter(s => s.ref);
+    .map(s => {
+      const type = CUSTOM_TYPE_BY_KEY[s?.type] ? s.type : 'file';
+      const valueKey = customValueKey(type);
+      const value = String(s?.[valueKey] || '').trim();
+      const label = String(s?.label || '').trim();
+      const out = { type, [valueKey]: value };
+      if (label) out.label = label;
+      return out;
+    })
+    .filter(s => s[customValueKey(s.type)]);
 }
 
 function sameCustom(a, b) {
   if (a.length !== b.length) return false;
-  return a.every((s, i) => s.type === b[i].type && s.ref === b[i].ref);
+  return a.every((s, i) => {
+    const vk = customValueKey(s.type);
+    return s.type === b[i].type && s[vk] === b[i][vk] && (s.label || '') === (b[i].label || '');
+  });
 }
 
 /**
@@ -222,40 +249,73 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
 
       <div>
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-gray-400">Custom file sources</span>
+          <span className="text-sm text-gray-400">Custom sources</span>
           <button
             type="button"
             onClick={() => setCustom([...custom, { type: 'file', ref: '' }])}
             className="flex items-center gap-1 text-xs px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded"
           >
-            <Plus size={12} /> Add file
+            <Plus size={12} /> Add source
           </button>
         </div>
         {custom.length === 0 ? (
-          <p className="text-xs text-gray-500">No custom sources. Add a repo-relative file (e.g. <code className="text-gray-400">docs/metrics.md</code>) to feed it into the loop&apos;s prompt.</p>
+          <p className="text-xs text-gray-500">No custom sources. Add a repo-relative file (e.g. <code className="text-gray-400">docs/metrics.md</code>), an <code className="text-gray-400">http</code> URL, or a shell command to feed its output into the loop&apos;s prompt.</p>
         ) : (
-          <div className="space-y-2">
-            {custom.map((src, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={src.ref || ''}
-                  onChange={e => setCustom(custom.map((s, j) => j === i ? { ...s, ref: e.target.value } : s))}
-                  className={INPUT_CLASS}
-                  placeholder="repo-relative path, e.g. docs/metrics.md"
-                  aria-label={`Custom file source ${i + 1}`}
-                />
-                <button
-                  type="button"
-                  onClick={() => setCustom(custom.filter((_, j) => j !== i))}
-                  className="p-2 text-gray-500 hover:text-port-error shrink-0"
-                  aria-label={`Remove custom source ${i + 1}`}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-            <p className="text-xs text-gray-500">Paths must be repo-relative — no leading <code>/</code> and no <code>..</code> segments.</p>
+          <div className="space-y-3">
+            {custom.map((src, i) => {
+              const type = CUSTOM_TYPE_BY_KEY[src.type] ? src.type : 'file';
+              const meta = CUSTOM_TYPE_BY_KEY[type];
+              const valueKey = meta.valueKey;
+              const setRow = (patch) => setCustom(custom.map((s, j) => j === i ? { ...s, ...patch } : s));
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  <div className="flex-1 space-y-1.5">
+                    <div className="flex gap-2">
+                      <select
+                        value={type}
+                        onChange={e => {
+                          // Switch type: keep only the label; the old value field no longer applies.
+                          const next = e.target.value;
+                          setCustom(custom.map((s, j) => j === i
+                            ? { type: next, [CUSTOM_TYPE_BY_KEY[next].valueKey]: '', ...(s.label ? { label: s.label } : {}) }
+                            : s));
+                        }}
+                        className={`${INPUT_CLASS} w-28 shrink-0`}
+                        aria-label={`Custom source ${i + 1} type`}
+                      >
+                        {LI_CUSTOM_TYPES.map(t => <option key={t.type} value={t.type}>{t.label}</option>)}
+                      </select>
+                      <input
+                        type="text"
+                        value={src[valueKey] || ''}
+                        onChange={e => setRow({ [valueKey]: e.target.value })}
+                        className={INPUT_CLASS}
+                        placeholder={meta.placeholder}
+                        aria-label={`Custom source ${i + 1} ${meta.label.toLowerCase()}`}
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={src.label || ''}
+                      onChange={e => setRow({ label: e.target.value })}
+                      className={`${INPUT_CLASS} text-xs`}
+                      placeholder="Optional label"
+                      maxLength={120}
+                      aria-label={`Custom source ${i + 1} label`}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCustom(custom.filter((_, j) => j !== i))}
+                    className="p-2 text-gray-500 hover:text-port-error shrink-0"
+                    aria-label={`Remove custom source ${i + 1}`}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              );
+            })}
+            <p className="text-xs text-gray-500">File paths must be repo-relative — no leading <code>/</code> and no <code>..</code> segments. URLs must be http(s). Commands run in the app&apos;s repo directory.</p>
           </div>
         )}
       </div>
