@@ -476,13 +476,26 @@ async function refineWorld(universeId, { providerId, model }) {
     providerId,
     model,
   });
-  await updateUniverse(universeId, {
-    logline: expanded.logline,
-    premise: expanded.premise,
-    styleNotes: expanded.styleNotes,
-    ...(expanded.influences ? { influences: expanded.influences } : {}),
+  // Persist through the write-queue mutator against the FRESHEST record, and
+  // defensively DROP any field the user has locked — expandWorldTemplate is
+  // meant to echo locked fields unchanged, but a bad LLM echo (or a lock set
+  // DURING the LLM round-trip) must never overwrite human-locked canon. The
+  // gate's whole contract is "locked entries are constraints, not fix targets."
+  let wrote = false;
+  await updateUniverse(universeId, (latest) => {
+    const locked = latest?.locked || {};
+    const patch = {};
+    if (locked.logline !== true) patch.logline = expanded.logline;
+    if (locked.premise !== true) patch.premise = expanded.premise;
+    if (locked.styleNotes !== true) patch.styleNotes = expanded.styleNotes;
+    if (expanded.influences && locked.influences !== true) patch.influences = expanded.influences;
+    if (!Object.keys(patch).length) return null; // every field locked → no-op
+    wrote = true;
+    return patch;
   });
-  return { applied: true };
+  // `wrote === false` means every refinable field is locked — report it so the
+  // gate pauses 'inapplicable' for human review instead of silently no-op-ing.
+  return wrote ? { applied: true } : { applied: false, reason: 'every refinable world field is locked' };
 }
 
 /**

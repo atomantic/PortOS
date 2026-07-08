@@ -232,16 +232,41 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
     expect(r).toMatchObject({ dimension: 'character', applied: true, entryId: 'thin' });
   });
 
-  it('routes worldbuilding → expandWorldTemplate + updateUniverse (locked echoed, no clobber)', async () => {
-    universeBuilder.getUniverse.mockResolvedValue({ id: 'uni-1', name: 'U', locked: { logline: true } });
+  it('routes worldbuilding → expandWorldTemplate + a lock-aware updateUniverse write', async () => {
+    const uni = { id: 'uni-1', name: 'U' };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    let writtenPatch = null;
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { writtenPatch = typeof m === 'function' ? m(uni) : m; return { id, ...(writtenPatch || {}) }; });
     const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
-    expect(universeBuilderExpand.expandWorldTemplate).toHaveBeenCalledWith(expect.objectContaining({ locked: { logline: true } }));
-    expect(universeBuilder.updateUniverse).toHaveBeenCalled();
+    expect(universeBuilderExpand.expandWorldTemplate).toHaveBeenCalledWith(expect.objectContaining({ starterPrompt: 'U' }));
+    expect(writtenPatch).toMatchObject({ logline: 'L2', premise: 'P2', styleNotes: 'S2' });
     expect(r).toMatchObject({ dimension: 'worldbuilding', applied: true });
   });
 
+  it('worldbuilding refine DROPS a human-locked field from the write (never clobbers locked canon)', async () => {
+    const uni = { id: 'uni-1', name: 'U', locked: { logline: true } };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    let writtenPatch = null;
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { writtenPatch = typeof m === 'function' ? m(uni) : m; return { id, ...(writtenPatch || {}) }; });
+    const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
+    // logline is locked → the refreshed logline must NOT be in the write patch.
+    expect(writtenPatch).not.toHaveProperty('logline');
+    expect(writtenPatch).toMatchObject({ premise: 'P2', styleNotes: 'S2' });
+    expect(r.applied).toBe(true);
+  });
+
+  it('worldbuilding refine reports applied:false when EVERY refinable field is locked', async () => {
+    const uni = { id: 'uni-1', name: 'U', locked: { logline: true, premise: true, styleNotes: true, influences: true } };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { const p = typeof m === 'function' ? m(uni) : m; return p === null ? { id } : { id, ...p }; });
+    const r = await applyFoundationFix('ser-1', 'worldbuilding', {});
+    expect(r).toMatchObject({ dimension: 'worldbuilding', applied: false });
+  });
+
   it('routes craft → the same universe world refine as worldbuilding', async () => {
-    universeBuilder.getUniverse.mockResolvedValue({ id: 'uni-1', name: 'U' });
+    const uni = { id: 'uni-1', name: 'U' };
+    universeBuilder.getUniverse.mockResolvedValue(uni);
+    universeBuilder.updateUniverse.mockImplementation(async (id, m) => { const p = typeof m === 'function' ? m(uni) : m; return { id, ...(p || {}) }; });
     await applyFoundationFix('ser-1', 'craft', {});
     expect(universeBuilderExpand.expandWorldTemplate).toHaveBeenCalled();
   });
