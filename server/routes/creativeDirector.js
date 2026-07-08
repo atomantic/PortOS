@@ -15,6 +15,8 @@ import {
   creativeDirectorProjectUpdateSchema,
   creativeDirectorTreatmentSchema,
   creativeDirectorPlanSchema,
+  creativeDirectorPlanStepActionSchema,
+  creativeDirectorDirectiveSchema,
   creativeDirectorSceneUpdateSchema,
   creativeDirectorAutoCastSuggestSchema,
   creativeDirectorAutoCastApplySchema,
@@ -27,6 +29,7 @@ import {
   deleteProject,
   setTreatment,
   setPlan,
+  updatePlanStep,
   updateScene,
 } from '../services/creativeDirector/local.js';
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
@@ -39,6 +42,33 @@ const router = Router();
 
 router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listProjects());
+}));
+
+// Creative tool catalog (CDO Phase 4, #2186) — the studio Plan board + directive
+// composer hydrate per-step cost-class badges + approval affordances from this
+// (mirrors the palette hydrating from the voice-tool registry). Also returns the
+// current `creative` autonomy mode (off | dry-run | execute) and the shared cos
+// action-budget status so the board can render a dry-run banner and flag steps
+// the gate would block (over budget). Registered before `/:id` so the literal
+// path can't be shadowed by the param route. Pure read — no LLM, no mutation.
+router.get('/tools', asyncHandler(async (_req, res) => {
+  // Dynamic-imported (like the /plan advance-loop nudge below) so the heavy tool
+  // graph + cos state modules aren't pulled at route module-load — keeps the
+  // route unit test fast and free of those services' import-time side effects.
+  const [{ getAllCreativeToolMetadata }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }, { loadState }] = await Promise.all([
+    import('../services/creative/toolRegistry.js'),
+    import('../lib/domainAutonomy.js'),
+    import('../services/domainUsage.js'),
+    import('../services/cosState.js'),
+  ]);
+  const state = await loadState().catch(() => ({ config: {} }));
+  const mode = getCreativeAutonomyMode(state.config);
+  const budget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true, exceeded: null }));
+  res.json({
+    tools: getAllCreativeToolMetadata(),
+    mode,
+    budget: { withinBudget: budget.withinBudget, exceeded: budget.exceeded },
+  });
 }));
 
 // Slim projection of a project for polling consumers (pipeline EpisodeVideoStage
@@ -195,6 +225,73 @@ router.patch('/:id/plan', asyncHandler(async (req, res) => {
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => console.log(`⚠️ CD plan advance failed: ${e.message}`));
   res.json(updated);
+}));
+
+// User-callable (CDO Phase 4, #2186): attach a directive to an EXISTING project
+// ("convert to directive") or replace one. Validates the directive, clears any
+// prior plan so the planner re-derives one from the new brief, flips the project
+// to `planning`, and nudges the generalized advance loop — which enqueues the
+// planner agent (the project now has a directive but no plan). A paused/failed
+// project is left parked (the user re-runs it explicitly). Reactive: returns the
+// updated project so the UI swaps state without a refetch.
+router.post('/:id/directive', asyncHandler(async (req, res) => {
+  const directive = validateRequest(creativeDirectorDirectiveSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const parked = project.status === 'paused' || project.status === 'failed';
+  const updated = await updateProject(req.params.id, {
+    directive,
+    plan: null,
+    ...(parked ? {} : { status: 'planning', failureReason: null }),
+  });
+  if (!parked) {
+    const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
+    advanceAfterPlanStepSettled(req.params.id)
+      .catch((e) => console.log(`⚠️ CD directive advance failed: ${e.message}`));
+  }
+  res.json(updated);
+}));
+
+// User-callable (CDO Phase 4, #2186): request a fresh plan. Drops the current
+// plan (preserving the directive) and re-runs the planner via the advance loop.
+// Blocked-step triage "re-plan" action. No-op on a project without a directive.
+router.post('/:id/replan', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (!project.directive) throw new ServerError('Project has no directive to re-plan', { status: 400, code: 'NO_DIRECTIVE' });
+  const updated = await updateProject(req.params.id, { plan: null, status: 'planning', failureReason: null });
+  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
+  advanceAfterPlanStepSettled(req.params.id)
+    .catch((e) => console.log(`⚠️ CD replan advance failed: ${e.message}`));
+  res.json(updated);
+}));
+
+// User-callable (CDO Phase 4, #2186): blocked-step triage. `skip` marks a step
+// `skipped` (terminal-success — unblocks dependents); `retry` resets a
+// blocked/failed step to `pending` (clearing its result + retryCount) so the
+// advance loop re-dispatches it — also the "approve" affordance for a gate-blocked
+// step. Either way we clear a plan-level pause (paused → rendering) and nudge the
+// advance loop. Returns the updated project for reactive state swap; 404 when the
+// step is unknown (updatePlanStep returns the project unchanged).
+router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
+  const { action } = validateRequest(creativeDirectorPlanStepActionSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const step = (project.plan?.steps || []).find((s) => s.stepId === req.params.stepId);
+  if (!step) throw new ServerError('Plan step not found', { status: 404, code: 'NOT_FOUND' });
+  const patch = action === 'skip'
+    ? { status: 'skipped', result: { skippedByUser: true } }
+    : { status: 'pending', retryCount: 0, result: null };
+  await updatePlanStep(req.params.id, req.params.stepId, patch);
+  // Clear a plan-level pause so the advance loop isn't short-circuited by the
+  // paused guard; a still-blocked project stays parked otherwise.
+  if (project.status === 'paused') {
+    await updateProject(req.params.id, { status: 'rendering', failureReason: null });
+  }
+  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
+  advanceAfterPlanStepSettled(req.params.id)
+    .catch((e) => console.log(`⚠️ CD plan step ${action} advance failed: ${e.message}`));
+  res.json(await getProject(req.params.id));
 }));
 
 // Agent-callable: update a single scene's status / evaluation / retry count.

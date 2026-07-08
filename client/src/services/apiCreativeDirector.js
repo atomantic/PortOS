@@ -30,6 +30,33 @@ export const resumeCreativeDirectorProject = (id) => request(`/creative-director
 export const createSmokeTestCreativeDirectorProject = () => request('/creative-director/smoke-test', {
   method: 'POST',
 });
+// Creative tool catalog (CDO Phase 4, #2186) — `{ tools: [{ id, description,
+// costClass, longRunning, destructive }], mode, budget }`. The Plan board
+// hydrates per-step cost-class badges + approval affordances from it; `mode`
+// drives the dry-run banner. `options.silent` defers error toasting to a caller
+// that owns its own error UI.
+export const getCreativeToolCatalog = (options = {}) => request('/creative-director/tools', options);
+// Attach/replace a directive on an existing project ("convert to directive").
+// Clears any prior plan so the planner re-derives one; returns the updated
+// project for reactive state swap.
+export const setCreativeDirectorDirective = (id, directive) => request(`/creative-director/${encodeURIComponent(id)}/directive`, {
+  method: 'POST',
+  body: JSON.stringify(directive),
+});
+// Request a fresh plan (drops the current plan, re-runs the planner). Blocked-step
+// triage "re-plan" action.
+export const replanCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/replan`, {
+  method: 'POST',
+});
+// Blocked-step triage: `skip` a step or `retry` (reset a blocked/failed step to
+// pending — also the "approve" affordance for a gate-blocked step). Returns the
+// updated project. `options.silent` defers error toasting.
+export const updateCreativeDirectorPlanStep = (id, stepId, action, options = {}) =>
+  request(`/creative-director/${encodeURIComponent(id)}/plan/step/${encodeURIComponent(stepId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+    ...options,
+  });
 // Autonomous auto-cast (#1810). `suggest` previews the catalog ingredients the
 // director would propose for a free-text brief (no mutation). `apply` derives the
 // brief from the project (or accepts an explicit one), appends the fresh
