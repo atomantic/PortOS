@@ -52,6 +52,7 @@ vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: vi.fn() }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),
+  trackAudioUrl: (filename) => `/data/music/${encodeURIComponent(filename)}`,
   importTrackFromYoutube: vi.fn(async () => ({ jobId: 'yt-job-1' })),
   trackImportEventsUrl: (jobId) => `/api/tracks/import/${jobId}/events`,
   cancelTrackImport: vi.fn(async () => ({ ok: true })),
@@ -75,7 +76,7 @@ import {
   listMusicVideoProjects, createMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject,
 } from '../services/apiMusicVideo.js';
-import { importTrackFromYoutube, trackImportEventsUrl } from '../services/apiTracks.js';
+import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 
 const PROJECT_ANALYZED = {
   ...PROJECT_NO_CLIP,
@@ -157,6 +158,32 @@ describe('MusicVideo render control (#1760)', () => {
     const link = await screen.findByText(/View rendered music video/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
     expect(link.closest('a').getAttribute('href')).toContain('preview=video%3Arh-9');
+  });
+});
+
+describe('MusicVideo audio preview + download', () => {
+  it('shows preview player + download link for a linked track', async () => {
+    listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon song.mp3' }]);
+    await openProject(PROJECT_WITH_CLIP);
+    const player = await screen.findByLabelText('Preview track audio');
+    expect(player.getAttribute('src')).toBe('/data/music/neon%20song.mp3');
+    const dl = screen.getByRole('link', { name: /Download audio/i });
+    expect(dl.getAttribute('href')).toBe('/data/music/neon%20song.mp3');
+    expect(dl.getAttribute('download')).toBe('neon song.mp3');
+  });
+
+  it('falls back to the project uploaded-audio file when there is no linked track', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: 'upload.wav' });
+    const player = await screen.findByLabelText('Preview track audio');
+    expect(player.getAttribute('src')).toBe('/data/music/upload.wav');
+  });
+
+  it('renders no audio controls when the project has no audio', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
+    // Board opened (Render button present) but no audio surface.
+    await screen.findByRole('button', { name: /^Render$/ });
+    expect(screen.queryByLabelText('Preview track audio')).toBeNull();
+    expect(screen.queryByRole('link', { name: /Download audio/i })).toBeNull();
   });
 });
 
