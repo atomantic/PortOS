@@ -145,3 +145,41 @@ export const privacyOrgHoldingsSetSchema = z.object({
     status: z.enum(PRIVACY_ORG_HOLDING_STATUSES).optional(),
   }).strict()).max(500),
 }).strict();
+
+// =============================================================================
+// DATA-BROKER DATABASE + CASE LEDGER SCHEMAS (issue #2144, epic #2138)
+// =============================================================================
+// Zod schemas for `privacy_brokers` / `privacy_broker_cases` — db-primary
+// Postgres, machine-local (same federation-deferred scope as the vault, #2148).
+// The broker rows themselves are curated seed / auto-refresh, not user-created,
+// so there is no broker create/update input schema — only read filters and the
+// scan/refresh action bodies.
+
+export const PRIVACY_BROKER_CASE_STATES = Object.freeze([
+  'unscanned',
+  'found', 'not_found', 'indirect_exposure', 'blocked',
+  'optout_in_progress', 'submitted', 'verification_pending', 'awaiting_processing',
+  'confirmed_removed', 'human_task_queued', 'reappeared',
+]);
+
+// GET /api/privacy/brokers?enabled=true — z.coerce so the string query "true"/
+// "false" becomes a boolean (matches the storage of the enabled column).
+export const privacyBrokerListQuerySchema = z.object({
+  enabled: z.preprocess(
+    (v) => (v === undefined ? undefined : v === 'true' || v === true),
+    z.boolean().optional(),
+  ),
+}).strict();
+
+// GET /api/privacy/broker-cases?state=found
+export const privacyBrokerCaseListQuerySchema = z.object({
+  state: z.enum(PRIVACY_BROKER_CASE_STATES).optional(),
+}).strict();
+
+// POST /api/privacy/brokers/refresh — no body; empty object.
+export const privacyBrokerRefreshSchema = z.object({}).strict();
+
+// POST /api/privacy/scan — optional concurrency knob.
+export const privacyScanStartSchema = z.object({
+  concurrency: z.number().int().min(1).max(6).optional(),
+}).strict();

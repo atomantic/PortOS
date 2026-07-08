@@ -176,6 +176,37 @@ export async function revealValue(id) {
   return { id: rows[0].id, type: rows[0].type, value };
 }
 
+/**
+ * Decrypted values for every scan-eligible record — the ONLY bulk-decrypt path,
+ * used solely to build broker-scan search vectors (privacyScan.js) inside a
+ * USER-TRIGGERED scan pass. Excludes sensitive types by construction:
+ * `use_for_scans` is hard-false for ssn/passport/drivers_license/financial_account
+ * (enforced on write + re-enforced here via the WHERE clause), so a plaintext
+ * SSN can never reach a broker form. Includes `previous` addresses (a broker may
+ * still list an old address). Plaintext is returned to the caller but never
+ * logged — the count is.
+ */
+export async function listScanEligibleValues() {
+  const { rows } = await query(
+    `SELECT id, type, value_enc, status,
+       to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
+       to_char(valid_to, 'YYYY-MM-DD') AS valid_to
+     FROM privacy_vault_records
+     WHERE use_for_scans = TRUE
+     ORDER BY type, created_at`,
+  );
+  const values = rows.map((row) => ({
+    id: row.id,
+    type: row.type,
+    value: decryptValue(row.value_enc),
+    status: row.status,
+    validFrom: row.valid_from ?? null,
+    validTo: row.valid_to ?? null,
+  }));
+  console.log(`🔎 Assembled ${values.length} scan-eligible vault values`);
+  return values;
+}
+
 /** Doctor-style readout: { keyConfigured, recordCounts: { <type>: n } }. */
 export async function getVaultStatus() {
   const { rows } = await query(

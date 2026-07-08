@@ -1135,6 +1135,58 @@ CREATE TABLE IF NOT EXISTS privacy_org_holdings (
 -- Reverse lookup: "which orgs hold vault record X" (getOrgsHoldingRecord).
 CREATE INDEX IF NOT EXISTS idx_privacy_org_holdings_vault_record ON privacy_org_holdings (vault_record_id);
 
+-- Privacy Center: data-broker database + case ledger (issue #2144, epic #2138).
+-- `privacy_brokers` is the curated (+ later BADBOOL / CA-registry) database of
+-- people-search brokers the exposure-scan/opt-out engine works. Seeded
+-- idempotently from data.reference/privacy/brokers.json on first use (NO network
+-- at boot). `source`/`confidence` gate the refresh: curated rows are never
+-- clobbered by an auto refresh. `cluster_parent` groups sibling brands under one
+-- suppression; `disclosure_fields` caps what the engine may submit. Machine-local
+-- — no federation, no tombstones (#2148). Mirrors the privacy blocks in
+-- server/lib/db.js ensureSchema().
+CREATE TABLE IF NOT EXISTS privacy_brokers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  urls JSONB NOT NULL DEFAULT '{}'::jsonb,
+  optout JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tier SMALLINT NOT NULL DEFAULT 2,
+  disclosure_fields TEXT[] NOT NULL DEFAULT '{}',
+  cluster_parent TEXT REFERENCES privacy_brokers (id) ON DELETE SET NULL,
+  prefer_suppression BOOLEAN NOT NULL DEFAULT FALSE,
+  antibot BOOLEAN NOT NULL DEFAULT FALSE,
+  source TEXT NOT NULL DEFAULT 'curated',
+  confidence TEXT NOT NULL DEFAULT 'documented',
+  last_verified DATE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Planner walks enabled brokers, cluster-parents first.
+CREATE INDEX IF NOT EXISTS idx_privacy_brokers_enabled ON privacy_brokers (enabled);
+CREATE INDEX IF NOT EXISTS idx_privacy_brokers_cluster_parent ON privacy_brokers (cluster_parent);
+-- Per-broker exposure/opt-out case ledger with a service-enforced state machine.
+-- `state` is validated app-side (privacyBrokers.js); every write stamps
+-- `next_recheck_at` (state-dependent backoff). `evidence` holds listing URLs /
+-- match basis / screenshot refs — NOT plaintext PII. A broker delete cascades
+-- its cases.
+CREATE TABLE IF NOT EXISTS privacy_broker_cases (
+  id UUID PRIMARY KEY,
+  broker_id TEXT NOT NULL REFERENCES privacy_brokers (id) ON DELETE CASCADE,
+  state TEXT NOT NULL DEFAULT 'unscanned',
+  found BOOLEAN,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  disclosed_fields TEXT[] NOT NULL DEFAULT '{}',
+  channel TEXT,
+  reason TEXT,
+  next_recheck_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- One live case per broker in v1 (self-only subject).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker ON privacy_broker_cases (broker_id);
+-- "Which cases are due for a recheck" — the run-loop's primary query.
+CREATE INDEX IF NOT EXISTS idx_privacy_broker_cases_recheck ON privacy_broker_cases (next_recheck_at);
+
 -- Deletion audit log (incident #1248-follow-up). Append-only forensic trail of
 -- every tombstone / un-tombstone / hard-delete of user-authored records, written
 -- by a DB trigger so it captures deletions from ANY source (app, a test suite's

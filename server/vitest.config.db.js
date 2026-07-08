@@ -14,6 +14,7 @@ export const DB_TEST_INCLUDE = [
   'services/humanActivity.db.test.js',
   'services/privacyVault.db.test.js',
   'services/privacyOrgs.db.test.js',
+  'services/privacyBrokers.db.test.js',
   'services/catalogCanonProjection.test.js',
   'services/catalogRefResolver.test.js',
   'services/creativeDirector/projectsDB.test.js',
