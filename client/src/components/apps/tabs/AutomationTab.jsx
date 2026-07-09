@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, Play, PauseCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { RefreshCw, Play, PauseCircle, Settings, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import * as api from '../../../services/api';
 import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
+import { PROVIDER_TYPES, filterSelectableModels } from '../../../utils/providers';
 import CustomTasksSection from './CustomTasksSection';
+
+const RUNNABLE_PROVIDER_TYPES = Object.values(PROVIDER_TYPES);
 
 const INTERVAL_OPTIONS = [
   { value: null, label: 'Inherit Global' },
@@ -20,23 +25,35 @@ const INTERVAL_OPTIONS = [
 ];
 
 export default function AutomationTab({ appId, appName }) {
+  const navigate = useNavigate();
   const [overrides, setOverrides] = useState({});
   const [schedule, setSchedule] = useState(null);
+  const [providers, setProviders] = useState([]);
   const [paused, setPaused] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(null);
   const [cronEditing, setCronEditing] = useState({});
+  // Only one Configure panel open at a time — a per-task disclosure holding the
+  // per-app provider/model override (and, for layered-intelligence, a link to
+  // the behavior config on the Edit App → Intelligence tab).
+  const [expandedTaskType, setExpandedTaskType] = useState(null);
 
   const fetchData = useCallback(async () => {
-    const [taskTypesData, scheduleData, statusData] = await Promise.all([
+    const [taskTypesData, scheduleData, statusData, providersData] = await Promise.all([
       api.getAppTaskTypes(appId).catch(() => ({ taskTypeOverrides: {} })),
       api.getCosSchedule().catch(() => null),
-      api.getCosStatus().catch(() => null)
+      api.getCosStatus().catch(() => null),
+      api.getProviders({ silent: true }).catch(() => ({ providers: [] }))
     ]);
     setOverrides(taskTypesData.taskTypeOverrides || {});
     setSchedule(scheduleData);
     setPaused(statusData?.paused === true);
+    // Every ENABLED provider of a runnable type (cli/tui/api) — handler-backed
+    // tasks dispatch on provider.type, so any of them is a valid override.
+    setProviders((providersData?.providers || []).filter(
+      p => RUNNABLE_PROVIDER_TYPES.includes(p.type) && p.enabled !== false
+    ));
     setLoading(false);
   }, [appId]);
 
@@ -109,6 +126,32 @@ export default function AutomationTab({ appId, appName }) {
     setOverrides(prev => ({
       ...prev,
       [taskType]: { ...prev[taskType], taskMetadata }
+    }));
+  };
+
+  const handleProviderChange = async (taskType, newProviderId) => {
+    // Picking a new provider clears any pinned model so a stale model from the
+    // previous provider can't leak through. Empty → inherit the default.
+    const providerId = newProviderId || null;
+    await api.updateAppTaskTypeOverride(appId, taskType, { providerId, model: '' }, { silent: true }).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    setOverrides(prev => ({
+      ...prev,
+      [taskType]: { ...prev[taskType], providerId, model: '' }
+    }));
+  };
+
+  const handleModelChange = async (taskType, newModel) => {
+    const model = newModel || '';
+    await api.updateAppTaskTypeOverride(appId, taskType, { model }, { silent: true }).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    setOverrides(prev => ({
+      ...prev,
+      [taskType]: { ...prev[taskType], model }
     }));
   };
 
@@ -199,16 +242,41 @@ export default function AutomationTab({ appId, appName }) {
               ? describeCron(overrideInterval) || 'cron'
               : overrideInterval || (globalConfig.type || 'rotation');
             const intervalSuffix = !overrideInterval && globalConfig.intervalMs ? ` (${Math.round(globalConfig.intervalMs / 3600000)}h)` : '';
+            const isExpanded = expandedTaskType === taskType;
+            const overrideProviderId = override.providerId || '';
+            const overrideModel = override.model || '';
+            const selectedProvider = providers.find(p => p.id === overrideProviderId);
+            const availableModels = filterSelectableModels(selectedProvider?.models);
+            // Keep a pinned model visible even when it's not in the provider's
+            // fetched list (avoids a blanked select on a stale/custom model).
+            const modelOptions = overrideModel && !availableModels.includes(overrideModel)
+              ? [overrideModel, ...availableModels]
+              : availableModels;
+            const effectiveProviderId = override.providerId || globalConfig.providerId || null;
+            const effectiveProviderName = effectiveProviderId
+              ? (providers.find(p => p.id === effectiveProviderId)?.name || effectiveProviderId)
+              : 'default (active provider)';
+            const isLayeredIntelligence = taskType === 'layered-intelligence';
 
             return (
               <div key={taskType} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
-                {/* Row 1: name + toggle + run now */}
+                {/* Row 1: name + toggle + configure + run now */}
                 <div className="flex items-center gap-3">
                   <ToggleSwitch enabled={isEnabled} onChange={() => handleToggle(taskType, isEnabled)} size="sm" activeColor="bg-port-success" />
                   <div className="flex-1 min-w-0">
                     <span className="text-white font-mono text-xs">{taskType}</span>
                     <div className="text-xs text-gray-500">{effectiveLabel}{intervalSuffix}</div>
                   </div>
+                  <button
+                    onClick={() => setExpandedTaskType(prev => prev === taskType ? null : taskType)}
+                    aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? 'Hide' : 'Show'} provider and model overrides for ${taskType}`}
+                    className="px-2 py-1 bg-port-border/60 text-gray-300 hover:bg-port-border rounded text-xs inline-flex items-center gap-1 shrink-0"
+                  >
+                    {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    <Settings size={12} />
+                    Configure
+                  </button>
                   <button
                     onClick={() => handleTrigger(taskType)}
                     disabled={triggering === taskType || !isEnabled}
@@ -270,6 +338,42 @@ export default function AutomationTab({ appId, appName }) {
                     })}
                   </div>
                 </div>
+                {/* Expanded config: per-app provider/model override (+ LI behavior link) */}
+                {isExpanded && (
+                  <div className="border-t border-port-border pt-3 space-y-3">
+                    <ProviderModelSelector
+                      providers={providers}
+                      selectedProviderId={overrideProviderId}
+                      selectedModel={overrideModel}
+                      availableModels={modelOptions}
+                      onProviderChange={id => handleProviderChange(taskType, id)}
+                      onModelChange={model => handleModelChange(taskType, model)}
+                      label="Provider override"
+                      emptyProviderOption="Use default provider"
+                      emptyModelOption="Default model"
+                      alwaysShowModel
+                      layout="stacked"
+                    />
+                    <p className="text-xs text-gray-500">
+                      Effective provider: <span className="text-gray-300">{effectiveProviderName}</span>
+                      {override.providerId ? ' (app override)' : globalConfig.providerId ? ' (task default)' : ''}
+                    </p>
+                    {isLayeredIntelligence && (
+                      <div className="pt-1">
+                        <button
+                          onClick={() => navigate(`/apps/${appId}?edit=1&appTab=intelligence`)}
+                          className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+                        >
+                          <Sparkles size={12} />
+                          Configure behavior (sources, scopes, rules) →
+                        </button>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Telemetry sources, allowed scopes, and guidance rules live on the Edit App → Intelligence tab.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
