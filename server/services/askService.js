@@ -34,6 +34,7 @@ import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
 import { resolveCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 // Re-export so the route can keep importing modes via askService — but
@@ -585,10 +586,17 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // Grok's /dev/stdin sentinel is fed via stdin on POSIX; on Windows it's
   // rewritten to a temp file (writePromptToStdin=false). No-op otherwise.
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(args, prompt);
+  const childEnv = (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })();
+  // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
+  // path and wrap it as `cmd.exe /c <path>` so spawn() under shell:false can
+  // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors
+  // the runner / agent / vision spawn paths. Resolved against childEnv so a
+  // provider PATH override is honored.
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(provider.command, deliveredArgs, childEnv);
   const out = await new Promise((resolve, reject) => {
     let buf = '';
-    const child = spawn(provider.command, deliveredArgs, {
-      env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
+    const child = spawn(spawnCommand, spawnArgs, {
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
