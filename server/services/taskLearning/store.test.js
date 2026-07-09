@@ -83,12 +83,26 @@ describe('store.classifyUntypedTask (issue #2333)', () => {
       .toBe('self-improve:perf-tuning');
   });
 
-  it('preserves an explicit task.taskType the primary extractor did not special-case', () => {
+  it('maps an allow-listed explicit task.taskType the primary extractor did not special-case', () => {
     // Previously these all collapsed to 'unknown'
     expect(classifyUntypedTask({ taskType: 'scheduled' })).toBe('scheduled-task');
     expect(classifyUntypedTask({ taskType: 'architect' })).toBe('architect-task');
     // an already-namespaced type keeps its colon rather than getting a -task suffix
     expect(classifyUntypedTask({ taskType: 'self-improve:ui' })).toBe('self-improve:ui');
+  });
+
+  it('does not spawn a non-sandboxed bucket for an unexpected/high-cardinality taskType', () => {
+    // Not allow-listed and not namespaced → falls through to the sandboxed fallback
+    // rather than a routing-influencing `whatever-task` bucket.
+    expect(classifyUntypedTask({ taskType: 'whatever-9f3a2b' })).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+  });
+
+  it('is round-trip stable: re-classifying the sandboxed fallback preserves the sandboxed bucket', () => {
+    // Feeding external/untyped back through must NOT slug the `/` into a
+    // non-sandboxed `external-untyped-task`.
+    const rt = classifyUntypedTask({ taskType: EXTERNAL_UNTYPED_TASK_TYPE });
+    expect(rt).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    expect(isSandboxedTaskType(rt)).toBe(true);
   });
 
   it('classifies free-form descriptions by keyword when no type token is present', () => {

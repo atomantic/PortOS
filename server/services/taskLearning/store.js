@@ -160,6 +160,17 @@ const DESCRIPTION_CLASSIFIERS = [
   { type: 'test-task', re: /\b(unit test|coverage|test suite|write tests?)\b/ }
 ];
 
+/**
+ * Concrete `task.taskType` values (beyond user/internal, resolved upstream) that
+ * map to a real learned domain. Allow-listed rather than accepting any string so
+ * an unexpected/high-cardinality taskType can't spawn a swarm of non-sandboxed
+ * singleton buckets that skew routing — anything not here falls through to the
+ * description heuristics and, failing that, the sandboxed fallback.
+ */
+const KNOWN_UNSPECIALIZED_TASK_TYPES = new Set([
+  'scheduled', 'test', 'architect', 'layered-intelligence', 'all'
+]);
+
 /** Normalize a raw task-type token to a stable, low-cardinality slug. */
 function slugTaskType(raw) {
   return String(raw).trim().toLowerCase().replace(/[^a-z0-9:_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -178,6 +189,11 @@ function slugTaskType(raw) {
 export function classifyUntypedTask(task) {
   if (!task || typeof task !== 'object') return EXTERNAL_UNTYPED_TASK_TYPE;
 
+  // Round-trip safety: re-classifying an already-classified task by its own
+  // recorded type must be stable and preserve the sandboxed bucket (the fallback
+  // string's `/` would otherwise be slugged to a non-sandboxed `-task` below).
+  if (isSandboxedTaskType(task?.taskType)) return task.taskType;
+
   // 1) A self-improvement hint not paired with a taskApp (that pairing is
   //    handled by the primary extractor upstream).
   const selfImprovementType = task?.metadata?.selfImprovementType;
@@ -186,12 +202,14 @@ export function classifyUntypedTask(task) {
   }
 
   // 2) An explicit task.taskType the primary extractor didn't special-case
-  //    (user/internal are resolved upstream). Preserve it as a concrete domain
-  //    rather than collapsing distinct system domains into one bucket.
+  //    (user/internal are resolved upstream). Map an already-namespaced type
+  //    (`a:b`) or an allow-listed known domain to a concrete bucket; anything
+  //    else falls through so an unexpected value can't skew routing.
   const explicit = task?.taskType;
   if (typeof explicit === 'string' && explicit.trim() && explicit !== 'unknown') {
     const slug = slugTaskType(explicit);
-    if (slug) return slug.includes(':') ? slug : `${slug}-task`;
+    if (slug.includes(':')) return slug;
+    if (KNOWN_UNSPECIALIZED_TASK_TYPES.has(slug)) return `${slug}-task`;
   }
 
   // 3) Broader description keyword signatures (bracket-tag patterns already ran
