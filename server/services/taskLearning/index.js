@@ -18,7 +18,13 @@
  * every existing importer is unaffected.
  */
 
-export { clearLearningCache } from './store.js';
+export {
+  clearLearningCache,
+  extractTaskType,
+  classifyUntypedTask,
+  isSandboxedTaskType,
+  EXTERNAL_UNTYPED_TASK_TYPE
+} from './store.js';
 
 export {
   recordTaskCompletion,

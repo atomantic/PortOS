@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 
 /**
@@ -86,6 +86,11 @@ export async function getTaskTypePriorityMultiplier(taskType) {
  * and prefers tiers with proven success for the task type
  */
 export async function suggestModelTier(taskType) {
+  // Sandboxed fallback (issue #2333): the `external/untyped` bucket aggregates
+  // heterogeneous work, so its tier success rates are meaningless — never let it
+  // drive a model-tier suggestion. Let the selector fall through to its default.
+  if (isSandboxedTaskType(taskType)) return null;
+
   const data = await loadLearningData();
 
   const metrics = data.byTaskType[taskType];
@@ -285,6 +290,14 @@ export async function getPerformanceSummary() {
  * @returns {Object} Cooldown adjustment info
  */
 export async function getAdaptiveCooldownMultiplier(taskType) {
+  // Sandboxed fallback (issue #2333): never skip or throttle the heterogeneous
+  // `external/untyped` bucket — a poor aggregate success rate here would create
+  // a routing blind spot that silently drops ALL unclassified work. Keep it at
+  // the default cooldown and always eligible.
+  if (isSandboxedTaskType(taskType)) {
+    return { multiplier: 1.0, reason: 'sandboxed-untyped', skip: false, successRate: null, completed: 0 };
+  }
+
   const data = await loadLearningData();
 
   const metrics = data.byTaskType[taskType];
@@ -380,6 +393,8 @@ export async function getSkippedTaskTypes() {
   const skipped = [];
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Sandboxed fallback is never globally skipped (issue #2333).
+    if (isSandboxedTaskType(taskType)) continue;
     // Skip if: completed >= 5 AND success rate < 30%
     if (metrics.completed >= 5 && metrics.successRate < 30) {
       skipped.push({
@@ -423,6 +438,8 @@ export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 
   const now = Date.now();
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Sandboxed fallback is never skipped, so never rehabilitated either (#2333).
+    if (isSandboxedTaskType(taskType)) continue;
     // Only consider task types that would be skipped (< 30% success with 5+ attempts)
     if (metrics.completed < 5 || metrics.successRate >= 30) {
       continue;
@@ -476,6 +493,8 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
   const now = Date.now();
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Sandboxed fallback is never skipped (#2333) — exclude from the skip status list.
+    if (isSandboxedTaskType(taskType)) continue;
     // Only include task types that would be skipped
     if (metrics.completed < 5 || metrics.successRate >= 30) {
       continue;
