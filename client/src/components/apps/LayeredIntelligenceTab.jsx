@@ -2,6 +2,8 @@ import { Plus, Trash2, Brain } from 'lucide-react';
 import Banner from '../ui/Banner';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { filterSelectableModels } from '../../utils/providers';
+import { timeAgo } from '../../utils/formatters';
+import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
 
 // The self-improvement loop's per-app config surface. Field set mirrors the
 // server schema (server/lib/validation.js `layeredIntelligenceConfigSchema`)
@@ -39,6 +41,40 @@ export const LI_INTERVAL_PRESETS = [
   { ms: 24 * 60 * 60 * 1000, label: 'Daily' },
   { ms: 7 * 24 * 60 * 60 * 1000, label: 'Weekly' }
 ];
+
+// Compact prose for a stored last-run outcome, keyed by the handler's action +
+// reason (persisted on the effective config as lastRunAction / lastRunReason).
+// The loop files a tracker issue and spawns no visible agent, so this durable
+// line — not the transient toast — is how a user (esp. on mobile) learns WHY a
+// run produced nothing. The reason→prose gloss + tone come from the shared
+// layeredIntelligenceReasons module so a filed run reads as success (with its
+// ref) while every non-filed reason renders identically here and in the toast.
+// Returns { tone, text, when } or null when it's never run.
+export function describeLastRun(li) {
+  if (!li?.lastRunAt) return null;
+  const when = timeAgo(li.lastRunAt);
+  const action = li.lastRunAction || null;
+  const reason = li.lastRunReason || null;
+
+  if (action === 'filed') {
+    return { tone: 'success', text: `filed an improvement issue${li.lastRunRef ? ` (${li.lastRunRef})` : ''}`, when };
+  }
+  // Legacy record: installs that ran the loop before this change persisted only
+  // `lastRunAt` (no action/reason). Do not fabricate an outcome — say the run
+  // happened but its detail predates the richer bookkeeping, until a new run
+  // records action + reason.
+  if (!action) {
+    return { tone: 'neutral', text: 'ran (outcome not recorded before this version)', when };
+  }
+  return { tone: liReasonTone(reason), text: formatLiReason({ action, reason }), when };
+}
+
+const LAST_RUN_TONE_CLASS = {
+  success: 'text-port-success',
+  error: 'text-port-error',
+  warn: 'text-port-warning',
+  neutral: 'text-gray-400'
+};
 
 // Deep-equal two allowedScopes arrays regardless of order.
 function sameScopes(a, b) {
@@ -215,15 +251,23 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
   };
 
   const visibleScopes = LI_SCOPES.filter(s => !s.portosOnly || isPortos);
+  const lastRun = describeLastRun(li);
 
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2">
         <Brain size={16} className="text-port-accent mt-0.5 shrink-0" />
         <p className="text-xs text-gray-500">
-          The Layered Intelligence Loop perpetually reviews this app&apos;s telemetry and files improvement proposals via CoS. Off by default — it runs on the schedule below only when enabled.
+          The Layered Intelligence Loop perpetually reviews this app&apos;s telemetry and files improvement proposals via CoS. Off by default — it runs on the schedule below only when enabled. It files a tracker issue rather than spawning a visible agent, so a run that produces nothing reports why here.
         </p>
       </div>
+
+      {lastRun && (
+        <div className="text-xs bg-port-bg border border-port-border rounded-lg px-3 py-2">
+          <span className="text-gray-500">Last run {lastRun.when}: </span>
+          <span className={LAST_RUN_TONE_CLASS[lastRun.tone] || 'text-gray-400'}>{lastRun.text}.</span>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 cursor-pointer">
         <input

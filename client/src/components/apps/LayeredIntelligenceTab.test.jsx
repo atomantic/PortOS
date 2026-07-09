@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs } from './LayeredIntelligenceTab';
+import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs, describeLastRun } from './LayeredIntelligenceTab';
 
 const baseline = {
   enabled: false,
@@ -11,6 +11,68 @@ const baseline = {
   sources: { goals: true, cosMetrics: true, healthReport: true, planMd: true, openIssues: true, custom: [] },
   allowedScopes: ['app-improvement', 'app-data-gap']
 };
+
+describe('describeLastRun', () => {
+  const at = '2026-07-09T20:29:05.000Z';
+
+  it('returns null when the loop has never run', () => {
+    expect(describeLastRun({})).toBeNull();
+    expect(describeLastRun({ lastRunAction: 'no-op' })).toBeNull(); // no lastRunAt ⇒ never ran
+  });
+
+  it('reports a filed run with its ref as success', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'filed', lastRunReason: null, lastRunRef: '#123' });
+    expect(r.tone).toBe('success');
+    expect(r.text).toContain('#123');
+  });
+
+  it('surfaces an unparseable reasoning response as a warning with actionable prose', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'unparseable-response' });
+    expect(r.tone).toBe('warn');
+    expect(r.text).toMatch(/no usable JSON/i);
+  });
+
+  it('treats a genuine no-proposal run as neutral (not an error)', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'no-proposal' });
+    expect(r.tone).toBe('neutral');
+  });
+
+  it('renders an llm-error reason as an error with the provider message', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'llm-error: provider timeout' });
+    expect(r.tone).toBe('error');
+    expect(r.text).toContain('provider timeout');
+  });
+
+  it('shows a duplicate suppression as neutral', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'duplicate', lastRunReason: 'duplicate' });
+    expect(r.tone).toBe('neutral');
+    expect(r.text).toMatch(/existing/i);
+  });
+
+  it('does not fabricate an outcome for a legacy record (lastRunAt only, no action)', () => {
+    // Installs upgraded from before this change persisted only lastRunAt.
+    const r = describeLastRun({ lastRunAt: at });
+    expect(r.tone).toBe('neutral');
+    expect(r.text).toMatch(/not recorded/i);
+    expect(r.text).not.toMatch(/no proposal/i);
+  });
+});
+
+describe('LayeredIntelligenceTab last-run status', () => {
+  const li = (extra) => ({ ...baseline, ...extra });
+  const noop = () => {};
+
+  it('renders the durable last-run line when the config carries a run outcome', () => {
+    render(<LayeredIntelligenceTab li={li({ lastRunAt: '2026-07-09T20:29:05.000Z', lastRunAction: 'no-op', lastRunReason: 'unparseable-response' })} onChange={noop} providers={[]} isPortos loaded />);
+    expect(screen.getByText(/Last run/i)).toBeInTheDocument();
+    expect(screen.getByText(/no usable JSON/i)).toBeInTheDocument();
+  });
+
+  it('omits the last-run line before the loop has ever run', () => {
+    render(<LayeredIntelligenceTab li={li()} onChange={noop} providers={[]} isPortos loaded />);
+    expect(screen.queryByText(/Last run/i)).not.toBeInTheDocument();
+  });
+});
 
 describe('buildLayeredIntelligenceUpdate', () => {
   it('returns null when nothing changed (avoids persisting the effective config to disk)', () => {
