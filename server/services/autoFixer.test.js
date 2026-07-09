@@ -401,6 +401,28 @@ describe('autoFixer — circuit breaker (guardrail #3)', () => {
     expect(cos.addTask).toHaveBeenCalledTimes(4);
   });
 
+  it('AI-provider path: fallback-recovered failures do NOT count toward the circuit', async () => {
+    // A failure that a fallback recovers never produces an investigation task,
+    // so it must not push the resource toward the circuit threshold. Otherwise
+    // a provider that always recovers via fallback would eventually suppress a
+    // GENUINE unrecovered failure's investigation task.
+    const { noteFallbackStarted, noteFallbackHandled } = await import('./autoFixer.js');
+    for (let i = 0; i < 4; i++) {
+      emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: `f-${i}` });
+      await vi.advanceTimersByTimeAsync(0);
+      noteFallbackStarted({ provider: 'Ollama', model: 'command-r' }); // cancels the deferred timer
+      noteFallbackHandled({ provider: 'Ollama', model: 'command-r' }); // success — clears dedupe/in-flight
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS);
+    }
+    expect(cos.addTask).not.toHaveBeenCalled();
+
+    // A genuine unrecovered failure now STILL raises a task — the circuit never
+    // opened because recovered failures were never counted.
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'real' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+  });
+
   it('generic critical-error path: suppresses the fix task once the same error fires >3 times within the hour', async () => {
     for (let i = 0; i < 3; i++) {
       emitCriticalError({ message: 'recurring boom' });

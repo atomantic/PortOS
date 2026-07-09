@@ -262,14 +262,6 @@ async function handleAIProviderError(error) {
     return;
   }
 
-  // Circuit breaker: a provider/model that keeps failing this often won't be
-  // fixed by scheduling yet another investigation task — suppress to avoid a
-  // retry loop that floods the plan queue. Auto-closes once failures age out.
-  if (tripCircuit(errorKey)) {
-    console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — >${CIRCUIT_MAX_FAILURES} failures within the last hour; suppressing investigation task`);
-    return;
-  }
-
   // Surface the actual failure reason + category inline so pm2 logs explain
   // WHY a run failed without spelunking into data/runs/<id>/metadata.json. The
   // reason is collapsed to a single line and capped (logging convention: no
@@ -280,6 +272,15 @@ async function handleAIProviderError(error) {
 
   const timer = setTimeout(() => {
     deferredTasks.delete(errorKey);
+    // Circuit breaker: only count a failure that actually survives the defer
+    // window (a fallback that recovered the failure has already cancelled this
+    // timer, so it never reaches here). A provider/model that keeps producing
+    // real investigation tasks this often won't be fixed by yet another — trip
+    // the circuit and suppress. Auto-closes once failures age out of the window.
+    if (tripCircuit(errorKey)) {
+      console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — >${CIRCUIT_MAX_FAILURES} failures within the last hour; suppressing investigation task`);
+      return;
+    }
     createAIProviderInvestigationTask(error).catch(err => {
       console.error(`❌ Deferred AI provider task creation failed: ${err.message}`);
       // Clear the dedupe entry so the next identical failure isn't
