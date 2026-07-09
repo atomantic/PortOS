@@ -79,6 +79,126 @@ const oneLine = (s, max = 300) => {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 };
 
+// ── Tiered fallback cascade (issue #2328) ─────────────────────────────────
+// A failure is routed to the CHEAPEST tier that can plausibly recover it,
+// escalating only when no deterministic fix applies:
+//   1 config/env             — wrong provider/model/key/path/env; fixable by config
+//   2 schema/type            — malformed request/response; type/format/parse/build
+//   3 constrained-agent-retry — transient/recoverable; a bounded retry may clear it
+//   4 escalate               — unknown or human-judgement-required; hand to investigation
+export const FIX_TIERS = {
+  CONFIG_ENV: 1,
+  SCHEMA_TYPE: 2,
+  CONSTRAINED_RETRY: 3,
+  ESCALATE: 4,
+};
+
+const FIX_TIER_META = {
+  [FIX_TIERS.CONFIG_ENV]: { strategy: 'config/env', label: 'config/env correction' },
+  [FIX_TIERS.SCHEMA_TYPE]: { strategy: 'schema/type', label: 'schema/type correction' },
+  [FIX_TIERS.CONSTRAINED_RETRY]: { strategy: 'constrained-agent-retry', label: 'constrained agent retry' },
+  [FIX_TIERS.ESCALATE]: { strategy: 'escalate', label: 'escalate for investigation' },
+};
+
+// Deterministic error-category → tier map. Categories come from BOTH
+// errorDetection.js (AI-provider failures) and agentErrorAnalysis.js (CoS agent
+// failures); the two vocabularies overlap and are unioned here. Anything
+// unmapped falls through to Tier 4 (escalate) — an unrecognized failure has no
+// deterministic fix, so an investigation task carries it to a human/agent.
+const CATEGORY_TO_TIER = {
+  // Tier 1 — config/env (wrong key/model/path/permissions/env)
+  'auth-error': FIX_TIERS.CONFIG_ENV,
+  forbidden: FIX_TIERS.CONFIG_ENV,
+  'model-not-found': FIX_TIERS.CONFIG_ENV,
+  'model-not-supported': FIX_TIERS.CONFIG_ENV,
+  'quota-exceeded': FIX_TIERS.CONFIG_ENV,
+  'billing-error': FIX_TIERS.CONFIG_ENV,
+  'usage-limit': FIX_TIERS.CONFIG_ENV,
+  'spawn-error': FIX_TIERS.CONFIG_ENV,
+  'permission-denied': FIX_TIERS.CONFIG_ENV,
+  'file-not-found': FIX_TIERS.CONFIG_ENV,
+  // Tier 2 — schema/type (malformed request/response, parse/build/format)
+  'parse-error': FIX_TIERS.SCHEMA_TYPE,
+  'bad-request': FIX_TIERS.SCHEMA_TYPE,
+  'context-length': FIX_TIERS.SCHEMA_TYPE,
+  'output-length': FIX_TIERS.SCHEMA_TYPE,
+  'build-error': FIX_TIERS.SCHEMA_TYPE,
+  'lint-error': FIX_TIERS.SCHEMA_TYPE,
+  // Tier 3 — constrained-agent-retry (transient/recoverable)
+  'rate-limit': FIX_TIERS.CONSTRAINED_RETRY,
+  'network-error': FIX_TIERS.CONSTRAINED_RETRY,
+  timeout: FIX_TIERS.CONSTRAINED_RETRY,
+  'server-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'tool-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'mcp-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'test-failure': FIX_TIERS.CONSTRAINED_RETRY,
+  'npm-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'memory-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'turn-limit': FIX_TIERS.CONSTRAINED_RETRY,
+  'process-killed': FIX_TIERS.CONSTRAINED_RETRY,
+  'browser-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'locator-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'claude-error': FIX_TIERS.CONSTRAINED_RETRY,
+  'startup-failure': FIX_TIERS.CONSTRAINED_RETRY,
+  // Tier 4 — escalate (explicit entries; also the fall-through default)
+  'content-refusal': FIX_TIERS.ESCALATE,
+  'content-filtered': FIX_TIERS.ESCALATE,
+  'task-rejected': FIX_TIERS.ESCALATE,
+  'git-conflict': FIX_TIERS.ESCALATE,
+  'git-error': FIX_TIERS.ESCALATE,
+  'no-changes': FIX_TIERS.ESCALATE,
+  unknown: FIX_TIERS.ESCALATE,
+};
+
+/**
+ * Deterministically map an error category to a fallback tier (issue #2328).
+ * Pure — no I/O. Unknown/absent categories escalate (Tier 4), so a failure the
+ * cascade doesn't recognize is never silently swallowed.
+ * @param {string} [category]
+ * @returns {{ tier: number, strategy: string, label: string }}
+ */
+export function classifyFixTier(category) {
+  const tier = CATEGORY_TO_TIER[category] ?? FIX_TIERS.ESCALATE;
+  return { tier, ...FIX_TIER_META[tier] };
+}
+
+/**
+ * Build a structured, per-attempt auto-fix diagnostics record (issue #2328).
+ * Beyond the single-line log, this object rides on the task/return shape so
+ * downstream telemetry can break failures out by tier / category / reason /
+ * time-to-recovery. Pure — no I/O.
+ * @returns {{ triggerEvent: string, target: string, errorType: string,
+ *   category: string, tier: number, fixStrategy: string, failureReason: string }}
+ */
+export function buildFixDiagnostics({ triggerEvent, target, category, failureReason } = {}) {
+  const cat = category || 'unknown';
+  const { tier, strategy } = classifyFixTier(cat);
+  return {
+    triggerEvent: triggerEvent || 'unknown',
+    target: target || 'unknown',
+    errorType: cat,
+    category: cat,
+    tier,
+    fixStrategy: strategy,
+    failureReason: oneLine(failureReason) || 'no error text captured',
+  };
+}
+
+/**
+ * Derive the diagnostics record for an AI-provider failure `error`. Kept as a
+ * single helper so the deferred log line and the investigation task record are
+ * always built from the same fields (no drift).
+ */
+function providerFixDiagnostics(error) {
+  const ctx = error.context || {};
+  return buildFixDiagnostics({
+    triggerEvent: error.code,
+    target: `${ctx.provider || 'Unknown'} (${ctx.model || 'N/A'})`,
+    category: ctx.errorAnalysis?.category,
+    failureReason: ctx.errorDetails || ctx.errorAnalysis?.message,
+  });
+}
+
 function aiProviderErrorKey(providerName, model) {
   // NUL separator: provider names ("Claude Code CLI") and model ids
   // ("gpt-4o-mini") both commonly contain `-`, so a `-`-joined key would
@@ -268,7 +388,11 @@ async function handleAIProviderError(error) {
   // multi-line blobs) — the full text stays in the run record's `error` field.
   const reason = oneLine(ctx.errorDetails || ctx.errorAnalysis?.message) || 'no error text captured';
   const category = ctx.errorAnalysis?.category || 'unknown';
-  console.log(`🤖 AI provider error detected: ${ctx.provider} (${ctx.model}) [${category}] exit=${ctx.exitCode ?? '?'} - run ${ctx.runId}: ${reason} (deferring ${TASK_DEFER_MS}ms for possible fallback retry)`);
+  // Structured per-attempt diagnostics (issue #2328): classify the failure into
+  // a fallback tier and surface it inline so pm2 logs (and the task record
+  // below) break failures out by tier/strategy without spelunking metadata.
+  const diagnostics = providerFixDiagnostics(error);
+  console.log(`🤖 AI provider error detected: ${ctx.provider} (${ctx.model}) [${category}] tier=${diagnostics.tier} (${diagnostics.fixStrategy}) exit=${ctx.exitCode ?? '?'} - run ${ctx.runId}: ${reason} (deferring ${TASK_DEFER_MS}ms for possible fallback retry)`);
 
   const timer = setTimeout(() => {
     deferredTasks.delete(errorKey);
@@ -296,13 +420,17 @@ async function handleAIProviderError(error) {
 
 async function createAIProviderInvestigationTask(error) {
   const ctx = error.context || {};
+  // Structured diagnostics ride on the task record so downstream telemetry can
+  // break auto-fix outcomes out by tier / category / failure reason (#2328).
+  const diagnostics = providerFixDiagnostics(error);
   // Build specialized context for AI provider errors
-  const context = buildAIProviderErrorContext(error);
+  const context = buildAIProviderErrorContext(error, diagnostics);
 
   const taskData = {
     description: `Investigate AI provider failure: ${ctx.provider} (${ctx.model})`,
     priority: 'MEDIUM',
     context,
+    diagnostics,
     app: 'portos', // Associate with PortOS app
     approvalRequired: true // Require user approval before investigating
   };
@@ -310,12 +438,12 @@ async function createAIProviderInvestigationTask(error) {
   // If CoS is running, create the task immediately
   if (isRunning()) {
     const task = await addTask(taskData, 'internal');
-    console.log(`✅ AI provider investigation task created: ${task.id}`);
+    console.log(`✅ AI provider investigation task created: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
     return task;
   }
 
   // Otherwise, store for later pickup
-  console.log(`📋 CoS not running - queuing AI provider investigation task`);
+  console.log(`📋 CoS not running - queuing AI provider investigation task [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
   pendingAutoFixTasks.push({
     ...taskData,
     createdAt: Date.now(),
@@ -364,7 +492,7 @@ function shouldAutoFix(error) {
 /**
  * Build detailed context for AI provider execution errors
  */
-function buildAIProviderErrorContext(error) {
+function buildAIProviderErrorContext(error, diagnostics) {
   const ctx = error.context || {};
   const lines = [
     '# AI Provider Execution Failure',
@@ -379,6 +507,16 @@ function buildAIProviderErrorContext(error) {
     `- **Workspace:** ${ctx.workspaceName || ctx.workspacePath || 'N/A'}`,
     ''
   ];
+
+  // Fallback-tier diagnostics (issue #2328) — tells the investigating agent
+  // which class of fix to try first before escalating to open-ended debugging.
+  if (diagnostics) {
+    lines.push('## Fallback Tier');
+    lines.push(`- **Tier:** ${diagnostics.tier} (${diagnostics.fixStrategy})`);
+    lines.push(`- **Error Type:** ${diagnostics.errorType}`);
+    lines.push(`- **Failure Reason:** ${diagnostics.failureReason}`);
+    lines.push('');
+  }
 
   // Add error category if available
   if (ctx.errorCategory) {
@@ -433,7 +571,16 @@ function buildAIProviderErrorContext(error) {
  * Create a CoS task to fix the error
  */
 async function createAutoFixTask(error) {
-  console.log(`🤖 Creating auto-fix task for error: ${error.code}`);
+  // Structured diagnostics (issue #2328): a bare crash usually has no recognized
+  // category, so it classifies to Tier 4 (escalate) — which is exactly right for
+  // an unsupervised fix task that still requires human approval below.
+  const diagnostics = buildFixDiagnostics({
+    triggerEvent: error.code,
+    target: error.code,
+    category: error.context?.errorAnalysis?.category,
+    failureReason: error.message,
+  });
+  console.log(`🤖 Creating auto-fix task for error: ${error.code} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
 
   // Build context for the agent
   const context = buildErrorContext(error);
@@ -445,6 +592,7 @@ async function createAutoFixTask(error) {
     description: `Fix critical error: ${error.message}`,
     priority: 'HIGH',
     context,
+    diagnostics,
     approvalRequired: true
   };
 
