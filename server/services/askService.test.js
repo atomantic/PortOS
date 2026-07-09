@@ -352,6 +352,44 @@ describe('runAsk', () => {
     expect(args[modelIdx + 1]).toBe('o4-mini');
   });
 
+  it('runs `grok` headless with plain output, permission bypass, model, and stdin prompt file', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'grok-cli',
+      type: 'cli',
+      enabled: true,
+      command: 'grok',
+      args: [],
+      defaultModel: 'grok-build',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn(), write: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'test question' })) {
+      events.push(evt);
+    }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).toEqual([
+      '--output-format', 'plain',
+      '--permission-mode', 'bypassPermissions',
+      '--model', 'grok-build',
+      '--prompt-file', '/dev/stdin',
+    ]);
+    // POSIX delivery: the prompt is piped in via stdin.
+    expect(child.stdin.end).toHaveBeenCalled();
+  });
+
   it('runs `opencode run --model ollama/<id>` for an OpenCode Ollama provider', async () => {
     providers.getActiveProvider.mockResolvedValue({
       id: 'opencode-ollama',

@@ -439,6 +439,12 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     expect(result).not.toBe(args);
     expect(args).toEqual(['exec', '-']);
   });
+
+  it('adds Grok TUI permission bypass and is idempotent when already pinned', () => {
+    expect(applyCommandDefaults('grok', [])).toEqual(['--permission-mode', 'bypassPermissions']);
+    const pinned = ['--permission-mode', 'auto'];
+    expect(applyCommandDefaults('grok', pinned)).toEqual(['--permission-mode', 'auto']);
+  });
 });
 
 describe('tuiHandshake.buildTuiInvocation', () => {
@@ -500,6 +506,13 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(buildTuiInvocation(provider, null).args).toEqual(['-p', '-']);
     expect(buildTuiInvocation(provider, undefined).args).toEqual(['-p', '-']);
     expect(buildTuiInvocation(provider, '').args).toEqual(['-p', '-']);
+  });
+
+  it('injects Grok TUI permission bypass and appends --model', () => {
+    const provider = { id: 'grok-tui', command: 'grok', args: [] };
+    const out = buildTuiInvocation(provider, 'grok-build');
+    expect(out.command).toBe('grok');
+    expect(out.args).toEqual(['--permission-mode', 'bypassPermissions', '--model', 'grok-build']);
   });
 
   it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {

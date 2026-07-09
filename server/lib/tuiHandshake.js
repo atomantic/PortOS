@@ -14,6 +14,7 @@
 
 import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
+import { ensureGrokTuiArgs, isGrokCommand } from './grok.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -706,6 +707,9 @@ export function applyCommandDefaults(command, args) {
   }
   if (isAntigravityCommand(command)) {
     return ensureAntigravityTuiArgs(args);
+  }
+  if (isGrokCommand(command)) {
+    return ensureGrokTuiArgs(args);
   }
   return args;
 }

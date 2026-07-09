@@ -97,6 +97,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `opencodeConfig.js` | OpenCode config builder — `buildOpencodeEnvVars(provider, model)` builds dynamic `OPENCODE_CONFIG_CONTENT` declaring the models map under `provider.ollama.models` (bare ids) for Ollama-backed OpenCode providers. Fixes --model rejection. |
 | `cliProviderArgs.js` | Per-CLI argv conventions (`buildCliArgs`) for stdin prompt delivery — dependency-light extraction from runner.js so out-of-process callers (autofixer) can import it. |
 | `cliProviderRun.js` | One-shot CLI provider invocation (`pickCliProvider` + `runCliProviderPrompt`) — lightweight path for the autofixer + calendar MCP sync to honor the configured provider/model. |
+| `grok.js` | xAI Grok Build (`grok`) provider helpers — id/endpoint/default-model constants (`GROK_API_ID`/`GROK_CLI_ID`/`GROK_TUI_ID`/`GROK_API_ENDPOINT`/`GROK_DEFAULT_MODEL`), `isGrokCommand`/`isGrokCliProvider`/`isGrokTuiProvider` predicates, `ensureGrokHeadlessArgs`/`ensureGrokTuiArgs` argv builders (grok reads its prompt from `--prompt-file /dev/stdin`, not raw stdin), and `prepareGrokPromptFile` (Windows temp-file delivery fallback). |
 | `runners.js` | Image-runner family constants. |
 | `codexAssistantExtract.js` | Strip Codex CLI banner + echoed metadata from session transcript. |
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |

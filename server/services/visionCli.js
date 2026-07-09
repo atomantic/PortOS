@@ -28,6 +28,7 @@ import { writeFile, rm, mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
+import { prepareGrokPromptFile } from '../lib/grok.js';
 import { resolveCliModel } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
@@ -111,9 +112,16 @@ export async function describeImageViaCli({
   // Fresh per-call temp dir so concurrent caption runs never collide on the
   // image file, and cleanup is a single recursive rm.
   const dir = await mkdtemp(join(tmpdir(), 'portos-vision-'));
+  // Grok's Windows prompt-file temp (no-op elsewhere); cleaned in the finally.
+  let cleanupPromptFile = () => {};
   try {
     await writeFile(join(dir, IMAGE_BASENAME), bytes);
     const { command, args, stdin, cwd } = buildCliVisionInvocation(provider, visionModel, dir, prompt);
+    // Grok reads its prompt from --prompt-file /dev/stdin (fed via stdin on
+    // POSIX); on Windows it's rewritten to a temp file (writePromptToStdin=false).
+    // No-op for every other provider.
+    const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareGrokPromptFile(args, stdin);
+    cleanupPromptFile = cleanup;
 
     const childEnv = { ...process.env, ...provider?.envVars };
     delete childEnv.CLAUDECODE;
@@ -131,7 +139,7 @@ export async function describeImageViaCli({
     // See resolveWindowsExecutable/prepareWindowsSafeSpawn in
     // server/lib/bufferedSpawn.js.
     const resolvedCommand = resolveWindowsExecutable(command, undefined, childEnv) || command;
-    const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+    const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, deliveredArgs);
 
     const text = await new Promise((resolve, reject) => {
       const child = spawnImpl(spawnCommand, spawnArgs, {
@@ -173,7 +181,9 @@ export async function describeImageViaCli({
         reject(new Error(`${command} vision call exited ${code}${tail ? `: ${tail}` : ''}`));
       });
 
-      if (stdin != null) {
+      // When grok is delivered via a Windows temp file the prompt is already on
+      // disk (writePromptToStdin=false) — just close stdin.
+      if (writePromptToStdin && stdin != null) {
         child.stdin?.write(stdin);
         child.stdin?.end();
       } else {
@@ -183,6 +193,7 @@ export async function describeImageViaCli({
 
     return { text, finishReason: null, usage: null, reasoning: '' };
   } finally {
+    cleanupPromptFile();
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }

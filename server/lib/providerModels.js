@@ -9,6 +9,21 @@ export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
 
 /**
+ * Normalize a provider `command` to its lowercase binary basename, stripping any
+ * directory prefix and a Windows `.exe` suffix — e.g. `/opt/homebrew/bin/Grok.exe`
+ * → `grok`. Returns `''` for empty/non-string input. The shared primitive behind
+ * `isClaudeCommand`/`isOpencodeCommand`/`isGrokCommand` so the split/pop/case/.exe
+ * rule lives in exactly one place. (Only `.exe` is stripped, matching the runner's
+ * `shell:false` spawn path — a `.cmd`/`.bat` shim isn't directly spawnable.)
+ * @param {string|null|undefined} command
+ * @returns {string}
+ */
+export function commandBasename(command) {
+  if (typeof command !== 'string' || command === '') return '';
+  return command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+}
+
+/**
  * Returns the model string to pass to a CLI's --model flag, or null if the
  * caller should omit --model entirely (Codex sentinel case — the CLI will use
  * whatever model is configured in ~/.codex/config.toml).
@@ -29,9 +44,7 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
  * @returns {boolean}
  */
 export function isOpencodeCommand(command) {
-  if (typeof command !== 'string' || command === '') return false;
-  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-  return base === 'opencode';
+  return commandBasename(command) === 'opencode';
 }
 
 /**
@@ -213,10 +226,11 @@ export function hasModelFlag(args) {
  * @returns {boolean}
  */
 export function isClaudeCommand(command) {
+  // An empty/blank command also counts as Claude: `buildCliSpawnConfig`'s default
+  // branch and the TUI `inferTuiCommand` fallback both resolve a blank command to
+  // `claude` — a policy that differs from the other predicates, so it stays here.
   if (command == null || command === '') return true;
-  if (typeof command !== 'string') return false;
-  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-  return base === 'claude';
+  return commandBasename(command) === 'claude';
 }
 
 /**
