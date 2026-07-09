@@ -145,10 +145,12 @@ describe('store.classifyUntypedTask (issue #2333)', () => {
     }
   });
 
-  it('only marks the fallback bucket as sandboxed', () => {
+  it('marks the fallback bucket and the legacy unknown sink as sandboxed', () => {
     expect(isSandboxedTaskType(EXTERNAL_UNTYPED_TASK_TYPE)).toBe(true);
+    // legacy 'unknown' buckets (older installs / not-yet-migrated spawn key) get
+    // the same routing wall so stale uncategorized data can't drive routing
+    expect(isSandboxedTaskType('unknown')).toBe(true);
     expect(isSandboxedTaskType('auto-fix')).toBe(false);
-    expect(isSandboxedTaskType('unknown')).toBe(false);
   });
 });
 

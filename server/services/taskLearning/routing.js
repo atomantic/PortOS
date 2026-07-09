@@ -438,6 +438,8 @@ export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 
   const now = Date.now();
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Sandboxed fallback is never skipped, so never rehabilitated either (#2333).
+    if (isSandboxedTaskType(taskType)) continue;
     // Only consider task types that would be skipped (< 30% success with 5+ attempts)
     if (metrics.completed < 5 || metrics.successRate >= 30) {
       continue;
@@ -491,6 +493,8 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
   const now = Date.now();
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
+    // Sandboxed fallback is never skipped (#2333) — exclude from the skip status list.
+    if (isSandboxedTaskType(taskType)) continue;
     // Only include task types that would be skipped
     if (metrics.completed < 5 || metrics.successRate >= 30) {
       continue;

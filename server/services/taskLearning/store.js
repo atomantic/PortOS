@@ -137,7 +137,11 @@ export async function saveLearningData(data) {
  */
 export const EXTERNAL_UNTYPED_TASK_TYPE = 'external/untyped';
 
-const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE]);
+// The new sandboxed fallback plus the legacy `'unknown'` sink it replaces. Older
+// installs (and the not-yet-migrated spawn-time key in agentModelSelection.js)
+// still produce `'unknown'` buckets, so it gets the same wall: stale/heterogeneous
+// uncategorized data must never drive a tier suggestion or globally skip work.
+const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE, 'unknown']);
 
 /**
  * True when a task type is a sandboxed fallback bucket (not a real learned
