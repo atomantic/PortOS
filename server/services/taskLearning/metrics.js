@@ -20,6 +20,117 @@ import {
   saveLearningData
 } from './store.js';
 
+// Cap on retained per-category signature samples — bounds file growth the same
+// way `recentUnknownErrors` does, while keeping enough recent context to spot
+// trends (provider/model/tier correlation) without a full agent-archive scan.
+const MAX_SIGNATURE_SAMPLES = 10;
+
+/**
+ * Milliseconds between two ISO timestamps. Pure. Returns null (not 0) when
+ * either bound is missing/unparseable so an absent timestamp never masquerades
+ * as a zero-latency measurement (repo "sentinel, don't conflate absent" rule).
+ */
+function msBetween(startIso, endIso) {
+  if (!startIso || !endIso) return null;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, end - start);
+}
+
+/**
+ * Build a structured TaskTelemetryContext for a completed agent run (issue
+ * #2329). Pure — no I/O. Derives what is cheaply available from the agent/task
+ * and their timestamps/metadata; uses explicit null sentinels for anything not
+ * derivable rather than fabricating a value.
+ *
+ *   failureSignature  — { category, messageSnippet, failurePosition } (null on success)
+ *   executionContext  — { provider, model, modelTier, taskType, component, inputChars, routingReason }
+ *   latency           — { wallMs, queueMs, executionMs } (null members when not derivable)
+ */
+export function buildTaskTelemetryContext(agent, task) {
+  const meta = agent?.metadata || {};
+  const result = agent?.result || {};
+  const success = result.success || false;
+  const taskType = extractTaskType(task);
+
+  const errorAnalysis = result.errorAnalysis || null;
+  const rawMessage = errorAnalysis?.message || errorAnalysis?.details || '';
+  const failureSignature = success ? null : {
+    category: errorAnalysis?.category || null,
+    messageSnippet: rawMessage ? String(rawMessage).substring(0, 200) : null,
+    // Best-available proxy for "where in a multi-step workflow it failed": the
+    // phase the agent had reached at completion. null when no phase was stamped.
+    failurePosition: meta.phase ?? null
+  };
+
+  const taskDescription = task?.description ?? meta.taskDescription ?? null;
+  const executionContext = {
+    provider: meta.providerId ?? null,
+    model: meta.model ?? null,
+    modelTier: meta.modelTier ?? null,
+    taskType,
+    // Component/runner that executed the agent (tui | runner | direct).
+    component: meta.executionMode ?? null,
+    // Input dimension: prompt/description size in chars (null, not 0, when absent).
+    inputChars: typeof taskDescription === 'string' ? taskDescription.length : null,
+    // Routing decision rationale captured at spawn time (modelSelection.reason).
+    routingReason: meta.modelReason ?? null
+  };
+
+  const executionMs = Number.isFinite(result.duration) ? result.duration : null;
+  return {
+    taskType,
+    success,
+    failureSignature,
+    executionContext,
+    latency: {
+      // Wall time: spawn → completion (includes any in-agent waiting).
+      wallMs: msBetween(agent?.startedAt, agent?.completedAt),
+      // Queue/wait time only derivable when the source task carried a createdAt.
+      queueMs: msBetween(task?.createdAt, agent?.startedAt),
+      // Measured execution time reported by the runner.
+      executionMs
+    }
+  };
+}
+
+/**
+ * Persist a failure signature aggregate onto the learning data (issue #2329).
+ * Pure — mutates and returns `data`. Additive + back-compat: tolerates an old
+ * learning.json that predates the `failureSignatures` key. No-op on success or
+ * when the failure carries no category.
+ */
+export function recordFailureSignature(data, context) {
+  const sig = context?.failureSignature;
+  if (!sig || !sig.category) return data;
+
+  if (!data.failureSignatures) data.failureSignatures = {};
+  if (!data.failureSignatures[sig.category]) {
+    data.failureSignatures[sig.category] = { count: 0, lastOccurred: null, recent: [] };
+  }
+
+  const bucket = data.failureSignatures[sig.category];
+  const recordedAt = new Date().toISOString();
+  bucket.count++;
+  bucket.lastOccurred = recordedAt;
+  bucket.recent.push({
+    messageSnippet: sig.messageSnippet,
+    failurePosition: sig.failurePosition,
+    provider: context.executionContext.provider,
+    model: context.executionContext.model,
+    modelTier: context.executionContext.modelTier,
+    taskType: context.executionContext.taskType,
+    wallMs: context.latency.wallMs,
+    executionMs: context.latency.executionMs,
+    recordedAt
+  });
+  if (bucket.recent.length > MAX_SIGNATURE_SAMPLES) {
+    bucket.recent = bucket.recent.slice(-MAX_SIGNATURE_SAMPLES);
+  }
+  return data;
+}
+
 /**
  * Record a completed task for learning
  */
@@ -27,11 +138,14 @@ export async function recordTaskCompletion(agent, task) {
   return withLock(async () => {
   const data = await loadLearningData();
 
-  const taskType = extractTaskType(task);
+  // Structured telemetry context (failure signature + execution context +
+  // latency breakdown) derived once and reused for aggregate + log (issue #2329).
+  const telemetry = buildTaskTelemetryContext(agent, task);
+  const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
-  const success = agent.result?.success || false;
+  const success = telemetry.success;
   const duration = agent.result?.duration || 0;
-  const errorCategory = agent.result?.errorAnalysis?.category || null;
+  const errorCategory = telemetry.failureSignature?.category || null;
 
   // Initialize task type bucket if needed
   if (!data.byTaskType[taskType]) {
@@ -140,6 +254,10 @@ export async function recordTaskCompletion(agent, task) {
     }
   }
 
+  // Aggregate the enriched failure signature (category + snippet + position +
+  // execution context + latency) — a no-op on success (issue #2329).
+  recordFailureSignature(data, telemetry);
+
   // Update totals
   data.totals.completed++;
   if (success) {
@@ -154,10 +272,22 @@ export async function recordTaskCompletion(agent, task) {
 
   await saveLearningData(data);
 
-  emitLog('debug', `Recorded task completion: ${taskType} (${success ? 'success' : 'failed'})`, {
+  const { provider, model, component, routingReason } = telemetry.executionContext;
+  const { wallMs, queueMs } = telemetry.latency;
+  const wallSecs = Math.round((wallMs ?? duration) / 1000);
+  emitLog('debug', `Recorded task completion: ${taskType} (${success ? 'success' : `failed:${errorCategory || 'uncategorized'}`}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
     taskType,
     modelTier,
+    provider,
+    model,
+    component,
+    routingReason,
     success,
+    errorCategory,
+    failurePosition: telemetry.failureSignature?.failurePosition ?? null,
+    wallMs,
+    queueMs,
+    executionMs: telemetry.latency.executionMs,
     duration: Math.round(duration / 1000) + 's'
   }, '[TaskLearning]');
 
