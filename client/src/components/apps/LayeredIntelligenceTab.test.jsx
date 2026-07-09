@@ -48,6 +48,14 @@ describe('describeLastRun', () => {
     expect(r.tone).toBe('neutral');
     expect(r.text).toMatch(/existing/i);
   });
+
+  it('does not fabricate an outcome for a legacy record (lastRunAt only, no action)', () => {
+    // Installs upgraded from before this change persisted only lastRunAt.
+    const r = describeLastRun({ lastRunAt: at });
+    expect(r.tone).toBe('neutral');
+    expect(r.text).toMatch(/not recorded/i);
+    expect(r.text).not.toMatch(/no proposal/i);
+  });
 });
 
 describe('LayeredIntelligenceTab last-run status', () => {

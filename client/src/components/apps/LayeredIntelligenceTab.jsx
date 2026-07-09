@@ -59,6 +59,13 @@ export function describeLastRun(li) {
   if (action === 'filed') {
     return { tone: 'success', text: `filed an improvement issue${li.lastRunRef ? ` (${li.lastRunRef})` : ''}`, when };
   }
+  // Legacy record: installs that ran the loop before this change persisted only
+  // `lastRunAt` (no action/reason). Do not fabricate an outcome — say the run
+  // happened but its detail predates the richer bookkeeping, until a new run
+  // records action + reason.
+  if (!action) {
+    return { tone: 'neutral', text: 'ran (outcome not recorded before this version)', when };
+  }
   return { tone: liReasonTone(reason), text: formatLiReason({ action, reason }), when };
 }
 
