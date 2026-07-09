@@ -97,8 +97,24 @@ const cosTaskAttachmentSchema = z.object({
   mimeType: z.string().optional(),
 });
 
+// Structured auto-fix diagnostics (#2328) — the record autoFixer.buildFixDiagnostics
+// attaches to error-driven tasks so downstream telemetry can break auto-fix outcomes
+// out by fallback tier / category / failure reason. Server-internal today (autoFixer
+// calls addTask directly), but validated for schema parity now that addTask persists
+// it as first-class metadata.
+const cosTaskDiagnosticsSchema = z.object({
+  triggerEvent: z.string().optional(),
+  target: z.string().optional(),
+  errorType: z.string().optional(),
+  category: z.string().optional(),
+  tier: z.number().optional(),
+  fixStrategy: z.string().optional(),
+  failureReason: z.string().optional(),
+}).passthrough();
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
+  diagnostics: cosTaskDiagnosticsSchema.optional(),
   priority: z.string().optional(),
   context: z.string().optional(),
   model: z.string().optional(),

@@ -270,6 +270,17 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
     if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
+    // Structured auto-fix diagnostics (#2328): the fallback classifier builds a
+    // { triggerEvent, target, errorType, category, tier, fixStrategy, failureReason }
+    // record for every error-driven task, but until now addTask only ever embedded
+    // it into the free-text context string and the log line — the structured object
+    // was silently dropped. Persist it as first-class metadata so downstream
+    // telemetry can aggregate auto-fix outcomes by tier / category / failure reason.
+    // It round-trips through the markdown store via the JSON sentinel (see
+    // taskParser.js escapeNewlines). A non-object (defensive) is ignored.
+    if (taskData.diagnostics && typeof taskData.diagnostics === 'object') {
+      metadata.diagnostics = taskData.diagnostics;
+    }
     // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
     // at creation so a freshly-added task always carries a stamp; the merge treats
     // an absent stamp as oldest, so this also keeps a stamped task from losing a

@@ -161,6 +161,35 @@ describe('cosTaskStore.addTask', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'added' && e.payload.type === 'user')).toBe(true);
   });
 
+  it('persists structured auto-fix diagnostics into metadata and round-trips them through markdown (#2328)', async () => {
+    const diagnostics = {
+      triggerEvent: 'AI_PROVIDER_EXECUTION_FAILED',
+      target: 'Claude Code CLI (opus)',
+      errorType: 'rate-limit',
+      category: 'rate-limit',
+      tier: 3,
+      fixStrategy: 'constrained-agent-retry',
+      failureReason: 'HTTP 429 from provider',
+    };
+    const created = await addTask(
+      { description: 'Investigate AI provider failure', approvalRequired: true, diagnostics },
+      'internal'
+    );
+    // Attached to the returned task's metadata (not silently dropped).
+    expect(created.metadata.diagnostics).toEqual(diagnostics);
+    // Survives the markdown serialize → parse round-trip via the JSON sentinel.
+    const { tasks } = await getCosTasks();
+    const reloaded = tasks.find(t => t.id === created.id);
+    expect(reloaded.metadata.diagnostics).toEqual(diagnostics);
+  });
+
+  it('omits diagnostics metadata when none is supplied and ignores a non-object value', async () => {
+    const created = await addTask({ description: 'no diagnostics here' }, 'user');
+    expect(created.metadata.diagnostics).toBeUndefined();
+    const bad = await addTask({ description: 'bad diagnostics', diagnostics: 'not-an-object' }, 'user');
+    expect(bad.metadata.diagnostics).toBeUndefined();
+  });
+
   it('rejects a duplicate with the same first-line description and app scope', async () => {
     await addTask({ description: 'dupe me', app: 'portos' }, 'user');
     const second = await addTask({ description: 'dupe me\nextra body', app: 'portos' }, 'user');
