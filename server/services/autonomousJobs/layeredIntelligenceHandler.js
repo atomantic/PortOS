@@ -146,7 +146,7 @@ export async function processApp(app, deps = {}) {
 
   // ---- Layer 2: REASON ----
   const prompt = buildPrompt({ app, config, sources, openIssues, isPortos })
-  const llm = await resolveLLM(config, callLLM)
+  const llm = await resolveLLM(config, callLLM, cwd)
   if (!llm.ok) {
     await recordRun(app, config, now)
     return { app: app.id, action: 'no-op', reason: llm.reason }
@@ -283,11 +283,20 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
 
 /**
  * Resolve the LLM call function. Prefers an injected `callLLM(prompt)`; otherwise
- * resolves the active/overridden provider and returns a bound
- * callProviderAISimple. Returns `{ ok: false, reason }` when no provider is
- * available (a no-op for that app, never a throw).
+ * resolves the active/overridden provider and returns a bound call through the
+ * unified `runPromptThroughProvider`. Returns `{ ok: false, reason }` when no
+ * provider is available (a no-op for that app, never a throw).
+ *
+ * Routing through runPromptThroughProvider (rather than the api-only
+ * callProviderAISimple) lets the loop reason with EVERY provider type the user
+ * can configure — `api` (Ollama, LM Studio), `cli` (Claude Code, Codex,
+ * OpenCode, Antigravity), and `tui` — not just API providers. It dispatches on
+ * `provider.type` and returns `{ text }`, throwing on failure; we convert a
+ * throw back to the `{ error }` shape processApp already branches on. `cwd` is
+ * the app's repo path so CLI/TUI spawns land in the right directory (no-op for
+ * API providers).
  */
-async function resolveLLM(config, injected) {
+async function resolveLLM(config, injected, cwd) {
   if (typeof injected === 'function') return { ok: true, call: injected }
   const { getActiveProvider, getProviderById } = await import('../providers.js')
   const provider = config.providerId
@@ -295,14 +304,16 @@ async function resolveLLM(config, injected) {
     : await getActiveProvider().catch(() => null)
   if (!provider) return { ok: false, reason: 'no-provider' }
   const model = config.model || provider.defaultModel
-  const { callProviderAISimple } = await import('../../lib/aiProvider.js')
+  const { runPromptThroughProvider } = await import('../../lib/promptRunner.js')
   return {
     ok: true,
-    call: (prompt) => callProviderAISimple(provider, model, prompt, {
-      op: `layered-intelligence:${provider.id}`,
-      opLabel: 'Layered Intelligence reasoning…',
-      max_tokens: 1500
-    })
+    call: (prompt) => runPromptThroughProvider({
+      provider,
+      model,
+      prompt,
+      source: 'layered-intelligence',
+      cwd
+    }).catch(err => ({ error: err.message }))
   }
 }
 
