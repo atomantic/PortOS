@@ -50,11 +50,7 @@ import {
   LI_LABEL,
   LI_BLOCKING_LABEL,
   LI_JIRA_BLOCKING_LABEL,
-  LI_JOB_ID,
-  summarizeLoopStatus,
-  summarizeFiledProposals,
-  normalizeProposalSummary,
-  PROPOSAL_LINKS_MAX
+  LI_JOB_ID
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -118,94 +114,6 @@ describe('getEffectiveConfig', () => {
     expect(getEffectiveConfig({ layeredIntelligence: { handoff: { enabled: true } } }).handoff).toEqual({ enabled: true });
     // A junk (non-object) handoff falls back to the default.
     expect(getEffectiveConfig({ layeredIntelligence: { handoff: 'nope' } }).handoff).toEqual({ enabled: false });
-  });
-});
-
-describe('summarizeLoopStatus (overview page shape)', () => {
-  const DAY = 24 * 60 * 60 * 1000;
-  const NOW = Date.parse('2026-07-07T12:00:00Z');
-
-  // Scheduling (enabled/intervalMs) now lives in the per-app task override (#2322);
-  // behavior + lastRunAt still come from app.layeredIntelligence.
-  it('summarizes a never-run enabled app as due with no lastRun/nextDue', () => {
-    const s = summarizeLoopStatus({
-      app: { id: 'a1', name: 'App One' },
-      override: { enabled: true, intervalMs: DAY },
-      now: NOW
-    });
-    expect(s).toMatchObject({ id: 'a1', name: 'App One', enabled: true, due: true, lastRunAt: null, nextDueAt: null });
-    expect(s.sources).toMatchObject({ goals: true, customCount: 0 });
-    expect(s.hasRules).toBe(false);
-  });
-
-  it('computes nextDueAt = lastRunAt + intervalMs and due=false before the interval elapses', () => {
-    const lastRunAt = new Date(NOW - DAY / 2).toISOString();
-    const s = summarizeLoopStatus({
-      app: { id: 'a2', name: 'App Two', layeredIntelligence: { lastRunAt } },
-      override: { enabled: true, intervalMs: DAY },
-      now: NOW
-    });
-    expect(s.lastRunAt).toBe(lastRunAt);
-    expect(s.nextDueAt).toBe(new Date(Date.parse(lastRunAt) + DAY).toISOString());
-    expect(s.due).toBe(false);
-  });
-
-  it('due is always false when the app is disabled, even past the interval', () => {
-    const lastRunAt = new Date(NOW - 2 * DAY).toISOString();
-    const s = summarizeLoopStatus({
-      app: { id: 'a3', name: 'Off', layeredIntelligence: { lastRunAt } },
-      override: { enabled: false, intervalMs: DAY },
-      now: NOW
-    });
-    expect(s.enabled).toBe(false);
-    expect(s.due).toBe(false);
-  });
-
-  it('reduces rules to a boolean and never leaks the free text', () => {
-    const s = summarizeLoopStatus({
-      app: { id: 'a4', name: 'Ruled', layeredIntelligence: { rules: 'never add deps' } },
-      override: { enabled: true },
-      now: NOW
-    });
-    expect(s.hasRules).toBe(true);
-    expect(JSON.stringify(s)).not.toContain('never add deps');
-  });
-
-  it('surfaces the hand-off enabled flag (behavior, from layeredIntelligence)', () => {
-    const off = summarizeLoopStatus({ app: { id: 'h0', name: 'Off' }, now: NOW });
-    expect(off.handoffEnabled).toBe(false);
-    const on = summarizeLoopStatus({
-      app: { id: 'h1', name: 'On', layeredIntelligence: { handoff: { enabled: true } } },
-      override: { enabled: true },
-      now: NOW
-    });
-    expect(on.handoffEnabled).toBe(true);
-  });
-
-  it('reads provider/model from the override, not layeredIntelligence', () => {
-    const s = summarizeLoopStatus({
-      app: { id: 'p1', name: 'Prov' },
-      override: { enabled: true, providerId: 'ov-prov', model: 'ov-model' },
-      now: NOW
-    });
-    expect(s.providerId).toBe('ov-prov');
-    expect(s.model).toBe('ov-model');
-  });
-
-  it('surfaces PortOS scopes + custom source count', () => {
-    const s = summarizeLoopStatus({
-      app: { id: 'portos-default', name: 'PortOS', layeredIntelligence: { sources: { custom: [{ type: 'file', ref: 'x.md' }] } } },
-      override: { enabled: true },
-      isPortos: true,
-      now: NOW
-    });
-    expect(s.isPortos).toBe(true);
-    expect(s.allowedScopes).toContain('portos-self');
-    expect(s.sources.customCount).toBe(1);
-  });
-
-  it('falls back to the app id when name is missing', () => {
-    expect(summarizeLoopStatus({ app: { id: 'no-name' }, now: NOW }).name).toBe('no-name');
   });
 });
 
@@ -1074,82 +982,5 @@ describe('listForgeIssues url surfacing (issue #2293)', () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify([{ number: 1, title: 'A', body: 'x', state: 'OPEN' }]) });
     const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
     expect(issues[0].url).toBeNull();
-  });
-});
-
-describe('normalizeProposalSummary (issue #2293)', () => {
-  it('distinguishes a failed read from a legitimately empty one', () => {
-    expect(normalizeProposalSummary({ ok: false }, 'github')).toMatchObject({ ok: false, reason: 'read-failed', total: 0 });
-    expect(normalizeProposalSummary({ ok: true, issues: [] }, 'github')).toMatchObject({ ok: true, total: 0, open: 0, closed: 0 });
-  });
-
-  it('counts open vs closed and surfaces link-ready issues', () => {
-    const listed = { ok: true, issues: [
-      { number: 1, title: 'A', state: 'open', url: 'u1' },
-      { number: 2, title: 'B', state: 'closed', url: 'u2' }
-    ] };
-    const s = normalizeProposalSummary(listed, 'github');
-    expect(s).toMatchObject({ ok: true, total: 2, open: 1, closed: 1 });
-    expect(s.issues).toEqual([
-      { number: 1, title: 'A', state: 'open', url: 'u1' },
-      { number: 2, title: 'B', state: 'closed', url: 'u2' }
-    ]);
-  });
-
-  it('caps the surfaced link list at PROPOSAL_LINKS_MAX but keeps the full total', () => {
-    const issues = Array.from({ length: PROPOSAL_LINKS_MAX + 10 }, (_, i) => ({ number: i, title: `t${i}`, state: 'open', url: `u${i}` }));
-    const s = normalizeProposalSummary({ ok: true, issues }, 'github');
-    expect(s.total).toBe(PROPOSAL_LINKS_MAX + 10);
-    expect(s.issues.length).toBe(PROPOSAL_LINKS_MAX);
-  });
-});
-
-describe('summarizeFiledProposals (issue #2293)', () => {
-  it('forge: delegates to the forge lister and normalizes', async () => {
-    const listForge = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 3, title: 'X', state: 'open', url: 'u' }] });
-    const s = await summarizeFiledProposals({
-      app: { id: 'a', repoPath: '/repo' },
-      tracker: { resolved: 'github', forge: 'gh' },
-      deps: { listForge }
-    });
-    expect(listForge).toHaveBeenCalledWith({ cli: 'gh', cwd: '/repo' });
-    expect(s).toMatchObject({ ok: true, tracker: 'github', total: 1, open: 1 });
-  });
-
-  it('forge: reports no-repo when the app has no repoPath', async () => {
-    const s = await summarizeFiledProposals({ app: { id: 'a' }, tracker: { resolved: 'github', forge: 'gh' } });
-    expect(s).toMatchObject({ ok: false, reason: 'no-repo', total: 0 });
-  });
-
-  it('jira: reports jira-not-configured without an instance/project', async () => {
-    const s = await summarizeFiledProposals({ app: { id: 'a', repoPath: '/r' }, tracker: { resolved: 'jira', forge: null } });
-    expect(s).toMatchObject({ ok: false, tracker: 'jira', reason: 'jira-not-configured' });
-  });
-
-  it('jira: delegates to the jira lister when configured', async () => {
-    const listJira = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 'PROJ-1', title: 'J', state: 'open' }] });
-    const s = await summarizeFiledProposals({
-      app: { id: 'a', repoPath: '/r', jira: { enabled: true, instanceId: 'i1', projectKey: 'PROJ' } },
-      tracker: { resolved: 'jira', forge: null },
-      deps: { listJira }
-    });
-    expect(listJira).toHaveBeenCalledWith({ instanceId: 'i1', projectKey: 'PROJ' });
-    expect(s).toMatchObject({ ok: true, tracker: 'jira', total: 1, open: 1 });
-    expect(s.issues[0].url).toBeNull(); // jira issues surface without per-item links
-  });
-
-  it('plan: counts slug tags in PLAN.md (all open, no links)', async () => {
-    const readPlan = vi.fn().mockResolvedValue('- [ ] [lil-foo] a\n- [ ] [lil-bar] b\n');
-    const s = await summarizeFiledProposals({
-      app: { id: 'a', repoPath: '/r' },
-      tracker: { resolved: 'plan', forge: null },
-      deps: { readPlan }
-    });
-    expect(s).toMatchObject({ ok: true, tracker: 'plan', total: 2, open: 2, closed: 0, issues: [] });
-  });
-
-  it('plan: reports no-repo without a repoPath', async () => {
-    const s = await summarizeFiledProposals({ app: { id: 'a' }, tracker: { resolved: 'plan', forge: null } });
-    expect(s).toMatchObject({ ok: false, tracker: 'plan', reason: 'no-repo' });
   });
 });

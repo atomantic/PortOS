@@ -38,7 +38,6 @@ const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
 const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
-const LayeredIntelligence = lazyWithReload(() => import('./pages/LayeredIntelligence'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
@@ -205,7 +204,6 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
-          <Route path="layered-intelligence" element={<LayeredIntelligence />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/flows" element={<FlowsDoc />} />
