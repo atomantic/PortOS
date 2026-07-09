@@ -59,6 +59,21 @@ vi.mock('../layeredIntelligence.js', async (importOriginal) => {
   };
 });
 
+// resolveLLM lazy-imports these only when NO callLLM is injected. Mocking them
+// lets us assert the real provider-resolution path routes through the unified
+// runPromptThroughProvider (which supports cli/api/tui) rather than the old
+// api-only callProviderAISimple.
+const runPromptMock = vi.fn().mockResolvedValue({ text: '{}' });
+vi.mock('../../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: (...args) => runPromptMock(...args)
+}));
+const getProviderByIdMock = vi.fn();
+const getActiveProviderMock = vi.fn();
+vi.mock('../providers.js', () => ({
+  getProviderById: (...args) => getProviderByIdMock(...args),
+  getActiveProvider: (...args) => getActiveProviderMock(...args)
+}));
+
 import { isAppDue, processApp, runLayeredIntelligence } from './layeredIntelligenceHandler.js';
 import { getActiveApps } from '../apps.js';
 
@@ -87,6 +102,12 @@ beforeEach(() => {
   forgeState.jiraBlockingApplied = [];
   forgeState.semanticResult = { available: false, duplicate: false, match: null };
   resolveTrackerMock.mockResolvedValue({ resolved: 'github', forge: 'gh' });
+  runPromptMock.mockResolvedValue({ text: '{}' });
+  // Default to resolving null (no provider) — mirrors the real async signature so
+  // resolveLLM's `.catch()` never trips over a non-promise in sweep tests that
+  // don't inject callLLM.
+  getProviderByIdMock.mockReset().mockResolvedValue(null);
+  getActiveProviderMock.mockReset().mockResolvedValue(null);
 });
 
 describe('isAppDue', () => {
@@ -297,6 +318,59 @@ describe('processApp', () => {
     expect(out.action).toBe('filed');
     expect(out.paused).toBe(false); // pause skipped for plan tracker
     expect(forgeState.blockingApplied).toHaveLength(0);
+  });
+});
+
+describe('processApp — provider resolution (no injected callLLM)', () => {
+  const app = (providerId) => ({
+    id: 'app-1', name: 'App One', repoPath: '/repo',
+    layeredIntelligence: { enabled: true, intervalMs: DAY, providerId, allowedScopes: ['app-improvement'] }
+  });
+
+  it('reasons through runPromptThroughProvider for a non-API (tui) provider', async () => {
+    getProviderByIdMock.mockResolvedValue({ id: 'claude-code-tui', type: 'tui', defaultModel: null });
+    runPromptMock.mockResolvedValue({ text: JSON.stringify({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X', body: 'do it' } }) });
+    const out = await processApp(app('claude-code-tui'));
+    expect(getProviderByIdMock).toHaveBeenCalledWith('claude-code-tui');
+    expect(runPromptMock).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ id: 'claude-code-tui', type: 'tui' }),
+      source: 'layered-intelligence',
+      cwd: '/repo'
+    }));
+    expect(out.action).toBe('filed');
+  });
+
+  it('works for a cli provider too (Claude Code / Codex / OpenCode)', async () => {
+    getProviderByIdMock.mockResolvedValue({ id: 'opencode-ollama', type: 'cli', defaultModel: null });
+    runPromptMock.mockResolvedValue({ text: JSON.stringify({ proposal: { scope: 'app-improvement', slug: 'add-y', title: 'Add Y', body: 'do it' } }) });
+    const out = await processApp(app('opencode-ollama'));
+    expect(runPromptMock).toHaveBeenCalledWith(expect.objectContaining({ provider: expect.objectContaining({ type: 'cli' }) }));
+    expect(out.action).toBe('filed');
+  });
+
+  it('falls back to the active provider when no providerId is set', async () => {
+    getActiveProviderMock.mockResolvedValue({ id: 'ollama', type: 'api', defaultModel: 'llama3.2' });
+    runPromptMock.mockResolvedValue({ text: JSON.stringify({ proposal: { scope: 'app-improvement', slug: 'add-z', title: 'Add Z', body: 'do it' } }) });
+    const out = await processApp(app(null));
+    expect(getProviderByIdMock).not.toHaveBeenCalled();
+    expect(getActiveProviderMock).toHaveBeenCalled();
+    expect(out.action).toBe('filed');
+  });
+
+  it('no-ops (never throws) when the runner rejects', async () => {
+    getProviderByIdMock.mockResolvedValue({ id: 'ollama', type: 'api', defaultModel: 'llama3.2' });
+    runPromptMock.mockRejectedValue(new Error('backend down'));
+    const out = await processApp(app('ollama'));
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toContain('backend down');
+  });
+
+  it('no-ops when the provider cannot be resolved', async () => {
+    getProviderByIdMock.mockResolvedValue(null);
+    const out = await processApp(app('ghost-provider'));
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toBe('no-provider');
+    expect(runPromptMock).not.toHaveBeenCalled();
   });
 });
 

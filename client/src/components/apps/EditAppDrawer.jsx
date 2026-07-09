@@ -10,6 +10,7 @@ import Banner from '../ui/Banner';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate } from './LayeredIntelligenceTab';
+import { PROVIDER_TYPES } from '../../utils/providers';
 
 const WORK_TRACKER_OPTIONS = [
   { value: 'auto', label: 'Auto (detect from git origin)' },
@@ -172,7 +173,11 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       setLiConfig(cfg);
       setLiBaseline(cfg);
       setLiIsPortos(!!li?.isPortos);
-      setLiProviders((provData?.providers || []).filter(p => p.type === 'cli' && p.enabled !== false));
+      // The loop reasons through runPromptThroughProvider, which dispatches on
+      // provider.type — so any enabled provider of a known type is selectable
+      // (Claude Code, Codex, OpenCode, Ollama/LM Studio API, TUI variants…).
+      const runnableTypes = Object.values(PROVIDER_TYPES);
+      setLiProviders((provData?.providers || []).filter(p => runnableTypes.includes(p.type) && p.enabled !== false));
       setLiError(!cfg);
       setLiLoaded(true);
     }).catch(() => {
