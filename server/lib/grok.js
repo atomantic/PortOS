@@ -24,6 +24,7 @@
 import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { hasModelFlag, commandBasename } from './providerModels.js';
 
 const NOOP_CLEANUP = () => {};
@@ -145,7 +146,11 @@ export function prepareGrokPromptFile(args, prompt) {
   if (process.platform !== 'win32') return { args, useStdin: true, cleanup: NOOP_CLEANUP };
   const idx = args.indexOf(GROK_STDIN_PROMPT_PATH);
   if (idx <= 0 || args[idx - 1] !== '--prompt-file') return { args, useStdin: true, cleanup: NOOP_CLEANUP };
-  const file = join(os.tmpdir(), `grok-prompt-${process.pid}-${Date.now()}.txt`);
+  // A collision-resistant name — concurrent grok runs in the same process (e.g.
+  // parallel CoS agents / pipeline stages) can reach here in the same millisecond,
+  // so a pid+timestamp name would clobber each other's prompt or delete a file a
+  // sibling still needs. randomUUID is unique per call (server-side Node crypto).
+  const file = join(os.tmpdir(), `grok-prompt-${process.pid}-${randomUUID()}.txt`);
   writeFileSync(file, typeof prompt === 'string' ? prompt : '', 'utf8');
   const rewritten = [...args];
   rewritten[idx] = file;
