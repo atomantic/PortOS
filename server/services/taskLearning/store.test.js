@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { extractTaskType, calculateDurationETA } from './store.js';
+import {
+  extractTaskType,
+  calculateDurationETA,
+  classifyUntypedTask,
+  isSandboxedTaskType,
+  EXTERNAL_UNTYPED_TASK_TYPE
+} from './store.js';
 
 // These two helpers are the pure foundation every other taskLearning submodule
 // builds on (duration math + task-type classification). They take no I/O, so we
@@ -20,8 +26,8 @@ describe('store.extractTaskType', () => {
   });
 
   it('does not treat a non-idle reviewType as idle-review', () => {
-    // falls through to 'unknown' since nothing else matches
-    expect(extractTaskType({ metadata: { reviewType: 'manual' } })).toBe('unknown');
+    // falls through to the sandboxed fallback since nothing else matches (#2333)
+    expect(extractTaskType({ metadata: { reviewType: 'manual' } })).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
   });
 
   it('classifies mission tasks by mission name', () => {
@@ -30,8 +36,9 @@ describe('store.extractTaskType', () => {
 
   it('classifies app-improvement tasks only when both taskApp and selfImprovementType present', () => {
     expect(extractTaskType({ metadata: { taskApp: 'foo', selfImprovementType: 'perf' } })).toBe('app-improve:perf');
-    // taskApp without selfImprovementType falls through
-    expect(extractTaskType({ metadata: { taskApp: 'foo' } })).toBe('unknown');
+    // taskApp with a selfImprovementType but no taskApp-pairing is caught by the
+    // classifier as a self-improve domain (#2333)
+    expect(extractTaskType({ metadata: { selfImprovementType: 'perf' } })).toBe('self-improve:perf');
   });
 
   it('parses a [self-improvement] description tag with a type token', () => {
@@ -62,9 +69,72 @@ describe('store.extractTaskType', () => {
     expect(extractTaskType({ taskType: 'internal', description: 'do a thing' })).toBe('internal-task');
   });
 
-  it('returns unknown for an empty/undefined task', () => {
-    expect(extractTaskType()).toBe('unknown');
-    expect(extractTaskType({})).toBe('unknown');
+  it('returns the sandboxed fallback (never the old unknown) for an empty/undefined task', () => {
+    expect(extractTaskType()).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    expect(extractTaskType({})).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    // regression guard: the blind 'unknown' sink is gone
+    expect(extractTaskType({})).not.toBe('unknown');
+  });
+});
+
+describe('store.classifyUntypedTask (issue #2333)', () => {
+  it('infers a self-improve domain from a bare selfImprovementType hint', () => {
+    expect(classifyUntypedTask({ metadata: { selfImprovementType: 'Perf Tuning' } }))
+      .toBe('self-improve:perf-tuning');
+  });
+
+  it('preserves an explicit task.taskType the primary extractor did not special-case', () => {
+    // Previously these all collapsed to 'unknown'
+    expect(classifyUntypedTask({ taskType: 'scheduled' })).toBe('scheduled-task');
+    expect(classifyUntypedTask({ taskType: 'architect' })).toBe('architect-task');
+    // an already-namespaced type keeps its colon rather than getting a -task suffix
+    expect(classifyUntypedTask({ taskType: 'self-improve:ui' })).toBe('self-improve:ui');
+  });
+
+  it('classifies free-form descriptions by keyword when no type token is present', () => {
+    expect(classifyUntypedTask({ description: 'Investigate the crash in the pipeline' })).toBe('auto-fix');
+    expect(classifyUntypedTask({ description: 'Refactor and clean up the store module' })).toBe('self-improve:general');
+    expect(classifyUntypedTask({ description: 'Audit the routing accuracy code' })).toBe('idle-review');
+    expect(classifyUntypedTask({ description: 'Add unit test coverage for the parser' })).toBe('test-task');
+  });
+
+  it('reads a description from metadata.taskDescription when top-level description is absent', () => {
+    expect(classifyUntypedTask({ metadata: { taskDescription: 'fix the broken build' } })).toBe('auto-fix');
+  });
+
+  it('does not false-positive on a substring of a trigger word', () => {
+    // "testing" / "fixture" must not trip the \b-anchored keyword rules
+    expect(classifyUntypedTask({ description: 'contesting the fixtures inventory' }))
+      .toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+  });
+
+  it('falls back to external/untyped (a sandboxed type) when nothing matches', () => {
+    const t = classifyUntypedTask({ description: 'ship the quarterly widgets' });
+    expect(t).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    expect(isSandboxedTaskType(t)).toBe(true);
+    expect(classifyUntypedTask(null)).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    expect(classifyUntypedTask('nope')).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+  });
+
+  it('is idempotent: same input always yields the same output', () => {
+    const inputs = [
+      { description: 'Investigate the crash' },
+      { taskType: 'scheduled' },
+      { metadata: { selfImprovementType: 'perf' } },
+      {}
+    ];
+    for (const input of inputs) {
+      const first = classifyUntypedTask(input);
+      expect(classifyUntypedTask(input)).toBe(first);
+      // re-classifying its own output-shaped task is stable (no drift)
+      expect(classifyUntypedTask({ taskType: first })).toBe(classifyUntypedTask({ taskType: first }));
+    }
+  });
+
+  it('only marks the fallback bucket as sandboxed', () => {
+    expect(isSandboxedTaskType(EXTERNAL_UNTYPED_TASK_TYPE)).toBe(true);
+    expect(isSandboxedTaskType('auto-fix')).toBe(false);
+    expect(isSandboxedTaskType('unknown')).toBe(false);
   });
 });
 

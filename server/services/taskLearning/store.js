@@ -127,6 +127,87 @@ export async function saveLearningData(data) {
 }
 
 /**
+ * Sandboxed fallback type for executions the classifier can't map to a known
+ * domain (issue #2333). Replaces the old blind `'unknown'` sink so untyped work
+ * still flows through outcome learning + failure-signature harvesting, while
+ * being explicitly walled off from routing influence (see `isSandboxedTaskType`
+ * consumers in routing.js) — a heterogeneous grab-bag must never drive a tier
+ * suggestion or globally skip all untyped work (which would create a routing
+ * blind spot / loop).
+ */
+export const EXTERNAL_UNTYPED_TASK_TYPE = 'external/untyped';
+
+const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE]);
+
+/**
+ * True when a task type is a sandboxed fallback bucket (not a real learned
+ * domain). Callers in routing.js gate on this to keep the fallback from
+ * influencing model-tier suggestions or skip/rehabilitation gating.
+ */
+export const isSandboxedTaskType = (taskType) => SANDBOXED_TASK_TYPES.has(taskType);
+
+/**
+ * Ordered description-keyword → concrete-type rules, tried only as a last resort
+ * before the sandboxed fallback. First match wins. Patterns are whole-word/stem
+ * tests (`\b…`) so a substring can't false-positive (e.g. "testing" ⊄ trigger of
+ * an unrelated word). Kept deliberately conservative — a wrong concrete label is
+ * worse than an honest `external/untyped`.
+ */
+const DESCRIPTION_CLASSIFIERS = [
+  { type: 'auto-fix', re: /\b(fix|bug|crash|broken|failing|regression|investigate|stack ?trace)\b/ },
+  { type: 'self-improve:general', re: /\b(refactor|clean ?up|simplif\w*|optimi[sz]\w*|improve|enhance)\b/ },
+  { type: 'idle-review', re: /\b(review|audit|inspect)\b/ },
+  { type: 'test-task', re: /\b(unit test|coverage|test suite|write tests?)\b/ }
+];
+
+/** Normalize a raw task-type token to a stable, low-cardinality slug. */
+function slugTaskType(raw) {
+  return String(raw).trim().toLowerCase().replace(/[^a-z0-9:_-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Classify a task that the primary `extractTaskType` heuristics left untyped
+ * (issue #2333). Pure, deterministic (idempotent — same input → same output),
+ * and side-effect free / O(1) over a few short regexes, so it stays well under
+ * the <50ms execution-entry budget. Inspects additional signals in priority
+ * order — a self-improvement metadata hint, an explicit `task.taskType` the
+ * primary extractor didn't special-case, then broader description keyword
+ * signatures — and only falls back to the sandboxed `external/untyped` type
+ * (never the old `'unknown'`) when nothing matches.
+ */
+export function classifyUntypedTask(task) {
+  if (!task || typeof task !== 'object') return EXTERNAL_UNTYPED_TASK_TYPE;
+
+  // 1) A self-improvement hint not paired with a taskApp (that pairing is
+  //    handled by the primary extractor upstream).
+  const selfImprovementType = task?.metadata?.selfImprovementType;
+  if (typeof selfImprovementType === 'string' && selfImprovementType.trim()) {
+    return `self-improve:${slugTaskType(selfImprovementType)}`;
+  }
+
+  // 2) An explicit task.taskType the primary extractor didn't special-case
+  //    (user/internal are resolved upstream). Preserve it as a concrete domain
+  //    rather than collapsing distinct system domains into one bucket.
+  const explicit = task?.taskType;
+  if (typeof explicit === 'string' && explicit.trim() && explicit !== 'unknown') {
+    const slug = slugTaskType(explicit);
+    if (slug) return slug.includes(':') ? slug : `${slug}-task`;
+  }
+
+  // 3) Broader description keyword signatures (bracket-tag patterns already ran
+  //    upstream; this catches free-form descriptions).
+  const desc = (task?.description || task?.metadata?.taskDescription || '').toLowerCase();
+  if (desc) {
+    for (const { type, re } of DESCRIPTION_CLASSIFIERS) {
+      if (re.test(desc)) return type;
+    }
+  }
+
+  // 4) Nothing matched — sandboxed fallback (never 'unknown').
+  return EXTERNAL_UNTYPED_TASK_TYPE;
+}
+
+/**
  * Extract task type from task description or metadata
  */
 export function extractTaskType(task) {
@@ -183,7 +264,10 @@ export function extractTaskType(task) {
     return 'internal-task';
   }
 
-  return 'unknown';
+  // Execution-entry classification hook (issue #2333): before giving up to the
+  // old blind 'unknown' sink, inspect additional signals to infer a concrete
+  // domain, else return the sandboxed `external/untyped` fallback.
+  return classifyUntypedTask(task);
 }
 
 /**

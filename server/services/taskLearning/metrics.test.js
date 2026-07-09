@@ -90,7 +90,7 @@ describe('buildTaskTelemetryContext', () => {
       provider: null,
       model: null,
       modelTier: null,
-      taskType: 'unknown',
+      taskType: 'external/untyped', // sandboxed fallback, no longer the blind 'unknown' (#2333)
       component: null,
       inputChars: null, // null, not 0 — description absent, not empty
       routingReason: null
@@ -115,6 +115,54 @@ describe('buildTaskTelemetryContext', () => {
     const ctx = buildTaskTelemetryContext(baseAgent, { description: 'no createdAt', taskType: 'user' });
     expect(ctx.latency.queueMs).toBeNull();
     expect(ctx.latency.wallMs).toBe(300000); // wall still derivable from agent timestamps
+  });
+
+  it('harvests a failure signature for a previously-untyped task via the classification hook (#2333)', () => {
+    // A failing task with no recognized type token: previously taskType would be
+    // 'unknown' and bypass structured learning. Now the classifier maps the
+    // free-form description to a concrete domain and the failure is captured.
+    const agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, phase: 'diagnosing' },
+      result: {
+        success: false,
+        duration: 5000,
+        errorAnalysis: { category: 'tool-error', message: 'ripgrep not found' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { description: 'investigate the failing deploy' });
+    expect(ctx.executionContext.taskType).toBe('auto-fix'); // classified, not 'unknown'
+    expect(ctx.failureSignature).toEqual({
+      category: 'tool-error',
+      messageSnippet: 'ripgrep not found',
+      failurePosition: 'diagnosing'
+    });
+
+    // The harvested signature lands in the normalized telemetry schema.
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures['tool-error'].count).toBe(1);
+    expect(data.failureSignatures['tool-error'].recent[0]).toMatchObject({
+      taskType: 'auto-fix',
+      messageSnippet: 'ripgrep not found',
+      failurePosition: 'diagnosing'
+    });
+  });
+
+  it('harvests failures even for the sandboxed external/untyped fallback (#2333)', () => {
+    const agent = {
+      ...baseAgent,
+      result: {
+        success: false,
+        duration: 3000,
+        errorAnalysis: { category: 'timeout', message: 'exceeded wall clock' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { description: 'ship the quarterly widgets' });
+    expect(ctx.executionContext.taskType).toBe('external/untyped');
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures['timeout'].recent[0].taskType).toBe('external/untyped');
   });
 });
 
