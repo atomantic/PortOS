@@ -1623,13 +1623,24 @@ export async function emitHandlerBackedOnDemand({ outcome, request, targetApp })
     });
     return;
   }
+  // Non-filed: forward the handler's ACTUAL action + reason so the client can
+  // explain WHY nothing was filed (llm-error, unparseable-response, duplicate,
+  // parked, jira-not-configured, …) instead of a blanket "nothing to do". A
+  // plain `no-op`/`no-proposal` is genuinely idle; everything else is a
+  // handler-issue the user should see. `error` is the thrown-run shape the
+  // caller synthesizes when the handler itself rejects.
+  const action = outcome?.action || 'no-op';
+  const reason = outcome?.reason ?? outcome?.error ?? null;
+  const isIdle = action === 'no-op' && (reason == null || reason === 'no-proposal');
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,
     appId,
     appName,
-    outcome: 'idle',
-    handlerAction: outcome?.action || 'no-op'
+    outcome: isIdle ? 'idle' : 'handler-issue',
+    handlerAction: action,
+    handlerReason: reason,
+    blocking: outcome?.blocking ?? null
   });
 }
 

@@ -99,6 +99,14 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
   if (override.providerId != null) config.providerId = override.providerId
   if (override.model != null) config.model = override.model
 
+  // Every terminal path records the run's OUTCOME (not just lastRunAt) and returns
+  // the same object, so the durable last-run status the UI reads always matches
+  // what was returned to the on-demand feedback layer. One seam ⇒ no drift.
+  const settle = async (outcome) => {
+    await recordRun(app, config, now, outcome)
+    return { app: app.id, ...outcome }
+  }
+
   // Resolve where this app files work — branch up front so a `plan` app never
   // hits the forge-only label/issue paths.
   const tracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan', forge: null }))
@@ -114,8 +122,7 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
     ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey, issueType: app.jira.issueType || 'Task' }
     : null
   if (filer === 'jira' && !jira) {
-    await recordRun(app, config, now)
-    return { app: app.id, action: 'skipped', reason: 'jira-not-configured' }
+    return settle({ action: 'skipped', reason: 'jira-not-configured' })
   }
 
   // ---- Park check (forge + jira; plan has no issue to block on) ----
@@ -127,13 +134,11 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
     // than risk resuming work the user parked, and try again next run.
     if (blocking && !blocking.ok) {
       console.warn(`⚠️ Layered Intelligence: ${app.name} blocking-issue read failed — skipping this run`)
-      await recordRun(app, config, now)
-      return { app: app.id, action: 'skipped', reason: 'blocking-read-failed' }
+      return settle({ action: 'skipped', reason: 'blocking-read-failed' })
     }
     if (blocking && isAppParked(blocking.issues)) {
       console.log(`⏸️ Layered Intelligence: ${app.name} parked on ${blocking.issues.length} blocking issue(s) — skipping`)
-      await recordRun(app, config, now)
-      return { app: app.id, action: 'parked', blocking: blocking.issues.length }
+      return settle({ action: 'parked', reason: 'blocking-open', blocking: blocking.issues.length })
     }
   }
 
@@ -168,13 +173,11 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
   const prompt = buildPrompt({ app, config, sources, openIssues, isPortos })
   const llm = await resolveLLM(config, callLLM, cwd)
   if (!llm.ok) {
-    await recordRun(app, config, now)
-    return { app: app.id, action: 'no-op', reason: llm.reason }
+    return settle({ action: 'no-op', reason: llm.reason })
   }
   const llmResult = await llm.call(prompt)
   if (llmResult?.error) {
-    await recordRun(app, config, now)
-    return { app: app.id, action: 'no-op', reason: `llm-error: ${llmResult.error}` }
+    return settle({ action: 'no-op', reason: `llm-error: ${llmResult.error}` })
   }
 
   const parsed = safeParse(llmResult?.text)
@@ -184,21 +187,31 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
   let filedNumber = null  // forge: integer issue number
   let filedKey = null     // jira: string ticket key (PROJ-123)
   let filedAction = 'no-op'
+  // Machine-readable reason for a non-filed terminal outcome, so the durable
+  // last-run status + the on-demand toast can tell the user WHY nothing was filed
+  // (the common silent case being a reasoning model that returns no usable JSON).
+  // `no-proposal` = the reasoner ran fine and proposed nothing; `unparseable-
+  // response` = it returned text we couldn't parse into a proposal at all.
+  let reason = parsed == null ? 'unparseable-response' : 'no-proposal'
   let handedOff = false
   if (proposal) {
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
     if (!scopeOk) {
       console.log(`🚫 Layered Intelligence: ${app.name} proposal scope "${proposal.scope}" not allowed — suppressed`)
+      reason = 'scope-suppressed'
     } else if (trackerReadFailed) {
       // Dedup would be blind against a failed tracker read — never file, or a
       // transient forge blip files a duplicate. Retry next run (CLAUDE.md sentinel).
       console.warn(`⚠️ Layered Intelligence: ${app.name} tracker read failed — suppressing proposal to avoid a blind duplicate`)
       filedAction = 'tracker-read-failed'
+      reason = 'tracker-read-failed'
     } else if (isProposalDuplicate({ slug: proposal.slug, existingIssues, now })) {
       console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" is a duplicate — suppressed`)
       filedAction = 'duplicate'
+      reason = 'duplicate'
     } else if (await isSemanticDuplicate(app, proposal, existingIssues, now)) {
       filedAction = 'semantic-duplicate'
+      reason = 'semantic-duplicate'
     } else {
       // ---- Layer 4: ACT (file exactly one) ----
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
@@ -206,7 +219,8 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
         filedNumber = filed.number ?? null
         filedKey = filed.key ?? null
         filedAction = 'filed'
-        const ref = filedKey || (filedNumber ? `#${filedNumber}` : '')
+        reason = null // filed ⇒ nothing to explain
+        const ref = filedRef(filedKey, filedNumber) ?? ''
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
         // ---- Optional Engine-A hand-off: enqueue a coding agent for a
         // trivial+safe fix (approval-gated) rather than only filing it. Only
@@ -225,6 +239,7 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
         }
       } else {
         console.error(`❌ Layered Intelligence: ${app.name} failed to file proposal: ${filed.error || 'unknown'}`)
+        reason = 'file-failed'
       }
     }
   }
@@ -247,8 +262,7 @@ export async function runLayeredIntelligenceForApp(app, deps = {}) {
     }
   }
 
-  await recordRun(app, config, now)
-  return { app: app.id, action: filedAction, filedNumber, filedKey, paused, handedOff }
+  return settle({ action: filedAction, reason, filedNumber, filedKey, paused, handedOff })
 }
 
 /**
@@ -348,14 +362,35 @@ function safeParse(text) {
 }
 
 /**
- * Persist per-app run bookkeeping (lastRunAt) — run cadence, not issue memory.
- * Routes through updateAppLayeredIntelligence so the write RE-READS the current
- * stored config and merges ONLY `lastRunAt` over it, rather than writing back the
+ * The user-facing ref for a filed proposal: the Jira key when present, else
+ * `#<number>` on a forge, else null (a plain PLAN item files no number/key).
+ */
+function filedRef(key, number) {
+  return key || (number != null ? `#${number}` : null)
+}
+
+/**
+ * Persist per-app run bookkeeping — run cadence AND the last run's OUTCOME, so a
+ * user (especially on mobile, where the transient "Run" toast is easy to miss)
+ * can look up WHY the loop produced nothing after the fact. Routes through
+ * updateAppLayeredIntelligence so the write RE-READS the current stored config
+ * and merges ONLY these bookkeeping fields over it, rather than writing back the
  * (possibly seconds-stale) snapshot captured at sweep start — so a user config
  * edit made mid-sweep isn't clobbered by the run-bookkeeping write.
+ *
+ * `lastRunAction` is the terminal action (filed / no-op / duplicate / parked /
+ * skipped / …); `lastRunReason` is the machine-readable reason for a non-filed
+ * outcome (or null when it filed / had nothing to explain); `lastRunRef` is the
+ * filed issue ref (`#123` / `PROJ-1`) when it filed, else null.
  */
-async function recordRun(app, config, now) {
-  await updateAppLayeredIntelligence(app.id, { lastRunAt: new Date(now).toISOString() }).catch((err) => {
+async function recordRun(app, config, now, outcome = {}) {
+  const patch = {
+    lastRunAt: new Date(now).toISOString(),
+    lastRunAction: outcome.action ?? null,
+    lastRunReason: outcome.reason ?? null,
+    lastRunRef: filedRef(outcome.filedKey, outcome.filedNumber)
+  }
+  await updateAppLayeredIntelligence(app.id, patch).catch((err) => {
     console.error(`❌ Layered Intelligence: failed to record run for ${app.id}: ${err.message}`)
   })
 }

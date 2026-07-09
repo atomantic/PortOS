@@ -465,6 +465,63 @@ describe('processApp — jira tracker', () => {
   });
 });
 
+describe('run outcome reason + persisted bookkeeping', () => {
+  const enabledApp = (extra = {}) => ({
+    id: 'app-1', name: 'App One', repoPath: '/repo',
+    layeredIntelligence: { enabled: true, intervalMs: DAY, allowedScopes: ['app-improvement', 'app-data-gap'] },
+    ...extra
+  });
+
+  // The last recordRun patch (updateAppLayeredIntelligence is recordRun's sink).
+  const lastRunPatch = () => updateAppMock.mock.calls.at(-1)?.[1];
+
+  it('reports unparseable-response when the model returns no usable JSON', async () => {
+    const callLLM = vi.fn().mockResolvedValue({ text: 'I am thinking… no JSON here.' });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toBe('unparseable-response');
+    expect(lastRunPatch()).toMatchObject({ lastRunAction: 'no-op', lastRunReason: 'unparseable-response', lastRunRef: null });
+  });
+
+  it('reports no-proposal when the reasoner ran but proposed nothing', async () => {
+    const callLLM = reasoner({ analysis: 'nothing worth doing' });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toBe('no-proposal');
+  });
+
+  it('reports scope-suppressed with a reason (was a silent no-op)', async () => {
+    const callLLM = reasoner({ proposal: { scope: 'loop-meta', slug: 'meta', title: 'Meta' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toBe('scope-suppressed');
+  });
+
+  it('persists the filed ref + null reason on a successful file', async () => {
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('filed');
+    expect(out.reason).toBeNull();
+    expect(lastRunPatch()).toMatchObject({ lastRunAction: 'filed', lastRunReason: null, lastRunRef: '#100' });
+  });
+
+  it('carries the llm-error reason through to the persisted outcome', async () => {
+    const callLLM = vi.fn().mockResolvedValue({ error: 'provider timeout' });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out.action).toBe('no-op');
+    expect(out.reason).toBe('llm-error: provider timeout');
+    expect(lastRunPatch()?.lastRunReason).toBe('llm-error: provider timeout');
+  });
+
+  it('records the park reason + blocking count in the outcome', async () => {
+    forgeState.blocking = [{ number: 5, state: 'open' }];
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 's', title: 'T' } });
+    const out = await processApp(enabledApp(), { callLLM });
+    expect(out).toMatchObject({ action: 'parked', reason: 'blocking-open', blocking: 1 });
+    expect(lastRunPatch()).toMatchObject({ lastRunAction: 'parked', lastRunReason: 'blocking-open' });
+  });
+});
+
 describe('runLayeredIntelligenceForApp (removed global sweep)', () => {
   it('no longer exports a cross-app sweep — the scheduler drives one app at a time', async () => {
     const mod = await import('./layeredIntelligenceHandler.js');
