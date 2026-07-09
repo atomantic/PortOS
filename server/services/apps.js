@@ -324,6 +324,14 @@ export async function createApp(appData) {
     updatedAt: now
   };
 
+  // Persist an explicitly-provided Layered Intelligence config on create; when
+  // omitted the app has no key and the config accessor supplies the baseline on
+  // first read (no per-app seed write). Only set it when present so absent stays
+  // absent — createApp otherwise builds the object field-by-field and would drop it.
+  if (appData.layeredIntelligence && typeof appData.layeredIntelligence === 'object') {
+    app.layeredIntelligence = appData.layeredIntelligence;
+  }
+
   data.apps[id] = app;
   await saveApps(data);
 
@@ -419,6 +427,49 @@ export async function getAppWorkTracker(id) {
   const app = await getAppById(id);
   if (!app) return null;
   return resolveAppWorkTracker(app);
+}
+
+/**
+ * Get an app's effective Layered Intelligence config (the loop's per-app
+ * settings). Merges the stored `layeredIntelligence` over the defaults so a
+ * partial/absent config still yields a complete, safe config. PortOS gets the
+ * meta/self scopes. Returns null when the app id is unknown.
+ *
+ * `isPortos` is passed to the merge so a missing config picks up the right
+ * default scopes without a per-app seed write — an install adopts the baseline
+ * the first time the loop reads it.
+ */
+export async function getAppLayeredIntelligenceConfig(id) {
+  const app = await getAppById(id);
+  if (!app) return null;
+  const { getEffectiveConfig } = await import('./layeredIntelligence.js');
+  return getEffectiveConfig({ ...app, isPortos: id === PORTOS_APP_ID });
+}
+
+/**
+ * Update an app's Layered Intelligence config. Shallow-merges `updates` over the
+ * *stored* config only (with `sources` merged one level deep) so a partial PATCH
+ * doesn't wipe untouched fields. We deliberately merge over the raw stored value,
+ * NOT the effective (defaults-filled) config — persisting the full default set to
+ * disk would freeze this install against future default changes (the config
+ * accessor's "adopt baseline on read" forward-compat property). Untouched fields
+ * stay absent and keep resolving to the shipped default via getEffectiveConfig.
+ * Returns the updated app, or null if unknown.
+ */
+export async function updateAppLayeredIntelligence(id, updates = {}) {
+  const app = await getAppById(id);
+  if (!app) return null;
+  const stored = (app.layeredIntelligence && typeof app.layeredIntelligence === 'object' && !Array.isArray(app.layeredIntelligence))
+    ? app.layeredIntelligence
+    : {};
+  const merged = { ...stored, ...updates };
+  if (updates.sources && typeof updates.sources === 'object') {
+    merged.sources = { ...(stored.sources && typeof stored.sources === 'object' ? stored.sources : {}), ...updates.sources };
+  }
+  if (updates.handoff && typeof updates.handoff === 'object') {
+    merged.handoff = { ...(stored.handoff && typeof stored.handoff === 'object' ? stored.handoff : {}), ...updates.handoff };
+  }
+  return updateApp(id, { layeredIntelligence: merged });
 }
 
 /**

@@ -51,9 +51,56 @@ export const RATE_LIMIT_MS = {
 // upstream, but for the ear a sentence or two is plenty. Trim long source text.
 const SPEECH_CLIP_LEN = 240;
 
-const clip = (text) => {
+// A task label is one topical phrase, not a sentence or two — a much tighter
+// budget than a free-form error/notification line. Keeps the spoken title from
+// running past the topic into the prompt body even after scaffolding is stripped.
+const TASK_LABEL_CLIP_LEN = 90;
+
+const clip = (text, max = SPEECH_CLIP_LEN) => {
   const s = (text || '').toString().trim().replace(/\s+/g, ' ');
-  return s.length > SPEECH_CLIP_LEN ? `${s.slice(0, SPEECH_CLIP_LEN - 1)}…` : s;
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+};
+
+// Reduce a task to a short, topical spoken label. A CoS task's `description` is
+// the raw agent prompt — for a swarm/claim run it leads with the `# ⚡ SWARM
+// MODE — …` block, and the concrete claim/plan prompts open their first line
+// with a `[Claim Issue: App]` tag. Reading that verbatim makes the voice agent
+// recite prompt scaffolding ("SWARM MODE — claim and ship up to 3 independent
+// issues in parallel. This run operates in slashdo …") instead of naming the
+// topic. This helper strips that scaffolding down to the underlying topic.
+//
+// `cleanTaskTopicLine` peels, in order: a leading markdown heading (`# `), a
+// leading run of emoji / symbol characters (the swarm block opens with `⚡`), a
+// leading `[Tag: App]` bracket label, `**bold**` markers, and the `SWARM MODE —`
+// label — so `# ⚡ SWARM MODE — claim and ship up to 3 …` reads as "claim and
+// ship up to 3 …" and `[Claim Issue: PortOS] Claim and ship the next open GitHub
+// issue` reads as "Claim and ship the next open GitHub issue".
+const cleanTaskTopicLine = (line) => {
+  let s = (line || '').toString().trim();
+  s = s.replace(/^#+\s*/, '');                    // markdown heading marker
+  s = s.replace(/^[^\p{L}\p{N}[]+/u, '');          // leading emoji / symbol run
+  s = s.replace(/^\[[^\]]*\]\s*/, '');             // [Claim Issue: App] tag
+  s = s.replace(/\*\*/g, '');                      // bold emphasis markers
+  s = s.replace(/^SWARM MODE\s*[—–-]\s*/i, '');    // swarm block label
+  return s.replace(/\s+/g, ' ').trim();
+};
+
+// A short topical label for a task, preferring an explicit title / post-run
+// agent summary (a completed task speaks what it actually did) and otherwise
+// deriving one from the first meaningful, de-scaffolded line of the description.
+export const deriveTaskSpeechLabel = (task) => {
+  if (!task) return '';
+  // Prefer the first NON-BLANK of title / summary — a whitespace-only title must
+  // fall through to a real taskSummary, not short-circuit past it (`||` would
+  // return the blank title and then trip the trim guard down to the description).
+  for (const explicit of [task.title, task.metadata?.taskSummary]) {
+    if (explicit && explicit.toString().trim()) return clip(explicit, TASK_LABEL_CLIP_LEN);
+  }
+  for (const raw of (task.description || '').toString().split('\n')) {
+    const cleaned = cleanTaskTopicLine(raw);
+    if (cleaned) return clip(cleaned, TASK_LABEL_CLIP_LEN);
+  }
+  return '';
 };
 
 // Pure rate-limit predicate — given a source, its last-spoken timestamp, and
@@ -78,7 +125,7 @@ export const formatErrorLine = (error) => {
 };
 
 export const formatTaskLine = (task) => {
-  const label = clip(task?.title || task?.description);
+  const label = deriveTaskSpeechLabel(task);
   return label ? `A new task is ready: ${label}.` : '';
 };
 
@@ -100,20 +147,21 @@ const isMetaTrue = (v) => v === true || v === 'true';
 // retries doesn't announce on every attempt, and a user-cancelled task is
 // suppressed by the caller. The PR URL is NOT spoken — it isn't created until
 // cleanup runs after completion, and a GitHub URL is poor speech anyway; the
-// user reviews the PR visually. Uses the first line of the description so a
-// multi-line task spec doesn't get read out.
+// user reviews the PR visually. Speaks a short topical label (via
+// deriveTaskSpeechLabel) rather than the raw prompt, so a swarm/claim task
+// announces its topic instead of reciting the "# ⚡ SWARM MODE — …" block.
 export const formatTaskCompletionLine = (task) => {
   if (!task) return '';
-  const desc = clip((task.description || '').split('\n')[0]);
+  const label = deriveTaskSpeechLabel(task);
   const success = task.status === 'completed';
-  if (!desc) {
+  if (!label) {
     return success
       ? 'Your coding task is done.'
       : "Heads up — a coding task you dispatched didn't finish cleanly.";
   }
   return success
-    ? `Your coding task is done: ${desc}.`
-    : `Heads up — the coding task "${desc}" didn't finish cleanly.`;
+    ? `Your coding task is done: ${label}.`
+    : `Heads up — the coding task "${label}" didn't finish cleanly.`;
 };
 
 /**

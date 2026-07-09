@@ -49,6 +49,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-cuts": {
+      "name": "Writers Room — Adversarial Cut Pass",
+      "description": "Ruthless-editor pass over a Writers Room work body: identifies 8–12% of the prose to cut as typed passages (FAT/REDUNDANT/OVER-EXPLAIN/GENERIC/TELL/STRUCTURAL) plus fat_percentage and a protected tightest passage. Drives the Polish loop's mechanical safe-cut application (#2173).",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "writers-room-revise": {
+      "name": "Writers Room — Brief-Driven Revision",
+      "description": "Rewrites a Writers Room draft against a PROBLEM / WHAT TO KEEP / WHAT TO CHANGE / VOICE RULES / TARGET brief, receiving the old draft as raw material. The revision half of the Polish loop's cut → revise → keep/revert cycle (#2173). Returns revised prose only.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "writers-room-continue": {
       "name": "Writers Room — Live Continuation",
       "description": "Live Creative Director feedback: from the prose around the cursor, propose 2–4 short optional continuation beats, prose snippets, or dialogue lines the writer can accept. Drives the opt-in live-mode side panel in the editor.",
@@ -80,6 +94,13 @@
     "cd-evaluate": {
       "name": "Creative Director — Scene Evaluation",
       "description": "Evaluate a freshly-rendered scene against the project style spec and scene intent. Reads multi-frame samples to judge intent across the full clip timeline.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "cd-plan": {
+      "name": "Creative Director — Production Plan",
+      "description": "Turn a production directive into a validated plan: an ordered list of creative-tool-registry tool calls (with dependsOn ordering) the generalized advance loop executes step-by-step.",
       "model": "default",
       "returnsJson": false,
       "variables": []
@@ -289,6 +310,55 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-judge-issue": {
+      "name": "Pipeline — Calibrated Issue Quality Judge",
+      "description": "CWQE Phase 3 (#2167): a harsh, calibrated LLM judge that scores one drafted issue across 9 dimensions (voice adherence, beat coverage, character voice, plants seeded, prose quality, continuity, canon compliance, lore integration, engagement) against the same brief the writer received. Uses an anti-inflation calibration ladder (median AI chapter = 6; no 10 for a draft) plus a QUOTE TEST (3 strongest / 3 weakest sentences) and a scene-vs-summary ratio. qualityScore = judge overall − deterministic slop penalty (#2165). Provider/model resolve via the writer stage judgeProvider/judgeModel (writer/judge split) — configure a DIFFERENT model to avoid self-congratulation.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-judge-compare": {
+      "name": "Pipeline — Head-to-Head Issue Comparison",
+      "description": "CWQE Phase 5 (#2169): a forced-pick comparison judge for the head-to-head Elo ranking. Reads two drafted issues (truncated to a comparable budget) and MUST pick a winner — ties are forbidden — quoting the deciding passage. Escapes the rubric trap where 1-10 scoring collapses to a 2-point band; comparative ranking forces discrimination. Runs pairwise across a series' drafted issues in a Swiss/Elo tournament to produce the weakest-issue ordering Phase 7 consumes.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-judge-foundation": {
+      "name": "Pipeline — Foundation Quality Judge",
+      "description": "CWQE Phase 11 (#2176): a harsh, calibrated LLM judge that scores a series' FOUNDATION — universe canon (worldbuilding 40%), character records (character 30%), the series arc/volumes (structure 20%), and declared voice (craft 10%) — against the Phase 10 craft doctrine BEFORE any drafting. Uses an anti-inflation calibration ladder (median AI foundation = 6; no 10) and requires a concrete gap AND fix per dimension. Series Autopilot's foundationGate spends the weighted composite: proceed to beat sheets once it clears the threshold, else target the weakest dimension, apply the fix through the owning service (universe refine / character expand / arc resolve), and re-judge. Provider/model resolve via the pipeline-arc-overview stage's judgeProvider/judgeModel (writer/judge split) — configure a DIFFERENT model to avoid self-congratulation.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-panel-editor": {
+      "name": "Pipeline — Reader Panel: The Editor",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-genre-reader": {
+      "name": "Pipeline — Reader Panel: The Genre Reader",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A voracious genre reader (50+ novels/year) reads a condensed arc digest and answers the panel's ~10 qualitative questions from a pure page-turn-pull perspective, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-writer": {
+      "name": "Pipeline — Reader Panel: The Writer",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). A working novelist reads a condensed arc digest for craft — structure, beats, setup/payoff — and answers the panel's ~10 qualitative questions citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
+    "pipeline-panel-first-reader": {
+      "name": "Pipeline — Reader Panel: The First Reader",
+      "description": "Reader-panel persona (#2170, CWQE Phase 6). An ordinary reader with no craft vocabulary reads a condensed arc digest and answers the panel's ~10 qualitative questions as pure emotional response, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": ["seriesName", "logline", "issueCount", "digest"]
+    },
     "pipeline-reverse-outline": {
       "name": "Pipeline — Reverse Outline (scene segmentation + plotline tagging)",
       "description": "Read the whole drafted manuscript and produce a reverse outline: identify the recurring plotlines, then segment the prose into scenes (each tagged to the plotline it advances, with POV, setting, and narrative/action/dialogue mix). Feeds the color-coded Reverse Outline view and is the canonical scene-segmentation substrate other editorial checks read. Runs at `heavy` tier — reads the full stitched manuscript.",
@@ -430,8 +500,22 @@
       "variables": []
     },
     "pipeline-series-generate": {
-      "name": "Pipeline — Generate Series Concept",
-      "description": "Invent a new series within a universe — returns a {name, logline, premise, shape} JSON concept that tells a different story from existing series in the same universe, using the universe premise / style / influences / canon as seed material. Drives the 'Generate with AI' button on the New Series form; the concept pre-fills the form for the user to edit before creating.",
+      "name": "Pipeline — Generate Series Concepts",
+      "description": "Multi-concept series ideation (#2180, CWQE Phase 15): invents SEVERAL genuinely distinct new series within a universe — each with a name / logline / premise / story shape PLUS craft facets (hook, world, conflict engine, cost, tension, theme) — under an anti-generic banlist that merges a shipped default list with the universe's own avoid-influences. Returns a {candidates:[...]} JSON payload. Interactive mode presents the candidates for user pick on the New Series form; autonomous invention judge-picks the winner via the forced-rank pipeline-series-concept-judge stage. Configure a judgeProvider/judgeModel here to drive the writer/judge split for the pick.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-series-concept-judge": {
+      "name": "Pipeline — Series Concept Judge (forced pick)",
+      "description": "Forced-pick ranker for autonomous multi-concept series ideation (#2180, CWQE Phase 15). Reads the candidate concepts and MUST pick the single one 'a reader who has seen a thousand pitches would stop scrolling for' — ties forbidden — rewarding freshness over the generic default, a generative conflict engine, real cost, and both scales of tension. Resolves via the pipeline-series-generate stage's judgeProvider/judgeModel (writer/judge split). Falls back to the first candidate when no judge is configured or the call fails.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-series-voice-discover": {
+      "name": "Pipeline — Discover Series Voice",
+      "description": "Voice discovery (#2179, CWQE Phase 14): writes the SAME short scene beat in several distinct registers (spare / lyric / wry / close-psychic / cinematic) so the author picks the series voice by ear. Returns a {candidates:[{register, passage, note}]} JSON payload; the picked passage lands in the style guide's voiceExemplars, rejected ones can drop into voiceAntiExemplars. Explicit user-triggered action — does NOT persist and does NOT fire on boot.",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -516,6 +600,27 @@
     "pipeline-editorial-chekhov": {
       "name": "Pipeline — Editorial Check: Chekhov's guns (setups & payoffs)",
       "description": "Editorial check (#1299): flags planted elements that never pay off (weapon, clue, secret, stated fear, promise, threat, skill introduced then dropped) and payoffs that arrive with no setup. Reads the stitched manuscript across chunks with a cross-chunk setup digest, and reconciles detected setups/payoffs against the authored reader-map hooks/payoffs. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-premature-reveal": {
+      "name": "Pipeline — Editorial Check: Premature reveal (spoiler leak)",
+      "description": "Editorial check (#2178): the information-economy guard for reveal-gated canon — flags a deliberately-withheld fact (character secret, late-story twist, hidden identity) that the prose states or unambiguously implies BEFORE its reveal issue, so a first-time reader learns it too early. Reconciles the stitched manuscript against the reveal-gated canon entries (reveal issue / hard-spoiler flag, spoiler-free surface descriptor, and the underlying gated fact) and distinguishes a genuine leak from deliberate foreshadowing, flagging only leaks. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-world-unforeshadowed-solution": {
+      "name": "Pipeline — Editorial Check: Unforeshadowed solution",
+      "description": "Editorial check (#2175): the worldbuilding sibling of the deus ex machina — flags a story problem resolved by a rule, power, property, or artifact the reader was never shown before it saved the day (Sanderson's First Law). Reconciles the stitched manuscript against the established world canon (artifacts/objects + places) and the continuity-bible world-rule facts, so a rule that WAS planted earlier is not flagged; the whole-arc verdict lands on the final part with earlier plants carried in the setup digest. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-world-cost-free-power": {
+      "name": "Pipeline — Editorial Check: Cost-free power",
+      "description": "Editorial check (#2175): flags an ability, technology, or magic used at a decisive moment with no cost, limitation, or price paid on the page (Sanderson's Second Law — limitations are more interesting than powers). Reconciles the stitched manuscript against the established world canon and continuity-bible world-rule facts, so a use that pays the established cost — or a power the canon defines as limitless — is not flagged. Returns issue-anchored findings.",
       "model": "default",
       "returnsJson": true,
       "variables": []
@@ -768,6 +873,13 @@
     "pipeline-editorial-arc-regression": {
       "name": "Pipeline — Editorial Check: Character-arc regression / premature closure",
       "description": "Editorial check (#1619): judges the SHAPE of each character's arc across the whole series and flags an unmotivated regression (growth then a purposeless revert, distinct from a dramatized relapse), a circular arc (ends where it began), or premature closure (the arc resolves early then goes flat for the rest of the series). Reads the stitched manuscript plus the reverse-outline scene map and the authored per-character arcs (series.characterArcs); degrades to a whole-manuscript scan when no outline or authored arcs exist. Whole-arc verdicts are gated to the final manuscript part. Returns character-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-editorial-adversarial-cuts": {
+      "name": "Pipeline — Editorial Check: Adversarial cuts (prose tightening)",
+      "description": "Editorial check (#2168): a ruthless literary editor persona that cuts 8–12% of the text as 10–20 passages, each an exact verbatim quote classified by cut type (FAT, REDUNDANT, OVER-EXPLAIN, GENERIC, TELL, STRUCTURAL). Also returns fat_percentage, tightest_passage (protected), loosest_passage, and one_sentence_verdict. Safe cut types (OVER-EXPLAIN, REDUNDANT) can be batch-applied mechanically. Returns issue-anchored findings with cutType.",
       "model": "default",
       "returnsJson": true,
       "variables": []

@@ -797,12 +797,14 @@ describe('chekhov.setups-payoffs — LLM check (#1299)', () => {
     ...overrides,
   });
 
-  it('is registered as a series-scoped LLM check reading manuscript + reader-map', () => {
+  it('is registered as a series-scoped LLM check reading manuscript + canon + reader-map + foreshadowing ledger', () => {
     const check = getCheck(CHEKHOV);
     expect(check.kind).toBe('llm');
     expect(check.scope).toBe('series');
     expect(check.category).toBe('continuity');
-    expect(check.sources).toEqual(['manuscript', 'series.arc.readerMap']);
+    // `canon` is a source since #2178 — reveal-gated canon folds into the
+    // authored-payoffs block, so a canon edit must re-fingerprint this check.
+    expect(check.sources).toEqual(['manuscript', 'canon', 'series.arc.readerMap', 'series.arc.foreshadowing']);
     expect(check.needsManuscript).toBe(true);
   });
 
@@ -1464,6 +1466,25 @@ describe('canonCharacterTraitsSummary (#1582)', () => {
     expect(() => canonCharacterTraitsSummary({ characters: [null, 'nope', { name: 'C', personality: 5, mannerisms: {} }] })).not.toThrow();
     // personality is a non-string and mannerisms is a non-array object → no traits → C drops out.
     expect(canonCharacterTraitsSummary({ characters: [{ name: 'C', personality: 5, mannerisms: {} }] })).toBe('');
+  });
+
+  it('surfaces authored character-framework fields for arc reconciliation (#2175)', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Vale', lie: 'I only matter if I win', want: 'seize command', need: 'I matter regardless', arcType: 'positive' },
+    ] });
+    expect(out).toContain('believes (Lie): I only matter if I win');
+    expect(out).toContain('wants: seize command');
+    expect(out).toContain('needs (Truth): I matter regardless');
+    expect(out).toContain('declared arc: positive');
+  });
+
+  it('omits framework fields that are absent (pre-#2175 records)', () => {
+    const out = canonCharacterTraitsSummary({ characters: [
+      { name: 'Legacy', personality: 'stoic' },
+    ] });
+    expect(out).toContain('personality: stoic');
+    expect(out).not.toContain('believes (Lie)');
+    expect(out).not.toContain('declared arc');
   });
 });
 

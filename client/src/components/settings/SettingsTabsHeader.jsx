@@ -18,14 +18,18 @@ export const TABS = [
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'embeddings', label: 'Embeddings', to: '/settings/embeddings' },
   { id: 'general', label: 'General', to: '/settings/general' },
+  { id: 'imessage', label: 'iMessage', to: '/settings/imessage' },
   { id: 'local-llm', label: 'Local LLMs', to: '/settings/local-llm' },
   { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },
   { id: 'prompts', label: 'Prompts', to: '/prompts' },
   { id: 'providers', label: 'Providers', to: '/ai' },
   { id: 'security', label: 'Security', to: '/settings/security' },
   { id: 'sharing', label: 'Sharing', to: '/settings/sharing' },
+  { id: 'signal', label: 'Signal', to: '/settings/signal' },
+  { id: 'spotify', label: 'Spotify', to: '/settings/spotify' },
   { id: 'telegram', label: 'Telegram', to: '/settings/telegram' },
-  { id: 'voice', label: 'Voice', to: '/settings/voice' }
+  { id: 'voice', label: 'Voice', to: '/settings/voice' },
+  { id: 'youtube', label: 'YouTube', to: '/settings/youtube' }
 ];
 
 export default function SettingsTabsHeader({ activeTab }) {

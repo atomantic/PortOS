@@ -115,10 +115,28 @@ export async function resolveAgentProviderAndModel(task) {
   // check below still guards it against the fallback provider's model list.
   if (fallbackModelPin) selectedModel = fallbackModelPin;
 
-  // Validate model is compatible with provider
+  // Validate model is compatible with provider. An EXPLICIT user-specified
+  // model (task.metadata.model → tier 'user-specified') is honored even when
+  // it isn't in the provider's `models` list: that list is a convenience
+  // enumeration, but the pass-through CLIs (claude/codex/opencode) accept any
+  // valid id — and the claude providers even disagree on alias form
+  // (`claude-code` lists `claude-haiku-4-5`, `claude-code-tui` lists the dated
+  // `claude-haiku-4-5-20251001`). Silently downgrading an explicit pin to the
+  // tier fallback — which for the default tier is the HEAVY model — both
+  // violates the user's intent and maximizes cost, so we trust the pin and let
+  // the provider reject a genuine typo at runtime. Auto-selected models (and a
+  // fallback-model pin, which the comment above deliberately guards) still fall
+  // back to the provider's tier default.
+  const isUserPinnedModel = modelSelection.tier === 'user-specified' && !fallbackModelPin;
   if (selectedModel && provider.models && provider.models.length > 0) {
     const modelIsValid = provider.models.includes(selectedModel);
-    if (!modelIsValid) {
+    if (!modelIsValid && isUserPinnedModel) {
+      emitLog('info', `Honoring user-specified model "${selectedModel}" not in provider "${provider.id}" list (CLI pass-through)`, {
+        taskId: task.id,
+        requestedModel: selectedModel,
+        providerId: provider.id
+      });
+    } else if (!modelIsValid) {
       emitLog('warn', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
         taskId: task.id,
         requestedModel: selectedModel,

@@ -167,7 +167,7 @@ const SHA256_RE = /^[0-9a-f]{64}$/;
 
 // Cheap structural check for a single .safetensors file. Reads only the header
 // region (a few KB), never the tensor payload. Returns { ok, reason, ... }.
-async function verifySafetensorsStructure(path, size) {
+export async function verifySafetensorsStructure(path, size) {
   if (size < 8) return { ok: false, reason: 'truncated-header' };
   let fd;
   try {

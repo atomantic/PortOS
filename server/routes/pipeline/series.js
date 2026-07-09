@@ -9,13 +9,15 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest, optionalBooleanMap, llmSchema } from '../../lib/validation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
+import { TRIM_SIZES, INTERIOR_FONTS } from '../../lib/proseExportSettings.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as seasonsSvc from '../../services/pipeline/seasons.js';
 import { findDuplicateSeriesGroups, findSameNameSeries } from '../../services/duplicateDetection.js';
 import { mergeSeries } from '../../services/recordMerge.js';
 import { mergeFieldsWithAI } from '../../services/recordMergeAI.js';
 import { generateSeriesTitleLogo } from '../../services/pipeline/seriesTitleLogo.js';
-import { generateSeriesConcept } from '../../services/pipeline/seriesGenerate.js';
+import { generateSeriesConcepts, CANDIDATE_COUNT_MIN, CANDIDATE_COUNT_MAX } from '../../services/pipeline/seriesGenerate.js';
+import { discoverSeriesVoice } from '../../services/pipeline/seriesVoiceDiscover.js';
 import {
   LENGTH_PROFILE_NAMES,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -66,6 +68,11 @@ const arcSchema = z.object({
   // sanitizeTickingClock (storyArc.js). Listed here so Zod doesn't strip it on
   // an arc PATCH and updateSeries's wholesale arc replace doesn't wipe it.
   tickingClock: z.object({}).passthrough().nullable().optional(),
+  // Foreshadowing ledger (#2172): the plant → reinforce → payoff seeds. Same
+  // defer-to-service pattern — an ARRAY of opaque entries sanitized by
+  // sanitizeForeshadowing (storyArc.js). Listed here so Zod doesn't strip it on
+  // an arc PATCH and updateSeries's wholesale arc replace doesn't wipe it.
+  foreshadowing: z.array(z.object({}).passthrough()).nullable().optional(),
   status: z.enum(ARC_STATUSES).optional(),
 });
 
@@ -119,6 +126,23 @@ const styleGuideSchema = z.object({
     spelling: z.enum(STYLE_GUIDE_SPELLING).nullable().optional(),
     italicizeThoughts: z.boolean().nullable().optional(),
   }).nullable().optional(),
+  // Voice exemplars / anti-exemplars (#2179, CWQE Phase 14). Concrete prose
+  // anchors ("the tuning fork") injected into every draft/revision prompt.
+  // `note` is optional (a passage can stand on its own); the service-side
+  // `cleanExemplars` drops empty passages, trims to the char caps, and caps the
+  // list length, so the schema only bounds the outer shape. `passage` is NOT
+  // `.min(1)`: the editor keeps a blank `{ passage: '', note: '' }` row while
+  // the user is still filling it in, and a save that flushes before the row is
+  // typed (or after a passage is cleared) must not 400 the whole series PATCH —
+  // `cleanExemplars` prunes the empty row on the server instead.
+  voiceExemplars: z.array(z.object({
+    passage: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
+  })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
+  voiceAntiExemplars: z.array(z.object({
+    passage: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX),
+    note: z.string().trim().max(STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX).optional(),
+  })).max(STYLE_GUIDE_LIMITS.EXEMPLARS_MAX).optional(),
 });
 
 // Volume-cover / back-cover sub-schema — accepts the script text plus the
@@ -184,6 +208,20 @@ const blockingSeveritiesSchema = z.object({
   editorial: z.array(blockingSeverityEnum).optional(),
 }).strict();
 
+// Per-series prose-export settings (#2181). All fields optional so a partial
+// PATCH tunes one knob; `null` clears the whole sub-object (defaults apply).
+// Re-bounded by sanitizeProseExportSettings on persist. `trimSize`/`interiorFont`
+// validated against their allow-lists; the title-page fields are free text.
+const exportSettingsSchema = z.object({
+  trimSize: z.enum(Object.keys(TRIM_SIZES)).optional(),
+  interiorFont: z.enum(INTERIOR_FONTS).optional(),
+  titlePageTitle: z.string().trim().max(200).optional(),
+  titlePageSubtitle: z.string().trim().max(300).optional(),
+  titlePageAuthor: z.string().trim().max(120).optional(),
+  copyright: z.string().trim().max(500).optional(),
+  dedication: z.string().trim().max(2000).optional(),
+}).strict();
+
 const seriesCreateSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
@@ -212,6 +250,7 @@ const seriesCreateSchema = z.object({
   factCritical: z.boolean().optional().default(false),
   factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional().default(''),
   styleGuide: styleGuideSchema.nullable().optional(),
+  exportSettings: exportSettingsSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
   authorId: z.string().trim().max(seriesSvc.AUTHOR_ID_MAX).nullable().optional(),
@@ -240,6 +279,7 @@ const seriesPatchSchema = z.object({
   factCritical: z.boolean().optional(),
   factReference: z.string().trim().max(seriesSvc.FACT_REFERENCE_MAX).optional(),
   styleGuide: styleGuideSchema.nullable().optional(),
+  exportSettings: exportSettingsSchema.nullable().optional(),
   titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
   author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),
   authorId: z.string().trim().max(seriesSvc.AUTHOR_ID_MAX).nullable().optional(),
@@ -377,18 +417,20 @@ router.post('/series/merge/ai-resolve', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// Generate a fresh series concept (name / logline / premise / story shape)
-// from a universe, used as seed material. Returns the concept WITHOUT
-// persisting it — the New Series form pre-fills these for the user to edit
-// before creating. Static path: keep BEFORE `/series/:id`.
+// Multi-concept series ideation (#2180, CWQE Phase 15): invent SEVERAL distinct
+// candidate concepts from a universe, under an anti-generic banlist, WITHOUT
+// persisting — the New Series form presents them for the user to pick (deep-
+// linkable selection). The rejected candidates live in run history so the user
+// can switch without regenerating. Static path: keep BEFORE `/series/:id`.
 const seriesGenerateSchema = z.object({
   universeId: z.string().trim().min(1).max(seriesSvc.UNIVERSE_ID_MAX),
+  count: z.number().int().min(CANDIDATE_COUNT_MIN).max(CANDIDATE_COUNT_MAX).optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
 });
 router.post('/series/generate-concept', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesGenerateSchema, req.body ?? {});
-  const result = await generateSeriesConcept(body.universeId, body)
+  const result = await generateSeriesConcepts(body.universeId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
@@ -430,6 +472,22 @@ const titleLogoGenerateSchema = z.object({
 router.post('/series/:id/generate-title-logo', asyncHandler(async (req, res) => {
   const body = validateRequest(titleLogoGenerateSchema, req.body ?? {});
   const result = await generateSeriesTitleLogo(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Voice discovery (#2179, CWQE Phase 14): write the same scene beat in several
+// distinct registers so the author picks the series voice by ear. Returns the
+// candidate passages WITHOUT persisting — the user's pick is committed via the
+// ordinary series PATCH (styleGuide.voiceExemplars). Reuses the LLM
+// provider/model override shape.
+const voiceDiscoverSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/series/:id/discover-voice', asyncHandler(async (req, res) => {
+  const body = validateRequest(voiceDiscoverSchema, req.body ?? {});
+  const result = await discoverSeriesVoice(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { getUnifiedActivityStreak } from './meatspacePost.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
@@ -40,6 +41,13 @@ export async function submitTrainingEntry(entry) {
     correctCount: entry.correctCount ?? 0,
     totalMs: entry.totalMs ?? 0,
   };
+  // Per-question breakdown (issue #2114) is optional — only wordplay training
+  // currently supplies it. Gate on Array.isArray (not truthiness/length) so an
+  // absent field stays absent rather than being coerced to `[]`, keeping
+  // legacy/no-breakdown entries indistinguishable from before this change.
+  if (Array.isArray(entry.questions)) {
+    record.questions = entry.questions;
+  }
 
   data.entries.push(record);
   await saveTrainingLog(data);
@@ -49,53 +57,40 @@ export async function submitTrainingEntry(entry) {
 
 /**
  * Get training stats: per-drill practice counts, streaks, recent activity.
+ *
+ * The streak comes from the SHARED unified streak (`getUnifiedActivityStreak` in
+ * meatspacePost.js) — the exact same number the launcher, dashboard widgets, and
+ * Progress page show — so the Morse trainer can no longer disagree with them
+ * (issue #2091). It counts BOTH scored sessions and training-log entries over
+ * ALL history; only the per-drill breakdown below is windowed.
  */
 export async function getTrainingStats(days = 30) {
   const data = await loadTrainingLog();
-  let entries = data.entries;
+  const allEntries = data.entries;
 
+  let entries = allEntries;
   if (days > 0) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - days);
     const cutoffStr = cutoff.toISOString().split('T')[0];
-    entries = entries.filter(e => e.date >= cutoffStr);
+    entries = allEntries.filter(e => String(e.date || '').split('T')[0] >= cutoffStr);
   }
 
-  // Group by drill type
+  // Group by drill type (windowed)
   const byDrill = {};
   for (const e of entries) {
     const key = `${e.module}:${e.drillType}`;
     if (!byDrill[key]) byDrill[key] = { practiceCount: 0, totalCorrect: 0, totalQuestions: 0, totalMs: 0, dates: new Set() };
     byDrill[key].practiceCount++;
-    byDrill[key].totalCorrect += e.correctCount;
-    byDrill[key].totalQuestions += e.questionCount;
-    byDrill[key].totalMs += e.totalMs;
-    byDrill[key].dates.add(e.date);
+    byDrill[key].totalCorrect += e.correctCount || 0;
+    byDrill[key].totalQuestions += e.questionCount || 0;
+    byDrill[key].totalMs += e.totalMs || 0;
+    byDrill[key].dates.add(String(e.date || '').split('T')[0]);
   }
 
-  // Compute streaks (consecutive days of practice)
-  const dateSet = new Set(entries.map(e => e.date));
-  let currentStreak = 0;
-  if (dateSet.size > 0) {
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-    // Count backwards from today/yesterday
-    let checkDate = dateSet.has(today) ? today : dateSet.has(yesterday) ? yesterday : null;
-    if (checkDate) {
-      currentStreak = 1;
-      let ts = new Date(checkDate + 'T00:00:00Z').getTime();
-      while (true) {
-        ts -= 86400000;
-        const prev = new Date(ts).toISOString().split('T')[0];
-        if (dateSet.has(prev)) {
-          currentStreak++;
-        } else {
-          break;
-        }
-      }
-    }
-  }
-  const activeDays = dateSet.size;
+  // ONE unified streak across sessions + training (shared helper, ALL history).
+  const { current: currentStreak, longest: longestStreak } = await getUnifiedActivityStreak();
+  const activeDays = new Set(entries.map(e => String(e.date || '').split('T')[0])).size;
 
   // Summarize
   const summary = {};
@@ -113,6 +108,7 @@ export async function getTrainingStats(days = 30) {
     activeDays,
     totalEntries: entries.length,
     currentStreak,
+    longestStreak,
     byDrill: summary,
   };
 }
@@ -124,4 +120,14 @@ export async function getTrainingEntries(limit = 20) {
   const data = await loadTrainingLog();
   if (!limit) return data.entries.slice().reverse();
   return data.entries.slice(-limit).reverse();
+}
+
+/**
+ * All training-log entries in chronological (append) order — the raw feed the
+ * unified progress aggregation reads (both meatspacePostTraining and
+ * meatspacePostMemory practice write to the same `post-training-log.json`).
+ */
+export async function getAllTrainingEntries() {
+  const data = await loadTrainingLog();
+  return data.entries;
 }

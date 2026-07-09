@@ -36,6 +36,7 @@
 // the public API exactly). Promoted-private helpers used by ./checks/*.js stay
 // internal to ./checkInfra.js and are imported from there directly.
 export {
+  ADVERSARIAL_CUTS_STAGE,
   APPEARANCE_CONTINUITY_STAGE,
   ARC_REGRESSION_STAGE,
   ARC_TRANSITIONS_STAGE,
@@ -50,6 +51,7 @@ export {
   COMIC_PROSE_SYNC_STAGE,
   CUSTOM_CHECK_MAX_FINDINGS_DEFAULT,
   CUSTOM_CHECK_RUN_SOURCE,
+  CUT_TYPES,
   DEAD_METAPHOR_STAGE,
   DIALOGUE_PLEASANTRIES_STAGE,
   EDITORIAL_PRIOR_DIGEST_BODY_CHARS,
@@ -79,6 +81,7 @@ export {
   PLOT_STRUCTURE_STAGE,
   PROSE_SYNC_PROSE_CHAR_CAP,
   REACTION_PROPORTIONALITY_STAGE,
+  SAFE_CUT_TYPES,
   SECONDARY_ARC_STAGE,
   SENSORY_BALANCE_STAGE,
   STYLE_CONFORMANCE_STAGE,
@@ -89,6 +92,8 @@ export {
   VOICE_CONSISTENCY_STAGE,
   VOICE_DISTINCTIVENESS_STAGE,
   WHITE_ROOM_STAGE,
+  WORLD_COST_FREE_POWER_STAGE,
+  WORLD_UNFORESHADOWED_SOLUTION_STAGE,
   authoredCliffhangerSummary,
   authoredPayoffsSummary,
   authoredSetupPayoffSummary,
@@ -97,6 +102,7 @@ export {
   canonCharacterStatesSummary,
   canonCharacterTraitsSummary,
   canonRosterNamesSummary,
+  canonWorldSummary,
   characterVoiceProfiles,
   comicIssuePages,
   comicLetteringIssues,
@@ -142,6 +148,8 @@ import { researchChecks } from './checks/research.js';
 import { characterArcChecks } from './checks/characterArc.js';
 import { proseStyleChecks } from './checks/proseStyle.js';
 import { dialogueChecks } from './checks/dialogue.js';
+import { slopChecks } from './checks/slop.js';
+import { worldChecks } from './checks/world.js';
 
 // Canonical display + run order of the built-in checks. Grouping the checks into
 // ./checks/*.js by category (#1829) would otherwise change the observable order
@@ -174,6 +182,8 @@ const CHECK_ORDER = Object.freeze([
   'arc.transitions',
   'arc.regression',
   'plot.structure-momentum',
+  'world.unforeshadowed-solution',
+  'world.cost-free-power',
   'pacing.escalation-curve',
   'theme.coherence',
   'arc.climax-agency',
@@ -191,6 +201,7 @@ const CHECK_ORDER = Object.freeze([
   'style.reading-level',
   'style.conformance',
   'chekhov.setups-payoffs',
+  'continuity.premature-reveal',
   'prose.cliches',
   'prose.modifier-stacking',
   'prose.filter-words',
@@ -201,6 +212,10 @@ const CHECK_ORDER = Object.freeze([
   'prose.repeated-gestures',
   'prose.word-echoes',
   'prose.sentence-rhythm',
+  'prose.slop-banned-words',
+  'prose.ai-tells',
+  'prose.structural-tics',
+  'prose.burstiness',
   'prose.telling-emotion',
   'prose.dead-metaphor',
   'opening.wrong-start',
@@ -212,7 +227,9 @@ const CHECK_ORDER = Object.freeze([
   'dialogue.on-the-nose',
   'dialogue.voice-distinctiveness',
   'style.voice-consistency',
+  'style.voice-drift',
   'prose.kill-your-darlings',
+  'prose.adversarial-cuts',
   'prose.italic-thoughts',
   'endings.cliffhanger',
   'endings.pov-switch',
@@ -231,8 +248,10 @@ const ASSEMBLED_CHECKS = [
   ...continuityChecks,
   ...researchChecks,
   ...characterArcChecks,
+  ...worldChecks,
   ...proseStyleChecks,
   ...dialogueChecks,
+  ...slopChecks,
 ];
 for (const c of ASSEMBLED_CHECKS) {
   if (!CHECK_ORDER_INDEX.has(c.id)) {

@@ -143,6 +143,36 @@ describe('generatePerspectiveRewrite', () => {
     expect(result.status).toBe('unknown-character');
   });
 
+  it('exempts a reveal-gated POV character from gating even when selected by NAME (#2178)', async () => {
+    // Ada is reveal-gated to a later issue than this one (#3), so without the
+    // name-form exemption she'd be surfaced/dropped and a name-form POV request
+    // would either return unknown-character or lose her full private canon.
+    canonChars = [
+      { id: 'char-ada', name: 'Ada', role: 'protagonist', personality: 'driven', physicalDescription: 'tall', revealIssue: 8, surfaceDescriptor: 'a quiet stranger' },
+      { id: 'char-bly', name: 'Bly', role: 'rival', revealIssue: 8 },
+    ];
+    seedIssue();
+    analysisQueue.push({ oneLine: 'tense' });
+
+    const result = await svc.generatePerspectiveRewrite('iss-1', { povCharacterId: 'Ada' });
+
+    expect(result.status).toBe('complete');
+    expect(result.rewrite.povCharacterName).toBe('Ada');
+    // The POV narrator keeps her full private canon: the rewrite prompt's
+    // povCharacter descriptor still carries her personality (which a surfaced
+    // view would strip). Without the name-form exemption this request would
+    // have returned unknown-character or lost this private context.
+    const povCtx = llmCalls.find((c) => c.stage === 'pipeline-pov-rewrite').ctx.povCharacter;
+    expect(povCtx.name).toBe('Ada');
+    expect(povCtx.descriptor).toContain('Personality: driven');
+    // The prompt's rendered cast roster (gated to this issue) keeps the full POV
+    // narrator but reduces Bly (gated, no surfaceDescriptor, not the POV) — she is
+    // dropped, so her name doesn't appear in the drafting roster.
+    const roster = llmCalls.find((c) => c.stage === 'pipeline-pov-rewrite').ctx.series.characters;
+    expect(roster.map((c) => c.name)).toContain('Ada');
+    expect(roster.map((c) => c.name)).not.toContain('Bly');
+  });
+
   it('caps stored rewrites and keeps newest first', async () => {
     seedIssue();
     for (let i = 0; i < 14; i++) {

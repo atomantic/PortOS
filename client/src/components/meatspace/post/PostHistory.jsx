@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowLeft, ChevronDown, ChevronRight, Flame, Trophy } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, ChevronRight, Flame, Trophy } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
-import { LLM_DRILL_TYPES, DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
+import { DRILL_TO_DOMAIN, DRILL_LABELS, domainLabel } from './constants';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -30,11 +31,11 @@ const scoreColorClass = (score) =>
   score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
 
 export default function PostHistory({ onBack }) {
+  const navigate = useNavigate();
   const chartColors = useChartColors();
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [range, setRange] = useState(30);
-  const [expandedId, setExpandedId] = useState(null);
 
   const loadData = useCallback(async () => {
     const from = range > 0
@@ -237,50 +238,36 @@ export default function PostHistory({ onBack }) {
             </tr>
           </thead>
           <tbody>
-            {sessions.flatMap(s => {
-              const expanded = expandedId === s.id;
+            {sessions.map(s => {
               const durationMin = Math.round((s.durationMs || 0) / 60000);
-
-              const rows = [
+              // Row opens the deep-linkable session detail (/post/session/:id) —
+              // the same shared summary + per-question review the post-save
+              // results screen shows (#2093), now shareable/bookmarkable rather
+              // than an inline expansion.
+              const open = () => navigate(`/post/session/${s.id}`);
+              return (
                 <tr
                   key={s.id}
-                  onClick={() => setExpandedId(expanded ? null : s.id)}
-                  className="border-b border-port-border/50 hover:bg-port-bg/50 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Session ${s.date}, score ${s.score}. Open details.`}
+                  onClick={open}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    open();
+                  }}
+                  className="border-b border-port-border/50 hover:bg-port-bg/50 cursor-pointer focus:outline-none focus:ring-2 focus:ring-port-accent focus:ring-inset"
                 >
                   <td className="px-4 py-2 text-gray-500">
-                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    <ChevronRight size={14} />
                   </td>
                   <td className="px-4 py-2 text-white">{s.date}</td>
                   <td className="px-4 py-2 text-gray-400">{durationMin}m</td>
                   <td className="px-4 py-2 text-gray-400">{(s.modules || []).join(', ')}</td>
                   <td className={`px-4 py-2 text-right font-mono font-medium ${scoreColorClass(s.score)}`}>{s.score}</td>
                 </tr>
-              ];
-
-              if (expanded) {
-                for (const [i, task] of (s.tasks || []).entries()) {
-                  const isLlm = LLM_DRILL_TYPES.includes(task.type);
-                  const detail = isLlm
-                    ? `${task.responses?.length || 0} responses`
-                    : `${task.questions?.filter(q => q.correct).length || 0}/${task.questions?.length || 0} correct`;
-                  rows.push(
-                    <tr key={`${s.id}-${i}`} className="bg-port-bg/30">
-                      <td></td>
-                      <td className="px-4 py-1.5 text-gray-500 text-xs" colSpan={2}>
-                        {DRILL_LABELS[task.type] || task.type}
-                      </td>
-                      <td className="px-4 py-1.5 text-gray-500 text-xs">
-                        {detail}
-                      </td>
-                      <td className="px-4 py-1.5 text-right text-gray-400 text-xs font-mono">
-                        {task.score}
-                      </td>
-                    </tr>
-                  );
-                }
-              }
-
-              return rows;
+              );
             })}
           </tbody>
         </table>

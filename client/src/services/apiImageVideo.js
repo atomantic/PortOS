@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
 
 // Image gen — local backend extras (gallery, models, LoRAs, cancel, delete).
 // generateImage / getImageGenStatus / generateAvatar live in apiSystem.js for
@@ -74,7 +74,27 @@ export const regenerateGalleryImage = (filename, { strength, steps, prompt, meth
   });
 // Whether the local FLUX regen backend is installed (hardware gate). Also carries
 // the strength slider bounds: `{ available, modelId, reason, strengthMin, strengthMax, strengthDefault }`.
-export const getRegenAvailability = () => request('/image-gen/regen/availability', { silent: true });
+// Pass a source `filename` (issue #2036) to get the EXACT model a regen of that
+// image would run — the backend picks by the source's own model on multi-model
+// installs, so the annotate dialog can disclose the real model before rendering.
+export const getRegenAvailability = (filename) =>
+  request(`/image-gen/regen/availability${filename ? `?filename=${encodeURIComponent(filename)}` : ''}`, { silent: true });
+// Annotation re-render (issue #2036 phase 2). Feeds the saved flattened sketch
+// (source image + drawn strokes) back through the local-FLUX img2img regen as the
+// init image; returns the queue ack ({ jobId, position, ... }). The annotation
+// must already be saved (the flattened PNG sidecar is the init image). `silent`
+// so the annotate page owns its own error toast (single-layer rule).
+export const rerenderWithAnnotations = (filename, { strength, steps, prompt } = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/regenerate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      annotated: true,
+      ...(strength != null ? { strength } : {}),
+      ...(steps != null ? { steps } : {}),
+      ...(prompt != null ? { prompt } : {}),
+    }),
+    silent: true,
+  });
 
 // HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;
 // reads fall back to HF_TOKEN env var and then ~/.cache/huggingface/token.
@@ -218,8 +238,9 @@ export const setMediaAnnotation = (key, patch) => request(`/media/annotations/${
   body: JSON.stringify(patch),
 });
 
-// Media sketches — freehand annotation strokes drawn over a generated image,
-// keyed by "<kind>:<ref>" (only image:* is supported in phase 1 of #2036).
+// Media sketches — freehand strokes over a generated image ("image:<ref>",
+// phases 1–2 of #2036) OR a free-standing blank canvas ("sketch:<uuid>",
+// phase 3, attachable to a pipeline storyboard scene).
 // GET returns `{ key, sketch: { width, height, strokes, updatedAt, hasPng } | null }`.
 // PUT persists strokes + an optional flattened PNG data URL. The persisted PNG
 // is retrievable at GET /media/sketches/:key/png (consumed by phase 2's
@@ -232,11 +253,70 @@ export const saveMediaSketch = (key, payload, { silent = false } = {}) =>
     body: JSON.stringify(payload),
     silent,
   });
+// Mint a fresh blank-canvas sketch key ("sketch:<uuid>"). Server-generated
+// because PortOS is served over plain HTTP (crypto.randomUUID is unavailable on
+// an insecure origin). Returns `{ key }`.
+export const createBlankSketch = ({ silent = false } = {}) =>
+  request('/media/sketches', { method: 'POST', silent });
 
 // Models management (HF cache + LoRAs)
 export const listCachedModels = () => request('/image-video/models');
 export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
 export const deleteLora = (filename) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+
+// Media-model REGISTRY (the catalog of pickable image/video base models,
+// distinct from listCachedModels which reports on-disk HF cache usage). Returns
+// `{ video: [...], image: [...] }` with a `builtIn` flag per entry so the
+// manager renders built-ins read-only and user-added entries editable.
+export const listMediaModelRegistry = () => request('/image-video/models/registry');
+
+// Search the HuggingFace Hub for candidate base-model repos. `pipeline` scopes
+// to e.g. 'text-to-image'/'text-to-video'. `silent` (default true) because the
+// caller owns its own error UI. Returns `{ items: [{ id, likes, downloads, pipeline_tag }] }`.
+export const searchHfMediaModels = ({ query = '', pipeline, limit, silent = true } = {}) => {
+  const params = new URLSearchParams();
+  if (query) params.set('query', query);
+  if (pipeline) params.set('pipeline', pipeline);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return request(`/image-video/models/search${qs ? `?${qs}` : ''}`, { silent });
+};
+
+// Add a custom base model from a HuggingFace repo. The server strictly refuses
+// GGUF-only / wan / hunyuan / unclassifiable repos, so a rejection carries a
+// typed `.code` (HF_UNSUPPORTED_FORMAT, HF_UNKNOWN_KIND, HF_UNKNOWN_RUNNER, …)
+// the page can surface inline. `kind`/`runtime`/`runner` are optional overrides
+// for a mis-detected repo; `name`/`steps`/`guidance` override derived defaults.
+// `silent` lets the page route the typed errors into its own inline UI.
+export const addMediaModelFromHf = ({ url, kind, runtime, runner, name, steps, guidance, silent = false } = {}) => {
+  const body = { url };
+  if (kind) body.kind = kind;
+  if (runtime) body.runtime = runtime;
+  if (runner) body.runner = runner;
+  if (name) body.name = name;
+  if (steps != null) body.steps = steps;
+  if (guidance != null) body.guidance = guidance;
+  return request('/image-video/models/install/huggingface', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    silent,
+  });
+};
+
+// Edit a user-added model's name/steps/guidance. Built-ins return 403.
+// `silent` lets a caller with its own error toast suppress the apiCore toast.
+export const patchCustomMediaModel = (id, patch, { silent = false } = {}) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+  silent,
+});
+
+// Remove a user-added model entry (weights stay in the HF cache). Built-ins
+// return 403; unknown ids 404. `silent` as above.
+export const removeCustomMediaModel = (id, { silent = false } = {}) => request(`/image-video/models/custom/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+  silent,
+});
 
 // LoRA manager — Civitai-aware list/install/patch/delete. Reads sidecar
 // metadata so the manager UI can show trigger words, base model, recommended
@@ -260,6 +340,81 @@ export const installLoraFromHuggingface = ({ url, family, silent = false } = {})
   body: JSON.stringify(family ? { url, family } : { url }),
   silent,
 });
+
+// Streaming HF LoRA install — same install as installLoraFromHuggingface but
+// reads a byte-level progress stream. Resolves with the new sidecar on the
+// `complete` frame; rejects with an Error carrying `.code` (e.g.
+// 'HF_UNKNOWN_FAMILY', 'HF_ALREADY_INSTALLED') on an `error` frame, so the page
+// can drive the same inline family-confirm retry it does for the POST path.
+// `onProgress({ received, total, progress })` fires per throttled download tick
+// — `progress` is 0..1, or null when the server had no Content-Length to divide.
+//
+// Uses fetch() + a stream reader rather than EventSource, mirroring
+// streamLocalLlmTest: (1) a POST (not an EventSource GET) — this install mutates
+// state, and a state-changing GET would be CSRF-reachable via a top-level
+// cross-origin navigation; (2) EventSource auto-reconnects on any transport
+// drop, which for this NON-idempotent install would silently start a second
+// multi-GB download — a single fetch never retries; (3) it honors session expiry
+// — a 401 AUTH_REQUIRED bounces to /login via maybeRedirectToLogin exactly like
+// request(), instead of dead-ending on a generic stream error. Frames are
+// SSE-encoded (`data: {json}\n\n`).
+export async function installLoraFromHuggingfaceStream({ url, family, onProgress, signal } = {}) {
+  const response = await fetch(`${API_BASE}/loras/install/huggingface/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(family ? { url, family } : { url }),
+    signal,
+  });
+  if (!response.ok || !response.body?.getReader) {
+    const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    maybeRedirectToLogin(response, err);
+    const e = new Error(err.error || `HTTP ${response.status}`);
+    e.code = err.code || null;
+    throw e;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sidecar;
+  let streamError = null;
+
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return; // skip SSE blank separators / comments
+    let frame;
+    try { frame = JSON.parse(trimmed.slice(5).trim()); } catch { return; }
+    if (frame.type === 'progress') onProgress?.(frame);
+    else if (frame.type === 'complete') sidecar = frame.sidecar;
+    else if (frame.type === 'error') {
+      streamError = new Error(frame.message || 'HuggingFace install failed');
+      streamError.code = frame.code || null;
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) consume(line);
+    }
+    if (buffer.trim()) consume(buffer);
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+
+  // An `error` frame is the server's terminal failure signal — surface it (with
+  // its code) over a truncation error.
+  if (streamError) throw streamError;
+  // Clean EOF that never delivered a `complete` frame (server killed mid-stream,
+  // proxy cut the body) — throw so the caller's spinner clears; an intentional
+  // cancel sets signal.aborted and the caller suppresses that.
+  if (!sidecar && !signal?.aborted) throw new Error('Download stream ended before completing');
+  return sidecar;
+}
 
 // Civitai LoRA suggestions per runner family. Cached server-side for 1h.
 // Pass `force: true` to bust the cache and re-fetch from Civitai.

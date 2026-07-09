@@ -16,6 +16,19 @@ export const CHECK_SCOPE_LABELS = Object.freeze({
 export const scopeLabel = (scope) =>
   CHECK_SCOPE_LABELS[scope] || (scope ? scope[0].toUpperCase() + scope.slice(1) : 'Other');
 
+// Display metadata for findings seeded OUT OF BAND with a stable `checkId` that
+// isn't a runnable registry check (so it never appears in the check catalog).
+// Consulted by groupFindingsByCheck's label fallback so the triage section shows
+// a human header instead of the raw slug. The reader panel (#2170) seeds
+// ≥3-persona consensus concerns with `reader-panel.consensus`.
+export const VIRTUAL_CHECK_META = Object.freeze({
+  'reader-panel.consensus': {
+    label: 'Reader Panel — consensus concern',
+    description: '3+ reader-panel personas independently flagged the same issue (#2170). Seeded from the Reader Panel, not a runnable editorial check.',
+    scope: 'series',
+  },
+});
+
 // A finding's editorial category (continuity / pacing / style / …) — distinct
 // from its check scope. Mirrors the server's normalization in editorialScore.js
 // so the triage facet and the health panel's "open by category" agree.
@@ -107,11 +120,12 @@ export function groupFindingsByCheck(comments = [], rowsById = {}) {
     if (!c?.checkId) continue;
     if (!groups.has(c.checkId)) {
       const row = lookup.get(c.checkId) || null;
+      const virtual = VIRTUAL_CHECK_META[c.checkId] || null;
       groups.set(c.checkId, {
         checkId: c.checkId,
-        label: row?.label || c.checkId,
-        description: row?.description || null,
-        scope: row?.scope || 'other',
+        label: row?.label || virtual?.label || c.checkId,
+        description: row?.description || virtual?.description || null,
+        scope: row?.scope || virtual?.scope || 'other',
         kind: row?.kind || null,
         comments: [],
         open: 0,

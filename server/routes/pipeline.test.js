@@ -76,62 +76,119 @@ vi.mock('../services/pipeline/autoRunner.js', () => ({
   isAutoRunActive: vi.fn(() => false),
 }));
 
-vi.mock('../services/pipeline/visualStages.js', () => ({
+vi.mock('../services/pipeline/visualStages.js', async () => {
+  // The four cover-render entry points persist the in-flight slot themselves
+  // now (#2220) — that write moved out of the route factory and into the
+  // service. Drive it through the REAL (unmocked) issues/series write tails so
+  // the route tests still exercise the persist + serialized-write + script-gate
+  // behavior end-to-end. Mirrors renderComicCoverLike / renderVolumeCoverLike.
+  const issuesSvc = await import('../services/pipeline/issues.js');
+  const seriesSvc = await import('../services/pipeline/series.js');
+  const { buildRenderSlot: buildSlot } = await import('../lib/renderSlot.js');
+  const { slotKeyForVariant } = await import('../services/pipeline/owners.js');
+
+  const persistComicCover = async (issueId, target, scriptField, body) => {
+    const variant = body?.target === 'final' ? 'final' : 'proof';
+    const jobId = `${target === 'cover' ? 'cover' : 'backcover'}-job-${++uuidCounter}`;
+    const prompt = target === 'cover' ? 'cover art prompt' : 'back cover art prompt';
+    const fromProof = variant === 'final' && body?.useProofAsBase === true;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: body?.width, height: body?.height, fromProof });
+    const { issue, stage } = await issuesSvc.updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const currentSlot = current?.[target] || {};
+      const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+      if (typeof body?.[scriptField] === 'string') nextSlot.script = body[scriptField];
+      return { [target]: nextSlot };
+    });
+    return {
+      jobId, mode: 'local', prompt, variant, fromProof,
+      [scriptField]: body?.[scriptField] ?? `default ${target === 'cover' ? 'cover' : 'back cover'} concept`,
+      issue, stage,
+    };
+  };
+
+  // Full-page render+persist. Enqueues then lands the in-flight slot on
+  // stages.comicPages.pages[pageIndex] through the real issue write tail (#2241)
+  // so the route tests exercise the persist end-to-end (mirrors renderComicPage).
+  const persistComicPage = async (issueId, options) => {
+    const pageIndex = options.pageIndex;
+    const variant = options?.target === 'final' ? 'final' : 'proof';
+    const jobId = `page-job-${++uuidCounter}`;
+    const prompt = `comic-page prompt for page ${pageIndex + 1}`;
+    const fromProof = variant === 'final' && options?.useProofAsBase === true;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: options?.width, height: options?.height, fromProof });
+    const { issue, stage } = await issuesSvc.updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const pages = Array.isArray(current?.pages) ? current.pages : [];
+      const next = [...pages];
+      next[pageIndex] = { ...pages[pageIndex], [slotKey]: slotRecord };
+      return { status: 'edited', pages: next };
+    });
+    return { jobId, mode: 'local', prompt, pageIndex, variant, fromProof, issue, stage };
+  };
+
+  // Comic-page AI refine + i2i re-render (issue #1534) + persist (#2241). Lands
+  // the refined render on the matching variant slot via the real write tail.
+  const persistComicPageRefine = async (issueId, options) => {
+    const pageIndex = options.pageIndex;
+    const variant = options?.target === 'final' ? 'final' : 'proof';
+    const jobId = `page-refine-job-${++uuidCounter}`;
+    const prompt = `refined page prompt for page ${pageIndex + 1}`;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: options?.width, height: options?.height });
+    const { issue, stage } = await issuesSvc.updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const pages = Array.isArray(current?.pages) ? current.pages : [];
+      const next = [...pages];
+      next[pageIndex] = { ...pages[pageIndex], [slotKey]: slotRecord };
+      return { status: 'edited', pages: next };
+    });
+    return {
+      jobId, mode: 'local', prompt, pageIndex, variant,
+      changes: ['warmed the lighting'], runId: 'run-mock-page-refine', providerId: 'mock-provider',
+      issue, stage,
+    };
+  };
+
+  const persistVolumeCover = async (seriesId, seasonId, target, scriptField, body) => {
+    const variant = body?.target === 'final' ? 'final' : 'proof';
+    const jobId = `vol-${target === 'cover' ? 'cover' : 'backcover'}-job-${++uuidCounter}`;
+    const prompt = target === 'cover' ? 'volume cover art prompt' : 'volume back cover art prompt';
+    const fromProof = variant === 'final' && body?.useProofAsBase === true;
+    const slotKey = slotKeyForVariant(variant);
+    const slotRecord = buildSlot({ slotKey, jobId, prompt, width: body?.width, height: body?.height, fromProof });
+    const series = await seriesSvc.updateSeasonOnSeries(seriesId, seasonId, (current) => {
+      const currentSlot = current?.[target] || {};
+      const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+      if (typeof body?.[scriptField] === 'string') nextSlot.script = body[scriptField];
+      return { [target]: nextSlot };
+    });
+    const season = (series.seasons || []).find((s) => s.id === seasonId);
+    return {
+      jobId, mode: 'local', prompt, variant, fromProof,
+      [scriptField]: body?.[scriptField] ?? `default volume ${target === 'cover' ? 'cover' : 'back cover'} concept`,
+      season, series,
+    };
+  };
+
+  return {
   enqueueVisualImage: vi.fn(async (_issueId, stageId, opts) => ({
     jobId: `job-${++uuidCounter}`,
     mode: 'local',
     prompt: `style, ${opts.description}`,
   })),
-  enqueueVisualComicPage: vi.fn(async (_issueId, opts) => ({
-    jobId: `page-job-${++uuidCounter}`,
-    mode: 'local',
-    // Match the real service contract: pageNumber is 1-based (pageIndex + 1).
-    prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
-    pageIndex: opts.pageIndex,
-    // Forward proof/final variant + i2i flag so the route's slotKey + slot
-    // record reflect the schema-validated body (target defaults to 'proof').
-    variant: opts?.target === 'final' ? 'final' : 'proof',
-    fromProof: opts?.target === 'final' && opts?.useProofAsBase === true,
-  })),
-  // Front cover render. Returns shape the route merges with the persisted cover:
-  // { jobId, mode, prompt, coverScript, variant, fromProof }.
-  enqueueComicCover: vi.fn(async (_issueId, body) => ({
-    jobId: `cover-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: 'cover art prompt',
-    coverScript: body?.coverScript ?? 'default cover concept',
-    variant: body?.target === 'final' ? 'final' : 'proof',
-    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
-  })),
-  // Back cover render — symmetric with front cover; the route's persist
-  // logic differs only in field names (backCover slot + backCoverScript).
-  enqueueComicBackCover: vi.fn(async (_issueId, body) => ({
-    jobId: `backcover-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: 'back cover art prompt',
-    backCoverScript: body?.backCoverScript ?? 'default back cover concept',
-    variant: body?.target === 'final' ? 'final' : 'proof',
-    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
-  })),
-  // Volume (season) front + back cover. Route writes to series.seasons[].cover
-  // / .backCover via seriesSvc.updateSeasonOnSeries, so the mock shape mirrors
-  // the comic-cover mocks.
-  enqueueVolumeCover: vi.fn(async (_seriesId, _seasonId, body) => ({
-    jobId: `vol-cover-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: 'volume cover art prompt',
-    coverScript: body?.coverScript ?? 'default volume cover concept',
-    variant: body?.target === 'final' ? 'final' : 'proof',
-    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
-  })),
-  enqueueVolumeBackCover: vi.fn(async (_seriesId, _seasonId, body) => ({
-    jobId: `vol-backcover-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: 'volume back cover art prompt',
-    backCoverScript: body?.backCoverScript ?? 'default volume back cover concept',
-    variant: body?.target === 'final' ? 'final' : 'proof',
-    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
-  })),
+  // Full-page render+persist entry point (#2241) — enqueues AND lands the
+  // in-flight slot on stages.comicPages.pages[pageIndex] through the real issue
+  // write tail, driven through persistComicPage above.
+  renderComicPage: vi.fn((issueId, opts) => persistComicPage(issueId, opts)),
+  // Front cover render+persist. Lands the in-flight slot on
+  // stages.comicPages.cover through the real issue write tail (#2220).
+  renderComicCover: vi.fn((issueId, body) => persistComicCover(issueId, 'cover', 'coverScript', body || {})),
+  // Back cover render+persist — symmetric; lands on stages.comicPages.backCover.
+  renderComicBackCover: vi.fn((issueId, body) => persistComicCover(issueId, 'backCover', 'backCoverScript', body || {})),
+  // Volume (season) front + back cover render+persist. Writes to
+  // series.seasons[].cover / .backCover through the real per-series write tail.
+  renderVolumeCover: vi.fn((seriesId, seasonId, body) => persistVolumeCover(seriesId, seasonId, 'cover', 'coverScript', body || {})),
+  renderVolumeBackCover: vi.fn((seriesId, seasonId, body) => persistVolumeCover(seriesId, seasonId, 'backCover', 'backCoverScript', body || {})),
   // Single-scene video render. Returns the shape the route forwards verbatim
   // to clients: { jobId, prompt, sceneIndex, issue, stage }.
   enqueueStoryboardSceneVideo: vi.fn(async (issueId, sceneIndex) => ({
@@ -179,20 +236,12 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     changes: ['mock change'],
     providerId: 'mock-provider',
   })),
-  // Comic-page AI refine + i2i re-render (issue #1534). Returns the shape the
-  // route lands on the matching variant slot via slotKeyForVariant +
-  // buildRenderSlot — variant defaults to 'proof' unless the body forces one.
-  refineComicPageRender: vi.fn(async (_issueId, opts) => ({
-    jobId: `page-refine-job-${++uuidCounter}`,
-    mode: 'local',
-    prompt: `refined page prompt for page ${opts.pageIndex + 1}`,
-    pageIndex: opts.pageIndex,
-    variant: opts?.target === 'final' ? 'final' : 'proof',
-    changes: ['warmed the lighting'],
-    runId: 'run-mock-page-refine',
-    providerId: 'mock-provider',
-  })),
-}));
+  // Comic-page AI refine + i2i re-render (issue #1534) + persist (#2241).
+  // Enqueues AND lands the refined render on the matching variant slot through
+  // the real write tail — variant defaults to 'proof' unless the body forces one.
+  refineComicPageRender: vi.fn((issueId, opts) => persistComicPageRefine(issueId, opts)),
+  };
+});
 
 // The episode-video handoff creates a CD project; stub it so the route test
 // doesn't have to spin up the whole CD machinery.
@@ -345,6 +394,16 @@ vi.mock('../services/pipeline/editorialAnalysis.js', () => ({
   getSeriesEditorial: (...a) => getSeriesEditorialMock(...a),
   analyzeIssue: (...a) => analyzeIssueMock(...a),
   getIssueAnalysis: (...a) => getIssueAnalysisMock(...a),
+}));
+// Quality judge (#2167) — spy the service so route tests assert dispatch/
+// validation without hitting an LLM provider.
+const getSeriesJudgeMock = vi.fn(async () => ({ coverage: { judged: 0, total: 0, stale: 0 }, scores: [], weakest: [] }));
+const judgeIssueMock = vi.fn(async () => ({ status: 'complete', overall: 6, slopPenalty: 1, qualityScore: 5, dimensions: {} }));
+const getIssueJudgeMock = vi.fn(async () => null);
+vi.mock('../services/pipeline/pipelineJudge.js', () => ({
+  getSeriesJudge: (...a) => getSeriesJudgeMock(...a),
+  judgeIssue: (...a) => judgeIssueMock(...a),
+  getIssueJudge: (...a) => getIssueJudgeMock(...a),
 }));
 const startSeriesAnalysisMock = vi.fn(async () => ({ runId: 'ed-run-1', alreadyRunning: false }));
 vi.mock('../services/pipeline/editorialAnalysisRunner.js', () => ({
@@ -1673,8 +1732,9 @@ describe('pipeline routes', () => {
       .send({});
     expect(r.status).toBe(404);
     expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
-    // Enqueue is never reached when the page doesn't exist.
-    expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
+    // The render+persist service is never reached when the page doesn't exist
+    // (the route pre-validates the page index before dispatching).
+    expect(visualStages.renderComicPage).not.toHaveBeenCalled();
   });
 
   // ---- comicPages/cover/render ----
@@ -3011,6 +3071,58 @@ describe('editorial roadmap routes', () => {
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app).get(`/api/pipeline/issues/${iss.body.id}/editorial`);
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBe('none');
+  });
+});
+
+describe('quality judge routes (#2167)', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    vi.clearAllMocks();
+  });
+
+  it('GET /series/:id/judge returns 404 for an unknown series', async () => {
+    const r = await request(makeApp()).get('/api/pipeline/series/ser-nope/judge');
+    expect(r.status).toBe(404);
+    expect(getSeriesJudgeMock).not.toHaveBeenCalled();
+  });
+
+  it('GET /series/:id/judge dispatches the aggregate for a known series', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/judge`);
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveProperty('coverage');
+    expect(getSeriesJudgeMock).toHaveBeenCalledWith(ser.body.id);
+  });
+
+  it('POST /issues/:id/judge validates body and dispatches', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+
+    const bad = await request(app).post(`/api/pipeline/issues/${iss.body.id}/judge`).send({ stageId: 'nonsense' });
+    expect(bad.status).toBe(400);
+
+    const ok = await request(app).post(`/api/pipeline/issues/${iss.body.id}/judge`).send({ stageId: 'prose', force: true });
+    expect(ok.status).toBe(200);
+    expect(ok.body.status).toBe('complete');
+    expect(judgeIssueMock).toHaveBeenCalledWith(iss.body.id, { stageId: 'prose', force: true });
+  });
+
+  it('POST /issues/:id/judge returns 404 for an unknown issue', async () => {
+    const r = await request(makeApp()).post('/api/pipeline/issues/iss-nope/judge').send({});
+    expect(r.status).toBe(404);
+    expect(judgeIssueMock).not.toHaveBeenCalled();
+  });
+
+  it('GET /issues/:id/judge returns a none-status stub when never judged', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: 'u-test' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app).get(`/api/pipeline/issues/${iss.body.id}/judge`);
     expect(r.status).toBe(200);
     expect(r.body.status).toBe('none');
   });

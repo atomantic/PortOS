@@ -415,13 +415,14 @@ export async function getFeatureAgentRuns(id, limit = 20) {
     .sort((a, b) => b.localeCompare(a)) // newest first
     .slice(0, limit);
 
-  const runs = [];
-  for (const file of runFiles) {
-    const run = await readJSONFile(join(runDir, file), null);
-    if (run) runs.push(run);
-  }
+  // Read the (already limit-capped) run files in parallel — these are
+  // independent small JSON reads, so a sequential loop needlessly serializes
+  // disk latency on the run-history endpoint.
+  const loaded = await Promise.all(
+    runFiles.map(file => readJSONFile(join(runDir, file), null))
+  );
 
-  return runs;
+  return loaded.filter(Boolean);
 }
 
 /**

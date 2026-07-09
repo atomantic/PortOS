@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Eraser, Upload, Download, ShieldCheck, Sparkles } from 'lucide-react';
+import { Eraser, Upload, Download, ShieldCheck, Sparkles, Brush, Square, Undo2, X, Cpu, Zap, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import IgnoreZonePainter from '../components/media/IgnoreZonePainter';
 import * as api from '../services/api';
+import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { formatBytes } from '../utils/formatters';
 
 const ALLOWED_EXT = /\.(png|jpe?g|webp)$/i;
@@ -28,12 +30,58 @@ export default function ImageClean() {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy).
-  const [steps, setSteps] = useState({ metadata: true, denoise: false });
+  // Opt-in pipeline steps. metadata defaults ON (lossless), denoise OFF (lossy),
+  // diffusion OFF (lossy — CPU light pass or GPU FLUX round-trip).
+  const [steps, setSteps] = useState({ metadata: true, denoise: false, diffusion: false });
+  // Diffusion sub-mode: 'gpu' (FLUX round-trip, hardware-gated) or 'cpu' (light
+  // spatial pass, always available). Auto-selected by hardware once availability
+  // loads; the user can override. `regen` carries the availability payload
+  // (strength bounds, model id, reason) so the strength slider stays in lock-step
+  // with server validation. null until the probe returns.
+  const [diffusionMode, setDiffusionMode] = useState('cpu');
+  const [regen, setRegen] = useState(null);
+  const [strength, setStrength] = useState(0.25);
+  const [maxMp, setMaxMp] = useState(''); // '' = use server default budget
+  // GPU job tracking (issue #2264). When a GPU clean is enqueued the server
+  // returns a jobId; we track it via the media-job channel, then fetch the
+  // finished bytes. `gpuJobId` drives the progress hook; `gpuResult` holds the
+  // fetched render + whether it was saved to the gallery.
+  const [gpuJobId, setGpuJobId] = useState(null);
+  const [gpuJob, setGpuJob] = useState(null); // enqueue descriptor (modelId, strength, ...)
+  const [savedFilename, setSavedFilename] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // Ignore-zone (preserve-region) mask state — only relevant when the diffusion
+  // step is on. `maskTool`/`brushSize`/`feather` drive the painter; `hasMask`
+  // reflects whether any region is painted so the re-clean knows to send it.
+  const [maskTool, setMaskTool] = useState('brush');
+  const [brushSize, setBrushSize] = useState(40);
+  const [feather, setFeather] = useState(3);
+  const [hasMask, setHasMask] = useState(false);
+  const painterRef = useRef(null);
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
   const resultUrlRef = useRef(null);
+
+  // Live progress for the GPU clean job (no-op when gpuJobId is null).
+  const jobProgress = useMediaJobProgress(gpuJobId, { kind: 'image' });
+
+  // Probe local FLUX availability once on mount — auto-select GPU when a runner
+  // is installed, else fall back to the always-available CPU light pass. Also
+  // seeds the strength slider bounds/default so it matches server validation.
+  useEffect(() => {
+    let alive = true;
+    api.getRegenAvailability().then((info) => {
+      if (!alive || !info) return;
+      setRegen(info);
+      setStrength(typeof info.strengthDefault === 'number' ? info.strengthDefault : 0.25);
+      setDiffusionMode(info.available ? 'gpu' : 'cpu');
+    }).catch(() => {
+      // Availability is best-effort — if it fails, stay on the CPU light pass
+      // (always available) with the conservative defaults already set.
+    });
+    return () => { alive = false; };
+  }, []);
 
   // Revoke any outstanding blob URL on unmount so we don't leak.
   useEffect(() => () => {
@@ -41,16 +89,105 @@ export default function ImageClean() {
     if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
   }, []);
 
-  const runClean = useCallback(async (file, selectedSteps) => {
+  // Once the tracked GPU job completes, fetch the finished bytes and show them
+  // in the After preview. Gated on the jobId so a stale completion (user moved
+  // on) can't overwrite a newer render.
+  useEffect(() => {
+    if (!gpuJobId || jobProgress.status !== 'completed') return;
+    let alive = true;
+    const myJob = gpuJobId;
+    // The socket `completed` event can (rarely) beat the render's final disk
+    // write, so a `pending` (409) result gets a few bounded retries rather than
+    // stranding the spinner. The server writes the PNG before emitting the
+    // event, so in practice the first attempt succeeds.
+    const attempt = (tries) => {
+      api.fetchCleanResult(myJob).then((res) => {
+        if (!alive || myJob !== gpuJobId) return;
+        if (res.pending) {
+          if (tries > 0) setTimeout(() => { if (alive && myJob === gpuJobId) attempt(tries - 1); }, 600);
+          else { setBusy(false); toast.error('GPU clean result never became available'); }
+          return;
+        }
+        if (resultUrlRef.current) { URL.revokeObjectURL(resultUrlRef.current); resultUrlRef.current = null; }
+        const objectUrl = URL.createObjectURL(res.blob);
+        resultUrlRef.current = objectUrl;
+        const report = res.report || {};
+        setResult({
+          format: 'png',
+          width: report.width,
+          height: report.height,
+          sizeAfter: res.blob.size,
+          sizeBefore: original?.size || res.blob.size,
+          mimeType: res.mimeType,
+          objectUrl,
+          steps: gpuJob?.steps || [],
+          c2paStripped: !!gpuJob?.c2paStripped,
+          c2paPresent: !!gpuJob?.c2paPresent,
+          gpu: true,
+        });
+        setBusy(false);
+        toast.success('GPU clean complete');
+      }).catch((err) => {
+        if (!alive) return;
+        setBusy(false);
+        toast.error(err.message || 'Failed to fetch clean result');
+      });
+    };
+    attempt(5);
+    return () => { alive = false; };
+  }, [gpuJobId, jobProgress.status, original, gpuJob]);
+
+  // A failed/canceled GPU job clears the spinner and surfaces the error.
+  useEffect(() => {
+    if (!gpuJobId) return;
+    if (jobProgress.status === 'failed' || jobProgress.status === 'canceled') {
+      setBusy(false);
+      toast.error(jobProgress.error || `GPU clean ${jobProgress.status}`);
+    }
+  }, [gpuJobId, jobProgress.status, jobProgress.error]);
+
+  // `skipMask` lets a caller (e.g. Clear) force a mask-free re-clean without
+  // depending on the painter ref having flushed its React state yet — clear()
+  // only schedules state, so reading painterRef.hasMask in the same tick would
+  // still see the stale mask. The Clear path passes skipMask:true explicitly.
+  const runClean = useCallback(async (file, selectedSteps, mode, opts = {}) => {
+    const { skipMask = false } = opts;
     if (!file) return;
     const myRequestId = ++requestIdRef.current;
     setBusy(true);
+    // Reset any prior GPU job/result state on a fresh run.
+    setGpuJobId(null);
+    setGpuJob(null);
+    setSavedFilename(null);
     if (resultUrlRef.current) {
       URL.revokeObjectURL(resultUrlRef.current);
       resultUrlRef.current = null;
     }
     setResult(null);
-    const cleaned = await api.cleanImage(file, selectedSteps).catch((err) => {
+    // Map the diffusion toggle + sub-mode to the server's mode enum.
+    const diffusion = selectedSteps.diffusion ? (mode === 'gpu' ? 'gpu' : 'light') : 'off';
+    const payload = {
+      metadata: selectedSteps.metadata,
+      denoise: selectedSteps.denoise,
+      diffusion,
+    };
+    // GPU-only diffusion knobs.
+    if (diffusion === 'gpu') {
+      payload.strength = strength;
+      const mp = Number(maxMp);
+      if (maxMp !== '' && Number.isFinite(mp) && mp > 0) payload.maxMp = mp;
+    }
+    // Ignore-zone mask only matters when a diffusion pass runs — export the
+    // painted preserve-region as a PNG Blob and ride it in the request envelope
+    // so the server composites original pixels back into the masked regions.
+    if (!skipMask && selectedSteps.diffusion && painterRef.current?.hasMask) {
+      const maskBlob = await painterRef.current.exportMaskBlob();
+      if (maskBlob) {
+        payload.mask = maskBlob;
+        payload.feather = feather;
+      }
+    }
+    const cleaned = await api.cleanImage(file, payload).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
     });
@@ -60,13 +197,25 @@ export default function ImageClean() {
       setBusy(false);
       return;
     }
+    // GPU path: the server enqueued a job. Track it — the progress effect fetches
+    // the bytes on completion. Keep `busy` true (the spinner shows job progress).
+    if (cleaned.gpu) {
+      if (!cleaned.job?.jobId) {
+        setBusy(false);
+        toast.error('GPU clean did not return a job id');
+        return;
+      }
+      setGpuJob(cleaned.job);
+      setGpuJobId(cleaned.job.jobId);
+      return;
+    }
     setBusy(false);
     const objectUrl = URL.createObjectURL(cleaned.blob);
     resultUrlRef.current = objectUrl;
     const report = cleaned.report || {};
     setResult({ ...report, mimeType: cleaned.mimeType, objectUrl });
     toast.success(report.c2paStripped ? 'C2PA chunk removed' : 'Image cleaned');
-  }, []);
+  }, [feather, strength, maxMp]);
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -98,7 +247,31 @@ export default function ImageClean() {
       width: dims?.width || null,
       height: dims?.height || null,
     });
-    runClean(file, steps);
+    // Auto-run the sync pipeline on select. If the GPU sub-mode is active it's
+    // NOT auto-enqueued (see `autoRun`) — the user tunes strength/max-MP then
+    // clicks "Run GPU clean", so the render reads the settings they see.
+    autoRun(file, steps, diffusionMode);
+  };
+
+  // A GPU diffusion run is expensive (GPU-serialized, queued) and has tunable
+  // params (strength / max-MP) — so it only fires from an explicit button, never
+  // as a side effect of toggling a step or switching mode (which would enqueue
+  // with stale params, then silently ignore later slider moves). Sync pipelines
+  // (metadata / denoise / CPU light) stay auto-run for instant feedback.
+  const willUseGpu = (selectedSteps, mode) => !!selectedSteps.diffusion && mode === 'gpu';
+  const autoRun = (file, selectedSteps, mode, opts) => {
+    if (!file) return;
+    if (willUseGpu(selectedSteps, mode)) {
+      // Clear a stale sync result so the After panel shows the "run GPU" prompt
+      // rather than a now-inconsistent preview.
+      if (resultUrlRef.current) { URL.revokeObjectURL(resultUrlRef.current); resultUrlRef.current = null; }
+      setResult(null);
+      setGpuJobId(null);
+      setGpuJob(null);
+      setBusy(false);
+      return;
+    }
+    runClean(file, selectedSteps, mode, opts);
   };
 
   const toggleStep = (key) => {
@@ -106,8 +279,13 @@ export default function ImageClean() {
     const next = { ...steps, [key]: !steps[key] };
     setSteps(next);
     // Re-run immediately against the new selection so the After preview always
-    // reflects the current steps.
-    if (original?.file) runClean(original.file, next);
+    // reflects the current steps (GPU is gated behind the explicit button).
+    if (original?.file) autoRun(original.file, next, diffusionMode);
+  };
+
+  const changeDiffusionMode = (mode) => {
+    setDiffusionMode(mode);
+    if (original?.file && steps.diffusion) autoRun(original.file, steps, mode);
   };
 
   const handleDrag = (e) => {
@@ -141,6 +319,23 @@ export default function ImageClean() {
     setOriginal(null);
     setResult(null);
     setBusy(false);
+    setGpuJobId(null);
+    setGpuJob(null);
+    setSavedFilename(null);
+  };
+
+  const saveToGallery = async () => {
+    if (!gpuJobId || saving) return;
+    setSaving(true);
+    const saved = await api.saveCleanResult(gpuJobId, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Failed to save to gallery');
+      return null;
+    });
+    setSaving(false);
+    if (saved?.filename) {
+      setSavedFilename(saved.filename);
+      toast.success('Saved to gallery');
+    }
   };
 
   const downloadName = (() => {
@@ -156,6 +351,16 @@ export default function ImageClean() {
     ? ((sizeDelta / result.sizeBefore) * 100).toFixed(1)
     : '0.0';
 
+  // Render-budget analysis for the GPU path (issue #2264). The GPU render
+  // downscales to fit FLUX's O(tokens²) attention budget, then upscales back —
+  // so a source over the budget takes a fidelity hit worth warning about.
+  const srcMp = megapixels(original?.width, original?.height);
+  const budgetMp = (() => {
+    const n = Number(maxMp);
+    return maxMp !== '' && Number.isFinite(n) && n > 0 ? n : 2.0; // DEFAULT_MAX_REGEN_MEGAPIXELS
+  })();
+  const overBudget = srcMp > budgetMp;
+
   const STEP_DEFS = [
     {
       key: 'metadata',
@@ -166,6 +371,11 @@ export default function ImageClean() {
       key: 'denoise',
       label: 'Median + sharpen',
       hint: 'Lossy — reduces visible AI-generation artifacts but blurs fine text. Re-encodes the image.',
+    },
+    {
+      key: 'diffusion',
+      label: 'Diffusion pass — disrupt SynthID',
+      hint: 'Lossy, best-effort — round-trips the pixels to perturb SynthID\'s watermark carriers. This is the only step that touches SynthID, and it disrupts — never guarantees removal. Blurs fine text (use the ignore-zone mask to preserve regions).',
     },
   ];
 
@@ -182,13 +392,14 @@ export default function ImageClean() {
           </p>
           <p className="text-gray-500 text-xs mt-1">
             <span className="text-port-warning">Note:</span>{' '}
-            these passes do NOT defeat SynthID. gpt-image / Imagen / Gemini renders stay detectable by their vendor watermark checkers
-            (e.g.{' '}
+            the metadata and median/sharpen passes do NOT defeat SynthID — gpt-image / Imagen / Gemini renders stay detectable by their
+            vendor watermark checkers (e.g.{' '}
             <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
               openai.com/synthid
             </a>
-            ) — SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. A local diffusion pass that
-            actually disrupts SynthID is tracked as a follow-up (issue #1763).
+            ), since SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode. The <strong>diffusion pass</strong>{' '}
+            is the only step that perturbs SynthID's carriers — best-effort, and it <em>disrupts</em> rather than guarantees removal (never verified against
+            Google's detector).
           </p>
         </div>
       </div>
@@ -239,7 +450,7 @@ export default function ImageClean() {
             <div className="flex items-center gap-2 mb-3">
               <Sparkles size={16} className="text-port-accent" />
               <span className="text-sm font-medium text-white">Pipeline steps</span>
-              <span className="text-xs text-gray-500">run in order: metadata → median/sharpen</span>
+              <span className="text-xs text-gray-500">run in order: metadata → median/sharpen → diffusion</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {STEP_DEFS.map(({ key, label, hint }) => (
@@ -265,6 +476,195 @@ export default function ImageClean() {
             </div>
           </div>
 
+          {/* Diffusion options — sub-mode + resolution-aware controls (issue #2264) */}
+          {steps.diffusion && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
+              <div className="flex items-center gap-2">
+                <Zap size={16} className="text-port-accent" />
+                <span className="text-sm font-medium text-white">Diffusion sub-mode</span>
+              </div>
+              {/* Sub-mode selector — GPU (hardware-gated) vs CPU light pass. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => changeDiffusionMode('gpu')}
+                  disabled={busy || !regen?.available}
+                  className={`text-left p-3 rounded-lg border transition-colors ${
+                    diffusionMode === 'gpu'
+                      ? 'border-port-accent bg-port-accent/10'
+                      : 'border-port-border hover:border-port-accent/50'
+                  } ${!regen?.available ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                  <span className="flex items-center gap-2 text-sm text-white"><Zap size={14} /> GPU FLUX round-trip</span>
+                  <span className="block text-xs text-gray-500 mt-1">
+                    {regen?.available
+                      ? `Higher reliability. Model: ${regen.modelId || 'local FLUX'}. GPU-serialized (queued).`
+                      : (regen?.reason || 'No local FLUX runner installed.')}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeDiffusionMode('cpu')}
+                  disabled={busy}
+                  className={`text-left p-3 rounded-lg border transition-colors ${
+                    diffusionMode === 'cpu'
+                      ? 'border-port-accent bg-port-accent/10'
+                      : 'border-port-border hover:border-port-accent/50'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 text-sm text-white"><Cpu size={14} /> CPU light pass</span>
+                  <span className="block text-xs text-gray-500 mt-1">
+                    Always available, synchronous. Best-effort spatial round-trip — lower reliability than the GPU pass.
+                  </span>
+                </button>
+              </div>
+
+              {/* GPU-only resolution-aware options. */}
+              {diffusionMode === 'gpu' && (
+                <div className="space-y-3 border-t border-port-border pt-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="flex items-center gap-2 flex-1">
+                      <label htmlFor="strength" className="text-xs text-gray-500 whitespace-nowrap">Denoise strength</label>
+                      <input
+                        id="strength"
+                        type="range"
+                        min={regen?.strengthMin ?? 0.02}
+                        max={regen?.strengthMax ?? 0.6}
+                        step="0.01"
+                        value={strength}
+                        onChange={(e) => setStrength(Number(e.target.value))}
+                        disabled={busy}
+                        className="flex-1 accent-port-accent"
+                      />
+                      <span className="text-xs text-gray-400 w-10 text-right">{strength.toFixed(2)}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-1">
+                      <label htmlFor="max-mp" className="text-xs text-gray-500 whitespace-nowrap">Max render MP</label>
+                      <input
+                        id="max-mp"
+                        type="number"
+                        min="0.25"
+                        max="16"
+                        step="0.25"
+                        value={maxMp}
+                        placeholder="2.0 (default)"
+                        onChange={(e) => setMaxMp(e.target.value)}
+                        disabled={busy}
+                        className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    A universal resolution-squeeze (~0.9×) is applied automatically as a second disruption vector, then the render is upscaled back to source dimensions.
+                  </p>
+                  {overBudget && (
+                    <p className="text-xs text-port-warning">
+                      Source is {srcMp.toFixed(1)}MP, above the {budgetMp.toFixed(1)}MP render budget — the render downscales to fit FLUX's attention budget, then upscales back to {original.width}×{original.height}. Expect some fidelity loss.
+                    </p>
+                  )}
+                  {/* Explicit run trigger — GPU never auto-enqueues, so the
+                      render always reads the strength/max-MP shown here. */}
+                  <button
+                    type="button"
+                    onClick={() => { if (original?.file) runClean(original.file, steps, 'gpu'); }}
+                    disabled={busy || !regen?.available}
+                    className="px-4 py-2 rounded-lg text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors flex items-center gap-2 w-full sm:w-auto"
+                  >
+                    <Zap size={16} />
+                    {busy && gpuJobId ? 'Rendering…' : 'Run GPU clean'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Ignore-zone (preserve-region) mask painter — only when diffusion is on */}
+          {steps.diffusion && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Brush size={16} className="text-port-accent" />
+                  <span className="text-sm font-medium text-white">Ignore zone (preserve region)</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setMaskTool('brush')}
+                    className={`px-2 py-1 rounded text-xs flex items-center gap-1 border transition-colors ${maskTool === 'brush' ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border text-gray-400 hover:text-white'}`}
+                  >
+                    <Brush size={12} /> Brush
+                  </button>
+                  <button
+                    onClick={() => setMaskTool('rect')}
+                    className={`px-2 py-1 rounded text-xs flex items-center gap-1 border transition-colors ${maskTool === 'rect' ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border text-gray-400 hover:text-white'}`}
+                  >
+                    <Square size={12} /> Rectangle
+                  </button>
+                  <button
+                    onClick={() => { painterRef.current?.undo(); }}
+                    className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
+                  >
+                    <Undo2 size={12} /> Undo
+                  </button>
+                  <button
+                    onClick={() => { painterRef.current?.clear(); if (original?.file) autoRun(original.file, steps, diffusionMode, { skipMask: true }); }}
+                    className="px-2 py-1 rounded text-xs flex items-center gap-1 border border-port-border text-gray-400 hover:text-white transition-colors"
+                  >
+                    <X size={12} /> Clear
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                Paint the regions the diffusion pass should NOT alter (comic dialog, faces, fine text).
+                After the pass, the original pixels are composited back into these regions with a feathered edge.
+                <span className="text-port-warning"> Heads up:</span> a preserved region keeps its original SynthID locally — a deliberate per-region quality-vs-disruption tradeoff.
+              </p>
+              <div className="flex items-center justify-center bg-port-bg/50 rounded p-2">
+                <IgnoreZonePainter
+                  ref={painterRef}
+                  imageSrc={original.previewUrl}
+                  tool={maskTool}
+                  brushSize={brushSize}
+                  onHasMaskChange={setHasMask}
+                />
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                <div className="flex items-center gap-2 flex-1">
+                  <label htmlFor="brush-size" className="text-xs text-gray-500 whitespace-nowrap">Brush size</label>
+                  <input
+                    id="brush-size"
+                    type="range"
+                    min="8"
+                    max="200"
+                    value={brushSize}
+                    onChange={(e) => setBrushSize(Number(e.target.value))}
+                    className="flex-1 accent-port-accent"
+                  />
+                  <span className="text-xs text-gray-400 w-10 text-right">{brushSize}px</span>
+                </div>
+                <div className="flex items-center gap-2 flex-1">
+                  <label htmlFor="feather" className="text-xs text-gray-500 whitespace-nowrap">Feather</label>
+                  <input
+                    id="feather"
+                    type="range"
+                    min="0"
+                    max="50"
+                    value={feather}
+                    onChange={(e) => setFeather(Number(e.target.value))}
+                    className="flex-1 accent-port-accent"
+                  />
+                  <span className="text-xs text-gray-400 w-10 text-right">{feather}px</span>
+                </div>
+                <button
+                  onClick={() => { if (original?.file) runClean(original.file, steps, diffusionMode); }}
+                  disabled={busy || !hasMask}
+                  className="px-3 py-1.5 rounded text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors whitespace-nowrap"
+                >
+                  Apply mask
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
               <div className="px-4 py-2 border-b border-port-border flex items-center justify-between">
@@ -287,7 +687,14 @@ export default function ImageClean() {
                 {result && <span className="text-xs text-gray-500">{formatBytes(result.sizeAfter)}</span>}
               </div>
               <div className="p-4 flex items-center justify-center bg-port-bg/50 min-h-[200px]">
-                {busy && <BrailleSpinner text="Cleaning" />}
+                {busy && gpuJobId && (
+                  <BrailleSpinner text={
+                    jobProgress.status === 'queued' ? 'Queued (GPU)'
+                      : jobProgress.status === 'running' ? `Rendering${typeof jobProgress.progress === 'number' && jobProgress.progress > 0 ? ` ${Math.round(jobProgress.progress * 100)}%` : ''}`
+                      : 'Cleaning'
+                  } />
+                )}
+                {busy && !gpuJobId && <BrailleSpinner text="Cleaning" />}
                 {!busy && result && (
                   <img
                     src={result.objectUrl}
@@ -363,6 +770,18 @@ export default function ImageClean() {
                 <Download size={16} />
                 Download
               </a>
+            )}
+            {/* Save-to-gallery — only for a finished GPU render (the temp result
+                is discarded by default; this promotes it to a gallery citizen). */}
+            {result?.gpu && gpuJobId && (
+              <button
+                onClick={saveToGallery}
+                disabled={saving || !!savedFilename}
+                className="px-4 py-2 bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Save size={16} />
+                {savedFilename ? 'Saved to gallery' : saving ? 'Saving…' : 'Save to gallery'}
+              </button>
             )}
             <button
               onClick={handleReset}

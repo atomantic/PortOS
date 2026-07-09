@@ -36,15 +36,33 @@ import {
   measureSentenceRhythm,
 } from './repetition.js';
 import {
+  findBannedWordsTier1,
+  findSuspiciousWordClusters,
+  findAiTells,
+  findNotJustButPatterns,
+  findNotSayingPatterns,
+  findNegativeAssertions,
+  findTheWaySimiles,
+  findTriadicShortSentences,
+  findStructuralTics,
+  emDashDensityPer1000,
+  transitionOpenerRatio,
+  paragraphLengthUniformity,
+  countSectionBreaks,
+  MIN_DENSITY_OCCURRENCES,
+} from './slopScore.js';
+import {
   analyzePanelRhythm,
   comicPageTurnSummary,
   authoredRevealSummary,
 } from './comicPacing.js';
 import { findAxisReversals, findShotTypeMonotony, summarizeStoryboardShots } from './shotContinuity.js';
+import { revealGatedCanonRows, canonHasRevealGated } from '../storyBible.js';
 
 // Re-exported so ./checks/*.js and ./checkRegistry.js import everything from here.
 export {
   DEFAULT_LETTERING_THRESHOLDS,
+  MIN_DENSITY_OCCURRENCES,
   analyzeBalloonAttribution,
   analyzeComicLettering,
   analyzeNamePair,
@@ -53,10 +71,14 @@ export {
   authoredRevealSummary,
   comicPageTurnSummary,
   comparisonName,
+  countSectionBreaks,
+  emDashDensityPer1000,
   estimateTokens,
   filterPassiveVoice,
   findAdverbs,
+  findAiTells,
   findAxisReversals,
+  findBannedWordsTier1,
   findCliches,
   findCrutchWords,
   findDialogueTagVariety,
@@ -66,18 +88,29 @@ export {
   findHedgeWords,
   findItalicThoughts,
   findModifierStacking,
+  findNegativeAssertions,
+  findNotJustButPatterns,
+  findNotSayingPatterns,
   findPassiveVoice,
   findRepeatedOpeners,
   findSaidBookisms,
   findShotTypeMonotony,
+  findStructuralTics,
+  findSuspiciousWordClusters,
+  findTheWaySimiles,
+  findTriadicShortSentences,
   findUnattributedDialogueRuns,
   findWordEchoes,
   measureSentenceRhythm,
   normalizeName,
+  paragraphLengthUniformity,
   parseComicScript,
   renderCharacterArcsForPrompt,
   splitScenes,
   summarizeStoryboardShots,
+  transitionOpenerRatio,
+  canonHasRevealGated,
+  revealGatedCanonRows,
   z,
 };
 
@@ -191,6 +224,11 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'series.styleGuide',
   'series.arc.tickingClock',
   'series.arc.readerMap',
+  // The authored foreshadowing ledger (#2172): the arc-overview-emitted
+  // plant → reinforce → payoff seeds the Chekhov check reconciles its detected
+  // setups/payoffs against. Lives on the already-loaded series record (no extra
+  // I/O); fingerprinting it stales Chekhov findings when the author edits the ledger.
+  'series.arc.foreshadowing',
   'series.arc.themes',
   // The author-supplied real-world fact reference the opt-in research.fact-accuracy
   // check reconciles the prose against (#1588). Lives on the already-loaded series
@@ -274,6 +312,56 @@ export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
 // migrations but NOT setup-data, so the migration is required).
 export const CHEKHOV_STAGE = 'pipeline-editorial-chekhov';
 
+// Stage name for the premature-reveal editorial LLM check (#2178 — CWQE Phase
+// 13). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
+// installs via setup-data.js) and migrates to existing installs via migration
+// 168 (boot runs migrations but NOT setup-data, so the migration is required).
+export const PREMATURE_REVEAL_STAGE = 'pipeline-editorial-premature-reveal';
+
+// Render the reveal-gated canon (#2178) into a compact text block the
+// premature-reveal check passes alongside the manuscript, so the model knows
+// which facts are SECRETS not yet due and when each is meant to surface. Each
+// row names the entry, its reveal issue (or hard spoiler), the spoiler-free
+// surface stand-in the reader IS allowed to see, and the underlying fact that
+// must NOT leak early. Pure + deterministic so it's unit-testable and its token
+// cost counts into the per-chunk overhead. Returns '' when no canon is
+// reveal-gated (the check gates on `canonHasRevealGated` so this won't be
+// called with an empty set, but the guard keeps it safe).
+export function revealGatedCanonSummary(canon) {
+  const rows = revealGatedCanonRows(canon);
+  if (!rows.length) return '';
+  const lines = rows.map((r) => {
+    const when = r.spoiler
+      ? 'HARD SPOILER — must not appear in ANY drafted issue'
+      : `revealed in Issue ${r.revealIssue} — must not appear before then`;
+    const surface = r.surfaceDescriptor
+      ? ` Pre-reveal, the reader may only know: "${r.surfaceDescriptor}".`
+      : '';
+    const fact = r.fact ? ` The gated fact (must NOT leak early): ${r.fact}.` : '';
+    return `- ${r.kind} "${r.name}" (${when}).${surface}${fact}`;
+  });
+  return 'Reveal-gated canon (these facts are deliberately withheld — flag any that a first-time reader would '
+    + 'learn from the prose before the fact is due):\n' + lines.join('\n');
+}
+
+// Render reveal-gated canon (#2178) as AUTHORED PAYOFFS for the Chekhov check —
+// a gated entry's `revealIssue` is effectively an authored payoff point (the
+// issue where the withheld fact is meant to fire). Folded into the Chekhov
+// `authoredSetups` block so the check can flag a reveal that arrives with zero
+// prior setup (an orphaned payoff). Only NUMERIC reveal gates render — a hard
+// `spoiler` has no scheduled payoff issue to reconcile against. Returns '' when
+// no numeric-gated entry exists (the block renders nothing). Pure.
+export function revealGatedPayoffsSummary(canon) {
+  const rows = revealGatedCanonRows(canon).filter((r) => Number.isInteger(r.revealIssue));
+  if (!rows.length) return '';
+  const lines = rows.map((r) => {
+    const what = r.fact || `the withheld fact about ${r.kind} "${r.name}"`;
+    return `- ${r.kind} "${r.name}" — reveal-gated fact due to pay off in Issue ${r.revealIssue}: ${what}`;
+  });
+  return 'Authored reveal-gated payoffs (each gated fact is meant to be revealed — fire — in its named issue; '
+    + 'flag a reveal that arrives with no prior setup):\n' + lines.join('\n');
+}
+
 // Stage name for the chapter-ending cliffhanger LLM check (#1298). Ships in
 // data.reference/prompts/stages/ + stage-config.json (fresh installs via
 // setup-data.js) and migrates to existing installs via migration 102 (boot runs
@@ -287,13 +375,20 @@ export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger
 // logged. Pure + deterministic so it's unit-testable and so its token cost can be
 // counted into the per-chunk overhead. Returns '' when nothing is authored (the
 // prompt's `{{#authoredSetups}}` section then renders nothing).
+// Shared preamble for the authored-entry renderers below: an entry's
+// `label — note` (or whichever is present), '' when neither is usable so
+// callers can `.filter(Boolean)`.
+function entryLabelNoteText(e) {
+  const label = typeof e?.label === 'string' ? e.label.trim() : '';
+  const note = typeof e?.note === 'string' ? e.note.trim() : '';
+  return label && note ? `${label} — ${note}` : (label || note);
+}
+
 // Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
 // Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
 // entry with no usable label/note so callers can `.filter(Boolean)`.
 function renderReaderMapEntryLine(e) {
-  const label = typeof e?.label === 'string' ? e.label.trim() : '';
-  const note = typeof e?.note === 'string' ? e.note.trim() : '';
-  const text = label && note ? `${label} — ${note}` : (label || note);
+  const text = entryLabelNoteText(e);
   if (!text) return '';
   // A coarse expected-location hint so the model can reason about WHERE an
   // authored hook should have paid off (reconciliation signal, #1299).
@@ -301,15 +396,49 @@ function renderReaderMapEntryLine(e) {
   return `- ${text}${pos}`;
 }
 
-export function authoredSetupPayoffSummary(readerMap) {
+// Render one foreshadowing-ledger entry (#2172) to a `- text (plant issue N →
+// reinforced issue M → payoff issue P)` line so the Chekhov check reconciles
+// its detected plants/payoffs against the author-declared ledger instead of
+// inferring every seed from scratch. Returns '' for an entry with no usable
+// label/note so callers can `.filter(Boolean)`.
+function renderForeshadowingEntryLine(e) {
+  const text = entryLabelNoteText(e);
+  if (!text) return '';
+  const span = [];
+  if (Number.isFinite(e?.plantIssue)) span.push(`plant issue ${e.plantIssue}`);
+  if (Array.isArray(e?.reinforceIssues) && e.reinforceIssues.length) {
+    span.push(`reinforced issue ${e.reinforceIssues.join(', ')}`);
+  }
+  if (Number.isFinite(e?.payoffIssue)) span.push(`payoff issue ${e.payoffIssue}`);
+  return span.length ? `- ${text} (${span.join(' → ')})` : `- ${text}`;
+}
+
+// Build the authored-foreshadowing-ledger block (#2172). Exported for the
+// Chekhov check + unit tests; returns '' when nothing is authored so the
+// prompt's `{{#authoredSetups}}` section renders nothing.
+export function authoredForeshadowingSummary(foreshadowing) {
+  const entries = Array.isArray(foreshadowing) ? foreshadowing : [];
+  const lines = entries.map(renderForeshadowingEntryLine).filter(Boolean);
+  if (!lines.length) return '';
+  return `Authored foreshadowing ledger (planted seeds the writer logged — plant → reinforce → payoff):\n${lines.join('\n')}`;
+}
+
+// `foreshadowing` (#2172) is the author-declared plant→reinforce→payoff ledger
+// on `series.arc.foreshadowing`; it's folded into the SAME authored-setups
+// block the reader-map hooks/payoffs render into, so the Chekhov prompt
+// consumes it through its existing `{{#authoredSetups}}` section without a
+// template change.
+export function authoredSetupPayoffSummary(readerMap, foreshadowing) {
   const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
   const hookLines = hooks.map(renderReaderMapEntryLine).filter(Boolean);
   const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);
-  if (!hookLines.length && !payoffLines.length) return '';
+  const ledgerBlock = authoredForeshadowingSummary(foreshadowing);
+  if (!hookLines.length && !payoffLines.length && !ledgerBlock) return '';
   const parts = [];
   if (hookLines.length) parts.push(`Authored hooks (questions the writer planted):\n${hookLines.join('\n')}`);
   if (payoffLines.length) parts.push(`Authored payoffs (resolutions the writer logged):\n${payoffLines.join('\n')}`);
+  if (ledgerBlock) parts.push(ledgerBlock);
   return parts.join('\n\n');
 }
 
@@ -347,6 +476,28 @@ export const OPENING_START_STAGE = 'pipeline-editorial-opening-start';
 export const MIRROR_DESCRIPTION_STAGE = 'pipeline-editorial-mirror-description';
 export const DIALOGUE_PLEASANTRIES_STAGE = 'pipeline-editorial-dialogue-pleasantries';
 export const KILL_YOUR_DARLINGS_STAGE = 'pipeline-editorial-kill-your-darlings';
+
+// Stage name for the adversarial-cuts prose-tightening LLM check (#2168). Ships
+// in data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js); new file so no migration needed. Asks a ruthless editor
+// persona to cut 8–12% of the text, classifying each cut (FAT, REDUNDANT,
+// OVER-EXPLAIN, GENERIC, TELL, STRUCTURAL). Safe types (OVER-EXPLAIN, REDUNDANT)
+// can be batch-applied mechanically.
+export const ADVERSARIAL_CUTS_STAGE = 'pipeline-editorial-adversarial-cuts';
+
+// The six cut types the adversarial-cuts check returns, ordered by safe-to-auto-
+// apply (the first two are the "safe majority" per the design doc). The applier
+// defaults to OVER-EXPLAIN + REDUNDANT only; other types require manual review.
+export const CUT_TYPES = Object.freeze([
+  'OVER-EXPLAIN',
+  'REDUNDANT',
+  'FAT',
+  'GENERIC',
+  'TELL',
+  'STRUCTURAL',
+]);
+// The subset that can be auto-applied without manual review.
+export const SAFE_CUT_TYPES = Object.freeze(['OVER-EXPLAIN', 'REDUNDANT']);
 
 // Stage names for the two scene-grounding LLM checks (#1309): sensory balance
 // (all-visual / sensory-bare scenes) and white-room (ungrounded, setting-less
@@ -562,6 +713,20 @@ export function canonCharacterTraitsSummary(canon) {
     if (dislikes) facts.push(`dislikes: ${dislikes}`);
     const speechPattern = cleanStr(c.speechPattern);
     if (speechPattern) facts.push(`speech: ${speechPattern}`);
+    // Authored character-framework fields (CWQE Phase 10, #2175) — the Lie the
+    // character believes, the Want (external goal), the Need (the Truth), and
+    // the declared arc type. Surfacing these lets the consistency / arc checks
+    // reconcile the prose against the PLAN (does the character overcome the Lie,
+    // pursue the Want, arrive at the Need per the declared arc?) instead of
+    // inferring the intended arc from the prose alone.
+    const lie = cleanStr(c.lie).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (lie) facts.push(`believes (Lie): ${lie}`);
+    const want = cleanStr(c.want).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (want) facts.push(`wants: ${want}`);
+    const need = cleanStr(c.need).slice(0, CANON_TRAIT_FACT_CHARS);
+    if (need) facts.push(`needs (Truth): ${need}`);
+    const arcType = cleanStr(c.arcType);
+    if (arcType) facts.push(`declared arc: ${arcType}`);
     if (!facts.length) continue;
     const who = aliases.length ? `${name} (also: ${aliases.join(', ')})` : name;
     rows.push(`- ${who} — ${facts.join('; ')}`);
@@ -636,6 +801,20 @@ export function continuityLedgerSummary(facts) {
 // deus ex machina, idiot plot, flat/unclear stakes, sagging middle, and dropped
 // subplots reconciled against the tagged plotlines.
 export const PLOT_STRUCTURE_STAGE = 'pipeline-editorial-plot-structure';
+
+// Stage names for the worldbuilding-doctrine LLM check pair (#2175). Both ship in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and reach existing installs via the multi-stage seed migration
+// 167 (boot runs migrations but NOT setup-data, so the migration is required or
+// the check throws "Stage not found" on first run). Both reconcile the prose against the
+// canon world summary (`canonWorldSummary`) + the continuity-bible world-rule
+// facts so an established-and-planted rule is NOT flagged:
+//   - unforeshadowed-solution: a plot problem solved by a rule/power the reader was
+//     never shown — deus ex machina's worldbuilding sibling.
+//   - cost-free-power: an ability used at a decisive moment with no cost/limitation
+//     on the page (violates "limitations > powers").
+export const WORLD_UNFORESHADOWED_SOLUTION_STAGE = 'pipeline-editorial-world-unforeshadowed-solution';
+export const WORLD_COST_FREE_POWER_STAGE = 'pipeline-editorial-world-cost-free-power';
 
 // Stage name for the series-wide pacing / intensity escalation-curve LLM check
 // (#1618). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
@@ -849,6 +1028,50 @@ export function canonRosterNamesSummary(canon) {
   }
   if (!lines.length) return '';
   return `Known characters (already in the story bible — do NOT flag these or their aliases):\n${lines.join('\n')}`;
+}
+
+// Render the established WORLD canon (#2175) — the named objects (with their
+// significance) and places (with their recurring details) — into a compact text
+// block the worldbuilding-doctrine checks pass alongside the manuscript so the
+// model can tell a rule/power/artifact the prose ESTABLISHED (and may legitimately
+// use) from one that appears out of nowhere. Objects carry the artifacts/powers a
+// solution might draw on; places carry the world's physical logic. Prose
+// `significance` / `description` / `recurringDetails` are the fields that state
+// what a thing DOES and what it costs, so those are what get surfaced. Pure +
+// deterministic (unit-testable, token-countable) and type-guarded throughout (the
+// canon rides peer sync, so an older/hand-edited row could carry a non-string
+// field). Returns '' when no object or place has usable content (the prompt's
+// `{{#canonWorld}}` section then renders nothing and the check reasons from the
+// prose alone).
+export function canonWorldSummary(canon) {
+  const objects = Array.isArray(canon?.objects) ? canon.objects : [];
+  const places = Array.isArray(canon?.places) ? canon.places : [];
+  const trim = (v) => (typeof v === 'string' ? v.trim() : '');
+  const objectLines = [];
+  for (const o of objects) {
+    const name = trim(o?.name);
+    if (!name) continue;
+    const detail = trim(o?.significance) || trim(o?.description);
+    objectLines.push(detail ? `- ${name}: ${detail}` : `- ${name}`);
+  }
+  const placeLines = [];
+  for (const p of places) {
+    const name = trim(p?.name) || trim(p?.slugline);
+    if (!name) continue;
+    const detail = trim(p?.recurringDetails) || trim(p?.description);
+    placeLines.push(detail ? `- ${name}: ${detail}` : `- ${name}`);
+  }
+  if (!objectLines.length && !placeLines.length) return '';
+  const blocks = [];
+  if (objectLines.length) blocks.push(`Named artifacts / objects (with their significance):\n${objectLines.join('\n')}`);
+  if (placeLines.length) blocks.push(`Named places (with their recurring details):\n${placeLines.join('\n')}`);
+  // Neutral framing: this is the author's reference for what the world's
+  // mechanics ARE, so a check can judge internal consistency. It deliberately
+  // does NOT assert the reader has seen these — each consuming prompt sets that
+  // interpretation (the unforeshadowed-solution check must still flag a canon
+  // rule the PROSE never surfaced; the cost-free-power check reads it for the
+  // costs a system is supposed to carry).
+  return `World-bible reference (the author's record of the world's artifacts, places, and mechanics — use it to understand what a thing is and does; it is NOT the manuscript and does not prove the reader has seen any of it):\n\n${blocks.join('\n\n')}`;
 }
 
 // Render the authored reader-map cliffhangers (#1298) into a compact text block

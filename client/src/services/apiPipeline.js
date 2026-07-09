@@ -102,13 +102,28 @@ export const generateSeriesTitleLogo = (id, opts = {}, requestOptions = {}) =>
     ...requestOptions,
   });
 
-// Generate a fresh series concept (name / logline / premise / story shape) from
-// a universe, used as seed material. Returns the concept WITHOUT persisting —
-// the New Series form pre-fills it for the user to edit before creating.
-export const generateSeriesConcept = (universeId, opts = {}, requestOptions = {}) =>
+// Multi-concept series ideation (#2180): invent SEVERAL distinct candidate
+// concepts (name / logline / premise / shape + craft facets) from a universe
+// under an anti-generic banlist. Returns `{ candidates: [...], banlist,
+// rationale }` WITHOUT persisting — the New Series form presents the candidates
+// for user pick; the chosen one pre-fills the form. `opts` may carry
+// `{ count, providerId, model }`.
+export const generateSeriesConcepts = (universeId, opts = {}, requestOptions = {}) =>
   request('/pipeline/series/generate-concept', {
     method: 'POST',
     body: JSON.stringify({ universeId, ...opts }),
+    ...requestOptions,
+  });
+
+// Voice discovery (#2179): write the same scene beat in several distinct
+// registers so the author picks the series voice by ear. Returns
+// `{ candidates: [{ register, label, passage, note }] }` WITHOUT persisting —
+// the picked passage is committed via the ordinary series PATCH
+// (styleGuide.voiceExemplars).
+export const discoverSeriesVoice = (id, opts = {}, requestOptions = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(id)}/discover-voice`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
     ...requestOptions,
   });
 
@@ -309,6 +324,16 @@ export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
   const qs = size ? `?size=${encodeURIComponent(size)}` : '';
   return `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/volume.pdf${qs}`;
 };
+
+// Prose-series export download URLs (#2181). Used as <a href> so the browser
+// streams each artifact straight to disk (no in-app blob handling). All three
+// read the persisted per-series export settings server-side.
+export const proseExportManuscriptUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/manuscript.md`;
+export const proseExportEpubUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/book.epub`;
+export const proseExportPdfUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/export/interior.pdf`;
 
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
@@ -574,6 +599,25 @@ export const reformatPipelineManuscriptText = (seriesId, { stageId, content, pro
     ...options,
   });
 
+// ---- Adversarial cuts (#2168) ----
+// Preview cuts — dry-run that returns before/after diffs without applying.
+// Returns { preview: [{ issueNumber, before, after, applied, refused, refusedDetails }], totalApplied, totalRefused }.
+export const previewPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
+    ...options,
+  });
+
+// Apply cuts — writes through the serialized stage-write path with snapshots.
+// Returns { applied, refused, sections, refusedDetails, acceptedCount }.
+export const applyPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, safeTypesOnly } = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/cuts/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ commentIds, allowTypes, safeTypesOnly }),
+    ...options,
+  });
+
 // ---- Volume beat-sheet bulk generator ----
 // Sequential idea-stage run across every issue in a volume. `mode` is
 // 'skip-existing' (default) or 'regenerate-all'. Returns
@@ -645,6 +689,69 @@ export const getSeriesEditorialStatus = (seriesId, options = {}) =>
 
 export const pipelineEditorialSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/analyze/progress`;
+
+// ---- Calibrated issue quality judge (#2167 — qualityScore = judge − slop) ----
+// One issue's stored judge score: { status, overall, dimensions, slopPenalty,
+// qualityScore, strongestSentences, weakestSentences, topRevisions, stale, ... }
+// or { status: 'none' }.
+export const getIssueJudge = (issueId, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/judge`, options);
+
+// Judge ONE issue (synchronous; returns the finished snapshot). opts:
+// { stageId?, providerId?, model?, force? }.
+export const judgeIssue = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/judge`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Series quality roadmap: { coverage, scores[], weakest[], ... } — scores carry
+// per-issue qualityScore; `weakest` is the ascending-quality revision priority.
+export const getSeriesJudge = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/judge`, options);
+
+// ---- Reader panel (#2170 — four-persona panel + disagreement mining) ----
+// Stored panel: { status, personas[], disagreements:{consensus,attention,polarizing,totalPersonas}, seededFindings, stale } or { status: 'none' }.
+export const getReaderPanel = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel`, options);
+
+// Convene the panel (batch). { runId, alreadyRunning, sseUrl } — subscribe via
+// readerPanelSseUrl to stream per-persona progress.
+export const runReaderPanel = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const cancelReaderPanel = (seriesId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/cancel`, {
+    method: 'POST',
+  });
+
+// ---- Head-to-head comparative Elo ranking (#2169, CWQE Phase 5) ----
+// Stored ranking: { status:'complete', ranking:[{ rank, issueId, number, label,
+// rating, wins, losses }], weakest[], matches[], entrants, rounds, stale } or
+// { status:'none' } / { status:'insufficient' }.
+export const getComparativeRank = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/rank`, options);
+
+// Run the pairwise Elo tournament (synchronous; returns the finished ranking).
+// opts: { providerId?, model?, rounds? }.
+export const runComparativeRank = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/rank`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight run.
+export const getReaderPanelStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/status`, options);
+
+export const readerPanelSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/editorial/panel/run/progress`;
 
 // ---- Perspective rewrite (#1290 — rewrite a passage in another POV + analyze) ----
 // Stored alternate-POV rewrites + cast (for the picker) + per-rewrite stale flags:
@@ -787,6 +894,13 @@ export const getReverseOutlineStatus = (seriesId, options = {}) =>
 
 export const pipelineReverseOutlineSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/reverse-outline/generate/progress`;
+
+// ---- Voice fingerprint matrix (#2194) ----
+// The full issues×metrics fingerprint vector + deterministic drift result:
+// { seriesId, config, wells, columns, gatedOff, issueCount, threshold, matrix,
+//   series, outliers }. Read-only, no LLM cost — drives the dedicated matrix view.
+export const getVoiceFingerprint = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/voice-fingerprint`, options);
 
 // ---- Continuity Bible (established-facts ledger) ----
 // The stored ledger: { facts, stale, status }. `status:'none'` when never

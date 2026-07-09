@@ -14,7 +14,8 @@
  * boundary in autoRunner.js, which routes failures through a finalizer.
  */
 
-import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
+import { getStage } from '../promptService.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
@@ -25,6 +26,8 @@ import { computeIssueTargets, assessSynopsisScope } from '../../lib/issueLength.
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderTickingClock } from '../../lib/storyArc.js';
+import { filterCanonForIssue } from '../../lib/storyBible.js';
+import { usableInputTokens, trimContextToBudget, CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -82,6 +85,29 @@ function shapeNeighborForIdeaPrompt(iss) {
   return beats ? { ...base, beats } : { ...base, synopsis };
 }
 
+// Resolve an issue's position within its volume plus its immediate siblings —
+// the shared ordering contract behind both the idea-stage neighbor context and
+// the prose-stage cross-issue continuity. Loads WITHOUT run history: neighbor
+// resolution only needs id / position / stage content, never the (potentially
+// large) per-stage runHistory arrays. Returns raw issue records so each caller
+// can shape them for its own template. An ungrouped issue (no season) or one
+// that isn't found in its volume yields `idx: -1` and null siblings.
+async function resolveVolumeNeighbors(series, issue) {
+  const seasonId = issue.seasonId;
+  if (!seasonId) return { volumeIssues: [], idx: -1, prior: null, next: null };
+  const allIssues = await listIssues({ seriesId: series.id, withHistory: false });
+  const volumeIssues = allIssues
+    .filter((i) => i.seasonId === seasonId)
+    .sort(compareIssuesByPosition);
+  const idx = volumeIssues.findIndex((i) => i.id === issue.id);
+  return {
+    volumeIssues,
+    idx,
+    prior: idx > 0 ? volumeIssues[idx - 1] : null,
+    next: idx >= 0 && idx < volumeIssues.length - 1 ? volumeIssues[idx + 1] : null,
+  };
+}
+
 // Mirrors the writer's working frame when drafting beats: whole-series arc
 // + parent volume + immediate-neighbor issues. Other text stages (prose,
 // comicScript, teleplay) don't need it — they derive from beats which
@@ -136,15 +162,9 @@ async function buildIdeaContextAugment(series, issue, seedOverride = '') {
     };
   }
 
-  const allIssues = await listIssues({ seriesId: series.id });
-  const volumeIssues = allIssues
-    .filter((i) => i.seasonId === season.id)
-    .sort(compareIssuesByPosition);
-  const idx = volumeIssues.findIndex((i) => i.id === issue.id);
-  const priorIssue = idx > 0 ? shapeNeighborForIdeaPrompt(volumeIssues[idx - 1]) : null;
-  const nextIssue = idx >= 0 && idx < volumeIssues.length - 1
-    ? shapeNeighborForIdeaPrompt(volumeIssues[idx + 1])
-    : null;
+  const { volumeIssues, idx, prior, next } = await resolveVolumeNeighbors(series, issue);
+  const priorIssue = shapeNeighborForIdeaPrompt(prior);
+  const nextIssue = shapeNeighborForIdeaPrompt(next);
   const positionInVolume = idx >= 0
     ? { ordinal: idx + 1, total: volumeIssues.length }
     : null;
@@ -186,6 +206,111 @@ async function buildIdeaContextAugment(series, issue, seedOverride = '') {
     priorIssue,
     nextIssue,
     priorVolume,
+  };
+}
+
+// Target size of the previous issue's prose tail (in chars) before token
+// budgeting. ~2000 chars ≈ the last few paragraphs — enough for the model to
+// pick up the closing beat + voice at the seam, matching autonovel's
+// last-~2000-char injection. The budgeter trims below this on a small window.
+const PRIOR_PROSE_TAIL_CHARS = 2_000;
+// Fraction of the resolved usable input budget the two continuity blocks may
+// consume in total, split across the prior-prose tail and the next-issue beats.
+// Continuity is a NICE-TO-HAVE relative to the bible + source material, so it
+// yields first on a tight window rather than crowding out the actual beats.
+const CONTINUITY_BUDGET_FRACTION = 0.25;
+// When both blocks are present, the prior-prose tail keeps priority (voice-at-
+// the-seam is the higher-value signal); the next-issue beats reclaim whatever
+// the trimmed tail leaves unused.
+const PRIOR_TAIL_SHARE = 0.6;
+
+/**
+ * Extract the last `maxChars` of an issue's prose, cut on a paragraph boundary
+ * when one falls in the last third of the slice so the tail reads as a coherent
+ * passage rather than mid-sentence. Returns '' for absent/blank prose so the
+ * template's `{{#priorIssueProseTail}}` section simply doesn't render (no fake
+ * continuity — issue task #3).
+ */
+function extractProseTail(text, maxChars = PRIOR_PROSE_TAIL_CHARS) {
+  const s = String(text ?? '').trim();
+  const cap = Math.max(0, Math.floor(maxChars));
+  if (!s || cap === 0) return '';
+  if (s.length <= cap) return s;
+  const slice = s.slice(s.length - cap);
+  // Prefer starting at a paragraph break so the tail opens cleanly — but only
+  // if that break isn't so late it throws away most of the budget.
+  const nl = slice.indexOf('\n\n');
+  const body = nl >= 0 && nl < cap * 0.33 ? slice.slice(nl + 2) : slice;
+  return body.trim();
+}
+
+/**
+ * Head of the next issue's beat sheet (idea stage) — its opening beats, so this
+ * issue can END so it hands off to them. Prefers the expanded beats
+ * (`idea.output`), falls back to the synopsis (`idea.input`); '' when neither
+ * exists so the block doesn't render.
+ */
+function extractNextIssueBeats(iss) {
+  if (!iss) return '';
+  return (iss.stages?.idea?.output || '').trim() || (iss.stages?.idea?.input || '').trim();
+}
+
+/**
+ * Cross-issue prose continuity (#2177 / CWQE Phase 12). Only the `prose` stage
+ * uses it: inject the PREVIOUS issue's actual closing prose (last ~2000 chars)
+ * and the NEXT issue's opening beats so chapter boundaries flow and the voice
+ * carries across units — the gap autonovel closed by feeding the prior chapter's
+ * tail + next chapter's outline head into every draft.
+ *
+ * Both blocks are token-budgeted via `contextBudget.js` so a small-context model
+ * degrades by trimming, not erroring. When the prior issue's prose doesn't exist
+ * yet (non-linear / parallel generation, or this is the first issue of the
+ * volume) the block simply doesn't render — no fabricated continuity.
+ *
+ * Same neighbor resolution as `buildIdeaContextAugment`: sort the volume's issues
+ * by canonical position and take the immediate siblings. An ungrouped issue (no
+ * season) has no resolvable neighbors, so it returns empty blocks.
+ */
+async function buildProseContextAugment(series, issue, options = {}) {
+  const empty = { priorIssueProseTail: '', nextIssueBeats: '', hasNeighborContinuity: false };
+
+  const { prior, next } = await resolveVolumeNeighbors(series, issue);
+  const priorProse = prior ? stageContentOf(prior.stages?.prose) : '';
+  const rawBeats = extractNextIssueBeats(next);
+  if (!priorProse && !rawBeats) return empty;
+
+  // Token-budget both blocks so they degrade by trimming on a small window
+  // rather than blowing the prompt. Resolve the prose stage's planning window
+  // (best-effort — a runtime provider fallback isn't reflected, matching every
+  // other budgeting caller) and reserve a fraction of the usable input for
+  // continuity. usableInputTokens already substitutes a conservative floor for a
+  // null/zero window, so no extra fallback is needed here.
+  const { contextWindow } = await resolveStageContext('pipeline-prose', {
+    providerOverride: options.providerId,
+    providerDefault: options.providerIdDefault,
+    modelOverride: options.model,
+    modelDefault: options.modelIdDefault,
+  }).catch(() => ({ contextWindow: null }));
+  const usableTokens = usableInputTokens({ contextWindow });
+  const continuityChars = Math.max(0, Math.floor(usableTokens * CONTINUITY_BUDGET_FRACTION)) * CHARS_PER_TOKEN;
+
+  // Prose tail keeps priority; next beats reclaim whatever the tail doesn't use.
+  // The tail must be trimmed from its HEAD (keep the actual CLOSING of the prior
+  // issue — the seam the template tells the model to flow from), so size it via
+  // extractProseTail (which keeps the end) rather than trimContextToBudget (which
+  // keeps the head and would discard the literal final lines on a small window).
+  // Never grow past PRIOR_PROSE_TAIL_CHARS just because the window is large.
+  const tailBudget = rawBeats ? Math.floor(continuityChars * PRIOR_TAIL_SHARE) : continuityChars;
+  const priorIssueProseTail = priorProse
+    ? extractProseTail(priorProse, Math.min(PRIOR_PROSE_TAIL_CHARS, tailBudget))
+    : '';
+  const beatsBudget = continuityChars - priorIssueProseTail.length;
+  const nextIssueBeats = rawBeats ? trimContextToBudget(rawBeats, Math.max(0, beatsBudget)) : '';
+
+  return {
+    priorIssueProseTail,
+    nextIssueBeats,
+    hasNeighborContinuity: !!(priorIssueProseTail || nextIssueBeats),
   };
 }
 
@@ -369,6 +494,16 @@ function buildIssueScopeText(issue, sourceMaterials, seedInput) {
  * Visual stages aren't included — text templates don't need rendered images.
  */
 function buildStageContext({ series, canon, world, issue, stageId, seedInput, sourceStageIds }) {
+  // Reveal-gated canon / spoiler scoping (#2178). Filter the writer-facing canon
+  // to this issue's reveal horizon BEFORE it's scoped or rostered: a canon fact
+  // gated to a later issue is dropped (or reduced to its spoiler-free
+  // `surfaceDescriptor`) so the drafting prompt can't leak a reveal early. Both
+  // the full-record character block AND the compact world roster are filtered —
+  // they read the same universe arrays, so filtering one is not enough. Absent
+  // gate fields = always visible (full backward compat). The judge (#2167) and
+  // editorial checks bypass this and receive the FULL canon.
+  const revealCanon = filterCanonForIssue(canon, issue.number);
+  const revealWorld = world ? { ...world, ...filterCanonForIssue(world, issue.number) } : world;
   const stages = {};
   for (const id of TEXT_STAGE_IDS) {
     if (id === stageId) break; // only include stages BEFORE the current one
@@ -391,8 +526,8 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   // named in the issue's source text. Only the roster-backed stages are scoped
   // (see ROSTER_BACKED_STAGES); the idea stage keeps the full cast.
   const scopedCharacters = ROSTER_BACKED_STAGES.has(stageId)
-    ? scopeCharactersForIssue(canon?.characters || [], buildIssueScopeText(issue, sourceMaterials, seedInput))
-    : (canon?.characters || []);
+    ? scopeCharactersForIssue(revealCanon.characters, buildIssueScopeText(issue, sourceMaterials, seedInput))
+    : revealCanon.characters;
   // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
   // per-issue text prompts reference named entities without paying the full
   // canon-block token cost. The roster carries the REST of the cast — everyone
@@ -405,8 +540,8 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   const scopedCharacterNames = new Set(
     scopedCharacters.map((c) => (c?.name || '').trim().toLowerCase()).filter(Boolean),
   );
-  const worldEntitiesSummary = world
-    ? (renderEntitiesSummary(world, {
+  const worldEntitiesSummary = revealWorld
+    ? (renderEntitiesSummary(revealWorld, {
       maxPerKind: { characters: Infinity },
       excludeCharacterNames: scopedCharacterNames,
     }) || '(none)')
@@ -420,7 +555,11 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
       // conventions) into the free-text styleNotes the template already renders,
       // so prose/script generation honors house style with no new template
       // variable (and thus no stage-prompt migration). See composeStyleNotes.
-      styleNotes: composeStyleNotes(series),
+      // The Le Guin prose-craft doctrine (#2175) rides along in the same fold,
+      // but only for the prose-writing stages (prose/comicScript/teleplay) — the
+      // `idea` beat-sheet stage is outlining, not drafting, so sentence-level
+      // craft rules would be noise there.
+      styleNotes: composeStyleNotes(series, { proseCraft: ROSTER_BACKED_STAGES.has(stageId) }),
       universeId: series.universeId || '',
       characters: scopedCharacters,
     },
@@ -441,12 +580,265 @@ function buildStageContext({ series, canon, world, issue, stageId, seedInput, so
   };
 }
 
+// Stages the calibrated judge (#2167) can score — the only stages the
+// multi-candidate draft gate (#2169) applies to. `idea` is an outline, not a
+// judged draft, so it's never gated.
+const JUDGEABLE_STAGES = new Set(['prose', 'comicScript', 'teleplay']);
+
+/**
+ * Resolve the multi-candidate draft-gate config for a stage (#2169, CWQE
+ * Phase 5). Reads `draftAttempts` / `draftGateThreshold` from the stage config
+ * (Prompts page / stage-config.json), with an explicit per-call `options`
+ * override for callers/tests. DEFAULT OFF: a non-judgeable stage or
+ * `draftAttempts <= 1` yields `{ attempts: 1 }` — the single-shot path, byte-for-
+ * byte the pre-#2169 behavior. `threshold` is null unless configured; when set,
+ * the loop early-stops as soon as an attempt meets it, else it runs the full cap
+ * and keeps the best.
+ */
+export function resolveDraftGate(stageId, template, options = {}) {
+  if (!JUDGEABLE_STAGES.has(stageId)) return { attempts: 1, threshold: null };
+  const cfg = getStage(template) || {};
+  const rawAttempts = Number.isInteger(options.draftAttempts) ? options.draftAttempts
+    : (Number.isInteger(cfg.draftAttempts) ? cfg.draftAttempts : 1);
+  const attempts = Math.max(1, Math.min(3, rawAttempts));
+  const threshold = Number.isFinite(options.draftGateThreshold) ? options.draftGateThreshold
+    : (Number.isFinite(cfg.draftGateThreshold) ? cfg.draftGateThreshold : null);
+  return { attempts, threshold: threshold != null ? Math.max(0, Math.min(10, threshold)) : null };
+}
+
+/**
+ * Pick the winning attempt from a scored list (#2169). Highest qualityScore wins;
+ * ties keep the EARLIER attempt (stable — a re-roll must strictly beat the prior
+ * to displace it). When no attempt scored (judge unavailable / all errored), keep
+ * the LAST attempt so generation still produces a draft. Pure — unit-tested.
+ */
+export function pickBestAttempt(attempts) {
+  const list = Array.isArray(attempts) ? attempts : [];
+  if (!list.length) return null;
+  const scored = list.filter((a) => Number.isFinite(a?.qualityScore));
+  if (!scored.length) return list[list.length - 1];
+  return scored.reduce((best, a) => (a.qualityScore > best.qualityScore ? a : best));
+}
+
+// Build the stage template context once (shared by the single-shot + draft-gate
+// paths). Includes the per-stage augments (idea neighbor frame / prose
+// cross-issue continuity). The context is identical across draft-gate attempts —
+// only the LLM sampling differs — so it's built once and reused.
+async function buildGenerationContext({ series, canon, world, issue, stageId, options }) {
+  const issueId = issue.id;
+  const ctx = buildStageContext({
+    series, canon, world, issue, stageId,
+    seedInput: options.seedInput,
+    sourceStageIds: options.sourceStageIds,
+  });
+  if (stageId === 'idea') {
+    Object.assign(ctx, await buildIdeaContextAugment(series, issue, options.seedInput));
+    if (ctx.paddingRisk) {
+      console.log(`⚠️ Pipeline idea — issue=${issueId.slice(0, 8)} terse synopsis vs ${ctx.lengthTargets?.profile} profile: scope-discipline guard engaged`);
+    }
+  } else if (stageId === 'prose') {
+    // Cross-issue prose continuity (#2177): the previous issue's closing prose
+    // tail + the next issue's opening beats, token-budgeted. Covers every full
+    // prose (re)generation path — manual route, autoRunner, and Series Autopilot
+    // — because they all funnel through generateStage.
+    Object.assign(ctx, await buildProseContextAugment(series, issue, options));
+    if (ctx.hasNeighborContinuity) {
+      console.log(`🔗 Pipeline prose — issue=${issueId.slice(0, 8)} continuity: priorTail=${ctx.priorIssueProseTail.length}c nextBeats=${ctx.nextIssueBeats.length}c`);
+    }
+  }
+  return ctx;
+}
+
+// Run the stage LLM once and persist the response as the active stage state.
+// The try/catch is the mandatory persist-then-rethrow boundary: without it an
+// LLM throw would leave the stage stuck in `generating` forever. Returns
+// { issue, stage, runId, output }. Each call with a new runId snapshots the
+// prior active state into runHistory (see snapshotRunHistory) — which is how the
+// draft gate's rejected attempts stay recoverable for inspection/restore.
+async function runStageLLMOnce(issueId, stageId, template, ctx, options) {
+  let result;
+  try {
+    result = await runStagedLLM(template, ctx, {
+      providerOverride: options.providerId,
+      // Soft run-level default (Series Autopilot, #1514): unlike providerId it
+      // loses to a per-stage pin and soft-falls-through to active when
+      // unavailable. Route callers pass providerId (hard); autopilot passes
+      // providerIdDefault (soft).
+      providerDefault: options.providerIdDefault,
+      modelOverride: options.model,
+      // Soft run-level model default (Series Autopilot, #1558): loses to a
+      // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
+      // model (hard); autopilot passes modelIdDefault (soft).
+      modelDefault: options.modelIdDefault,
+      source: 'pipeline-text-stage',
+    });
+  } catch (err) {
+    await updateStage(issueId, stageId, {
+      status: 'error',
+      errorMessage: (err?.message || String(err)).slice(0, 4000),
+    });
+    throw err;
+  }
+
+  const output = (result.content || '').trim();
+  const { issue, stage } = await updateStage(issueId, stageId, {
+    status: output ? 'ready' : 'error',
+    output,
+    lastRunId: result.runId,
+    errorMessage: output ? '' : 'LLM returned empty response',
+  });
+  console.log(`✅ Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} runId=${result.runId} length=${output.length}`);
+  return { issue, stage, runId: result.runId, output };
+}
+
+/**
+ * Multi-candidate draft gate (#2169, CWQE Phase 5). Generate → judge (#2167) →
+ * if the composite qualityScore is below the threshold, regenerate a FRESH draft
+ * (not a revision) up to the attempt cap; keep the best-scoring attempt. Every
+ * attempt persists (rejected ones stay in runHistory), and a per-attempt
+ * scorecard lands on `stage.draftGate` for inspection. Returns the winning
+ * attempt's { issue, stage, runId, output }.
+ *
+ * Cost/budget: when invoked from the autopilot, `options.chargeAction` is billed
+ * once per re-roll (attempt ≥ 2) — return false to STOP re-rolling (daily cos
+ * budget exhausted) and keep the best attempt so far. Route callers pass no
+ * chargeAction, so a manual regenerate is never cos-billed.
+ */
+async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) {
+  // Dynamic import breaks the textStages ↔ pipelineJudge require cycle (the judge
+  // imports scopeCharactersForIssue/stageContentOf from here) and keeps the judge
+  // out of the module-eval graph for callers that never gate.
+  const { judgeIssue } = await import('./pipelineJudge.js');
+  const attempts = [];
+  let last = null;
+
+  for (let i = 0; i < gate.attempts; i += 1) {
+    // Bill one cos action per re-roll (the first attempt is the baseline
+    // generation the caller already accounts for). A false return means the
+    // budget is spent — stop and keep the best attempt so far.
+    if (i > 0 && typeof options.chargeAction === 'function') {
+      const ok = await options.chargeAction({ attempt: i + 1 });
+      if (ok === false) {
+        console.log(`💸 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} budget exhausted after ${i} attempt(s)`);
+        break;
+      }
+    }
+    const started = Date.now();
+    const res = await runStageLLMOnce(issueId, stageId, template, ctx, options);
+    last = res;
+    let qualityScore = null;
+    let overall = null;
+    let slopPenalty = null;
+    if (res.output) {
+      const snap = await judgeIssue(issueId, { stageId, force: true }).catch((err) => {
+        console.warn(`⚠️ Pipeline draft-gate judge failed — issue=${issueId.slice(0, 8)} attempt=${i + 1}: ${err.message}`);
+        return null;
+      });
+      if (snap && snap.status === 'complete') {
+        qualityScore = snap.qualityScore;
+        overall = snap.overall;
+        slopPenalty = snap.slopPenalty;
+      }
+    }
+    attempts.push({ runId: res.runId, output: res.output, input: res.stage?.input || '', qualityScore, overall, slopPenalty });
+    console.log(`🎲 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} attempt=${i + 1}/${gate.attempts} quality=${qualityScore ?? 'n/a'} in ${Date.now() - started}ms`);
+    // Early-stop once a draft clears the configured bar — no point re-rolling.
+    if (gate.threshold != null && qualityScore != null && qualityScore >= gate.threshold) break;
+  }
+
+  const best = pickBestAttempt(attempts);
+  const winnerRunId = best?.runId || last?.runId || null;
+  const stoppedEarly = attempts.length < gate.attempts;
+  let final = last;
+
+  // Restore the winner as the active stage state when the last-generated attempt
+  // wasn't the best. Passing the winner's output explicitly (rather than
+  // restoreStageFromHistory) survives a runHistory cap eviction and keeps the
+  // 'ready' status. The displaced last attempt is snapshotted back into history.
+  if (best && last && best.runId !== last.runId) {
+    const restored = await updateStage(issueId, stageId, {
+      status: best.output ? 'ready' : 'error',
+      input: best.input,
+      output: best.output,
+      lastRunId: best.runId,
+      errorMessage: best.output ? '' : 'LLM returned empty response',
+    });
+    final = { issue: restored.issue, stage: restored.stage, runId: best.runId, output: best.output };
+    // Re-judge the restored winner so the persisted judge snapshot matches the
+    // active content (the loop's final judge scored the now-displaced attempt).
+    await judgeIssue(issueId, { stageId, force: true }).catch(() => {});
+  }
+
+  // Persist the per-attempt scorecard (rejected attempts + their scores) for
+  // inspection — never silently discard. runHistory holds each attempt's text;
+  // this maps runId → score. A no-op lastRunId patch, so no history churn.
+  const draftGate = {
+    winner: winnerRunId,
+    threshold: gate.threshold,
+    stoppedEarly,
+    at: new Date().toISOString(),
+    attempts: attempts.map((a) => ({
+      runId: a.runId,
+      qualityScore: a.qualityScore,
+      overall: a.overall,
+      slopPenalty: a.slopPenalty,
+      rejected: a.runId !== winnerRunId,
+    })),
+  };
+  const stamped = await updateStage(issueId, stageId, { draftGate }).catch((err) => {
+    console.warn(`⚠️ Failed to record draft-gate scorecard for issue ${issueId.slice(0, 8)}: ${err.message}`);
+    return null;
+  });
+  if (stamped && final) final = { issue: stamped.issue, stage: stamped.stage, runId: final.runId, output: final.output };
+
+  console.log(`🏁 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} kept=${best?.qualityScore ?? 'n/a'} from ${attempts.length} attempt(s)${stoppedEarly ? ' (stopped early)' : ''}`);
+  return final;
+}
+
+// Post-generation canon extraction (prose only). Only runs on `prose`: scripts
+// derive from prose so new characters land here first; idea is too short to
+// extract usefully. Non-fatal — prose succeeded, and a noisy extract shouldn't
+// roll back the user's accepted draft. An orphan series (no universeId) skips
+// extraction entirely. Returns the stamped { issue, stage } or null (unchanged).
+async function maybeExtractCanon(issueId, stageId, output, series, options) {
+  if (stageId !== 'prose' || !output || !series.universeId) return null;
+  // Canon extraction follows whichever provider/model drove this prose stage —
+  // the manual route's hard `providerId`/`model` OR Series Autopilot's soft run
+  // defaults (#1514/#1558). Record only the provider actually forwarded so the
+  // Nouns banner can't misreport which provider failed. '' = default/active.
+  const extractProvider = options.providerId ?? options.providerIdDefault;
+  const extractModel = options.model ?? options.modelIdDefault;
+  const provider = extractProvider || '';
+  const model = extractModel || '';
+  const marker = await extractCanonFromProse(series.universeId, {
+    corpus: output,
+    providerOverride: extractProvider,
+    modelOverride: extractModel,
+    parallel: true,
+    autoLock: true,
+    sourceSeriesId: series.id,
+  }).then(
+    ({ results, failures }) => summarizeCanonExtraction({ results, failures, provider, model }),
+    (err) => {
+      console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+      return summarizeCanonExtraction({ error: err, provider, model });
+    },
+  );
+  return updateStage(issueId, 'prose', { canonExtraction: marker }).catch((err) => {
+    console.warn(`⚠️ Failed to record canon-extraction status for issue ${issueId.slice(0, 8)}: ${err.message}`);
+    return null;
+  });
+}
+
 /**
  * Run one text stage end-to-end:
  *   1. Mark the stage `generating`.
  *   2. Build the prompt via promptService.buildPrompt(<template>, ctx).
- *   3. Call the LLM (active provider unless overridden).
- *   4. Persist the response as `stages.<stageId>.output` with `status: ready`.
+ *   3. Call the LLM (active provider unless overridden) — once, OR, when the
+ *      per-stage multi-candidate draft gate (#2169) is enabled, generate/judge/
+ *      re-roll up to `draftAttempts` and keep the best-scoring attempt.
+ *   4. Persist the (winning) response as `stages.<stageId>.output`, then run
+ *      prose canon extraction.
  *
  * Returns { issue, stage, runId }.
  *
@@ -476,120 +868,23 @@ export async function generateStage(issueId, stageId, options = {}) {
 
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
-  const ctx = buildStageContext({
-    series, canon, world, issue, stageId,
-    seedInput: options.seedInput,
-    sourceStageIds: options.sourceStageIds,
-  });
-  if (stageId === 'idea') {
-    Object.assign(ctx, await buildIdeaContextAugment(series, issue, options.seedInput));
-    if (ctx.paddingRisk) {
-      console.log(`⚠️ Pipeline idea — issue=${issueId.slice(0, 8)} terse synopsis vs ${ctx.lengthTargets?.profile} profile: scope-discipline guard engaged`);
-    }
-  }
+  const ctx = await buildGenerationContext({ series, canon, world, issue, stageId, options });
+  const gate = resolveDraftGate(stageId, template, options);
 
-  // Catch only at this boundary so the stage record persists the failure
-  // before the error bubbles to the caller — without this, an LLM throw
-  // would leave the stage stuck in `generating` forever.
-  let result;
-  try {
-    result = await runStagedLLM(template, ctx, {
-      providerOverride: options.providerId,
-      // Soft run-level default (Series Autopilot, #1514): unlike providerId it
-      // loses to a per-stage pin and soft-falls-through to active when
-      // unavailable. Route callers pass providerId (hard); autopilot passes
-      // providerIdDefault (soft).
-      providerDefault: options.providerIdDefault,
-      modelOverride: options.model,
-      // Soft run-level model default (Series Autopilot, #1558): loses to a
-      // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
-      // model (hard); autopilot passes modelIdDefault (soft).
-      modelDefault: options.modelIdDefault,
-      source: 'pipeline-text-stage',
-    });
-  } catch (err) {
-    await updateStage(issueId, stageId, {
-      status: 'error',
-      errorMessage: (err?.message || String(err)).slice(0, 4000),
-    });
-    throw err;
-  }
+  // Draft gate (opt-in, default off) vs the single-shot path. The single-shot
+  // path is byte-for-byte the pre-#2169 behavior so a stage with draftAttempts=1
+  // (the default) is unchanged.
+  const result = gate.attempts > 1
+    ? await runDraftGate({ issueId, stageId, template, ctx, options, gate })
+    : await runStageLLMOnce(issueId, stageId, template, ctx, options);
 
-  const output = (result.content || '').trim();
-  let { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
-    status: output ? 'ready' : 'error',
-    output,
-    lastRunId: result.runId,
-    errorMessage: output ? '' : 'LLM returned empty response',
-  });
-
-  console.log(`✅ Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} runId=${result.runId} length=${output.length}`);
-
-  // Only runs on `prose`: scripts derive from prose so new characters land here
-  // first; idea is too short to extract usefully. Non-fatal — prose succeeded,
-  // and a noisy extract shouldn't roll back the user's accepted draft.
-  // Phase B.4: canon lives on the universe, so an orphan series (no
-  // universeId) silently skips extraction — the prose write still
-  // succeeds, the user just doesn't get the bible auto-populated until
-  // they link a universe.
-  if (stageId === 'prose' && output && series.universeId) {
-    // Stamp new inserts as series-extracted: autoLock prevents a later AI
-    // refine/differentiate from silently rewriting prose-derived canon, and
-    // sourceSeriesId attributes them to the triggering series. Matches the
-    // pre-B.4 `extractAndMergeIntoSeries` semantics so existing-data behavior
-    // is preserved.
-    // Persist the extraction outcome on the prose stage (success, partial, or
-    // failed) so the Nouns UI can surface a banner and let the user retry with
-    // a different provider/model. Still non-fatal — a noisy extract shouldn't
-    // roll back the user's accepted prose draft. The stamp is best-effort: if
-    // even the stamp write fails we only warn (no throw out of the prose path).
-    //
-    // Canon extraction follows whichever provider drove this prose stage — the
-    // manual route's hard `providerId` OR Series Autopilot's run provider
-    // (#1514 moved the autopilot from `providerId` to `providerIdDefault`, so
-    // fall back to it here; without this the just-generated prose would extract
-    // on the global active provider instead of the run's provider). The
-    // extractor takes a hard `providerOverride` (it has no stage pins of its own
-    // to honor), and a throw on an unavailable provider is non-fatal — caught
-    // below into a failed-extraction marker. Record only the provider actually
-    // forwarded (not a series.llm fallback) so the banner can't misreport which
-    // provider failed. Empty string = "used the default/active provider".
-    const extractProvider = options.providerId ?? options.providerIdDefault;
-    // Mirror the provider fallback for the model dimension (#1558): the hard
-    // route model wins, else the autopilot's soft run model — so the just-
-    // generated prose extracts canon on the run's model, not the active
-    // provider's default. extractCanonFromProse takes a hard modelOverride (it
-    // has no stage pins of its own).
-    const extractModel = options.model ?? options.modelIdDefault;
-    const provider = extractProvider || '';
-    const model = extractModel || '';
-    const marker = await extractCanonFromProse(series.universeId, {
-      corpus: output,
-      providerOverride: extractProvider,
-      modelOverride: extractModel,
-      parallel: true,
-      autoLock: true,
-      sourceSeriesId: series.id,
-    }).then(
-      ({ results, failures }) => summarizeCanonExtraction({ results, failures, provider, model }),
-      (err) => {
-        console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
-        return summarizeCanonExtraction({ error: err, provider, model });
-      },
-    );
-    // Use the stamped issue/stage as the return value so callers (and the
-    // socket update) carry the fresh canonExtraction marker, not the pre-stamp
-    // snapshot. Best-effort: on a stamp-write failure we keep the pre-stamp
-    // values.
-    const stamped = await updateStage(issueId, 'prose', { canonExtraction: marker }).catch((err) => {
-      console.warn(`⚠️ Failed to record canon-extraction status for issue ${issueId.slice(0, 8)}: ${err.message}`);
-      return null;
-    });
-    if (stamped) ({ issue: updatedIssue, stage } = stamped);
-  }
+  let { issue: updatedIssue, stage } = result;
+  // Prose canon extraction on the FINAL (winning) output — once, not per attempt.
+  const stamped = await maybeExtractCanon(issueId, stageId, result.output, series, options);
+  if (stamped) ({ issue: updatedIssue, stage } = stamped);
 
   return { issue: updatedIssue, stage, runId: result.runId };
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, buildProseContextAugment, resolveVolumeNeighbors, extractProseTail, extractNextIssueBeats, shapeNeighborForIdeaPrompt, resolveSourceStageIds, scopeCharactersForIssue, buildIssueScopeText, resolveDraftGate, pickBestAttempt, JUDGEABLE_STAGES, STAGE_TO_TEMPLATE, STAGE_LABELS, DEFAULT_FORWARD_SOURCE };

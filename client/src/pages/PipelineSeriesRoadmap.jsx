@@ -12,16 +12,28 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  ArrowLeft, Loader2, Sparkles, ChevronRight, ChevronDown, AlertTriangle, Crown, ChartSpline,
+  ArrowLeft, Loader2, Sparkles, ChevronRight, ChevronDown, AlertTriangle, Crown, ChartSpline, Users, Swords,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
+import ReaderPanelView from '../components/pipeline/ReaderPanelView';
+import ComparativeRankView from '../components/pipeline/ComparativeRankView';
+import TabPills from '../components/ui/TabPills';
 import {
-  getPipelineSeries, getIssueEditorial, analyzeIssueEditorial,
+  getPipelineSeries, getIssueEditorial, analyzeIssueEditorial, getSeriesJudge,
 } from '../services/api';
 import { useSeriesEditorial } from '../hooks/useSeriesEditorial';
+
+// Deep-linkable tabs (?tab=roadmap|panel) — the URL is the source of truth for
+// which view is open, per the ID-based deep-linking convention.
+const TABS = [
+  { id: 'roadmap', label: 'Reader Map', icon: ChartSpline },
+  { id: 'panel', label: 'Reader Panel', icon: Users },
+  { id: 'rank', label: 'Rankings', icon: Swords },
+];
+const TAB_IDS = TABS.map((t) => t.id);
 
 const DIR_TONE = {
   rising: 'text-emerald-300',
@@ -66,7 +78,14 @@ function SectionRow({ section, index }) {
   );
 }
 
-function IssueRow({ entry, onAnalyze, analyzing }) {
+const qualityTone = (v) => {
+  if (v == null) return 'text-gray-400 border-port-border';
+  if (v >= 7) return 'text-port-success border-port-success/40';
+  if (v >= 5) return 'text-port-warning border-port-warning/40';
+  return 'text-port-error border-port-error/40';
+};
+
+function IssueRow({ entry, quality, onAnalyze, analyzing }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -96,6 +115,14 @@ function IssueRow({ entry, onAnalyze, analyzing }) {
           <span className="text-sm text-gray-200 truncate">{entry.title || 'Untitled'}</span>
           {entry.stale ? <AlertTriangle size={12} className="text-port-warning shrink-0" title="Content changed since this was analyzed — re-run" /> : null}
         </button>
+        {quality && quality.judged ? (
+          <span
+            className={`text-[10px] font-bold rounded border px-1.5 py-0.5 shrink-0 ${qualityTone(quality.qualityScore)} ${quality.stale ? 'opacity-60' : ''}`}
+            title={`Quality judge${quality.stale ? ' (stale)' : ''}: overall ${quality.overall} − slop ${quality.slopPenalty}${quality.oneLineVerdict ? `\n${quality.oneLineVerdict}` : ''}`}
+          >
+            Q{quality.qualityScore?.toFixed(1)}
+          </span>
+        ) : null}
         {entry.analyzed ? (
           <div className="flex items-center gap-3 shrink-0">
             <span className="text-[10px] text-gray-500" title="Plot tension / Character progress / Reader valence">
@@ -180,9 +207,34 @@ function CharacterArcs({ protagonist, supportingArcs, protagonistArcText }) {
 export default function PipelineSeriesRoadmap() {
   const { seriesId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [series, setSeries] = useState(null);
   const [loading, setLoading] = useState(true);
   const [perIssueBusy, setPerIssueBusy] = useState(null); // issueId currently analyzing solo
+  const [judgeById, setJudgeById] = useState({}); // issueId → quality-judge score (#2167)
+
+  // Load the series quality-judge scores (composite qualityScore per issue) so
+  // the roadmap shows a Q chip next to each issue. Silent — the judge column is
+  // supplementary, and an un-judged series simply shows no chips.
+  useEffect(() => {
+    let canceled = false;
+    if (!seriesId) return undefined;
+    getSeriesJudge(seriesId, { silent: true })
+      .then((res) => {
+        if (canceled || !res?.scores) return;
+        setJudgeById(Object.fromEntries(res.scores.filter((s) => s.judged).map((s) => [s.issueId, s])));
+      })
+      .catch(() => { /* supplementary — ignore */ });
+    return () => { canceled = true; };
+  }, [seriesId]);
+
+  // A stale/typo'd deep link degrades to the roadmap tab rather than a blank view.
+  const activeTab = TAB_IDS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'roadmap';
+  const setActiveTab = useCallback((id) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'roadmap') next.delete('tab'); else next.set('tab', id);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Shared editorial-roadmap state + batch lifecycle (load, re-attach, SSE,
   // start/cancel, reload). The EditorialRoadmapPanel uses the same hook.
@@ -239,7 +291,7 @@ export default function PipelineSeriesRoadmap() {
           <p className="text-xs text-gray-500 truncate">{series?.name}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {running ? (
+          {activeTab !== 'roadmap' ? null : running ? (
             <button type="button" onClick={cancelAnalysis} className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-port-border text-gray-300 hover:border-port-error/50">
               <Loader2 size={13} className="animate-spin" /> {progressText || 'Analyzing…'} (cancel)
             </button>
@@ -258,6 +310,22 @@ export default function PipelineSeriesRoadmap() {
         </div>
       </div>
 
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        size="sm"
+        ariaLabel="Reader Map view"
+        mobileDropdown
+        mobileSelectId="reader-map-tab"
+      />
+
+      {activeTab === 'panel' ? (
+        <ReaderPanelView seriesId={seriesId} hasContent={coverage.withContent > 0} />
+      ) : activeTab === 'rank' ? (
+        <ComparativeRankView seriesId={seriesId} hasContent={coverage.withContent > 0} />
+      ) : (
+      <>
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)] gap-4 items-start">
         <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -304,6 +372,7 @@ export default function PipelineSeriesRoadmap() {
               <IssueRow
                 key={entry.issueId}
                 entry={entry}
+                quality={judgeById[entry.issueId]}
                 onAnalyze={analyzeOne}
                 analyzing={perIssueBusy === entry.issueId || running}
               />
@@ -313,6 +382,8 @@ export default function PipelineSeriesRoadmap() {
           <p className="text-xs text-gray-500 italic">This series has no issues yet.</p>
         )}
       </section>
+      </>
+      )}
     </div>
   );
 }

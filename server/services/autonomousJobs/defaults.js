@@ -10,6 +10,7 @@
  */
 
 import { DAY, WEEK, JOB_STRUCTURAL_FIELDS, JOB_ADDITIVE_FIELDS } from './constants.js'
+import { LI_JOB_ID } from '../layeredIntelligence.js'
 
 /**
  * Default job definitions
@@ -250,6 +251,22 @@ Phase 4 — Report:
     priority: 'MEDIUM',
     type: 'script',
     scriptHandler: 'goal-check-in',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
+    id: LI_JOB_ID,
+    name: 'Layered Intelligence Loop',
+    description: 'Per-managed-app self-improvement loop. Reads each enabled app\'s goals + telemetry, asks a reasoning model (default: local LLM) for the single most-valuable improvement, and files ONE deduplicated tracker issue (GitHub/GitLab/Jira/PLAN.md) for a coding agent. The model never writes code — every side effect is deterministic. Off by default; enable per app under its config.',
+    category: 'layered-intelligence',
+    interval: 'daily',
+    intervalMs: DAY,
+    enabled: false,
+    priority: 'MEDIUM',
+    type: 'script',
+    scriptHandler: 'layered-intelligence',
     lastRun: null,
     runCount: 0,
     createdAt: null,

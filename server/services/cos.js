@@ -86,6 +86,7 @@ import {
   queueEligibleImprovementTasks,
   generateSelfImprovementTaskForType,
   generateManagedAppImprovementTaskForType,
+  emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
   isCooldownExemptTask,
@@ -764,6 +765,11 @@ async function dequeueNextTask() {
 
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+      // A user-initiated "Run" must re-check live state, never honor a stale
+      // park or convergence signature — resetting both up front guarantees the
+      // detector/reconcile below runs fresh and dispatches on live state (and,
+      // if still idle, re-stamps a park reflecting THIS check).
+      await taskScheduleMod.resetPerpetualForManualRun(request.taskType, targetApp.id);
       // Advance the cooldown eagerly (deduped per app per cycle), but defer
       // binding the active agent until a task is produced — a null result
       // here must not strand `activeAgentId` (issue #978).
@@ -778,6 +784,8 @@ async function dequeueNextTask() {
       }
     } else {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+      // Same fresh-check guarantee as the app-scoped branch above.
+      await taskScheduleMod.resetPerpetualForManualRun(request.taskType);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();
@@ -794,6 +802,13 @@ async function dequeueNextTask() {
         cosEvents.emit('task:ready', task);
         trackSpawn(task);
       }
+    } else if (!task) {
+      // Explicit user "Run" produced no task — surface WHY (parked / transient /
+      // idle) so the trigger isn't a silent no-op. Shared with the sibling
+      // spawnPriority0OnDemand engine so a request drained by either path gets
+      // the same feedback. Because we reset the park BEFORE the fresh detection
+      // above, the outcome classification reflects THIS check.
+      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: taskSchedule.tasks[request.taskType] });
     }
   }
 

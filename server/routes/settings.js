@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -133,6 +133,11 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.codeReview !== undefined) {
     validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
   }
+  // Creative Director scene-evaluation provider/model pin — validate the slice
+  // when present so a malformed picker save can't write a bad provider config.
+  if (req.body?.creativeDirector !== undefined) {
+    validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
+  }
   // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
   // already makes both fields optional + nullable (clearing falls back to the
   // tool default), and the refine enforces both-or-neither — so validate the
@@ -147,6 +152,26 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed interval/cap can't reach disk and break the scheduler.
   if (req.body?.citySnapshots !== undefined) {
     validateRequest(citySnapshotConfigSchema.partial(), req.body.citySnapshots);
+  }
+  // iMessage ingestion config (#2151) — validate the slice when present so a
+  // malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.imessage !== undefined) {
+    validateRequest(imessageConfigSchema.partial(), req.body.imessage);
+  }
+  // Signal ingestion config (#2154) — validate the slice when present so a
+  // malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.signal !== undefined) {
+    validateRequest(signalConfigSchema.partial(), req.body.signal);
+  }
+  // Spotify ingestion config (#2152) — validate the slice when present so a
+  // malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.spotify !== undefined) {
+    validateRequest(spotifyConfigSchema.partial(), req.body.spotify);
+  }
+  // YouTube watch-history scrape config (#2153) — validate the slice when present
+  // so a malformed enabled/interval can't reach disk and break the sync scheduler.
+  if (req.body?.youtube !== undefined) {
+    validateRequest(youtubeConfigSchema.partial(), req.body.youtube);
   }
   // LoRA training config (caption provider + training defaults) — validate
   // the slice when present so a malformed save can't write bad bounds the
@@ -165,6 +190,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // registry would then choke on.
   if (req.body?.pipelineEditorialChecks !== undefined) {
     validateRequest(pipelineEditorialChecksSettingsSchema.partial(), req.body.pipelineEditorialChecks);
+  }
+  // Privacy Center opt-out recheck config (#2145) — validate the slice when
+  // present so a malformed cron / non-boolean autonomy toggle can't reach disk
+  // and break the recheck scheduler. Both autonomy toggles default OFF.
+  if (req.body?.privacy !== undefined) {
+    validateRequest(privacySettingsSchema.partial(), req.body.privacy);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only

@@ -24,6 +24,8 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-overview.md': [
     '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (original)
     'd34d72b8e49ba303d38607845dd87f1c', // post-005 / pre-019 — the hash this migration originally produced
+    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019 / pre-165 (foreshadowing ledger)
+    '612f8b04950e2ff26dd350dd76a062fe', // post-166 / pre-173 (MICE thread nesting)
   ],
   'pipeline-arc-verify.md': [
     '52e31abc93e3105176236fcaa5d1575a', // pre-005 (original)
@@ -33,7 +35,10 @@ export const ACCEPTED_OLD_MD5 = {
     'c6ea28e972ad6e229bafb2d602b4dda3', // pre-005 (original)
     '03f3c874cb80e1c98abcf03168fa7a92', // post-005 / pre-019 — the hash this migration originally produced
   ],
-  'pipeline-season-episodes.md': ['c4928e2a5f833358116b29d2d669888d'], // pre-005 (original); post-005 hash IS the live sample
+  'pipeline-season-episodes.md': [
+    'c4928e2a5f833358116b29d2d669888d', // pre-005 (original)
+    '50c68a29c3ebc275db3095d06bd87100', // post-005 / pre-172 (structure rules)
+  ],
   'pipeline-arc-resolve.md': [
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (original)
     'a8677bbe1eb38f871fb152a5b0fec7c6', // post-005 / pre-019 — the hash this migration originally produced
@@ -43,10 +48,10 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-overview.md':    '74d6c26548660d85fc345b2099c63b6c', // post-173 (MICE thread nesting)
   'pipeline-arc-verify.md':      '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-volume-verify.md':   '49458d36700cb94e34806d536ffe2940', // post-019
-  'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005 (live sample)
+  'pipeline-season-episodes.md': 'a88e8e78a949b7aaf500d03314e2ea0b', // post-172 (structure rules)
   'pipeline-arc-resolve.md':     'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
 };
 

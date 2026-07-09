@@ -60,6 +60,14 @@ The series is grounded in this World Builder world: **{{worldName}}**. When you 
    - **`logline`** — one sentence; what changes in this season.
    - **`endingHook`** — the image or line that pulls the audience into season N+1. Skippable for the final season (leave empty).
    - **`episodeCountTarget`** — integer. Divide `issueCountTarget` across the seasons roughly proportionally to season weight. Sum of all `episodeCountTarget`s should approximately equal `issueCountTarget`.
+6. **Thread nesting (MICE).** Treat each season as opening and closing narrative threads (a Milieu / Inquiry / Character / Event question). Threads must close in the REVERSE order they open — the last thread opened is the first resolved, like nested brackets. In each season's `logline` (or the `summary`), name the thread this season OPENS and the thread it CLOSES, so the nesting is legible: a season that opens a thread it never closes leaves a dangling question; one that closes a thread out of order breaks the nesting.
+7. **Foreshadowing ledger (2–6 seeds).** Plan the major setups the series plants early and pays off later — a Chekhov's gun, a prophecy, an unexplained scar, a withheld secret. For each seed record:
+   - **`label`** — a short name for the seed (e.g. *The locked room*, *Mara's limp*, *The recurring bell*).
+   - **`plantIssue`** — the 1-indexed issue number where it's first planted (subtly introduced, not explained).
+   - **`reinforceIssues`** — 0 or more issue numbers between plant and payoff where the seed is quietly reinforced so the reader doesn't forget it. Keep it a light touch — a glimpse, not a recap.
+   - **`payoffIssue`** — the issue number where it fires / is resolved.
+   - **`note`** — one sentence on what the payoff delivers.
+   - **Distance rule:** `payoffIssue` must be **at least 3 issues after** `plantIssue`. A payoff that lands right after its plant isn't foreshadowing — it's just setup-and-immediate-use. Spread seeds so the reader has time to forget before the gun fires.
 
 ## Output contract
 
@@ -79,6 +87,15 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "logline": "string",
       "endingHook": "string",
       "episodeCountTarget": 8
+    }
+  ],
+  "foreshadowing": [
+    {
+      "label": "string (short name for the planted seed)",
+      "plantIssue": 1,
+      "reinforceIssues": [3],
+      "payoffIssue": 6,
+      "note": "string (what the payoff delivers)"
     }
   ]
 }

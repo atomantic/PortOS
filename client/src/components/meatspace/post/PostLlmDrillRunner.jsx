@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
 import { scorePostLlmDrill } from '../../../services/api';
-import { DRILL_LABELS } from './constants';
-import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI } from './WordplayDrillUI';
+import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
+import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, scoreWordplayResponse } from './WordplayDrillUI';
 
 export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, drillCount, onComplete, isTraining, providerId, model }) {
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -94,44 +94,34 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     e?.preventDefault();
     const responseMs = Date.now() - questionStartRef.current;
 
-    let responseObj;
-    if (drillType === 'story-recall') {
-      responseObj = {
-        questionIndex,
-        answers: items.length > 0 ? items : [inputValue.trim()],
-        responseMs
-      };
-    } else if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
-      responseObj = {
-        questionIndex,
-        items: items,
-        responseMs
-      };
-    } else {
-      responseObj = {
-        questionIndex,
-        prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom || '',
-        response: inputValue.trim(),
-        responseMs
-      };
-    }
+    const responseObj = buildLlmResponseObj({ drillType, questionIndex, items, inputValue, currentPrompt, responseMs });
 
     const newResponses = [...responses, responseObj];
     setResponses(newResponses);
 
-    // Training mode: score this response immediately and show feedback
+    // Training mode: score this response immediately and show feedback.
+    // The four wordplay types (compound-chain/bridge-word/double-meaning/
+    // idiom-twist) delegate to scoreWordplayResponse — the same scoring core
+    // the standalone WordplayTrainer tab uses (issue #2097) — so both entry
+    // points share one scoring path. The other 10 LLM drill types keep their
+    // existing inline path unchanged.
     if (isTraining) {
       setTrainingFeedback({ scoring: true });
-      const scored = await scorePostLlmDrill(
-        drillType, drill, [responseObj], timeLimitMs, providerId, model
-      ).catch(() => null);
-      const fb = scored?.evaluation?.scores?.[0] || {};
-      setTrainingFeedback({
-        scoring: false,
-        score: fb.score ?? scored?.score ?? 0,
-        feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
-        missedExamples: fb.missedExamples,
-      });
+      if (WORDPLAY_LLM_DRILL_TYPES.includes(drillType)) {
+        const result = await scoreWordplayResponse(drillType, drill, responseObj, timeLimitMs, providerId, model);
+        setTrainingFeedback({ scoring: false, ...result });
+      } else {
+        const scored = await scorePostLlmDrill(
+          drillType, drill, [responseObj], timeLimitMs, providerId, model
+        ).catch(() => null);
+        const fb = scored?.evaluation?.scores?.[0] || {};
+        setTrainingFeedback({
+          scoring: false,
+          score: fb.score ?? scored?.score ?? 0,
+          feedback: fb.feedback || scored?.evaluation?.summary || 'No feedback available',
+          missedExamples: fb.missedExamples,
+        });
+      }
       return;
     }
 
@@ -476,7 +466,7 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   );
 }
 
-function getPrompts(drill) {
+export function getPrompts(drill) {
   if (!drill) return [];
   switch (drill.type) {
     case 'word-association': return drill.questions || [];
@@ -495,6 +485,47 @@ function getPrompts(drill) {
     case 'reframe': return drill.situations || [];
     default: return [];
   }
+}
+
+// Pure per-type response-object builder — the shape scorePostLlmDrill and the
+// server's finishDrill counterpart key off of. Every shape stamps
+// `questionIndex` so the server can pair a response with its originating
+// prompt/challenge/scenario by explicit index rather than array position —
+// array position broke pairing for hosts (e.g. the standalone WordplayTrainer
+// tab) that submit one response at a time wrapped in a single-item array
+// (fixed in 0a60c8457, "pair wordplay responses with correct challenge by
+// index"). Regressing this field silently mis-scores every response.
+export function buildLlmResponseObj({ drillType, questionIndex, items, inputValue, currentPrompt, responseMs }) {
+  if (drillType === 'story-recall') {
+    return {
+      questionIndex,
+      answers: items.length > 0 ? items : [inputValue.trim()],
+      responseMs,
+    };
+  }
+  if (drillType === 'verbal-fluency' || drillType === 'compound-chain' || drillType === 'alternative-uses') {
+    return {
+      questionIndex,
+      // Compound Chain's root word (undefined/dropped for the other two
+      // items-based types) — needed so a completed training round can
+      // persist a readable per-question prompt (issue #2114), matching the
+      // standalone WordplayTrainer tab's compound-chain result shape.
+      prompt: currentPrompt?.rootWord,
+      items,
+      responseMs,
+    };
+  }
+  return {
+    questionIndex,
+    // Bridge Word puzzles have no rootWord/word/idiom field, only `clues` —
+    // without this fallback the persisted per-question prompt silently fell
+    // through to '' for this mode (issue #2114, same bug fixed in the
+    // standalone WordplayTrainer tab).
+    prompt: currentPrompt?.prompt || currentPrompt?.setup || currentPrompt?.category || currentPrompt?.rootWord || currentPrompt?.word || currentPrompt?.idiom
+      || (currentPrompt?.clues || []).join(' / ') || '',
+    response: inputValue.trim(),
+    responseMs,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

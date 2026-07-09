@@ -127,6 +127,40 @@ export function prepareWindowsSafeSpawn(command, args, isWin32 = IS_WIN32) {
   return { command, args };
 }
 
+/**
+ * Compose `resolveWindowsExecutable` + `prepareWindowsSafeSpawn` into the single
+ * `{ command, args }` pair a caller should hand to `spawn()` under the default
+ * `shell: false`. This is the canonical fix for spawning a bare npm-installed
+ * CLI provider (`opencode`, `codex`, `claude`, …) — a `.cmd`/`.bat` shim on
+ * Windows — safely: resolve the bare name to its explicit-extension path, then
+ * wrap a `.cmd`/`.bat` target as `cmd.exe /c <path> <args>` (see the two
+ * helpers' docstrings for why a direct `.cmd` spawn fails post-CVE-2024-27980
+ * and why `shell:true` is unsafe).
+ *
+ * Every terminal condition off-Windows is a no-op: `resolveWindowsExecutable`
+ * returns `null` (so the bare `command` is kept) and `prepareWindowsSafeSpawn`
+ * returns `{ command, args }` unchanged — POSIX callers get exactly what they
+ * passed in.
+ *
+ * Resolution reads `searchEnv.PATH`/`.Path` — pass the actual env the child
+ * will run under (after merging a provider's `envVars`) so a per-provider PATH
+ * override is honored; defaults to `process.env`.
+ *
+ * The `server/services/runner.js`, `visionCli.js`, and `cliProviderRun.js`
+ * paths pre-date this helper and still inline the two-step form; new callers
+ * (the Chief-of-Staff agent spawners) use this instead.
+ *
+ * @param {string} command - bare command name, or an existing path
+ * @param {string[]} args
+ * @param {NodeJS.ProcessEnv} [searchEnv] - env to read PATH from; defaults to `process.env`
+ * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
+ * @returns {{ command: string, args: string[] }} launchable pair for `spawn()`
+ */
+export function prepareCliSpawn(command, args, searchEnv = process.env, isWin32 = IS_WIN32) {
+  const resolved = resolveWindowsExecutable(command, isWin32, searchEnv) || command;
+  return prepareWindowsSafeSpawn(resolved, args, isWin32);
+}
+
 // cmd.exe metacharacters that act as command separators / redirection /
 // grouping on its raw command line.
 const CMD_METACHAR_RE = /[&|<>^()]/g;
@@ -180,16 +214,25 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * ConPTY handle), leaking it — so any non-ChildProcess killable always uses
  * its own `.kill()` instead, on every platform.
  *
+ * `signal` applies to the **POSIX** branch only (`SIGTERM` default → the
+ * graceful-then-`SIGKILL`-escalation pattern callers expect). On Windows there
+ * is no real POSIX signal — `taskkill /T /F` force-kills the whole tree
+ * regardless — so the arg is ignored there. A caller that wraps a `.cmd`/`.bat`
+ * shim via `prepareCliSpawn` (its child is a `cmd.exe /c …` parent) MUST use
+ * this rather than `child.kill()`, or on Windows only the `cmd.exe` shim dies
+ * and the real CLI child is orphaned.
+ *
  * @param {import('child_process').ChildProcess} child
+ * @param {NodeJS.Signals} [signal] - POSIX signal to send (default `SIGTERM`); ignored on Windows
  */
-export function killProcessTree(child) {
+export function killProcessTree(child, signal = 'SIGTERM') {
   if (IS_WIN32 && child.pid && child instanceof ChildProcess) {
     child.killed = true;
     spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true })
       .on('error', () => {})
       .unref();
   } else {
-    child.kill('SIGTERM');
+    child.kill(signal);
   }
 }
 

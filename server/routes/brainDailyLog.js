@@ -7,8 +7,9 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { dailyLogSettingsSchema } from '../lib/brainValidation.js';
+import { dailyLogSettingsSchema, activityDigestSettingsSchema } from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
+import * as activityDigest from '../services/activityDigest.js';
 
 const router = Router();
 
@@ -74,6 +75,25 @@ router.post('/daily-log/sync-obsidian', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/brain/daily-log/digest-settings
+ * Activity-digest (auto-draft) configuration. Registered BEFORE /:date so the
+ * literal path isn't captured by the date param.
+ */
+router.get('/daily-log/digest-settings', asyncHandler(async (req, res) => {
+  const settings = await activityDigest.getSettings();
+  res.json(settings);
+}));
+
+/**
+ * PUT /api/brain/daily-log/digest-settings
+ */
+router.put('/daily-log/digest-settings', asyncHandler(async (req, res) => {
+  const data = validateRequest(activityDigestSettingsSchema, req.body || {});
+  const next = await activityDigest.updateSettings(data);
+  res.json(next);
+}));
+
+/**
  * GET /api/brain/daily-log/:date (accepts 'today')
  */
 router.get('/daily-log/:date', asyncHandler(async (req, res) => {
@@ -96,6 +116,19 @@ router.post('/daily-log/:date/append', asyncHandler(async (req, res) => {
   }
   const entry = await journal.appendJournal(date, text, { source });
   res.json({ date, entry });
+}));
+
+/**
+ * POST /api/brain/daily-log/:date/draft — manual "draft today now".
+ * Direct user action, so it runs regardless of the scheduler's enabled flag and
+ * doesn't advance the scheduler cursor. Uses the configured provider/model when
+ * one is set (LLM narrative), else the non-LLM structured summary.
+ */
+router.post('/daily-log/:date/draft', asyncHandler(async (req, res) => {
+  const date = await resolveJournalDate(req.params.date);
+  const result = await activityDigest.runDigestForDate(date);
+  const entry = await journal.getJournal(date);
+  res.json({ ...result, entry });
 }));
 
 /**

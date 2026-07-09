@@ -94,6 +94,12 @@ export const getUsage = () => request('/usage');
 export const getUsageRaw = () => request('/usage/raw');
 export const resetUsage = () => request('/usage', { method: 'DELETE' });
 
+// Claude Code subscription rate-limit usage (parsed from the CLI `/usage` output).
+// Callers own their own inline error UI, so default to silent to avoid a toast
+// on machines without the `claude` CLI.
+export const getClaudeCodeUsage = ({ refresh = false, ...options } = {}) =>
+  request(`/usage/claude-code${refresh ? '?refresh=1' : ''}`, { silent: true, ...options });
+
 // Backup
 export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
@@ -246,7 +252,15 @@ export const searchDatadogErrors = (instanceId, serviceName, environment, fromTi
 
 // JIRA
 export const getJiraInstances = () => request('/jira/instances');
-export const getJiraProjects = (instanceId) => request(`/jira/instances/${instanceId}/projects`);
+export const getJiraProjects = (instanceId, options) => request(`/jira/instances/${instanceId}/projects`, options);
+export const getJiraBoards = (instanceId, projectKey, options) =>
+  request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/boards`, options);
+export const getJiraBoardSprints = (instanceId, boardId, options) =>
+  request(`/jira/instances/${instanceId}/boards/${encodeURIComponent(boardId)}/sprints`, options);
+export const searchJiraEpics = (instanceId, projectKey, query, options) =>
+  request(`/jira/instances/${instanceId}/projects/${encodeURIComponent(projectKey)}/epics?q=${encodeURIComponent(query || '')}`, options);
+export const getJiraIssue = (instanceId, issueKey, options) =>
+  request(`/jira/instances/${instanceId}/issues/${encodeURIComponent(issueKey)}`, options);
 export const getMySprintTickets = (instanceId, projectKey, options) => request(`/jira/instances/${instanceId}/my-sprint-tickets/${projectKey}`, options);
 export const getJiraBoardColumns = (instanceId, projectKey, boardId, options) =>
   request(`/jira/instances/${instanceId}/board-columns/${projectKey}${boardId ? `?boardId=${encodeURIComponent(boardId)}` : ''}`, options);
@@ -299,6 +313,27 @@ export const getInsightNarrative = () => request('/insights/narrative');
 export const refreshInsightNarrative = (providerId, model) => request('/insights/narrative/refresh', {
   method: 'POST',
   body: JSON.stringify({ providerId, model })
+});
+
+// Goal effectiveness scorecard (#2157)
+export const getGoalScorecard = () => request('/insights/goal-scorecard');
+export const computeGoalScorecard = (weekStart) => request('/insights/goal-scorecard/compute', {
+  method: 'POST',
+  body: JSON.stringify(weekStart ? { weekStart } : {})
+});
+export const refreshGoalScorecardNarrative = (providerId, model) => request('/insights/goal-scorecard/narrative', {
+  method: 'POST',
+  body: JSON.stringify({ providerId, model })
+});
+export const getGoalScorecardRules = () => request('/insights/goal-scorecard/rules');
+export const saveGoalScorecardRules = (overrides) => request('/insights/goal-scorecard/rules', {
+  method: 'PUT',
+  body: JSON.stringify(overrides ?? {})
+});
+export const getGoalScorecardSettings = () => request('/insights/goal-scorecard/settings');
+export const updateGoalScorecardSettings = (partial) => request('/insights/goal-scorecard/settings', {
+  method: 'PUT',
+  body: JSON.stringify(partial ?? {})
 });
 
 // Media - Server media devices

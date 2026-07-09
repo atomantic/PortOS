@@ -47,6 +47,11 @@ import gsdRoutes from './routes/gsd.js';
 import catalogRoutes from './routes/catalog.js';
 import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
+import timelineRoutes from './routes/timeline.js';
+import imessageRoutes from './routes/imessage.js';
+import signalRoutes from './routes/signal.js';
+import spotifyRoutes from './routes/spotify.js';
+import youtubeRoutes from './routes/youtube.js';
 import notificationsRoutes from './routes/notifications.js';
 import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
@@ -111,6 +116,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import musicVideoRoutes from './routes/musicVideo.js';
 import moodBoardRoutes from './routes/moodBoard.js';
+import privacyRoutes from './routes/privacy.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
 import authorsRoutes from './routes/authors.js';
@@ -165,7 +171,12 @@ import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
+import { startImessageScheduler } from './services/imessageScheduler.js';
+import { startSignalScheduler } from './services/signalScheduler.js';
+import { startSpotifyScheduler } from './services/spotifyScheduler.js';
+import { startYoutubeScheduler } from './services/youtubeScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
 import { getSettings as getInitSettings } from './services/settings.js';
@@ -175,12 +186,15 @@ import { startUpdateScheduler, clearStaleUpdateInProgress, processUpdateMarker }
 import { captureBootCommit } from './services/installState.js';
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
+import { startActivityDigestScheduler } from './services/activityDigestScheduler.js';
+import { startTwinEnrichmentScheduler } from './services/twinEnrichmentScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './services/pipeline/seriesAutopilot.js';
 import { startOrphanShellGc } from './services/importerOrphanGc.js';
 import { startImageRefsGc } from './services/imageRefsGc.js';
+import { startImageCleanTmpGc } from './services/imageCleanTmpGc.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './services/meatspacePostReminder.js';
@@ -470,6 +484,11 @@ app.use('/api/feeds', feedsRoutes);
 app.use('/api/catalog', catalogRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
+app.use('/api/timeline', timelineRoutes);
+app.use('/api/imessage', imessageRoutes);
+app.use('/api/signal', signalRoutes);
+app.use('/api/spotify', spotifyRoutes);
+app.use('/api/youtube', youtubeRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain/import', brainImportRoutes);
@@ -520,6 +539,7 @@ app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
+app.use('/api/privacy', privacyRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/authors', authorsRoutes);
@@ -577,6 +597,14 @@ recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recover
 recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
+// Initialize activity-digest scheduler — OFF by default; drafts daily-log
+// auto-summaries from the Human Activity timeline only when the user enables it
+// (Settings → Daily Log → Activity Digest). Silent + no LLM calls until then.
+startActivityDigestScheduler();
+// Initialize twin-enrichment scheduler — LLM-free daily rollup of observed
+// taste + chronotype evidence from the Human Activity timeline (#2156). No
+// provider calls; the AI interpretation is a separate explicit-button action.
+startTwinEnrichmentScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
 initBrainMemoryBridge();
 // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
@@ -590,15 +618,38 @@ initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: $
 registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
 // Initialize backup scheduler for daily data backups
 startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+// Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
+// re-runs the broker scan + opt-out pass when the user opts in via
+// Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
+startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
+// Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
+// the user opts in via Settings → iMessage (needs macOS Full Disk Access) (#2151).
+startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
+// Initialize Signal sync scheduler — OFF by default; only reads the SQLCipher
+// chat DB (via the keychain-wrapped key) when the user opts in via
+// Settings → Signal (#2154).
+startSignalScheduler().catch(err => console.error(`❌ Signal sync scheduler init failed: ${err.message}`));
+// Initialize Spotify sync scheduler — OFF by default; only polls the
+// recently-played API when the user connects Spotify + opts in via
+// Settings → Spotify (#2152).
+startSpotifyScheduler().catch(err => console.error(`❌ Spotify sync scheduler init failed: ${err.message}`));
+// Initialize YouTube watch-history sync scheduler — OFF by default; only scrapes
+// the signed-in history page in the managed browser when the user opts in via
+// Settings → YouTube (#2153).
+startYoutubeScheduler().catch(err => console.error(`❌ YouTube sync scheduler init failed: ${err.message}`));
 // Periodically GC orphan zero-issue/zero-canon importer shells left by an
 // abandoned analyze (issue #727).
 startOrphanShellGc();
 // Periodically GC orphan staged init/reference upload images that pile up in
 // data/image-refs on every i2i/edit render and are never cleaned up (issue #1214).
 startImageRefsGc();
+// Periodically GC the Image Cleaner's GPU-clean temp working files (init/render/
+// mask/original) that land in data/image-clean-tmp and are never long-lived
+// (issue #2264). Age-gate only — nothing here is referenced after the fetch.
+startImageCleanTmpGc();
 // Warm the catalog user-type registry from the user-type store (Postgres as of
 // #1001; the settings.json slice under the escape hatch) before any catalog
 // request can land, so user-defined types validate + mint ids immediately on

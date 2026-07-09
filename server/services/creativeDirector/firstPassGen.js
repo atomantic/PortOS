@@ -33,7 +33,7 @@ import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
-import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
+import { resolveAspectDimensions } from '../../lib/creativeDirectorPresets.js';
 import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
 
 // Keep the derived portrait prompt bounded — enough descriptive text to render
@@ -231,7 +231,7 @@ export async function enqueueFirstPassSceneFrames(project) {
   // the worker's own default (undefined → 1024x1024) for an unrecognized
   // aspectRatio rather than throwing, matching this function's best-effort
   // contract.
-  const { width, height } = ASPECT_PRESETS[project.aspectRatio] || {};
+  const { width, height } = resolveAspectDimensions(project.aspectRatio, {});
 
   const enqueued = [];
   const skipped = [];

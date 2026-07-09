@@ -20,6 +20,7 @@ import { join, dirname } from 'path';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
+import { ServerError } from './errorHandler.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -694,6 +695,149 @@ export const loadMediaModels = () => {
     }
   }
   return cached;
+};
+
+// Bust the boot-only cache so the next loadMediaModels() re-reads the file.
+// The registry is cached at module scope (videoGen/imageGen import it
+// synchronously at boot), so a runtime add/edit/remove must invalidate the
+// cache or the change 400s ("Unknown model") until a server restart — the
+// exact gotcha called out in issue #2124. Returns the freshly-loaded registry.
+export const reloadMediaModels = () => {
+  cached = null;
+  return loadMediaModels();
+};
+
+// Persist a registry object to disk and swap it in as the cache. The cache is
+// only replaced AFTER a successful write, so a persist failure leaves the live
+// cache untouched (the mutators build an immutable `next` rather than editing
+// the shared cache in place). Single-user trust model → no file lock needed.
+const persistRegistry = (reg) => {
+  ensureDir(REGISTRY_FILE);
+  writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + '\n');
+  cached = reg;
+  return reg;
+};
+
+// A user-added entry (from the "add from HuggingFace" flow) carries
+// `source: 'user'`. Shipped built-ins have no `source` (or a non-'user' one
+// like 'trained' won't appear here). Only user entries are editable/removable
+// through the API — built-ins are read-only (the registry is their source of
+// truth + they round-trip through the shipped-defaults upgrade machinery).
+export const isUserModelEntry = (entry) => entry?.source === 'user';
+
+// Locate a model entry by id, returning `{ entry, list, listKey, idx }` or null.
+// Scans the CURRENT platform's video list + the image list — NOT the other
+// platform's video list. The other platform's rows aren't visible to
+// getVideoModels()/the render path on this install, and scanning both would
+// make patch/remove ambiguous when a shared media-models.json (macOS+Windows
+// peer) legitimately holds the same custom id in both platform lists — a
+// remove(id) meant for the Windows row would hit the macOS row first. `listKey`
+// ('macos' | 'windows' | 'image') lets the mutators rebuild just that list.
+const findModelLocation = (reg, id) => {
+  const videoKey = IS_WIN ? 'windows' : 'macos';
+  const lists = [
+    [videoKey, reg.video?.[videoKey]],
+    ['image', reg.image],
+  ];
+  for (const [listKey, list] of lists) {
+    if (!Array.isArray(list)) continue;
+    const idx = list.findIndex((m) => m?.id === id);
+    if (idx >= 0) return { entry: list[idx], list, listKey, idx };
+  }
+  return null;
+};
+
+// Rebuild the registry with one list replaced — shallow everywhere except the
+// swapped array, so we neither deep-clone the whole registry nor mutate the
+// live cache before the write succeeds.
+const withList = (reg, listKey, nextList) =>
+  listKey === 'image'
+    ? { ...reg, image: nextList }
+    : { ...reg, video: { ...reg.video, [listKey]: nextList } };
+
+// Add a user model entry to the registry. `kind` selects the target list:
+// 'video' → the current platform's video list; 'image' → the image list.
+// Throws on a duplicate id (a repo already added). Persists + hot-reloads.
+export const addUserModelEntry = (entry, { kind }) => {
+  if (!entry || typeof entry.id !== 'string') {
+    throw new ServerError('Model entry must carry a string id', { status: 400, code: 'BAD_MODEL_ENTRY' });
+  }
+  if (kind !== 'video' && kind !== 'image') {
+    throw new ServerError(`Unknown model kind "${kind}" — expected "image" or "video".`, { status: 400, code: 'BAD_MODEL_KIND' });
+  }
+  const reg = loadMediaModels();
+  const listKey = kind === 'video' ? (IS_WIN ? 'windows' : 'macos') : 'image';
+  // Conflict-check against the ACTIVE-on-this-install lists — the current
+  // platform's video list + the image list — via findModelLocation (which
+  // scopes to exactly those). This rejects a collision between the current
+  // video list and the image list (both mutable through the same :id-only
+  // PATCH/DELETE, so a dup would make one row unaddressable), while still
+  // allowing the same custom video id to be added on the OTHER platform's list
+  // of a shared media-models.json (that list isn't scanned, so no false 409).
+  if (findModelLocation(reg, entry.id)) {
+    throw new ServerError(
+      `A model with id "${entry.id}" is already in this install's registry (repo already added?). Remove it first to re-add.`,
+      { status: 409, code: 'MODEL_ALREADY_EXISTS' },
+    );
+  }
+  const current = (listKey === 'image' ? reg.image : reg.video?.[listKey]) || [];
+  // Also reject a duplicate REPO in the target list — the same weights under a
+  // different id (e.g. the UI placeholder `notapalindrome/ltx23-mlx-av-q4`,
+  // already shipped as the built-in `ltx23_distilled_q4`) would otherwise add a
+  // second pickable row for identical weights. Only meaningful when the entry
+  // carries a repo.
+  if (typeof entry.repo === 'string' && entry.repo.trim()
+    && current.some((m) => typeof m?.repo === 'string' && m.repo === entry.repo)) {
+    throw new ServerError(
+      `The HuggingFace repo "${entry.repo}" is already in this install's ${kind} registry (possibly as a built-in). It's already available in the model picker.`,
+      { status: 409, code: 'MODEL_REPO_ALREADY_EXISTS' },
+    );
+  }
+  persistRegistry(withList(reg, listKey, [...current, entry]));
+  console.log(`📝 Added user media model: ${entry.id} (${kind}) → ${entry.repo || '?'}`);
+  return entry;
+};
+
+// Guard shared by patch/remove: locate a USER entry by id or throw (404 for
+// unknown, 403 for a built-in). Returns the `findModelLocation` result.
+const requireUserEntry = (reg, id, verb) => {
+  const loc = findModelLocation(reg, id);
+  if (!loc) throw new ServerError(`Unknown model id: ${id}`, { status: 404, code: 'NOT_FOUND' });
+  if (!isUserModelEntry(loc.entry)) {
+    throw new ServerError(
+      `Model "${id}" is a built-in — built-in models can't be ${verb} through this surface.`,
+      { status: 403, code: 'MODEL_READONLY' },
+    );
+  }
+  return loc;
+};
+
+// Patch a USER model entry's editable fields (name, steps, guidance). Refuses
+// built-ins and unknown ids. Persists + hot-reloads. Returns the updated entry.
+const USER_EDITABLE_FIELDS = new Set(['name', 'steps', 'guidance']);
+export const patchUserModelEntry = (id, patch) => {
+  const reg = loadMediaModels();
+  const loc = requireUserEntry(reg, id, 'edited');
+  const cleanPatch = {};
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (USER_EDITABLE_FIELDS.has(k) && v !== undefined) cleanPatch[k] = v;
+  }
+  const updated = { ...loc.entry, ...cleanPatch, id, source: 'user' };
+  const nextList = loc.list.map((m, i) => (i === loc.idx ? updated : m));
+  persistRegistry(withList(reg, loc.listKey, nextList));
+  console.log(`📝 Patched user media model: ${id}`);
+  return updated;
+};
+
+// Remove a USER model entry. Refuses built-ins and unknown ids. Persists +
+// hot-reloads. Returns `{ ok, id }`.
+export const removeUserModelEntry = (id) => {
+  const reg = loadMediaModels();
+  const loc = requireUserEntry(reg, id, 'removed');
+  const nextList = loc.list.filter((_, i) => i !== loc.idx);
+  persistRegistry(withList(reg, loc.listKey, nextList));
+  console.log(`🗑️ Removed user media model: ${id}`);
+  return { ok: true, id };
 };
 
 const platformBroken = (broken) =>

@@ -7,10 +7,11 @@ import fs from 'fs/promises';
 import { createHttpClient } from '../lib/httpClient.js';
 import path from 'path';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { hostFromOriginUrl } from '../lib/workTracker.js';
 
 const JIRA_CONFIG_FILE = path.join(PATHS.data, 'jira.json');
 
-const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+export const escapeJql = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 /**
  * Get JIRA instances configuration
@@ -55,7 +56,7 @@ export async function upsertInstance(instanceId, instanceData) {
     name: instanceData.name,
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
-    apiToken: instanceData.apiToken, // PAT (Personal Access Token)
+    apiToken: instanceData.apiToken, // Server/DC PAT (sent as Bearer) or Cloud API token (sent as Basic email:token)
     tokenUpdatedAt: (instanceData.apiToken !== existing?.apiToken) ? new Date().toISOString() : (existing?.tokenUpdatedAt || new Date().toISOString()),
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -75,6 +76,29 @@ export async function deleteInstance(instanceId) {
 }
 
 /**
+ * Whether a JIRA instance is Jira Cloud (*.atlassian.net) vs Server / Data Center.
+ * Uses the shared no-throw host extractor (returns null on unparseable input) so a
+ * hand-edited jira.json can't throw here.
+ */
+export function isCloudInstance(baseUrl) {
+  const host = hostFromOriginUrl(baseUrl);
+  return !!host && /(^|\.)atlassian\.net$/i.test(host);
+}
+
+/**
+ * Build the Authorization header for a JIRA instance.
+ * - Jira Cloud authenticates a personal API token via HTTP Basic (base64 "email:token").
+ * - Jira Server / Data Center authenticates a Personal Access Token (PAT) via Bearer.
+ * Detected by host so Server and Cloud instances can coexist during a migration.
+ */
+export function jiraAuthHeader(instance) {
+  if (isCloudInstance(instance.baseUrl)) {
+    return `Basic ${Buffer.from(`${instance.email}:${instance.apiToken}`).toString('base64')}`;
+  }
+  return `Bearer ${instance.apiToken}`;
+}
+
+/**
  * Create HTTP client for JIRA instance
  */
 export function createJiraClient(instance) {
@@ -85,7 +109,7 @@ export function createJiraClient(instance) {
   const base = createHttpClient({
     baseURL: instance.baseUrl,
     headers: {
-      'Authorization': `Bearer ${instance.apiToken}`,
+      'Authorization': jiraAuthHeader(instance),
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
@@ -93,21 +117,38 @@ export function createJiraClient(instance) {
     allowSelfSigned: instance.allowSelfSigned
   });
 
-  // Detect expired token (JIRA returns HTML login page instead of JSON)
+  // Expired/invalid token surfaces differently per instance type, so detection is
+  // instance-type-aware alongside jiraAuthHeader — both funnel to one friendly error:
+  //   - Jira Server/DC: 200 response whose body is the HTML login page (not JSON).
+  //   - Jira Cloud: JSON 401 (createHttpClient throws HTTP 401), never an HTML page.
+  const isCloud = isCloudInstance(instance.baseUrl);
+  const expiredTokenError = () => {
+    const err = new Error('JIRA token expired or invalid — regenerate your token (Server: PAT; Cloud: API token).');
+    err.status = 401;
+    return err;
+  };
+
+  // Success path: only Server serves an HTML login page in place of JSON, so gate the
+  // heuristic to Server — a Cloud JSON payload can't accidentally trip on "<!DOCTYPE".
   const checkToken = res => {
-    if (typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
-      const err = new Error('JIRA token expired — received login page instead of JSON. Regenerate your PAT.');
-      err.status = 401;
-      throw err;
+    if (!isCloud && typeof res.data === 'string' && res.data.includes('<!DOCTYPE')) {
+      throw expiredTokenError();
     }
     return res;
   };
 
+  // Error path: a 401 (Cloud's expired-token signal, and Server's when it 401s rather
+  // than serving HTML) maps to the same friendly error. Other errors bubble unchanged.
+  const mapAuthError = err => {
+    if (err?.status === 401) throw expiredTokenError();
+    throw err;
+  };
+
   return {
-    get: (...args) => base.get(...args).then(checkToken),
-    post: (...args) => base.post(...args).then(checkToken),
-    put: (...args) => base.put(...args).then(checkToken),
-    delete: (...args) => base.delete(...args).then(checkToken)
+    get: (...args) => base.get(...args).then(checkToken, mapAuthError),
+    post: (...args) => base.post(...args).then(checkToken, mapAuthError),
+    put: (...args) => base.put(...args).then(checkToken, mapAuthError),
+    delete: (...args) => base.delete(...args).then(checkToken, mapAuthError)
   };
 }
 
@@ -229,6 +270,64 @@ export async function createTicket(instanceId, ticketData) {
 }
 
 /**
+ * Search JIRA issues by an arbitrary JQL string. STRICT variant — lets fetch
+ * errors bubble so a caller can distinguish a transient API failure from a
+ * legitimately empty result set (the CLAUDE.md sentinel rule). `fields` selects
+ * the returned issue fields; `maxResults` caps the page.
+ *
+ * Returns `[{ key, summary, description, status, statusCategory, labels, updated, url }]`.
+ */
+export async function searchIssues(instanceId, jql, { fields = 'summary,status,labels,updated,description,resolutiondate', maxResults = 100 } = {}) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get('/rest/api/2/search', {
+    params: { jql, fields, maxResults }
+  });
+
+  return (response.data.issues || []).map(issue => ({
+    key: issue.key,
+    summary: issue.fields.summary || '',
+    description: issue.fields.description || '',
+    status: issue.fields.status?.name || null,
+    statusCategory: issue.fields.status?.statusCategory?.name || null,
+    labels: issue.fields.labels || [],
+    updated: issue.fields.updated || null,
+    resolutiondate: issue.fields.resolutiondate || null,
+    url: `${instance.baseUrl}/browse/${issue.key}`
+  }));
+}
+
+/**
+ * Add labels to an existing JIRA ticket without disturbing its other labels.
+ * Jira's field-update API takes an `update.labels` array of `{ add: <label> }`
+ * ops, so this is additive (unlike PUT-ing `fields.labels`, which replaces).
+ */
+export async function addLabels(instanceId, ticketId, labels = []) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const toAdd = (Array.isArray(labels) ? labels : []).filter(l => typeof l === 'string' && l.trim());
+  if (toAdd.length === 0) return { success: true, ticketId };
+
+  const client = createJiraClient(instance);
+  await client.put(`/rest/api/2/issue/${encodeURIComponent(ticketId)}`, {
+    update: { labels: toAdd.map(name => ({ add: name })) }
+  });
+
+  return { success: true, ticketId };
+}
+
+/**
  * Update JIRA ticket
  */
 export async function updateTicket(instanceId, ticketId, updates) {
@@ -334,9 +433,13 @@ export async function transitionTicket(instanceId, ticketId, transitionId) {
 }
 
 /**
- * Get tickets assigned to user in current sprint for a project
+ * Fetch tickets assigned to the current user in the active sprint for a project —
+ * STRICT variant that lets fetch errors bubble. Used by the issue-reconcile JIRA
+ * gatherer, which must distinguish a transient API failure (skip, don't park) from
+ * a legitimately empty sprint ([], a valid answer) — the sentinel rule in CLAUDE.md.
+ * The UI-facing `getMyCurrentSprintTickets` wraps this and swallows to [] instead.
  */
-export async function getMyCurrentSprintTickets(instanceId, projectKey) {
+export async function fetchMyCurrentSprintTickets(instanceId, projectKey) {
   const config = await getInstances();
   const instance = config.instances[instanceId];
 
@@ -349,26 +452,34 @@ export async function getMyCurrentSprintTickets(instanceId, projectKey) {
   // JQL to find tickets assigned to current user in active sprint for the project
   const jql = `project = "${escapeJql(projectKey)}" AND assignee = currentUser() AND sprint in openSprints() ORDER BY priority DESC, updated DESC`;
 
-  try {
-    const response = await client.get('/rest/api/2/search', {
-      params: {
-        jql,
-        fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
-        maxResults: 50
-      }
-    });
+  const response = await client.get('/rest/api/2/search', {
+    params: {
+      jql,
+      fields: 'summary,status,priority,issuetype,assignee,updated,customfield_10106',
+      maxResults: 50
+    }
+  });
 
-    return response.data.issues.map(issue => ({
-      key: issue.key,
-      summary: issue.fields.summary,
-      status: issue.fields.status.name,
-      statusCategory: issue.fields.status.statusCategory?.name,
-      priority: issue.fields.priority?.name,
-      issueType: issue.fields.issuetype?.name,
-      storyPoints: issue.fields.customfield_10106,
-      updated: issue.fields.updated,
-      url: `${instance.baseUrl}/browse/${issue.key}`
-    }));
+  return response.data.issues.map(issue => ({
+    key: issue.key,
+    summary: issue.fields.summary,
+    status: issue.fields.status.name,
+    statusCategory: issue.fields.status.statusCategory?.name,
+    priority: issue.fields.priority?.name,
+    issueType: issue.fields.issuetype?.name,
+    storyPoints: issue.fields.customfield_10106,
+    updated: issue.fields.updated,
+    url: `${instance.baseUrl}/browse/${issue.key}`
+  }));
+}
+
+/**
+ * Get tickets assigned to user in current sprint for a project.
+ * Swallows fetch errors to [] so a JIRA blip never breaks the Kanban UI.
+ */
+export async function getMyCurrentSprintTickets(instanceId, projectKey) {
+  try {
+    return await fetchMyCurrentSprintTickets(instanceId, projectKey);
   } catch (error) {
     console.warn(`⚠️ JIRA sprint fetch failed for project ${projectKey}: ${error.message}`);
     // Return empty array on error to avoid breaking the UI
@@ -536,6 +647,74 @@ export async function searchEpics(instanceId, projectKey, query) {
   }));
 }
 
+/**
+ * List agile boards for a JIRA project (Scrum + Kanban).
+ * Powers the app-config "detect boards" picker so a boardId is chosen from live
+ * data instead of hand-typed — which is how a boardId goes stale across a
+ * Server→Cloud migration (the id is reassigned). The Agile board list paginates,
+ * so walk every page until isLast.
+ */
+export async function getBoards(instanceId, projectKey) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const boards = [];
+  let startAt = 0;
+  let guard = 0;
+  for (;;) {
+    const response = await client.get('/rest/agile/1.0/board', {
+      params: { projectKeyOrId: projectKey, maxResults: 50, startAt }
+    });
+    const values = response.data.values || [];
+    for (const b of values) {
+      boards.push({
+        id: b.id,
+        name: b.name,
+        type: b.type,
+        projectKey: b.location?.projectKey || null
+      });
+    }
+    // isLast is authoritative; the empty-page and guard checks are belt-and-suspenders
+    // so a misbehaving API can't spin this loop forever.
+    if (response.data.isLast || values.length === 0 || ++guard > 40) break;
+    startAt += values.length;
+  }
+  return boards;
+}
+
+/**
+ * Fetch a single issue by key (lightweight — summary/type/status only).
+ * Used by the app-config picker to validate that a configured epicKey still
+ * resolves on the instance (keys can vanish/change across a migration). Throws
+ * (bubbles to a 4xx) when the key doesn't resolve — the caller treats that as
+ * "no longer resolves".
+ */
+export async function getIssue(instanceId, issueKey) {
+  const config = await getInstances();
+  const instance = config.instances[instanceId];
+
+  if (!instance) {
+    throw new Error(`JIRA instance ${instanceId} not found`);
+  }
+
+  const client = createJiraClient(instance);
+  const response = await client.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}`, {
+    params: { fields: 'summary,status,issuetype' }
+  });
+  const fields = response.data.fields || {};
+  return {
+    key: response.data.key,
+    summary: fields.summary || '',
+    status: fields.status?.name || null,
+    issueType: fields.issuetype?.name || null
+  };
+}
+
 export default {
   getInstances,
   saveInstances,
@@ -543,13 +722,18 @@ export default {
   deleteInstance,
   testConnection,
   getProjects,
+  getBoards,
+  getIssue,
   createTicket,
+  searchIssues,
+  addLabels,
   updateTicket,
   addComment,
   getTransitions,
   deleteTicket,
   transitionTicket,
   getMyCurrentSprintTickets,
+  fetchMyCurrentSprintTickets,
   getBoardColumns,
   buildColumnsFromBoardConfig,
   buildColumnsFromStatuses,

@@ -2,6 +2,7 @@ import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { getUserTimezone } from '../lib/timezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
 export const CACHE_DIR = join(PATHS.calendar, 'cache');
@@ -83,15 +84,20 @@ export async function getEvents(options = {}) {
   const accounts = await listAccounts();
   const accountMap = new Map(accounts.map(a => [a.id, a]));
 
+  const accountIds = files
+    .filter(file => file.endsWith('.json'))
+    .map(file => file.replace('.json', ''))
+    .filter(id => UUID_RE.test(id));
+  // Load each account's cache in parallel rather than serializing one disk read
+  // per account before aggregating the combined calendar view.
+  const caches = await Promise.all(
+    accountIds.map(async id => ({ id, cache: await loadCache(id) }))
+  );
   let allEvents = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const fileAccountId = file.replace('.json', '');
-    if (!UUID_RE.test(fileAccountId)) continue;
-    const cache = await loadCache(fileAccountId);
-    let events = cache.events.map(e => ({ ...e, accountId: e.accountId || fileAccountId }));
+  for (const { id, cache } of caches) {
+    let events = cache.events.map(e => ({ ...e, accountId: e.accountId || id }));
     events = filterDeclinedAndCancelled(events);
-    events = filterByEnabledSubcalendars(events, accountMap.get(fileAccountId));
+    events = filterByEnabledSubcalendars(events, accountMap.get(id));
     allEvents.push(...events);
   }
   allEvents = filterBySearch(allEvents, search);
@@ -217,6 +223,11 @@ export async function syncAccount(accountId, io, options = {}) {
     await logCalendarTouchpoints(accountId, newEvents).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
 
+    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+    // fail the sync. Idempotent on (source, dedupe_key). Machine-local.
+    await recordCalendarActivity(account, newEvents).catch((err) =>
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+
     io?.emit('calendar:sync:completed', { accountId, newEvents: uniqueNew.length, pruned, status: providerStatus });
     console.log(`📅 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
@@ -292,4 +303,18 @@ export async function logCalendarTouchpoints(accountId, events = []) {
     console.log(`🤝 Auto-logged ${result.created} calendar touchpoint(s) for account ${accountId}`);
   }
   return result;
+}
+
+// Record synced calendar events into the machine-local human-activity timeline
+// (#2150). Only finished, non-declined/cancelled events count as activity.
+// Idempotent (dedupe on source + event id). humanActivity is imported
+// dynamically to keep this hook lazy (mirrors the tribe auto-log path).
+export async function recordCalendarActivity(account, events = []) {
+  const { calendarActivityCandidates, recordEvents } = await import('./humanActivity.js');
+  // The user's configured timezone anchors offset-less values (Google all-day
+  // events normalize to "YYYY-MM-DDT00:00:00") so they land on the right local day.
+  const timezone = await getUserTimezone();
+  const candidates = calendarActivityCandidates(account, events, Date.now(), timezone);
+  if (candidates.length === 0) return { recorded: 0, skipped: 0 };
+  return recordEvents(candidates);
 }

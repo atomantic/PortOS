@@ -34,6 +34,7 @@ export * as notesValidation from './notesValidation.js';
 export * as peerSyncValidation from './peerSyncValidation.js';
 export * as pipelineValidation from './pipelineValidation.js';
 export * as postValidation from './postValidation.js';
+export * as privacyValidation from './privacyValidation.js';
 export * as socketValidation from './socketValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
@@ -56,6 +57,7 @@ export * from './creativeDirectorPrompts.js';
 export * as editorial from './editorial/index.js';
 export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
+export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
 export * from './seasonStructure.js';
 export * from './seriesCharacterArc.js';
@@ -95,6 +97,7 @@ export * from './promptPartials.js';
 export * from './promptRunner.js';
 export * from './promptTemplate.js';
 export * from './providerModels.js';
+export * from './opencodeConfig.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
 // mediaModels.js — namespace it so the barrel surface is unambiguous.
 export * as runners from './runners.js';
@@ -179,6 +182,7 @@ export * from './appResolver.js';
 export * from './capabilityMap.js';
 export * from './civitai.js';
 export * from './huggingfaceLora.js';
+export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
 export * from './localLlmDisk.js';
 export * from './localModelHeuristics.js';
@@ -189,10 +193,14 @@ export * from './navManifest.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';
+export * from './postMultiplicationLadder.js';
+export * from './postProgression.js';
+export * from './postStreak.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './telegramClient.js';
 export * from './textUtils.js';
+export * from './vaultCrypto.js';
 
 // === Model & config ===
 export * from './browserConfig.js';
@@ -202,6 +210,7 @@ export * from './pgTimestamp.js';
 export * from './pgTools.js';
 export * from './platform.js';
 export * from './ports.js';
+export * from './signalCrypto.js';
 export * from './timezone.js';
 export * from './tribeCadence.js';
 export * from './tribeMatch.js';
@@ -209,6 +218,7 @@ export * from './viteAllowedHosts.js';
 
 // === General utilities ===
 export * from './apiRegistry.js';
+export * from './arrayUtils.js';
 export * from './asyncMutex.js';
 export * from './authGate.js';
 export * from './domainAutonomy.js';
@@ -216,6 +226,7 @@ export * from './domainBudgets.js';
 export * from './errorHandler.js';
 export * from './lwwTimestamp.js';
 export * from './mapWithConcurrency.js';
+export * from './markedSection.js';
 export * from './objects.js';
 export * from './openapiSpec.js';
 export * from './shellQuote.js';
@@ -230,4 +241,5 @@ export * from './zodCompat.js';
 
 // === Test support (consumed by *.test.js files) ===
 export * from './mockPathsDataRoot.js';
+export * from './settingsTestUtil.js';
 export * from './testHelper.js';

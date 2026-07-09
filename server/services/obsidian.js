@@ -306,6 +306,18 @@ export async function searchNotes(vaultId, query) {
 async function searchDir(rootPath, currentPath, query, countRe, results) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
+  // Kick off this directory's markdown reads concurrently (the disk-latency
+  // win), but keep the ORIGINAL depth-first walk order when pushing results:
+  // iterate entries in readdir order and recurse into a subdir at the exact
+  // point the sequential version would have, so result ordering is unchanged.
+  const contentReads = new Map();
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isFile() && extname(entry.name) === '.md') {
+      contentReads.set(entry.name, readFile(join(currentPath, entry.name), 'utf-8'));
+    }
+  }
+
   for (const entry of entries) {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const fullPath = join(currentPath, entry.name);
@@ -313,38 +325,36 @@ async function searchDir(rootPath, currentPath, query, countRe, results) {
     if (entry.isDirectory()) {
       await searchDir(rootPath, fullPath, query, countRe, results);
     } else if (entry.isFile() && extname(entry.name) === '.md') {
-      const content = await readFile(fullPath, 'utf-8');
+      const content = await contentReads.get(entry.name);
       const contentLower = content.toLowerCase();
       const nameLower = basename(entry.name, '.md').toLowerCase();
       const titleMatch = nameLower.includes(query);
       const contentMatch = contentLower.includes(query);
+      if (!titleMatch && !contentMatch) continue;
 
-      if (titleMatch || contentMatch) {
-        const relativePath = relative(rootPath, fullPath);
-        const { tags } = parseNoteMetadata(content);
+      const relativePath = relative(rootPath, fullPath);
+      const { tags } = parseNoteMetadata(content);
 
-        const snippets = [];
-        if (contentMatch) {
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length && snippets.length < 3; i++) {
-            if (lines[i].toLowerCase().includes(query)) {
-              snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
-            }
+      const snippets = [];
+      if (contentMatch) {
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length && snippets.length < 3; i++) {
+          if (lines[i].toLowerCase().includes(query)) {
+            snippets.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
           }
         }
-
-        // Reset regex lastIndex before reuse
-        countRe.lastIndex = 0;
-        results.push({
-          path: relativePath,
-          name: basename(entry.name, '.md'),
-          folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
-          titleMatch,
-          matchCount: (contentLower.match(countRe) || []).length,
-          snippets,
-          tags
-        });
       }
+
+      countRe.lastIndex = 0;
+      results.push({
+        path: relativePath,
+        name: basename(entry.name, '.md'),
+        folder: dirname(relativePath) === '.' ? '' : dirname(relativePath),
+        titleMatch,
+        matchCount: (contentLower.match(countRe) || []).length,
+        snippets,
+        tags
+      });
     }
   }
 }
@@ -390,6 +400,18 @@ export async function getVaultGraph(vaultId) {
 async function collectNotes(rootPath, currentPath, noteMap, nodes) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
+  // Read this directory's markdown files concurrently, but apply them in the
+  // ORIGINAL depth-first entry order (interleaving subdir recursion at the same
+  // point). noteMap is last-write-wins, so preserving the traversal order keeps
+  // duplicate-basename wikilink resolution identical to the sequential version.
+  const contentReads = new Map();
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isFile() && extname(entry.name) === '.md') {
+      contentReads.set(entry.name, readFile(join(currentPath, entry.name), 'utf-8'));
+    }
+  }
+
   for (const entry of entries) {
     if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
     const fullPath = join(currentPath, entry.name);
@@ -397,7 +419,7 @@ async function collectNotes(rootPath, currentPath, noteMap, nodes) {
     if (entry.isDirectory()) {
       await collectNotes(rootPath, fullPath, noteMap, nodes);
     } else if (entry.isFile() && extname(entry.name) === '.md') {
-      const content = await readFile(fullPath, 'utf-8');
+      const content = await contentReads.get(entry.name);
       const relativePath = relative(rootPath, fullPath);
       const noteName = basename(entry.name, '.md');
       const { tags, wikilinks } = parseNoteMetadata(content);

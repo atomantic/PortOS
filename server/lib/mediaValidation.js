@@ -20,6 +20,45 @@ export const citySnapshotConfigSchema = z.object({
   maxSnapshots: z.number().int().min(10).max(100000).optional()
 });
 
+// iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
+// by default and only reads chat.db when enabled (needs macOS Full Disk Access).
+// Validated as a settings slice on PUT /api/settings; service-side DEFAULT_CONFIG
+// fills any absent field so an install with no `imessage` key still resolves.
+export const imessageConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
+// Signal Desktop ingestion config (#2154) — the `settings.signal` slice. Sync is
+// OFF by default and only reads Signal's SQLCipher-encrypted chat DB (via the
+// keychain-wrapped key) when enabled. Validated as a settings slice on
+// PUT /api/settings; service-side DEFAULT_CONFIG fills any absent field so an
+// install with no `signal` key still resolves (default cadence 60min).
+export const signalConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
+// Spotify listening-history ingestion config (#2152) — the `settings.spotify`
+// slice. Sync is OFF by default and only polls the recently-played API when
+// enabled AND the user has completed OAuth (credentials/tokens live under
+// data/spotify/, not settings). Validated as a settings slice on
+// PUT /api/settings; service-side DEFAULT_CONFIG fills any absent field.
+export const spotifyConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
+// YouTube watch-history ingestion config (#2153) — the `settings.youtube` slice.
+// The scrape is OFF by default and only reads the signed-in history page in the
+// managed browser when enabled. Validated as a settings slice on PUT /api/settings;
+// service-side DEFAULT_CONFIG fills any absent field (default cadence ~8h, since
+// the history page is day-bucketed) so an install with no `youtube` key resolves.
+export const youtubeConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional()
+});
+
 // Shared LoRA-training parameter bounds — used by both the settings-slice
 // defaults and the per-run override on POST /api/lora-training/runs.
 const loraTrainingParamsSchema = z.object({

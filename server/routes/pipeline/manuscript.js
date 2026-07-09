@@ -16,6 +16,7 @@ import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import * as manuscriptReview from '../../services/pipeline/manuscriptReview.js';
 import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
+import * as applyCuts from '../../services/pipeline/applyCuts.js';
 import * as completenessRunner from '../../services/pipeline/manuscriptCompletenessRunner.js';
 import { getReviewWithStaleness } from '../../services/pipeline/editorial/checkRunner.js';
 import { recordTrendSnapshot } from '../../services/pipeline/editorialScore.js';
@@ -84,6 +85,16 @@ const manuscriptReformatSchema = z.object({
   stageId: z.enum(seriesSvc.MANUSCRIPT_TYPES),
   content: z.string().max(issuesSvc.STAGE_OUTPUT_MAX),
   ...providerOverrideShape,
+});
+
+// Adversarial cuts — preview and apply (#2168).
+const manuscriptCutsSchema = z.object({
+  // Which comment ids to apply cuts from. If empty, applies all eligible open cuts.
+  commentIds: z.array(z.string().min(1).max(120)).max(100).optional(),
+  // Filter by cut types. Defaults to SAFE_CUT_TYPES (OVER-EXPLAIN, REDUNDANT).
+  allowTypes: z.array(z.enum(applyCuts.CUT_TYPES)).max(6).optional(),
+  // Whether to only allow safe cut types.
+  safeTypesOnly: z.boolean().optional(),
 });
 
 // Manuscript-completeness editor pass — categorized "finish the draft"
@@ -244,6 +255,67 @@ router.post('/series/:id/manuscript/reformat', asyncHandler(async (req, res) => 
   const result = await manuscriptFix.reformatManuscriptStageText(content, opts)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
+}));
+
+// ---------------------------------------------------------------------------
+// Adversarial cuts (#2168) — batch application of cut-type findings.
+// ---------------------------------------------------------------------------
+
+// Preview cuts — dry-run that returns before/after diffs without applying.
+router.post('/series/:id/manuscript/cuts/preview', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCutsSchema, req.body ?? {});
+  const review = await manuscriptReview.getReview(req.params.id);
+  // Filter to open cut-type comments.
+  let cuts = applyCuts.filterCutComments(review.comments);
+  // If specific comment ids requested, filter to those.
+  if (Array.isArray(body.commentIds) && body.commentIds.length > 0) {
+    const wanted = new Set(body.commentIds);
+    cuts = cuts.filter((c) => wanted.has(c.id));
+  }
+  const opts = {
+    safeTypesOnly: body.safeTypesOnly !== false,
+    allowTypes: Array.isArray(body.allowTypes) ? body.allowTypes : applyCuts.SAFE_CUT_TYPES,
+  };
+  const result = await applyCuts.previewCuts(req.params.id, cuts, opts)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Apply cuts — writes through the serialized stage-write path with snapshots.
+router.post('/series/:id/manuscript/cuts/apply', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(manuscriptCutsSchema, req.body ?? {});
+  const review = await manuscriptReview.getReview(req.params.id);
+  // Filter to open cut-type comments.
+  let cuts = applyCuts.filterCutComments(review.comments);
+  // If specific comment ids requested, filter to those.
+  if (Array.isArray(body.commentIds) && body.commentIds.length > 0) {
+    const wanted = new Set(body.commentIds);
+    cuts = cuts.filter((c) => wanted.has(c.id));
+  }
+  const opts = {
+    safeTypesOnly: body.safeTypesOnly !== false,
+    allowTypes: Array.isArray(body.allowTypes) ? body.allowTypes : applyCuts.SAFE_CUT_TYPES,
+  };
+  const result = await applyCuts.applyCuts(req.params.id, cuts, opts)
+    .catch((err) => { throw mapServiceError(err); });
+  // Mark applied cuts as accepted in the review.
+  const appliedSections = new Set(result.sections.map((s) => `${s.issueId}:${s.stageId}`));
+  const appliedCuts = cuts.filter((c) => {
+    // A cut was applied if it wasn't in the refusedDetails.
+    const refused = result.refusedDetails.some((r) => r.quote === c.anchorQuote);
+    if (refused) return false;
+    // And its section was updated.
+    const key = c.issueId && c.stageId ? `${c.issueId}:${c.stageId}` : null;
+    return key ? appliedSections.has(key) : true;
+  });
+  // Auto-accept applied cuts.
+  for (const c of appliedCuts) {
+    await manuscriptReview.updateComment(req.params.id, c.id, { status: 'accepted' })
+      .catch((err) => console.warn(`⚠️ applyCuts: failed to mark comment ${c.id} accepted: ${err.message}`));
+  }
+  res.json({ ...result, acceptedCount: appliedCuts.length });
 }));
 
 export default router;

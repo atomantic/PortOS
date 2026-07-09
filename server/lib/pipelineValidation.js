@@ -71,6 +71,20 @@ export const writersRoomLiveModeSchema = z.object({
   dailyRenderBudget: z.number().int().min(0).max(10_000).default(20),
 }).strict();
 
+// Voice exemplar / anti-exemplar passages on a Writers Room work (#2179 Writers
+// Room parity). Same shape + caps as the series style guide's voice fields
+// (STYLE_GUIDE_LIMITS in styleGuide.js) — `passage` is the concrete prose
+// anchor ("the tuning fork"), `note` a one-line gloss of what it demonstrates
+// (exemplar) or what's wrong with it (anti-exemplar). `note` is optional; the
+// service sanitizer (sanitizeVoiceExemplars) drops empty passages, trims to the
+// caps, and caps the list at 3 — this wire gate just bounds the shape so a
+// crafted PATCH can't ship an unbounded blob. An explicit `[]` clears the list.
+const writersRoomVoiceExemplarSchema = z.object({
+  passage: z.string().max(2000),
+  note: z.string().max(200).optional(),
+}).strict();
+const writersRoomVoiceExemplarsSchema = z.array(writersRoomVoiceExemplarSchema).max(3);
+
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   kind: writersRoomWorkKindSchema.optional(),
@@ -81,6 +95,8 @@ export const writersRoomWorkUpdateSchema = z.object({
   // the other knobs' defaults and clobber their stored values (Zod 4 .partial()
   // keeps inner defaults — see zodCompat.js). The service field-merges each knob.
   liveMode: partialWithoutDefaults(writersRoomLiveModeSchema).optional(),
+  voiceExemplars: writersRoomVoiceExemplarsSchema.optional(),
+  voiceAntiExemplars: writersRoomVoiceExemplarsSchema.optional(),
 }).strict();
 
 // Cursor-context payload for the live continuation suggest route. The three
@@ -198,6 +214,16 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // Whole-manuscript beat-continuity convergence (#1510) — same bound + 0-skip
   // semantics. Optional + additive so older peers fall through to the default.
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Foundation-quality gate (#2176, CWQE Phase 11). Before drafting, the
+  // autopilot judges the whole foundation (world/characters/arc) against a
+  // weighted rubric and iterates on the weakest dimension until it clears
+  // `foundationThreshold` (a weighted [0,10] score), bounded by
+  // `maxFoundationRounds` (0 = skip the gate). `foundationGate` toggles the gate
+  // (defaults ON — the point of the phase). All three optional + additive so
+  // older peers fall through to the defaults.
+  foundationGate: z.boolean().optional(),
+  foundationThreshold: z.number().min(0).max(10).optional(),
+  maxFoundationRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   // Editorial-checks pause threshold (#1613). When the registry-driven editorial
   // checks pass surfaces ≥ N high-severity findings, the autopilot pauses the run
   // for human review instead of silently proceeding (the downstream health gate is
@@ -212,6 +238,23 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // informational signal — so this is the one autopilot setting that's opt-OUT.
   // Optional + additive so older peers fall through to the default.
   notifyOnPause: z.boolean().optional(),
+  // Autopilot → CD teaser deliverable (CDO Phase 3, #2185). When on, once a comic
+  // issue is text-ready + drafted the autopilot OPTIONALLY mints + starts a
+  // Creative Director teaser/trailer video project seeded from it. Defaults OFF
+  // (opt-in) — producing video is a fresh burst of LLM + render spend. Optional +
+  // additive so older peers fall through to off.
+  produceTeaser: z.boolean().optional(),
+  // Iterate-to-quality revision loop (CWQE Phase 7, #2171). When on, the autopilot
+  // cycles the weakest drafted issue through adversarial cuts + a judge-gated
+  // keep/revert after the editorial-health gate, stopping on plateau /
+  // hedged-convergence / maxCycles. Defaults OFF (opt-in) — a fresh burst of judge
+  // + cut LLM spend. `revisionMaxCycles` is the cost ceiling; `revisionMinCycles`
+  // floors the plateau/hedge stops; `revisionPlateauDelta` is the mean-score
+  // movement below which the series counts as converged. All optional + additive.
+  revisionEnabled: z.boolean().optional(),
+  revisionMinCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionMaxCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionPlateauDelta: z.number().min(0).max(10).optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to
@@ -311,6 +354,22 @@ export const writersRoomExerciseFinishSchema = z.object({
 
 export const writersRoomAnalysisCreateSchema = z.object({
   kind: z.enum(ANALYSIS_KINDS)
+}).strict();
+
+// Start options for the autonomous Polish loop (#2173). All bounds mirror the
+// polish.js runtime clamps so a direct API call can't request an out-of-range
+// run; the runner clamps again defensively.
+export const writersRoomPolishStartSchema = z.object({
+  cycles: z.number().int().min(1).max(3).optional(),
+  plateauThreshold: z.number().min(0).max(100).optional(),
+  cutTargetPercent: z.number().int().min(5).max(20).optional(),
+  minCuts: z.number().int().min(1).max(50).optional(),
+  maxCuts: z.number().int().min(1).max(50).optional(),
+}).strict();
+
+// Manual revert of a work body to an immutable Polish snapshot (#2173).
+export const writersRoomPolishRevertSchema = z.object({
+  snapshotId: z.string().trim().regex(/^wr-snap-[0-9a-f-]+$/i, 'Invalid snapshot id'),
 }).strict();
 
 // Character profile fields are all optional on update so the UI can PATCH
@@ -490,6 +549,40 @@ export const stageConfigUpdateSchema = z.object({
   description: z.string().optional(),
   model: z.string().nullable().optional(),
   provider: z.string().nullable().optional(),
+  // Writer/judge model split (#2167, CWQE Phase 3). A writer stage may pin a
+  // DIFFERENT provider/model to grade its own output — `null`/'' clears the pin
+  // so the judge falls back to the writer provider (see resolveJudgeForStage).
+  // Without these keys the `.strip()` below would silently drop them from the
+  // saved config, so schema parity is required in the same change.
+  judgeProvider: z.string().nullable().optional(),
+  judgeModel: z.string().nullable().optional(),
+  // Multi-candidate draft gate (#2169, CWQE Phase 5). Opt-in, DEFAULT OFF
+  // (draftAttempts 1 = single generation, no gate) because each extra attempt
+  // multiplies generation + judge cost. When > 1, generateStage re-rolls a fresh
+  // draft while the composite qualityScore (#2167) is below draftGateThreshold,
+  // up to the attempt cap, and keeps the best-scoring attempt. `null`/'' clears
+  // the override. Only judgeable stages (prose/comicScript/teleplay) honor it.
+  // Coerce digit-only strings (form inputs) the same way `timeout` does.
+  draftAttempts: z.preprocess(
+    (v) => {
+      if (v === '' || v === null) return null;
+      if (v === undefined) return undefined;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && /^\d+$/.test(v.trim())) return Number(v.trim());
+      return v;
+    },
+    z.number().int().min(1).max(3).nullable().optional(),
+  ),
+  draftGateThreshold: z.preprocess(
+    (v) => {
+      if (v === '' || v === null) return null;
+      if (v === undefined) return undefined;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim())) return Number(v.trim());
+      return v;
+    },
+    z.number().min(0).max(10).nullable().optional(),
+  ),
   timeout: z.preprocess(
     // Treat empty string as a "clear override" (null). Coerce digit-only
     // strings to numbers so form clients that send "900000" still parse —

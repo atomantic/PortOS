@@ -22,9 +22,16 @@ import {
   formatTaskLine,
   formatNotificationLine,
   formatTaskCompletionLine,
+  deriveTaskSpeechLabel,
   wireProactiveTriggers,
   RATE_LIMIT_MS,
 } from './proactiveTriggers.js';
+
+// The swarm block a scheduled claim-issue task's description leads with — the
+// exact scaffolding the voice agent used to recite verbatim.
+const SWARM_DESCRIPTION = `# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel
+
+**This run operates in slashdo \`/do:next --swarm=3\` mode.** The single-issue framing in the task body below is your PER-AGENT playbook, not the shape of the whole run.`;
 
 // Let the fire-and-forget dispatch promise chain settle after a synchronous
 // emit before asserting.
@@ -83,9 +90,54 @@ describe('formatTaskLine', () => {
     expect(formatTaskLine({ description: 'Fix the bug' })).toBe('A new task is ready: Fix the bug.');
   });
 
+  it('speaks the swarm topic, not the raw prompt block', () => {
+    expect(formatTaskLine({ description: SWARM_DESCRIPTION }))
+      .toBe('A new task is ready: claim and ship up to 3 independent issues in parallel.');
+  });
+
   it('returns empty when neither title nor description present', () => {
     expect(formatTaskLine({})).toBe('');
     expect(formatTaskLine(null)).toBe('');
+  });
+});
+
+describe('deriveTaskSpeechLabel', () => {
+  it('strips the swarm block down to its topic', () => {
+    expect(deriveTaskSpeechLabel({ description: SWARM_DESCRIPTION }))
+      .toBe('claim and ship up to 3 independent issues in parallel');
+  });
+
+  it('strips a leading [Tag: App] label from a claim/plan prompt', () => {
+    expect(deriveTaskSpeechLabel({
+      description: '[Claim Issue: PortOS] Claim and ship the next open GitHub issue\n\nPhase 1 …',
+    })).toBe('Claim and ship the next open GitHub issue');
+  });
+
+  it('prefers an explicit title, then a post-run agent summary', () => {
+    expect(deriveTaskSpeechLabel({ title: 'Ship it', description: SWARM_DESCRIPTION })).toBe('Ship it');
+    expect(deriveTaskSpeechLabel({
+      description: SWARM_DESCRIPTION,
+      metadata: { taskSummary: 'Fixed the flaky backup test' },
+    })).toBe('Fixed the flaky backup test');
+  });
+
+  it('falls through a blank title to a real post-run summary', () => {
+    expect(deriveTaskSpeechLabel({
+      title: '   ',
+      metadata: { taskSummary: 'Fixed the flaky backup test' },
+      description: SWARM_DESCRIPTION,
+    })).toBe('Fixed the flaky backup test');
+  });
+
+  it('skips scaffolding-only leading lines to the first real topic', () => {
+    expect(deriveTaskSpeechLabel({ description: '#\n---\nRefactor the widget registry' }))
+      .toBe('Refactor the widget registry');
+  });
+
+  it('returns empty for a missing or empty task', () => {
+    expect(deriveTaskSpeechLabel(null)).toBe('');
+    expect(deriveTaskSpeechLabel({})).toBe('');
+    expect(deriveTaskSpeechLabel({ description: '' })).toBe('');
   });
 });
 
@@ -109,6 +161,11 @@ describe('formatTaskCompletionLine', () => {
       description: 'Fix the flaky backup test\n\nmore detail here',
     });
     expect(line).toBe('Your coding task is done: Fix the flaky backup test.');
+  });
+
+  it('announces the swarm topic on completion, not the prompt block', () => {
+    expect(formatTaskCompletionLine({ status: 'completed', description: SWARM_DESCRIPTION }))
+      .toBe('Your coding task is done: claim and ship up to 3 independent issues in parallel.');
   });
 
   it('reports a blocked task as a failure', () => {

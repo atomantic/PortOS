@@ -66,6 +66,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { broadcastSse, attachSseClient, SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
@@ -98,13 +99,38 @@ import { computeHealth, openBlockers, READINESS_GATES, resolveReadinessGate, sum
 import { getSettings } from '../settings.js';
 import { readReadinessGate, mergeSeverityWeights, resolveBlockingSet } from '../../lib/editorial/index.js';
 import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
+import { judgeIssue, getIssueJudge, getSeriesJudge } from './pipelineJudge.js';
+import { applyCuts, filterSafeCutComments } from './applyCuts.js';
+import { eligibleIssues, getComparativeRank } from './editorial/comparativeRank.js';
+import { buildRevisionBrief } from './editorial/revisionBrief.js';
+import { evaluateRevisionStop, decideKeepRevert } from './editorial/revisionStop.js';
 import { verifyComicScript } from './scriptVerify.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
+import { judgeFoundation, applyFoundationFix, weakestDimension, residualFindings, DEFAULT_FOUNDATION_THRESHOLD } from './foundationJudge.js';
 import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS } from '../notifications.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, cancelRequested, finished,
 //   cleanupTimer, startedAt, mode, options, runState, activeChild }>
 const runs = new Map();
+
+// In-process progress bus (CDO Phase 3, #2185). Every SSE frame the run
+// broadcasts to attached HTTP clients is ALSO emitted here keyed by seriesId, so
+// a SERVER-SIDE consumer — the Creative Director plan-advance loop running an
+// autopilot as one plan step — can observe progress/pause/terminal frames
+// without opening an HTTP/SSE client. SSE behavior is unchanged; this is a
+// parallel tap, not a replacement. Listeners are per-seriesId and short-lived
+// (attached for the life of one plan step), but a busy install could run several
+// concurrently, so lift the default 10-listener cap to avoid a spurious leak
+// warning. The payloads are the exact SSE frames (they carry `type`).
+export const autopilotEvents = new EventEmitter();
+autopilotEvents.setMaxListeners(0);
+
+// The frame `type`s that mean the run reached a terminal/paused state — a
+// server-side consumer settles its plan step on any of these. `complete` (or a
+// dry-run `complete`), `paused` (convergence/budget/child pause), `canceled`
+// (user stop), and `error` (run-ending throw) are exhaustive of the run's exit
+// frames (see the fire-and-forget coordinator in startSeriesAutopilot).
+export const AUTOPILOT_TERMINAL_TYPES = new Set(['complete', 'paused', 'canceled', 'error']);
 
 // Bounded convergence loops — re-verify/re-review at most this many rounds, then
 // pause for human review with the residual findings (see module header). These
@@ -118,6 +144,16 @@ export const MAX_EDITORIAL_ROUNDS = 2;
 // the expensive text/script stage — bounded like the others, then pauses with
 // the residual findings for human review.
 export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
+
+// Foundation-quality gate (CWQE Phase 11, #2176). Before drafting, judge the
+// whole foundation (world / characters / arc) against a weighted rubric and
+// iterate on the weakest dimension until it clears a threshold — bounded like
+// the other convergence loops, then pause with the residual per-dimension
+// findings for human review. Defaults ON for autopilot runs (the point of the
+// phase) but overridable per-run + via the persisted setting. 0 rounds skips
+// the gate entirely (accept the foundation as-is).
+export const MAX_FOUNDATION_ROUNDS = 3;
+export const DEFAULT_FOUNDATION_GATE_ENABLED = true;
 
 // Bounded retry budget for a delegated child runner (#1574). A child (volume
 // beats / text auto-run) can finish with its target stage(s) still empty when
@@ -146,7 +182,28 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
     maxArcVerifyRounds: pick('maxArcVerifyRounds', 'maxArcVerifyRounds', MAX_ARC_VERIFY_ROUNDS),
     maxEditorialRounds: pick('maxEditorialRounds', 'maxEditorialRounds', MAX_EDITORIAL_ROUNDS),
     maxBeatContinuityRounds: pick('maxBeatContinuityRounds', 'maxBeatContinuityRounds', MAX_BEAT_CONTINUITY_ROUNDS),
+    maxFoundationRounds: pick('maxFoundationRounds', 'maxFoundationRounds', MAX_FOUNDATION_ROUNDS),
   };
+}
+
+// Foundation-gate config (#2176): whether the gate runs, and the weighted [0,10]
+// threshold the foundation must clear. Mirror resolveAutopilotRounds — per-run
+// option wins, then the persisted pipelineEditorialChecks setting, then the
+// default. The enable flag defaults ON (the point of the phase); the threshold
+// falls through to DEFAULT_FOUNDATION_THRESHOLD in the loop when unset. Stamped
+// onto run options once at start so the loop, the dry-run plan, and a resume all
+// read the same effective values.
+export function resolveAutopilotFoundationGate(options = {}, settings = null) {
+  if (typeof options?.foundationGate === 'boolean') return options.foundationGate;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (typeof pec?.foundationGate === 'boolean') return pec.foundationGate;
+  return DEFAULT_FOUNDATION_GATE_ENABLED;
+}
+export function resolveAutopilotFoundationThreshold(options = {}, settings = null) {
+  if (Number.isFinite(options?.foundationThreshold)) return options.foundationThreshold;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (Number.isFinite(pec?.foundationThreshold)) return pec.foundationThreshold;
+  return null;
 }
 
 // Resolve the effective editorial-health readiness gate for a run (#1580): an
@@ -190,12 +247,76 @@ export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
   return DEFAULT_NOTIFY_ON_PAUSE;
 }
 
+// Autopilot → CD teaser deliverable (CDO Phase 3, #2185). Once a comic issue is
+// text-ready + drafted, the autopilot can OPTIONALLY mint + start a Creative
+// Director video project (a teaser/trailer) seeded from the issue — the reverse
+// of the CD→autopilot bridge. Defaults OFF: producing video is a fresh burst of
+// LLM + render spend the user must opt into, so existing runs are unchanged.
+// Per-run option wins, then the persisted setting, then false. Stamped onto run
+// options once at start so the resolver, the dry-run plan, and a later resume
+// all read the same effective flag.
+export const DEFAULT_PRODUCE_TEASER = false;
+export function resolveAutopilotProduceTeaser(options = {}, settings = null) {
+  if (typeof options?.produceTeaser === 'boolean') return options.produceTeaser;
+  const pec = settings?.pipelineEditorialChecks || {};
+  if (typeof pec?.produceTeaser === 'boolean') return pec.produceTeaser;
+  return DEFAULT_PRODUCE_TEASER;
+}
+
+// Does THIS run want to produce a teaser deliverable? Gated on the resolved
+// `produceTeaser` flag AND that visuals ran (a teaser is a visual deliverable —
+// pointless on a text-only run).
+export function wantsTeaser(options = {}) {
+  return options.produceTeaser === true && wantsVisual(options);
+}
+
+// Iterate-to-quality revision loop (CWQE Phase 7, #2171). Opt-in per run; when
+// enabled the autopilot cycles the weakest issue through adversarial cuts +
+// judge-gated keep/revert instead of stopping at the editorial-health gate.
+// Defaults OFF — it is a fresh burst of judge + cut LLM spend the user must
+// opt into. minCycles floors the plateau/hedge stops so the loop always runs at
+// least once; maxCycles is the cost ceiling; plateauDelta is the mean-score
+// movement below which the series counts as converged. Per-run option wins, then
+// the persisted pipelineEditorialChecks.revision* setting, then the default.
+export const DEFAULT_REVISION_ENABLED = false;
+export const DEFAULT_REVISION_MIN_CYCLES = 1;
+export const DEFAULT_REVISION_MAX_CYCLES = 2;
+export const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
+export function resolveAutopilotRevision(options = {}, settings = null) {
+  const pec = settings?.pipelineEditorialChecks || {};
+  const bool = (o, s, fallback) => {
+    if (typeof o === 'boolean') return o;
+    if (typeof s === 'boolean') return s;
+    return fallback;
+  };
+  const int = (o, s, fallback) => {
+    if (Number.isInteger(o)) return o;
+    if (Number.isInteger(s)) return s;
+    return fallback;
+  };
+  const num = (o, s, fallback) => {
+    if (Number.isFinite(o)) return o;
+    if (Number.isFinite(s)) return s;
+    return fallback;
+  };
+  const minCycles = int(options?.revisionMinCycles, pec?.revisionMinCycles, DEFAULT_REVISION_MIN_CYCLES);
+  const maxCycles = int(options?.revisionMaxCycles, pec?.revisionMaxCycles, DEFAULT_REVISION_MAX_CYCLES);
+  return {
+    revisionEnabled: bool(options?.revisionEnabled, pec?.revisionEnabled, DEFAULT_REVISION_ENABLED),
+    revisionMinCycles: Math.max(1, minCycles),
+    // maxCycles never below minCycles — a misconfig can't strand the loop unable to run.
+    revisionMaxCycles: Math.max(Math.max(1, minCycles), maxCycles),
+    revisionPlateauDelta: Math.max(0, num(options?.revisionPlateauDelta, pec?.revisionPlateauDelta, DEFAULT_REVISION_PLATEAU_DELTA)),
+  };
+}
+
 // Per-gate copy for the non-convergence pause — shared by the arc-verify and
 // editorial loops so the two messages can't drift.
 const PAUSE_GATES = {
   arc: { label: 'Arc verification', fix: 'Edit the arc/volumes to address them', limit: 'verify-rounds' },
   beatContinuity: { label: 'Beat continuity', fix: 'Edit the affected issue beats', limit: 'beat-continuity-rounds' },
   editorial: { label: 'Editorial review', fix: 'Address them in the manuscript editor', limit: 'editorial-rounds' },
+  foundation: { label: 'Foundation quality', fix: 'Strengthen the world / characters / arc, or lower the threshold', limit: 'foundation-rounds' },
 };
 function convergencePauseReason(gate, maxRounds, blockingCount) {
   const { label, fix, limit } = PAUSE_GATES[gate];
@@ -244,6 +365,23 @@ function divergencePauseReason(gate, blockingCount, rounds) {
   const plural = rounds === 1 ? 'round' : 'rounds';
   return `${label} stopped converging — ${blockingCount} blocking finding(s) and no net progress over `
     + `${rounds} consecutive ${plural} of auto-resolve. Paused for review. ${fix}, then resume.`;
+}
+
+// Foundation gate pause reasons (#2176) — the gate converges on a WEIGHTED
+// SCORE, not a finding count, so it needs its own wording (score vs. threshold)
+// rather than the finding-count phrasing of convergencePauseReason. Shares
+// PAUSE_GATES.foundation so the copy stays aligned with the other gates.
+function foundationPauseReason(maxRounds, score, threshold) {
+  const { label, fix, limit } = PAUSE_GATES.foundation;
+  const plural = maxRounds === 1 ? 'round' : 'rounds';
+  return `${label} couldn't reach the threshold (weighted ${score} < ${threshold}) in ${maxRounds} ${plural} — `
+    + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
+}
+function foundationDivergenceReason(score, threshold, rounds) {
+  const { label, fix } = PAUSE_GATES.foundation;
+  const plural = rounds === 1 ? 'round' : 'rounds';
+  return `${label} stopped improving — weighted ${score} still below ${threshold} with no net gain over `
+    + `${rounds} consecutive ${plural} of auto-fix. Paused for review. ${fix}, then resume.`;
 }
 
 // Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
@@ -470,6 +608,19 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     return { kind: 'verifyArc', reason: 'arc not yet verified this run' };
   }
 
+  // STEP 3.5 — foundation-quality gate (#2176). After the arc/volumes exist and
+  // arc structure is verified, judge the whole foundation (world / characters /
+  // arc) BEFORE the expensive beat/text stages and iterate on the weakest
+  // dimension until it clears the threshold. Once per run (bounded loop happens
+  // in dispatch). Gated on `foundationGate` being enabled AND a non-zero round
+  // budget — a disabled/0-round gate is treated as already satisfied so the
+  // resolver falls straight through to beats (the dispatch never runs).
+  if (!runState.foundationGated
+    && options.foundationGate !== false
+    && options.maxFoundationRounds !== 0) {
+    return { kind: 'foundationGate', reason: 'foundation not yet judged this run' };
+  }
+
   // STEP 4a — per-volume beat sheets (skip volumes already attempted this run).
   for (const season of seasons) {
     if (setHas(runState.beatsAttempted, season.id)) continue;
@@ -541,6 +692,21 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     return { kind: 'editorialHealthGate', reason: 'editorial health not yet confirmed clean this run' };
   }
 
+  // STEP 5.4 — iterate-to-quality revision loop (CWQE Phase 7, #2171). Opt-in.
+  // Runs AFTER the editorial health gate is clean (so the manuscript is
+  // structurally sound) and BEFORE canon/visuals — each cycle judges every
+  // drafted issue, revises the weakest through adversarial cuts under a
+  // keep/revert score gate, and stops on plateau / hedged-convergence / maxCycles.
+  // Pure-function-of-state like every other step: cycle counters + convergence
+  // live in runState (revisionCyclesRun / revisionConverged), so a resume picks up
+  // mid-loop with no stored cursor. `revisionConverged` is set by the dispatch
+  // once a stop condition fires; until then we route back here while cycles remain.
+  if (options.revisionEnabled
+    && !runState.revisionConverged
+    && (runState.revisionCyclesRun || 0) < (options.revisionMaxCycles ?? 1)) {
+    return { kind: 'revisionCycle', reason: `iterate-to-quality revision cycle ${(runState.revisionCyclesRun || 0) + 1}` };
+  }
+
   // STEP 5.5 — canon descriptive integrity. Before ANY visual production, every
   // canon noun that appears where it'd be drawn must be described (an artist
   // can't render a name). Runs once per run; the gate blocks (pauses) on
@@ -555,6 +721,18 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
       return { kind: 'visualDraft', issueId: issue.id, reason: 'comic pages not yet drafted' };
+    }
+  }
+
+  // STEP 7 — teaser video deliverable (CDO Phase 3, #2185, opt-in, default off).
+  // After every issue is text-ready + drafted, OPTIONALLY mint + start a Creative
+  // Director video project seeded from each issue. Gated on wantsTeaser (which
+  // itself requires visuals). Attempted-once per issue this run so a started (or
+  // failed) teaser can't re-loop the resolver back here.
+  if (VISUAL_DRAFT_ENABLED && wantsTeaser(options) && wantsComic(series, options)) {
+    for (const issue of ordered) {
+      if (setHas(runState.teaserProduced, issue.id)) continue;
+      return { kind: 'produceTeaser', issueId: issue.id, reason: 'teaser video not yet produced' };
     }
   }
 
@@ -596,6 +774,15 @@ function broadcast(seriesId, payload) {
   const run = runs.get(seriesId);
   if (!run) return;
   broadcastSse(run, payload);
+  // Mirror every frame onto the in-process bus (CDO Phase 3, #2185) so a
+  // server-side consumer (CD plan step) sees the same progress/pause/terminal
+  // frames as an SSE client. Emit is best-effort — a listener throw must never
+  // abort the run (this runs inside the fire-and-forget coordinator).
+  try {
+    autopilotEvents.emit(seriesId, payload);
+  } catch (err) {
+    console.log(`⚠️ autopilot: event emit failed for ${seriesId.slice(0, 12)}: ${err.message}`);
+  }
 }
 
 function scheduleCleanup(seriesId, record) {
@@ -695,6 +882,18 @@ const providerOverrideOpts = (record) => ({
 const providerIdOpts = (record) => ({
   providerIdDefault: record.options.providerOverride,
   modelIdDefault: record.options.modelOverride,
+  // Multi-candidate draft gate (#2169): bill one cos action per re-roll and stop
+  // re-rolling when the daily budget is spent. Only ever invoked by
+  // generateStage's runDraftGate on a judgeable stage with draftAttempts > 1 — a
+  // no-op for every other stage/run. Check-then-bill so a skipped (budget-out)
+  // attempt isn't charged. Returns false to halt further attempts (keep the best
+  // so far); true when the attempt may proceed.
+  chargeAction: async () => {
+    const budget = await getDomainBudgetStatus('cos');
+    if (!budget.withinBudget) return false;
+    await recordDomainUsage('cos', { actions: 1 });
+    return true;
+  },
 });
 
 // Pause result when the cos action budget is exhausted, else null. Used to gate
@@ -820,6 +1019,105 @@ async function runBeatContinuity(seriesId, record) {
         ? resolved.episodesResolved.filter((e) => e?.corrected).length
         : 0,
     });
+  }
+  return {};
+}
+
+// Foundation-quality convergence loop (#2176). Mirrors runArcVerify but gates on
+// a WEIGHTED SCORE (not a blocking-findings count): judge the whole foundation,
+// and while it's below the threshold, target the weakest dimension, apply the
+// fix through the owning service (universe refine / character expand / arc
+// resolve — force:false, never a raw write), then re-judge. The re-judge is
+// content-hash-cached, so an unchanged foundation short-circuits (no LLM) and
+// can't loop. Bounded; pauses with the residual per-dimension findings on
+// non-convergence. Each judge + each fix bills one cos action, budget-gated like
+// the arc loop. The improve-loop convergence is tracked on the weighted score
+// (higher = better), so divergence = the score failing to reach a NEW HIGH.
+async function runFoundationGate(seriesId, record) {
+  const maxRounds = Number.isInteger(record.options.maxFoundationRounds)
+    ? record.options.maxFoundationRounds
+    : MAX_FOUNDATION_ROUNDS;
+  // 0 rounds (or disabled) means "skip the gate entirely" — accept the
+  // foundation as-is. The resolver already routes past a disabled gate, but a
+  // dispatch that arrives here with 0 rounds still short-circuits cleanly.
+  if (maxRounds === 0 || record.options.foundationGate === false) {
+    record.runState.foundationGated = true;
+    return {};
+  }
+  const threshold = Number.isFinite(record.options.foundationThreshold)
+    ? record.options.foundationThreshold
+    : DEFAULT_FOUNDATION_THRESHOLD;
+  const providerId = record.options.providerOverride;
+  const model = record.options.modelOverride;
+
+  // Convergence tracker keyed on the weighted score (higher is better) — invert
+  // to a "distance below 10" so trackConvergence's fewer-is-better minimum logic
+  // applies unchanged (a new low distance = a new high score = progress).
+  let convergence = { best: null, sinceBest: 0 };
+  for (let round = 1; round <= maxRounds; round += 1) {
+    if (record.cancelRequested) return { canceled: true };
+    const beforeJudge = await budgetPause();
+    if (beforeJudge) return beforeJudge;
+    // Never force: judgeFoundation is content-hash-cached, so an unchanged
+    // foundation (a clean verdict from a prior run, or a fix that changed
+    // nothing) returns the cached score with no LLM call — this IS the fast-pass
+    // that stops an already-clean foundation looping. A real change (any fix, or
+    // a user edit) flips the pinned hash and re-judges automatically.
+    const snap = await judgeFoundation(seriesId, { providerId, model });
+    // A cached (content-hash unchanged) verdict did no LLM work — don't bill it.
+    if (!snap.cached) await recordDomainUsage('cos', { actions: 1 });
+    const score = snap.weightedScore ?? 0;
+    const weak = weakestDimension(snap.dimensions);
+    broadcast(seriesId, {
+      type: 'foundation:round', round, weightedScore: score, threshold, weakest: weak?.dimension || null,
+    });
+    if (score >= threshold) {
+      record.runState.foundationGated = true;
+      return {};
+    }
+    if (round === maxRounds || !weak) {
+      return {
+        pause: true,
+        pauseKind: 'maxRounds',
+        reason: foundationPauseReason(maxRounds, score, threshold),
+        residual: residualFindings(snap.dimensions),
+      };
+    }
+    // Divergence guard (#1571): bail when fixes stop improving the score.
+    convergence = trackConvergence(convergence, 10 - score);
+    if (convergence.sinceBest >= DIVERGENCE_PATIENCE) {
+      return {
+        pause: true,
+        pauseKind: 'divergence',
+        reason: foundationDivergenceReason(score, threshold, DIVERGENCE_PATIENCE),
+        residual: residualFindings(snap.dimensions),
+      };
+    }
+    if (record.cancelRequested) return { canceled: true };
+    const beforeFix = await budgetPause();
+    if (beforeFix) return beforeFix;
+    const fix = await applyFoundationFix(seriesId, weak.dimension, {
+      finding: snap.dimensions?.[weak.dimension] || {},
+      providerOverride: providerId,
+      modelOverride: model,
+    });
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(seriesId, {
+      type: 'foundation:fix', round, dimension: weak.dimension, applied: fix?.applied === true, reason: fix?.reason || null,
+    });
+    // A dimension whose owning service can't apply a fix (no linked universe, a
+    // fully-locked cast, nothing left to fill) would loop unproductively — treat
+    // an inapplicable fix as immediate non-convergence and pause for human
+    // review rather than burning the remaining rounds re-judging an unchanged
+    // foundation.
+    if (fix?.applied !== true) {
+      return {
+        pause: true,
+        pauseKind: 'inapplicable',
+        reason: `Foundation gate can't auto-fix the weakest dimension (${weak.dimension}): ${fix?.reason || 'no change applied'}. Strengthen it manually, or lower the threshold, and resume.`,
+        residual: residualFindings(snap.dimensions),
+      };
+    }
   }
   return {};
 }
@@ -1486,6 +1784,280 @@ async function runCanonVerify(sId, record) {
   };
 }
 
+// Teaser deliverable (CDO Phase 3, #2185, opt-in). Mint + start a Creative
+// Director video project seeded from this issue — the autopilot→CD direction of
+// the bridge. Attempted-once per issue (marked up front so a failure can't
+// re-loop the resolver). Bills one cos action like every other autopilot step
+// (the CD project's own downstream render spend is gated by the creative/cos
+// budget on its side). A teaser is an OPTIONAL, terminal-phase deliverable, so a
+// failure is ADVISORY: it broadcasts a skip + files a gap, but does NOT pause the
+// whole run (the story is already done — a failed trailer shouldn't strand it).
+// bridgeFromIssue is imported dynamically to keep the pipeline↔creative-director
+// module graph acyclic (it transitively pulls the CD plan loop + tool registry).
+async function runProduceTeaser(sId, issueId, record) {
+  record.runState.teaserProduced.add(issueId);
+  const issue = await getIssue(issueId).catch(() => null);
+  try {
+    const { produceVideoFromIssue } = await import('../creativeDirector/bridgeFromIssue.js');
+    // The treatment-from-prose LLM call runs through stageRunner's soft channel,
+    // so thread the run's provider/model as providerDefault/modelDefault.
+    const { project } = await produceVideoFromIssue(issueId, providerOverrideOpts(record));
+    await recordDomainUsage('cos', { actions: 1 });
+    broadcast(sId, { type: 'teaser:produced', issueId, projectId: project?.id });
+    console.log(`🎬 autopilot teaser — series=${sId.slice(0, 12)} issue=${issue?.number ?? issueId} → CD project ${project?.id?.slice(0, 8) ?? '?'}`);
+    return {};
+  } catch (err) {
+    const message = (err?.message || String(err)).slice(0, 300);
+    broadcast(sId, { type: 'step:skip', kind: 'produceTeaser', issueId, reason: `teaser production failed: ${message}` });
+    await fileGap(record, sId, {
+      gapKind: 'teaser-failed',
+      issueId,
+      summary: `The optional teaser video for issue ${issue?.number ?? issueId} could not be produced: ${message}. The story is complete — this deliverable can be retried from the Creative Director.`,
+      context: `issueId=${issueId}`,
+    });
+    return {};
+  }
+}
+
+// Mean of the judged issues' composite qualityScore (null when nothing judged).
+function meanQualityScore(seriesJudge) {
+  const vals = (seriesJudge?.scores || [])
+    .filter((s) => s.judged && Number.isFinite(Number(s.qualityScore)))
+    .map((s) => Number(s.qualityScore));
+  if (vals.length === 0) return null;
+  return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+}
+
+// Judge every drafted (eligible) issue that needs it — an unjudged or stale
+// snapshot. Staleness is read from the persisted snapshots (getSeriesJudge, no
+// LLM), so a fresh issue is skipped WITHOUT even a cache-reuse call and, crucially,
+// the budget is gated BEFORE a fresh judge spends — never after. Each real judge
+// bills one cos action. Returns a pause result when the budget is exhausted with
+// judging still to do, a cancel result, or null on completion.
+async function judgeAllEligible(sId, record, issues) {
+  const eligible = eligibleIssues(issues);
+  const { providerOverride, modelOverride } = record.options;
+  const pre = await getSeriesJudge(sId, { issues });
+  const scoreById = new Map((pre.scores || []).map((s) => [s.issueId, s]));
+  for (const issue of eligible) {
+    if (record.cancelRequested) return { canceled: true };
+    const score = scoreById.get(issue.id);
+    const needsJudge = !score || !score.judged || score.stale;
+    if (!needsJudge) continue; // already judged against the current content — free.
+    // A fresh judge WILL spend an LLM call — gate the budget first, then bill.
+    const gate = await budgetPause();
+    if (gate) return gate;
+    const snap = await judgeIssue(issue.id, { providerId: providerOverride, model: modelOverride }).catch((err) => {
+      console.log(`⚠️ revision: judge failed for issue ${issue.id.slice(0, 12)}: ${err.message}`);
+      return null;
+    });
+    if (snap && !snap.cached && snap.status === 'complete') {
+      await recordDomainUsage('cos', { actions: 1 });
+    }
+  }
+  return null;
+}
+
+// Run the adversarial-cuts editorial check for the series, seed the findings into
+// the manuscript-review comment set, and return the freshly-seeded safe-cut
+// comments (OVER-EXPLAIN + REDUNDANT). Force-enables the check for this pass so a
+// user who disabled it globally still gets the loop's mechanical revision. One
+// billed LLM pass; returns { safeComments } or a { pause }/{ canceled } result.
+async function runAdversarialCuts(sId, record) {
+  const before = await budgetPause();
+  if (before) return before;
+  const settings = await getSettings().catch(() => null);
+  // Overlay a force-enable for the cut check so a globally-disabled check still
+  // runs inside the consented revision loop (never mutates persisted settings).
+  const merged = {
+    ...(settings || {}),
+    pipelineEditorialChecks: {
+      ...(settings?.pipelineEditorialChecks || {}),
+      checks: {
+        ...(settings?.pipelineEditorialChecks?.checks || {}),
+        'prose.adversarial-cuts': {
+          ...(settings?.pipelineEditorialChecks?.checks?.['prose.adversarial-cuts'] || {}),
+          enabled: true,
+        },
+      },
+    },
+  };
+  const signal = { get aborted() { return record.cancelRequested; } };
+  const result = await runEditorialChecks(sId, {
+    checkIds: ['prose.adversarial-cuts'],
+    settings: merged,
+    signal,
+    ...providerOverrideOpts(record),
+  }).catch((err) => {
+    console.log(`⚠️ revision: adversarial cuts failed for ${sId.slice(0, 12)}: ${err.message}`);
+    return null;
+  });
+  if (record.cancelRequested) return { canceled: true };
+  if (!result || result.canceled) return { safeComments: [] };
+  await recordDomainUsage('cos', { actions: 1 });
+  await seedReviewFromFindings(sId, result.findings || [], { runId: result.runId, mode: 'merge' }).catch((err) => {
+    console.log(`⚠️ revision: seed cut findings failed for ${sId.slice(0, 12)}: ${err.message}`);
+  });
+  const review = await getReview(sId).catch(() => ({ comments: [] }));
+  return { safeComments: filterSafeCutComments(review.comments || []) };
+}
+
+// One iterate-to-quality revision cycle (CWQE Phase 7, #2171). Composes the
+// judge (#2167), adversarial cuts (#2168), and — when a fresh ranking exists —
+// the comparative Elo (#2169) to revise the WEAKEST drafted issue under a
+// keep/revert score gate, then evaluates the stop conditions. Every LLM call is
+// budget-gated + billed exactly like the other steps; a budget-exhausted cycle
+// returns a pause the coordinator handles. Never routes here in dry-run (dispatch
+// only runs in execute mode).
+async function runRevisionCycle(sId, record) {
+  if (record.cancelRequested) return { canceled: true };
+  const issues0 = await listIssues({ seriesId: sId });
+  if (eligibleIssues(issues0).length === 0) {
+    // Nothing drafted to revise — converge so the resolver moves on.
+    record.runState.revisionConverged = true;
+    broadcast(sId, { type: 'revision:converged', reason: 'no-content', cycle: record.runState.revisionCyclesRun || 0 });
+    return {};
+  }
+
+  // 1. Judge every eligible issue (cache-aware) → baseline mean + weakest.
+  const judged = await judgeAllEligible(sId, record, issues0);
+  if (judged?.canceled) return { canceled: true };
+  if (judged?.pause) return judged;
+
+  const seriesJudge = await getSeriesJudge(sId, { issues: issues0 });
+  const preMean = meanQualityScore(seriesJudge);
+
+  // 2. Pick the weakest issue — Elo ranking when a FRESH one exists (#2169),
+  //    else the judge's weakest-first (lowest qualityScore).
+  let weakestId = null;
+  const rank = await getComparativeRank(sId).catch(() => null);
+  if (rank?.status === 'complete' && !rank.stale && Array.isArray(rank.weakest) && rank.weakest[0]) {
+    weakestId = rank.weakest[0].issueId;
+  }
+  if (!weakestId) weakestId = seriesJudge.weakest?.[0]?.issueId || null;
+  if (!weakestId) {
+    record.runState.revisionConverged = true;
+    broadcast(sId, { type: 'revision:converged', reason: 'no-weakest', cycle: record.runState.revisionCyclesRun || 0 });
+    return {};
+  }
+
+  const preWeakest = seriesJudge.scores.find((s) => s.issueId === weakestId);
+  const preScore = preWeakest?.qualityScore ?? null;
+  const stageId = preWeakest?.stageId || 'prose';
+
+  // 3. Adversarial cuts (series-wide seed) + collect this issue's safe cuts.
+  const cuts = await runAdversarialCuts(sId, record);
+  if (cuts?.canceled) return { canceled: true };
+  if (cuts?.pause) return cuts;
+  const issueSafeCuts = (cuts.safeComments || []).filter((c) => c.issueId === weakestId);
+
+  // Capture the weakest issue's pre-revision stage state for the keep/revert gate
+  // (existing runHistory snapshotting handles the version event; we hold the exact
+  // text so a revert can restore it through the serialized write path — never a
+  // force over a concurrent human edit).
+  const preIssue = await getIssue(weakestId).catch(() => null);
+  const preStage = preIssue?.stages?.[stageId] || {};
+  const preState = { input: preStage.input || '', output: preStage.output || '', lastRunId: preStage.lastRunId || null };
+  // The full judge snapshot for the brief — a persisted-snapshot read (no LLM
+  // spend); judgeAllEligible above already judged this issue this cycle.
+  const weakestJudge = await getIssueJudge(weakestId).catch(() => null);
+
+  // 4. Build the revision brief (pure) and broadcast it as the revision plan.
+  const brief = buildRevisionBrief({
+    issue: { number: preIssue?.number, title: preIssue?.title },
+    judge: weakestJudge && weakestJudge.status === 'complete' ? weakestJudge : (preWeakest || {}),
+    cutComments: issueSafeCuts,
+    currentChars: (preState.output || '').length || null,
+  });
+  broadcast(sId, { type: 'revision:brief', issueId: weakestId, cycle: (record.runState.revisionCyclesRun || 0) + 1, cuts: issueSafeCuts.length, brief: brief.slice(0, 2000) });
+
+  // 5. Apply — mechanical safe cuts are the revision (autonovel: "the cuts ARE the
+  //    plan"). applyCuts writes through the serialized stage path with a runHistory
+  //    snapshot for undo. No safe cuts ⇒ nothing to apply this cycle.
+  let applied = 0;
+  if (issueSafeCuts.length > 0) {
+    const cutResult = await applyCuts(sId, issueSafeCuts, { safeTypesOnly: true }).catch((err) => {
+      console.log(`⚠️ revision: applyCuts failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
+      return { applied: 0, sections: [] };
+    });
+    applied = cutResult.applied || 0;
+  }
+
+  // 6. Keep/revert gate — re-judge the revised issue; keep only if the composite
+  //    qualityScore did not regress, else restore the pre-revision text.
+  let decision = 'keep';
+  let postScore = preScore;
+  if (applied > 0) {
+    const postIssue = await getIssue(weakestId).catch(() => null);
+    const appliedOutput = postIssue?.stages?.[stageId]?.output || '';
+    const before = await budgetPause();
+    if (before) return before;
+    const reJudge = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride }).catch((err) => {
+      console.log(`⚠️ revision: re-judge failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
+      return null;
+    });
+    if (reJudge && reJudge.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
+    postScore = reJudge?.status === 'complete' ? reJudge.qualityScore : preScore;
+    decision = decideKeepRevert(preScore, postScore);
+    if (decision === 'revert') {
+      // Restore through the serialized path, guarded so a concurrent human edit is
+      // never clobbered: revert ONLY when the stage still holds the cut output we
+      // produced. A `revert-` runId marks this as a fresh version event.
+      await updateStageWithLatest(weakestId, stageId, (cur) => {
+        if ((cur?.output || '') !== appliedOutput) return {};
+        return { status: 'edited', input: preState.input, output: preState.output, lastRunId: `revert-${randomUUID()}`, errorMessage: '' };
+      }).catch((err) => {
+        console.log(`⚠️ revision: revert failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
+      });
+      // Re-judge the restored text so the persisted snapshot matches what's on
+      // disk (else it lingers pinned to the rejected cut version). Budget-gated +
+      // billed like every other judge; skipped (snapshot stays stale — the next
+      // cycle re-judges it) when the budget is spent.
+      const beforeRevertJudge = await budgetPause();
+      if (!beforeRevertJudge) {
+        const rj = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride }).catch(() => null);
+        if (rj && rj.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
+      }
+    }
+  }
+
+  // 7. Record the cycle: post-cycle mean drives the plateau detector; the ledger
+  //    line is the experiment log (single emoji line per the CLAUDE.md convention).
+  record.runState.revisionCyclesRun = (record.runState.revisionCyclesRun || 0) + 1;
+  const postSeriesJudge = await getSeriesJudge(sId, { issues: await listIssues({ seriesId: sId }) });
+  const postMean = meanQualityScore(postSeriesJudge);
+  if (Number.isFinite(postMean)) record.runState.revisionScoreHistory.push(postMean);
+  console.log(`🔁 revision cycle ${record.runState.revisionCyclesRun} — series=${sId.slice(0, 12)} issue=${preIssue?.number ?? weakestId} pre=${preScore ?? '?'} post=${postScore ?? '?'} → ${decision} (applied ${applied} cut(s), mean ${preMean ?? '?'}→${postMean ?? '?'})`);
+
+  // 8. Stop conditions — plateau / hedged-convergence / maxCycles. The residual
+  //    finding texts come from the weakest issue's judge (verdict + revisions):
+  //    the reviewer will ALWAYS find something, so the stop is about qualification,
+  //    not zero defects.
+  const findingTexts = [
+    postSeriesJudge.scores.find((s) => s.issueId === weakestId)?.oneLineVerdict || '',
+    ...((weakestJudge?.topRevisions) || []),
+  ].filter(Boolean);
+  const stop = evaluateRevisionStop({
+    cyclesRun: record.runState.revisionCyclesRun,
+    minCycles: record.options.revisionMinCycles,
+    maxCycles: record.options.revisionMaxCycles,
+    scoreHistory: record.runState.revisionScoreHistory,
+    plateauDelta: record.options.revisionPlateauDelta,
+    findingTexts,
+  });
+  broadcast(sId, {
+    type: 'revision:cycle', cycle: record.runState.revisionCyclesRun, issueId: weakestId,
+    preScore, postScore, decision, applied, preMean, postMean,
+    converged: stop.stop, stopReason: stop.reason,
+  });
+  if (stop.stop) {
+    record.runState.revisionConverged = true;
+    broadcast(sId, { type: 'revision:converged', reason: stop.reason, detail: stop.detail, cycle: record.runState.revisionCyclesRun });
+    console.log(`✅ revision converged (${stop.reason}) — series=${sId.slice(0, 12)}: ${stop.detail}`);
+  }
+  return {};
+}
+
 async function dispatchStep(sId, step, record) {
   switch (step.kind) {
     case 'generateArc': {
@@ -1529,6 +2101,8 @@ async function dispatchStep(sId, step, record) {
       return runBeats(sId, step.seasonId, record);
     case 'beatContinuity':
       return runBeatContinuity(sId, record);
+    case 'foundationGate':
+      return runFoundationGate(sId, record);
     case 'textStages':
       return runText(sId, step.issueId, record);
     case 'scriptVerify':
@@ -1541,10 +2115,14 @@ async function dispatchStep(sId, step, record) {
       return runEditorialChecksPass(sId, record);
     case 'editorialHealthGate':
       return runEditorialHealthGate(sId, record);
+    case 'revisionCycle':
+      return runRevisionCycle(sId, record);
     case 'canonVerify':
       return runCanonVerify(sId, record);
     case 'visualDraft':
       return runVisualDraft(sId, step.issueId, record);
+    case 'produceTeaser':
+      return runProduceTeaser(sId, step.issueId, record);
     default:
       return {};
   }
@@ -1576,6 +2154,12 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
   if (emptySeasons.length) plan.push({ kind: 'generateEpisodes', count: emptySeasons.length, estActions: emptySeasons.length });
   const arcRounds = Number.isInteger(options?.maxArcVerifyRounds) ? options.maxArcVerifyRounds : MAX_ARC_VERIFY_ROUNDS;
   plan.push({ kind: 'verifyArc', count: 1, note: roundsNote(arcRounds), estActions: convergenceLoopActions(arcRounds) });
+  // foundationGate (#2176) runs once between arc verify and beats, unless
+  // disabled or 0-round. Bills judge + fix per round like the arc loop.
+  const foundationRounds = Number.isInteger(options?.maxFoundationRounds) ? options.maxFoundationRounds : MAX_FOUNDATION_ROUNDS;
+  if (options?.foundationGate !== false && foundationRounds !== 0) {
+    plan.push({ kind: 'foundationGate', count: 1, note: roundsNote(foundationRounds), estActions: convergenceLoopActions(foundationRounds) });
+  }
   const beatsNeeded = seasons.filter((s) =>
     ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded, estActions: beatsNeeded });
@@ -1637,6 +2221,20 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
     const gate = resolveReadinessGate(options?.readinessGate);
     plan.push({ kind: 'editorialHealthGate', count: 1, note: `editorial health readiness gate (#1316) — gate: ${gate}`, estActions: 0 });
   }
+  // Iterate-to-quality revision loop (#2171, opt-in, default off). Each cycle
+  // judges every drafted issue (cache-aware — only stale/unjudged content bills),
+  // runs one adversarial-cut pass, and re-judges the revised issue: roughly
+  // (issues + 2) actions per cycle, capped at maxCycles. High-end estimate — a
+  // cycle stops early on plateau / hedged-convergence and cached judges are free.
+  if (options?.revisionEnabled) {
+    const rev = resolveAutopilotRevision(options);
+    plan.push({
+      kind: 'revisionCycle',
+      count: rev.revisionMaxCycles,
+      note: `iterate-to-quality (up to ${rev.revisionMaxCycles} cycle(s), min ${rev.revisionMinCycles}, plateau Δ ${rev.revisionPlateauDelta})`,
+      estActions: rev.revisionMaxCycles * (ordered.length + 2),
+    });
+  }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
     // canonVerify runs an LLM pass but bills no cos action (token-only) — 0 budget.
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns (no budget cost)', estActions: 0 });
@@ -1645,6 +2243,10 @@ function buildDryRunPlan(series, issues, options, costContext = {}) {
     // interior page. The interior-page count isn't known until the script parses,
     // so the estimate counts the two covers and notes the per-page additions.
     if (visualNeeded) plan.push({ kind: 'visualDraft', count: visualNeeded, note: 'cover + back + all pages (draft) — +1 action per interior page', estActions: visualNeeded * 2 });
+    // Teaser deliverable (#2185, opt-in, default off): one CD video project per
+    // issue. Each mint+start bills one cos action for the treatment LLM call; the
+    // CD project's own render spend is gated on the creative/cos budget its side.
+    if (wantsTeaser(options)) plan.push({ kind: 'produceTeaser', count: ordered.length, note: 'mint + start a Creative Director teaser video per issue (opt-in)', estActions: ordered.length });
   }
   return plan;
 }
@@ -1686,9 +2288,13 @@ export async function startSeriesAutopilot(sId, options = {}) {
   const runOptions = {
     ...options,
     ...resolveAutopilotRounds(options, settings),
+    foundationGate: resolveAutopilotFoundationGate(options, settings),
+    foundationThreshold: resolveAutopilotFoundationThreshold(options, settings),
     readinessGate: resolveAutopilotReadinessGate(options, settings),
     checkFindingsPauseThreshold: resolveAutopilotCheckPauseThreshold(options, settings),
     notifyOnPause: resolveAutopilotNotifyOnPause(options, settings),
+    produceTeaser: resolveAutopilotProduceTeaser(options, settings),
+    ...resolveAutopilotRevision(options, settings),
     severityWeights: mergeSeverityWeights(seriesRecord?.severityWeights),
     blockingSets: {
       arc: resolveBlockingSet(seriesRecord?.blockingSeverities, 'arc'),
@@ -1718,6 +2324,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
     runState: {
       arcAttempted: false,
       arcVerified: false,
+      // #2176 — foundation-quality gate satisfied this run (threshold cleared,
+      // or the gate disabled/0-round). Boolean like arcVerified so the resolver
+      // routes here at most once per run.
+      foundationGated: false,
       beatContinuityChecked: false,
       editorialReviewed: false,
       reverseOutlineRefreshed: false,
@@ -1729,6 +2339,9 @@ export async function startSeriesAutopilot(sId, options = {}) {
       textAttempted: new Set(),
       scriptChecked: new Set(),
       visualDrafted: new Set(),
+      // #2185 — issues whose optional teaser deliverable has been produced (or
+      // attempted) this run, so the resolver can't re-loop into produceTeaser.
+      teaserProduced: new Set(),
       // #1572 — issues whose ADVISORY craft gate filed a blocking gap task, and
       // the total blocking-finding count. Carried into the terminal `complete`
       // frame + persisted marker so a "clean complete" doesn't hide downstream
@@ -1739,6 +2352,14 @@ export async function startSeriesAutopilot(sId, options = {}) {
       // pass. Surfaced on the terminal `complete` frame + persisted marker so a
       // check that errors every run is visible instead of a silent "clean".
       editorialCheckErroredIds: new Set(),
+      // #2171 — iterate-to-quality revision loop state (opt-in). `revisionCyclesRun`
+      // is the completed-cycle count (the resolver's cursor); `revisionScoreHistory`
+      // is the per-cycle mean series qualityScore the plateau detector reads;
+      // `revisionConverged` latches true once a stop condition fires so the resolver
+      // routes past the loop to canon/visuals.
+      revisionCyclesRun: 0,
+      revisionScoreHistory: [],
+      revisionConverged: false,
     },
     activeChild: null,
   };
@@ -1828,7 +2449,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
         // budget instead of skipping).
         const zeroRoundSkip = (step.kind === 'verifyArc' && runOptions.maxArcVerifyRounds === 0)
           || (step.kind === 'beatContinuity' && runOptions.maxBeatContinuityRounds === 0)
-          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0);
+          || (step.kind === 'editorialReview' && runOptions.maxEditorialRounds === 0)
+          || (step.kind === 'foundationGate' && (runOptions.maxFoundationRounds === 0 || runOptions.foundationGate === false));
         const selfGatingStep = step.kind === 'editorialChecks'
           || step.kind === 'editorialHealthGate'
           || step.kind === 'reverseOutline';
@@ -1917,4 +2539,4 @@ export async function recoverStuckAutopilots() {
 }
 
 // Export internals for tests.
-export const __testing = { runs, buildDryRunPlan, summarizePlanCost, providerOverrideOpts, providerIdOpts };
+export const __testing = { runs, buildDryRunPlan, summarizePlanCost, providerOverrideOpts, providerIdOpts, meanQualityScore };

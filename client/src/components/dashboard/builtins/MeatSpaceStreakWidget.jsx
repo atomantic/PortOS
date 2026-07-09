@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { HeartPulse, ArrowRight } from 'lucide-react';
+import { streakGlyph } from '../../../lib/streakGlyph.js';
 
 // Health-logging habit loop. Reads the `meatspaceLogging` slice of
 // dashboardState (cross-domain streak + this-week counts computed server-side)
@@ -11,7 +12,6 @@ export default function MeatSpaceStreakWidget({ dashboardState }) {
 
   const streak = stats.currentStreak ?? 0;
   const longest = stats.longestStreak ?? 0;
-  const streakGlyph = streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨';
   const activeDomains = (stats.domains || []).filter((d) => d.thisWeek > 0);
 
   return (
@@ -28,7 +28,7 @@ export default function MeatSpaceStreakWidget({ dashboardState }) {
       </div>
 
       <div className="flex items-center gap-3">
-        <div className="text-2xl" aria-hidden="true">{streakGlyph}</div>
+        <div className="text-2xl" aria-hidden="true">{streakGlyph(streak)}</div>
         <div>
           <div className="text-xl font-bold text-white">
             {streak} day{streak !== 1 ? 's' : ''}

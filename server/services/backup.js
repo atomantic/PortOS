@@ -18,6 +18,7 @@ import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSubdirFilter } from '../lib/validation.js';
 import { getIo } from './socket.js';
+import { reloadSettings } from './settings.js';
 
 // Module-level state
 let isRunning = false;
@@ -484,6 +485,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   }
 
   const changedFiles = await runRsync(srcDir, PATHS.data, flags);
+  // A live restore rsyncs settings.json into place outside the save() path, so
+  // getSettings()'s read-cache (and other settings:updated-driven caches) would
+  // keep serving pre-restore values until the next save/restart. Re-sync them.
+  if (!dryRun) await reloadSettings();
   return { dryRun, snapshotId, subdirFilter, changedFiles };
 }
 

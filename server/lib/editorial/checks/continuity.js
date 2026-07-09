@@ -5,11 +5,13 @@ import {
   OBJECT_BACKSTORY_STAGE,
   OBJECT_MOTIVATION_STAGE,
   OBJECT_WEIGHT_STAGE,
+  PREMATURE_REVEAL_STAGE,
   TIMELINE_CONTRADICTION_STAGE,
   attachmentBackstoryRows,
   attachmentCanon,
   authoredSetupPayoffSummary,
   canonCharacterStatesSummary,
+  canonHasRevealGated,
   continuityLedgerSummary,
   describeObjectAttachments,
   describeObjectWeight,
@@ -17,6 +19,8 @@ import {
   mapLlmFindings,
   relationshipCanon,
   renderCharacterArcsForPrompt,
+  revealGatedCanonSummary,
+  revealGatedPayoffsSummary,
   runManuscriptLlmCheck,
   sceneGroundingSummary,
   z,
@@ -389,7 +393,12 @@ export const continuityChecks = [
   },
   {
     id: 'chekhov.setups-payoffs',
-    sources: ['manuscript', 'series.arc.readerMap'],
+    // `canon` is a real source here (#2178): reveal-gated canon folds into the
+    // authored-payoffs block via `revealGatedPayoffsSummary(ctx.canon)`, so a
+    // canon edit (adding/removing a reveal gate, retitling a gated fact) must
+    // re-fingerprint this check — otherwise an obsolete orphaned-payoff finding
+    // never goes stale after the gate is edited away.
+    sources: ['manuscript', 'canon', 'series.arc.readerMap', 'series.arc.foreshadowing'],
     label: "Chekhov's guns (setups & payoffs)",
     description:
       'Classifies each setup/payoff thread as paired, false-setup (planted, never fired — cut it), orphaned-payoff (fired, never planted — unearned), or distant (paid off so many issues after the setup the reader may have forgotten). Reconciles its detected setups/payoffs against the authored reader-map hooks/payoffs.',
@@ -432,8 +441,16 @@ export const continuityChecks = [
     ],
     gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
     run: (ctx) => {
-      // Authored hooks/payoffs are fixed per-call overhead (re-sent on each chunk).
-      const authoredSetups = authoredSetupPayoffSummary(ctx.series?.arc?.readerMap);
+      // Authored hooks/payoffs + the foreshadowing ledger (#2172) are fixed
+      // per-call overhead (re-sent on each chunk). The ledger is folded into the
+      // same authoredSetups block so the prompt consumes it unchanged. Reveal-
+      // gated canon (#2178) adds each gated fact as an authored payoff at its
+      // reveal issue, so the check can flag a reveal that arrives with no prior
+      // setup (an orphaned payoff).
+      const authoredSetups = [
+        authoredSetupPayoffSummary(ctx.series?.arc?.readerMap, ctx.series?.arc?.foreshadowing),
+        revealGatedPayoffsSummary(ctx.canon),
+      ].filter(Boolean).join('\n\n');
       // 0 disables the distant sub-check; >0 is the issue-gap threshold. Pass a
       // string so the prompt's `{{#distantGap}}` section renders only when enabled.
       const distantGap = ctx.config?.distantGap ?? 4;
@@ -469,6 +486,72 @@ export const continuityChecks = [
           + 'secrets, stated fears, promises/vows, threats, and notable skills — and, for each, '
           + (distantEnabled ? 'the issue number it was first planted in, and ' : '')
           + 'whether it has already been paid off (fired, spilled, confronted, kept) or is still open.',
+      });
+    },
+  },
+  {
+    id: 'continuity.premature-reveal',
+    sources: ['manuscript', 'canon'],
+    label: 'Premature reveal (spoiler leak)',
+    description:
+      'LLM check (#2178) — the information-economy guard for reveal-gated canon. Scans drafted prose for a canon fact that is deliberately withheld (a character secret, a late-story twist, a hidden identity) stated or unambiguously implied BEFORE its reveal issue, so a first-time reader learns it too early. Reconciles the prose against the reveal-gated canon entries (their reveal issue / hard-spoiler flag, the spoiler-free surface descriptor the reader IS allowed to know, and the underlying gated fact). Distinguishes a genuine LEAK (a first-time reader now knows the secret) from deliberate FORESHADOWING (a hint that only acquires meaning on reread) — flags only leaks. Gated on the series having authored any reveal-gated canon; otherwise it never runs.',
+    scope: 'series',
+    kind: 'llm',
+    category: 'continuity',
+    severityDefault: 'high',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    // Skip the LLM call entirely when the series authored no reveal-gated canon
+    // (no revealIssue / spoiler on any entry) AND when there's no manuscript to
+    // scan — there is nothing a premature reveal could be measured against.
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0 && canonHasRevealGated(ctx.canon),
+    run: (ctx) => {
+      // The reveal-gated canon block is fixed per-call overhead (re-sent on each
+      // chunk) and pure context: it names each withheld fact, WHEN it's due, the
+      // spoiler-free surface view, and the underlying secret — the ground truth a
+      // leak is judged against. Trimmed by the runner to keep the manuscript a
+      // budget floor.
+      const revealGatedCanon = revealGatedCanonSummary(ctx.canon);
+      return runManuscriptLlmCheck(ctx, {
+        stage: PREMATURE_REVEAL_STAGE,
+        category: 'continuity',
+        context: { revealGatedCanon },
+        // `finalPart` gates the shipped prompt's part-vs-whole guidance (a single-
+        // chunk run is its own final part). Without it the prompt always renders
+        // the "reading in PARTS" branch and points at a setup digest that doesn't
+        // exist on a one-chunk run — mirror the sibling checks' meta.isFinal wiring.
+        buildVars: (manuscript, meta, c) => ({
+          manuscript,
+          revealGatedCanon: c.revealGatedCanon,
+          finalPart: meta?.isFinal ? 'true' : '',
+        }),
+        // A reveal can leak in an early issue for a fact due much later; the
+        // findings digest keeps prior leaks in view so a later chunk doesn't
+        // re-flag, and the setup digest rolls forward which gated facts have
+        // already surfaced (legitimately or not) so the issue-of-first-leak is
+        // measured against the earliest appearance, not each chunk in isolation.
+        crossChunkDigest: true,
+        crossChunkSetup: true,
+        setupFocus: 'For each reveal-gated canon fact, note the earliest issue in which the prose so far states '
+          + 'or unambiguously implies it (so a later chunk measures the leak against its first appearance, not just '
+          + 'its own text) — and whether that issue is before the fact\'s reveal issue.',
       });
     },
   },

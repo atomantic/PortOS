@@ -12,6 +12,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 vi.mock('fs/promises', () => ({
   unlink: vi.fn(async (path) => { fileStore.delete(path); }),
+  access: vi.fn(async (path) => { if (!fileStore.has(path)) throw new Error('ENOENT'); }),
 }));
 
 const svc = await import('./mediaSketches.js');
@@ -50,6 +51,21 @@ describe('mediaSketches service', () => {
     const png = await svc.getSketchPng(KEY);
     expect(Buffer.isBuffer(png)).toBe(true);
     expect(png.toString()).toBe('fake-png-bytes');
+  });
+
+  it('getSketchPngPath returns the flattened PNG path when it exists, null otherwise', async () => {
+    // Issue #2036 phase 2: the img2img re-render needs the sidecar path, not bytes.
+    expect(await svc.getSketchPngPath(KEY)).toBeNull();
+    await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes, png: PNG_DATA_URL });
+    const path = await svc.getSketchPngPath(KEY);
+    expect(path).toBe('/mock/data/media-sketches/aW1hZ2U6Zm9vLnBuZw.png');
+    // A vectors-only re-save drops the PNG, so the path resolver goes null again.
+    await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes });
+    expect(await svc.getSketchPngPath(KEY)).toBeNull();
+  });
+
+  it('getSketchPngPath rejects an invalid key', async () => {
+    await expect(svc.getSketchPngPath('not a key')).rejects.toThrow();
   });
 
   it('re-saving with strokes but no PNG drops the stale flattened export', async () => {
@@ -99,5 +115,39 @@ describe('mediaSketches service', () => {
   it('rejects a non-PNG data URL', () => {
     expect(() => svc.sanitizeSketchInput({ width: 1, height: 1, strokes: [], png: 'data:image/jpeg;base64,AAAA' }))
       .toThrowError();
+  });
+
+  describe('blank-canvas sketches (phase 3)', () => {
+    it('createBlankSketchKey mints a recognizable sketch:<uuid> key', () => {
+      const key = svc.createBlankSketchKey();
+      expect(key).toMatch(/^sketch:[a-f0-9-]{36}$/);
+      expect(svc.isBlankSketchKey(key)).toBe(true);
+      expect(svc.isValidKey(key)).toBe(true);
+    });
+
+    it('isBlankSketchKey rejects image/video/garbage keys', () => {
+      expect(svc.isBlankSketchKey('image:foo.png')).toBe(false);
+      expect(svc.isBlankSketchKey('video:abc')).toBe(false);
+      expect(svc.isBlankSketchKey('sketch:not-a-uuid')).toBe(false);
+      expect(svc.isBlankSketchKey('sketch:')).toBe(false);
+      expect(svc.isBlankSketchKey(null)).toBe(false);
+    });
+
+    it('saveSketch → getSketch round-trips a blank-canvas key', async () => {
+      const key = svc.createBlankSketchKey();
+      const saved = await svc.saveSketch(key, { width: 512, height: 512, strokes: sampleStrokes, png: PNG_DATA_URL });
+      expect(saved.strokes).toHaveLength(2);
+      expect(saved.hasPng).toBe(true);
+      const loaded = await svc.getSketch(key);
+      expect(loaded.strokes).toEqual(saved.strokes);
+      expect(loaded.width).toBe(512);
+      // The flattened PNG path resolves for the img2img feedback path too.
+      expect(await svc.getSketchPngPath(key)).not.toBeNull();
+    });
+
+    it('still rejects a video key (only image + blank sketch are supported)', async () => {
+      await expect(svc.saveSketch('video:abc', { width: 1, height: 1, strokes: sampleStrokes }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
   });
 });

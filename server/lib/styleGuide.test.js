@@ -2,8 +2,60 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizeStyleGuide,
   renderStyleGuide,
+  composeStyleNotes,
+  sanitizeVoiceExemplars,
+  renderVoiceExemplars,
+  PROSE_CRAFT_DOCTRINE,
   STYLE_GUIDE_LIMITS,
+  VOICE_REGISTERS,
+  VOICE_REGISTER_IDS,
 } from './styleGuide.js';
+
+describe('sanitizeVoiceExemplars / renderVoiceExemplars (shared with Writers Room — #2179)', () => {
+  it('drops empty passages, trims to caps, and caps the list at 3', () => {
+    const cleaned = sanitizeVoiceExemplars([
+      { passage: '  a real passage  ', note: '  what it shows  ' },
+      { passage: '   ' }, // dropped
+      null, // dropped
+      { passage: 'p2' }, { passage: 'p3' }, { passage: 'p4' }, // 4th capped off
+    ]);
+    expect(cleaned).toHaveLength(3);
+    expect(cleaned[0]).toEqual({ passage: 'a real passage', note: 'what it shows' });
+    expect(cleaned[1]).toEqual({ passage: 'p2' }); // no note key when absent
+    expect(sanitizeVoiceExemplars('not-an-array')).toEqual([]);
+  });
+
+  it('renders MATCH / NEVER blocks from a plain carrier, and empty string when absent', () => {
+    expect(renderVoiceExemplars(null)).toBe('');
+    expect(renderVoiceExemplars({})).toBe('');
+    const block = renderVoiceExemplars({
+      voiceExemplars: [{ passage: 'terse, exact', note: 'the target' }],
+      voiceAntiExemplars: [{ passage: 'ornate and purple', note: 'too much' }],
+    });
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('terse, exact');
+    expect(block).toContain('NEVER drift toward this');
+    expect(block).toContain('too much');
+  });
+});
+
+describe('VOICE_REGISTERS (voice discovery — #2179)', () => {
+  it('exposes a small, non-empty set of registers with stable ids + labels + hints', () => {
+    expect(VOICE_REGISTERS.length).toBeGreaterThanOrEqual(3);
+    for (const r of VOICE_REGISTERS) {
+      expect(typeof r.id).toBe('string');
+      expect(r.id).toMatch(/^[a-z-]+$/);
+      expect(r.label.length).toBeGreaterThan(0);
+      expect(r.hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('has unique register ids that VOICE_REGISTER_IDS mirrors in order', () => {
+    const ids = VOICE_REGISTERS.map((r) => r.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(VOICE_REGISTER_IDS).toEqual(ids);
+  });
+});
 
 describe('sanitizeStyleGuide', () => {
   it('returns null for absent / non-object / empty input (legacy-tolerant)', () => {
@@ -63,6 +115,37 @@ describe('sanitizeStyleGuide', () => {
   it('survives when only one field is set', () => {
     expect(sanitizeStyleGuide({ tense: 'past' })).toMatchObject({ tense: 'past', povPerson: null });
   });
+
+  it('cleans voice exemplars: drops empty passages, trims, caps at 3', () => {
+    const sg = sanitizeStyleGuide({
+      voiceExemplars: [
+        { passage: '  Spare, clipped prose.  ', note: '  wry  ' },
+        { passage: '', note: 'no passage' }, // dropped — empty passage
+        { passage: 'x'.repeat(3000) }, // trimmed to cap, no note key
+        { passage: 'four' },
+        { passage: 'five' }, // over the cap of 3 → dropped
+        'not an object', // ignored
+      ],
+    });
+    expect(sg.voiceExemplars).toHaveLength(3);
+    expect(sg.voiceExemplars[0]).toEqual({ passage: 'Spare, clipped prose.', note: 'wry' });
+    expect(sg.voiceExemplars[1].passage).toHaveLength(STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX);
+    expect(sg.voiceExemplars[1]).not.toHaveProperty('note'); // no note → key omitted
+    expect(sg.voiceExemplars[2]).toEqual({ passage: 'four' });
+  });
+
+  it('a guide with only exemplars is not collapsed to null', () => {
+    const sg = sanitizeStyleGuide({ voiceExemplars: [{ passage: 'anchor prose' }] });
+    expect(sg).not.toBeNull();
+    expect(sg.tense).toBeNull();
+    expect(sg.voiceExemplars).toHaveLength(1);
+    expect(sg.voiceAntiExemplars).toEqual([]);
+  });
+
+  it('all-empty exemplar entries do not save an empty husk', () => {
+    // Every field absent + exemplars that all drop → still null.
+    expect(sanitizeStyleGuide({ voiceExemplars: [{ passage: '' }, 'junk'] })).toBeNull();
+  });
 });
 
 describe('renderStyleGuide', () => {
@@ -98,5 +181,76 @@ describe('renderStyleGuide', () => {
     const block = renderStyleGuide(sanitizeStyleGuide({ contentRating: 'custom', tense: 'past' }));
     expect(block).not.toContain('rating');
     expect(block).toContain('past tense');
+  });
+
+  it('renders MATCH / NEVER voice blocks with passages + notes', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({
+      tense: 'past',
+      voiceExemplars: [{ passage: 'The rain came sideways.', note: 'terse' }],
+      voiceAntiExemplars: [{ passage: 'Verily the tempest did descend.', note: 'too ornate' }],
+    }));
+    expect(block).toContain('past tense');
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('The rain came sideways.');
+    expect(block).toContain('— terse');
+    expect(block).toContain('NEVER drift toward this');
+    expect(block).toContain('Verily the tempest did descend.');
+    expect(block).toContain('— too ornate');
+  });
+
+  it('renders voice blocks even when no mechanical directives are set', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({
+      voiceExemplars: [{ passage: 'Clean, quiet sentences.' }],
+    }));
+    expect(block).not.toBeNull();
+    expect(block).not.toContain('house style — follow exactly'); // no directive header
+    expect(block).toContain('MATCH this voice');
+    expect(block).toContain('Clean, quiet sentences.');
+  });
+
+  it('conditionally omits absent voice blocks (renders nothing)', () => {
+    const block = renderStyleGuide(sanitizeStyleGuide({ tense: 'present' }));
+    expect(block).toContain('present tense');
+    expect(block).not.toContain('MATCH this voice');
+    expect(block).not.toContain('NEVER drift toward this');
+  });
+});
+
+describe('composeStyleNotes', () => {
+  it('returns empty string when neither guide nor notes nor craft is present', () => {
+    expect(composeStyleNotes(null)).toBe('');
+    expect(composeStyleNotes({})).toBe('');
+    expect(composeStyleNotes({ styleNotes: '   ' })).toBe('');
+  });
+
+  it('leads with the rendered guide, trails with free-text notes', () => {
+    const out = composeStyleNotes({
+      styleGuide: sanitizeStyleGuide({ tense: 'past' }),
+      styleNotes: 'Noir and rain.',
+    });
+    expect(out).toContain('past tense');
+    expect(out).toContain('Noir and rain.');
+    expect(out.indexOf('past tense')).toBeLessThan(out.indexOf('Noir and rain.'));
+  });
+
+  it('does NOT append prose-craft doctrine by default (structural stages)', () => {
+    const out = composeStyleNotes({ styleNotes: 'Noir.' });
+    expect(out).toBe('Noir.');
+    expect(out).not.toContain('Le Guin');
+    expect(out).not.toContain('Prose craft');
+  });
+
+  it('appends the Le Guin prose-craft doctrine when proseCraft is set', () => {
+    const out = composeStyleNotes({ styleNotes: 'Noir.' }, { proseCraft: true });
+    expect(out).toContain('Noir.');
+    expect(out).toContain(PROSE_CRAFT_DOCTRINE);
+    expect(out).toContain('ancient wisdom'); // one of the banned clichés
+    // Author notes lead; the baked doctrine trails.
+    expect(out.indexOf('Noir.')).toBeLessThan(out.indexOf('Prose craft'));
+  });
+
+  it('appends craft even with an otherwise-empty series', () => {
+    const out = composeStyleNotes(null, { proseCraft: true });
+    expect(out).toBe(PROSE_CRAFT_DOCTRINE);
   });
 });

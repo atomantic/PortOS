@@ -67,6 +67,13 @@ vi.mock('fs/promises', () => ({
 }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
+// Default passthrough for the Windows resolve+wrap helper (#2243) — POSIX
+// behavior. A specific test overrides it with mockReturnValueOnce to assert the
+// spawn wiring uses whatever prepareCliSpawn returns.
+vi.mock('../lib/bufferedSpawn.js', () => ({
+  prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
+}));
+
 // Mock child_process.spawn to return a controllable fake process
 let fakeProcess;
 vi.mock('child_process', () => ({
@@ -78,6 +85,8 @@ vi.mock('child_process', () => ({
 }));
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
+import { spawn } from 'child_process';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 
 // Helper: feed the parser a sequence of stream-json lines
 function runStream(parser, events) {
@@ -215,6 +224,41 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
   });
 
+  it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude CLI', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'claude-ollama', command: 'claude', ollamaBacked: true },
+      'qwen3.6:35b',
+      {},
+      { systemPromptFile: '/data/cos/agents/agent-1/system-prompt.md' },
+    );
+
+    expect(config.args).toContain('--bare');
+    expect(config.args).toContain('--strict-mcp-config');
+    const idx = config.args.indexOf('--append-system-prompt-file');
+    expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-1/system-prompt.md');
+    // Lean flags must not disturb the model injection.
+    expect(config.args[config.args.indexOf('--model') + 1]).toBe('qwen3.6:35b');
+  });
+
+  it('does NOT add lean flags to the standard claude CLI provider', () => {
+    const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, 'claude-opus-4-8');
+    expect(config.args).not.toContain('--bare');
+    expect(config.args).not.toContain('--strict-mcp-config');
+    expect(config.args).not.toContain('--append-system-prompt-file');
+  });
+
+  it('adds the system-prompt file to a STANDARD claude CLI WITHOUT lean flags', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'claude-code', command: 'claude' },
+      'claude-opus-4-8',
+      {},
+      { systemPromptFile: '/data/cos/agents/agent-2/system-prompt.md' },
+    );
+    expect(config.args).not.toContain('--bare');
+    const idx = config.args.indexOf('--append-system-prompt-file');
+    expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-2/system-prompt.md');
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.
@@ -306,6 +350,9 @@ describe('stream error containment', () => {
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentLifecycle.js')).finalizeAgent.mockResolvedValue(undefined);
     minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
+    // Reset the resolve+wrap helper to its POSIX passthrough before each test
+    // (afterEach's restoreAllMocks can clear the factory implementation).
+    vi.mocked(prepareCliSpawn).mockImplementation((command, args) => ({ command, args }));
   });
 
   afterEach(() => {
@@ -382,6 +429,37 @@ describe('stream error containment', () => {
       (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
     );
     expect(logged).toBe(true);
+  });
+
+  it('routes the CLI command through prepareCliSpawn and spawns its resolved+wrapped result (#2243)', async () => {
+    // The reported bug: on Windows a bare `opencode`/`claude` .cmd shim can't be
+    // spawned directly under shell:false → ENOENT (-4058) → startup-failure.
+    // spawnDirectly must hand the command through prepareCliSpawn (resolve +
+    // cmd.exe wrap) and spawn WHATEVER it returns — asserted here with a sentinel.
+    vi.mocked(prepareCliSpawn).mockReturnValueOnce({
+      command: 'cmd.exe',
+      args: ['/c', 'C:\\npm\\claude.cmd', '--print'],
+    });
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10)); // let the getClaudeSettingsEnv await settle
+
+    // Called with the logical command + args and the child env (PATH-bearing) so
+    // a provider PATH override is honored.
+    expect(prepareCliSpawn).toHaveBeenCalledWith(
+      minimalArgs.cliConfig.command,
+      minimalArgs.cliConfig.args,
+      expect.objectContaining({ PATH: expect.anything() }),
+    );
+    // spawn() received the resolved+wrapped pair, NOT the bare command.
+    expect(spawn).toHaveBeenCalledWith(
+      'cmd.exe',
+      ['/c', 'C:\\npm\\claude.cmd', '--print'],
+      expect.objectContaining({ shell: false }),
+    );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
   });
 
   describe('initialization timeout — 3-second phase transition', () => {

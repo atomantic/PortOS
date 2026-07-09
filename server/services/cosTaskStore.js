@@ -199,7 +199,16 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // tick. The completing task is about to become `completed`, so ignoring it is
   // correct, not a dedup hole.
   const normalizedDesc = firstLine(taskData.description).toLowerCase();
-  const targetApp = taskData.app || null;
+  // The candidate's app can arrive two ways: non-raw tasks pass it top-level as
+  // `taskData.app` (used below to build `metadata.app`); raw tasks — the queue-path
+  // improvement tasks and on-demand generated tasks — arrive pre-built with the app
+  // already in `metadata.app` and NO top-level `app`. Read both, or the app-scoped
+  // dedup silently no-ops for raw managed-app tasks: `targetApp` would be `null` and
+  // never equal the existing task's `metadata.app`, so two concurrent
+  // `queueEligibleImprovementTasks` snapshots (the periodic evaluation + the
+  // improvement-check timer firing close together) each add an identical
+  // `[Improvement: PortOS] …` task, producing the overlapping duplicate runs.
+  const targetApp = taskData.app ?? taskData.metadata?.app ?? null;
   const duplicate = tasks.find(t =>
     t.id !== ignoreTaskId &&
     (t.status === 'pending' || t.status === 'in_progress') &&
@@ -237,6 +246,15 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     else if (taskData.useWorktree === false) metadata.useWorktree = false;
     if (taskData.openPR === true) metadata.openPR = true;
     else if (taskData.openPR === false) metadata.openPR = false;
+    // Default a worktree-isolated USER task to opening a PR rather than
+    // auto-merging straight to the default branch — an unreviewed agent commit
+    // landing on main is the more dangerous default (see the local-model eval
+    // that auto-merged). Fires only when openPR wasn't explicitly set AND a
+    // worktree was explicitly requested; an explicit `openPR: false` above
+    // always wins, and internal/system tasks (autopilot, self-improvement) keep
+    // their existing auto-merge behavior so automation isn't silently gated on a
+    // human merging a PR.
+    else if (taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
     if (taskData.simplify === true) metadata.simplify = true;
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;

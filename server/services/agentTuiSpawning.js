@@ -17,21 +17,25 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
+  DEFAULT_TUI_MAX_RUNTIME_MS,
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
+  REVIEW_LOOP_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
   createWorkActivityTracker,
   createMergeQueueTracker,
+  createReviewLoopTracker,
   createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
@@ -44,13 +48,27 @@ import {
   RAW_SPOOL_MAX_BYTES,
   inferTuiCommand,
   applyCommandDefaults,
+  PASTE_VERIFY_POLL_MS,
+  PASTE_VERIFY_WINDOW_MS,
+  PASTE_RETRY_MAX_ATTEMPTS,
+  PASTE_RETRY_BASE_DELAY_MS,
+  extractVerifiablePromptPrefix,
+  isPasteConfirmed,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { execFile } from 'child_process';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
 const DEFAULT_TUI_MIN_RUNTIME_MS = 15000;
+// Grace window after the last input written to the session (human paste via
+// the Shell page, or our own auto-paste) before the idle reaper is allowed to
+// fire again. Covers a large bracketed paste sitting in a silent reflow/commit
+// window with no PTY output yet — comfortably above the paste-to-enter
+// handshake windows in tuiHandshake.js (PASTE_DEADLINE_MS=10s) without
+// meaningfully weakening the idle-reap protection once input truly stops.
+const PASTE_INPUT_GRACE_MS = 15000;
 // Tail-read window for raw.txt at failure analysis. analyzeAgentFailure only
 // inspects the last ~200 lines, so reading the whole file (which has no upper
 // bound for long-running agents) would reintroduce the OOM risk the disk
@@ -99,6 +117,45 @@ async function readFileTail(path, maxBytes) {
     await fh.close().catch(() => {});
   }
 }
+/**
+ * Check if a worktree has any uncommitted changes. Returns true when the
+ * working tree is dirty (staged or unstaged changes exist). Used to gate
+ * idle-complete success — an agent that idled out with zero file changes
+ * should fail, not succeed.
+ */
+async function worktreeHasChanges(workspacePath) {
+  if (!workspacePath || typeof workspacePath !== 'string') return false;
+  const status = await git.getStatus(workspacePath).catch(() => null);
+  return status && !status.clean;
+}
+
+/**
+ * Capture the git diff (staged + unstaged) from a worktree and save it to the
+ * agent archive dir. Called before worktree cleanup so post-mortems can see
+ * what changes existed even if the worktree is deleted. Non-throwing — a
+ * failure to capture shouldn't block finalize.
+ *
+ * @returns {string|null} The captured diff, or null if none/error.
+ */
+async function captureWorktreeDiff(workspacePath, agentDir) {
+  if (!workspacePath || typeof workspacePath !== 'string') return null;
+  if (!agentDir || typeof agentDir !== 'string') return null;
+  const [staged, unstaged] = await Promise.all([
+    git.getDiff(workspacePath, true).catch(() => ''),
+    git.getDiff(workspacePath, false).catch(() => ''),
+  ]);
+  const combined = [
+    staged ? `### STAGED CHANGES ###\n${staged}` : '',
+    unstaged ? `### UNSTAGED CHANGES ###\n${unstaged}` : '',
+  ].filter(Boolean).join('\n\n');
+  if (!combined.trim()) return null;
+  const diffFile = join(agentDir, 'worktree-diff.txt');
+  await writeFile(diffFile, combined).catch((err) => {
+    console.error(`❌ Failed to capture worktree diff for agent: ${err.message}`);
+  });
+  return combined;
+}
+
 // Debounce window for batching parsed output to disk + state. A chatty TUI can
 // emit hundreds of lines/sec; without batching, each line triggers a full
 // state load+save (see appendAgentOutput) and a small appendFile, which slows
@@ -122,7 +179,10 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
+  // the models map so --model is accepted (the static env var lacked this).
+  const opencodeEnv = buildOpencodeEnvVars(provider, model);
   const sessionId = shellService.createShellSession(null, {
     cwd,
     kind: 'agent-tui',
@@ -142,7 +202,8 @@ export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onDat
     // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
-    env: { ...(provider.envVars || {}), ...agentGuardEnv() },
+    // opencodeEnv comes after provider.envVars to override the static config.
+    env: { ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -195,17 +256,25 @@ function appendModelArgs(args, model, command, provider) {
   return [...args, '--model', injectedModel];
 }
 
-export function buildTuiSpawnConfig(provider, model) {
+export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  const args = appendModelArgs(baseArgs, model, command, provider);
+  let args = appendModelArgs(baseArgs, model, command, provider);
+  // Lean mode for Ollama-backed claude sessions (no-op otherwise) — must come
+  // before the system-prompt flag so `--bare` is present when the contract
+  // file rides along.
+  args = applyLeanClaudeArgs(provider, args, command);
+  if (systemPromptFile && isClaudeCommand(command)) {
+    args = [...args, '--append-system-prompt-file', systemPromptFile];
+  }
 
   return {
     command,
     args,
     commandLine: [command, ...args].map(shellQuote).join(' '),
     promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
-    idleTimeoutMs: provider?.tuiIdleTimeoutMs || DEFAULT_TUI_IDLE_TIMEOUT_MS
+    idleTimeoutMs: provider?.tuiIdleTimeoutMs || DEFAULT_TUI_IDLE_TIMEOUT_MS,
+    maxRuntimeMs: provider?.tuiMaxRuntimeMs || DEFAULT_TUI_MAX_RUNTIME_MS
   };
 }
 
@@ -283,6 +352,14 @@ export async function spawnTuiAgent({
   // latched, the idle reaper uses the extended MERGE_QUEUE_IDLE_TIMEOUT_MS so a
   // still-working orchestrator isn't reaped mid-merge (issue #2074).
   const mergeQueue = createMergeQueueTracker();
+  // Latches once the agent enters a do:release/do:pr/do:rpr multi-reviewer
+  // loop, whose external reviewer passes (codex reading a large diff, a
+  // Copilot cloud review, a human @<login> review) can go silent in the TUI
+  // for well over the default idle window. While latched, the idle reaper
+  // uses the extended REVIEW_LOOP_IDLE_TIMEOUT_MS so a still-waiting release
+  // isn't reaped as a false `idle-complete` success before it reaches the
+  // merge gate (issue observed on agent-61508f36, PR #2084).
+  const reviewLoop = createReviewLoopTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
@@ -321,7 +398,14 @@ export async function spawnTuiAgent({
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
   let pasteEnterTimer = null;
+  let pasteVerifyTimer = null;
   let submitEnterTimer = null;
+  // Absolute wall-clock backstop — armed once the prompt is SUBMITTED, cleared
+  // in finish(). Unlike the idle reaper (which resets on every PTY repaint and
+  // so never fires for a busy-but-stuck agent whose working counter keeps
+  // ticking), this bounds the total run so a hung provider/CLI can't run
+  // unbounded. See DEFAULT_TUI_MAX_RUNTIME_MS for the incident.
+  let maxRuntimeTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
 
@@ -471,7 +555,9 @@ export async function spawnTuiAgent({
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
     if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     if (submitEnterTimer) { clearInterval(submitEnterTimer); submitEnterTimer = null; }
+    if (maxRuntimeTimer) { clearTimeout(maxRuntimeTimer); maxRuntimeTimer = null; }
     // Release the post-paste accumulator even when finalize fires mid-paste-
     // window. The pasteEnterTimer's own cleanup path nulls this too, but if
     // finalize comes from elsewhere (shell-exit, command-not-found, user
@@ -639,6 +725,13 @@ export async function spawnTuiAgent({
         emitLog('info', `TUI agent ${agentId} entered merge queue — idle reaper extended to ${Math.round(MERGE_QUEUE_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'merge-queue' });
         await updateAgent(agentId, { metadata: { phase: 'merge-queue' } });
       }
+      // Detect entry into a do:release/do:pr/do:rpr multi-reviewer loop so the
+      // idle reaper can extend its grace across a slow reviewer's silent
+      // working stretch (see reviewLoop declaration above for the incident).
+      if (promptSubmittedAt && stripped && !reviewLoop.active && reviewLoop.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} entered review loop — idle reaper extended to ${Math.round(REVIEW_LOOP_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'review-loop' });
+        await updateAgent(agentId, { metadata: { phase: 'review-loop' } });
+      }
       lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
@@ -701,6 +794,7 @@ export async function spawnTuiAgent({
   const session = createAgentTuiSession({
     agentId,
     provider,
+    model,
     tuiConfig,
     cwd,
     onData: handleData,
@@ -761,6 +855,11 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Extract a verifiable prefix from the prompt for paste verification (issue #2192).
+  // Computed once up front so retry attempts use the same verification target.
+  const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+  let pasteAttempt = 0;
+
   const sendPrompt = async (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
@@ -778,13 +877,26 @@ export async function spawnTuiAgent({
       );
       return;
     }
+    // Start the paste attempt — may be retried if verification fails (issue #2192).
+    attemptPaste(reason);
+  };
+
+  // Actually perform a paste attempt. Separated from sendPrompt so retries don't
+  // re-run the liveness guard or re-set promptSentAt. Increments pasteAttempt on
+  // each call; clears any pending timers from the previous attempt first.
+  const attemptPaste = (reason) => {
+    pasteAttempt += 1;
+    const attemptNum = pasteAttempt;
+    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     // Start capturing post-paste output. Set BEFORE writing the paste so
     // every chunk that arrives in response gets appended. Cleared the moment
     // detection resolves (marker seen or fallback elapsed) so the accumulator
     // never lives beyond the paste-marker window.
     postPasteBuffer = '';
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
+    const attemptSuffix = attemptNum > 1 ? ` [attempt ${attemptNum}/${PASTE_RETRY_MAX_ATTEMPTS}]` : '';
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})${attemptSuffix}`);
 
     // Submit the pasted prompt with repeated Enters — a single `\r` can be
     // swallowed while the TUI is still reflowing a large paste, stranding the
@@ -798,6 +910,72 @@ export async function spawnTuiAgent({
         () => shellService.writeToSession(sessionId, '\r'),
         () => finalized
       );
+      // Arm the absolute wall-clock backstop from submission (once — a paste
+      // retry re-enters submitEnter but must not stack timers). The idle reaper
+      // can't bound a busy-but-stuck agent because Claude Code's working counter
+      // keeps repainting through a stalled provider retry, resetting lastOutputAt
+      // forever; this timer is the honest ceiling regardless of PTY chatter.
+      if (!maxRuntimeTimer) {
+        maxRuntimeTimer = setTimeout(() => {
+          if (finalized) return;
+          // Salvage net: if the agent already wrote its .agent-done sentinel the
+          // run truly finished (the TUI just never idled/exited), so complete as
+          // success — mirrors the one-shot runner's response-file salvage. The
+          // 2s doneSentinelTimer normally catches this first; this covers the
+          // boundary where it lands right at the deadline.
+          const salvaged = doneSentinelPath && existsSync(doneSentinelPath);
+          if (salvaged) {
+            finish({ success: true, exitCode: 0, reason: 'max-runtime-sentinel' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId} at max-runtime salvage: ${err.message}`, { agentId });
+            });
+            return;
+          }
+          // Capture any uncommitted work for post-mortem before cleanup, then
+          // fail with a needs-manual-finish message — a stuck orchestrator may
+          // have left PRs/worktrees behind (same recovery guidance as the
+          // merge-queue/review-loop idle-timeout paths).
+          captureWorktreeDiff(cwd, agentDir).catch(() => {});
+          finish({
+            success: false,
+            exitCode: 124,
+            error: `TUI agent exceeded its max runtime of ${Math.round(tuiConfig.maxRuntimeMs / 60000)}min — the provider/CLI likely hung (a stalled request keeps the working counter repainting so the idle reaper never fires); check for open or merged-but-uncleaned PRs and finish them manually.`,
+            reason: 'max-runtime-timeout',
+          }).catch(err => {
+            emitLog('error', `Failed to finalize TUI agent ${agentId} at max-runtime: ${err.message}`, { agentId });
+          });
+        }, tuiConfig.maxRuntimeMs);
+      }
+    };
+
+    // Confirms the TUI actually received the paste before we submit. The
+    // paste-commit MARKER ([Pasted text #N]) is authoritative — Claude Code
+    // collapses a multi-line paste into that chip and HIDES the body text, so a
+    // literal text check false-negatives on every multi-line prompt (real
+    // incident 2026-07-05: agent-656efa6e et al. failed `paste-not-rendered`
+    // despite the marker being present). Literal-text verification is only the
+    // fallback for the markerless path — see isPasteConfirmed.
+    const pasteConfirmed = (buffer) =>
+      isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
+
+    // Markerless AND the prompt text never rendered → the paste was swallowed by
+    // a still-initializing TUI (issue #2192). Retry with backoff, then fail.
+    const retryOrFailPaste = () => {
+      if (finalized) return;
+      if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
+        const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+        appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
+        setTimeout(() => {
+          if (finalized) return;
+          attemptPaste(reason);
+        }, retryDelayMs);
+        return;
+      }
+      // Max retries exhausted — fail the agent
+      appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
+      finishStartupFailure(
+        'paste-not-rendered',
+        `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
+      ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
     };
 
     const pasteSentAt = Date.now();
@@ -817,8 +995,41 @@ export async function spawnTuiAgent({
         || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
+        // Capture the buffer before clearing, then confirm the paste (issue #2192).
+        const commitBuffer = postPasteBuffer || '';
         postPasteBuffer = null;
-        submitEnter();
+        // Marker present (or text already visible, or nothing to verify) → the
+        // paste landed; submit now. Trusting the marker here is what fixes the
+        // multi-line-collapse false negative — Claude hides the pasted body text.
+        if (pasteConfirmed(commitBuffer)) {
+          submitEnter();
+          return;
+        }
+        // Markerless AND text not visible yet: give the prompt a short window to
+        // render (a late marker also counts as confirmed) before declaring it
+        // swallowed. Resume accumulation for the verification window.
+        let verifyBuffer = commitBuffer;
+        const verifyStartedAt = Date.now();
+        postPasteBuffer = commitBuffer;
+        pasteVerifyTimer = setInterval(() => {
+          if (finalized) {
+            clearInterval(pasteVerifyTimer);
+            pasteVerifyTimer = null;
+            postPasteBuffer = null;
+            return;
+          }
+          verifyBuffer = postPasteBuffer || verifyBuffer;
+          const verifyElapsed = Date.now() - verifyStartedAt;
+          const confirmed = pasteConfirmed(verifyBuffer);
+          // Submit once confirmed, or give up and retry/fail when the window expires.
+          if (confirmed || verifyElapsed >= PASTE_VERIFY_WINDOW_MS) {
+            clearInterval(pasteVerifyTimer);
+            pasteVerifyTimer = null;
+            postPasteBuffer = null;
+            if (confirmed) submitEnter();
+            else retryOrFailPaste();
+          }
+        }, PASTE_VERIFY_POLL_MS);
       }
     }, PASTE_MARKER_POLL_MS);
   };
@@ -888,6 +1099,21 @@ export async function spawnTuiAgent({
 
   const idleTimer = setInterval(() => {
     if (!promptSentAt || finalized) return;
+    // Don't reap a session that just received real input — a human pasting
+    // into the Shell page, or our own auto-paste. A big bracketed paste can
+    // sit in a silent reflow/commit window with no PTY output yet, which
+    // looks identical to "idle" to this timer otherwise (same class of bug
+    // as #2074/#2084, but for a live paste instead of a merge-queue/
+    // review-loop wait). Gated on INPUT RECENCY, not "is a socket attached" —
+    // a regular (non-external) Shell session keeps its socket bound after the
+    // viewer navigates away (only external one-shot runs get released via
+    // `shell:release-views`), so "attached" would permanently suppress
+    // idle-complete for any agent glanced at once in the Shell UI. Recency
+    // naturally expires once nobody is actually interacting.
+    if (sessionId) {
+      const lastInputAt = shellService.getLastInputAt(sessionId);
+      if (lastInputAt && Date.now() - lastInputAt < PASTE_INPUT_GRACE_MS) return;
+    }
     const runtime = Date.now() - promptSentAt;
     const idle = Date.now() - lastOutputAt;
     if (runtime < DEFAULT_TUI_MIN_RUNTIME_MS) return;
@@ -901,7 +1127,9 @@ export async function spawnTuiAgent({
     // extended window still bounds a genuinely-dead orchestrator's reap.
     const effectiveIdleTimeoutMs = mergeQueue.active
       ? Math.max(tuiConfig.idleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
-      : tuiConfig.idleTimeoutMs;
+      : reviewLoop.active
+        ? Math.max(tuiConfig.idleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
+        : tuiConfig.idleTimeoutMs;
     if (idle >= effectiveIdleTimeoutMs) {
       // Reaped AFTER the extended merge-queue grace elapsed: the orchestrator
       // almost certainly died mid-merge with PRs opened/merged-but-uncleaned.
@@ -913,6 +1141,22 @@ export async function spawnTuiAgent({
           exitCode: 1,
           error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min in the merge queue — it likely died mid-merge; check for open or merged-but-uncleaned PRs and finish them manually.`,
           reason: 'merge-queue-idle-timeout',
+        }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        });
+        return;
+      }
+      // Reaped AFTER the extended review-loop grace elapsed: a reviewer
+      // (copilot/codex/agy/claude/ollama/@<login>) likely hung, or the wait
+      // simply exceeded budget. Surface it as a needs-manual-finish FAILURE
+      // rather than the silent `status: completed` that let PR #2084 sit
+      // open+unmerged for hours while agent-61508f36 looked "done".
+      if (reviewLoop.active) {
+        finish({
+          success: false,
+          exitCode: 1,
+          error: `TUI agent idled out after ${Math.round(effectiveIdleTimeoutMs / 60000)}min waiting inside the multi-reviewer loop — a reviewer may have hung or the wait exceeded budget; check the PR's review/merge state and finish manually.`,
+          reason: 'review-loop-idle-timeout',
         }).catch(err => {
           emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
         });
@@ -930,8 +1174,19 @@ export async function spawnTuiAgent({
       // completion on those providers would falsely fail). So: downgrade to
       // failure only when the provider DOES render the counter and we never saw
       // it advance.
+      //
+      // Issue #2191 extension: even when workActivity.active is true, the model
+      // may have "worked" (made tool calls, printed output) without actually
+      // writing any files — e.g. rambled, made invalid tool calls, or hit an
+      // error. Check the worktree for evidence of actual changes: if the
+      // worktree is clean (no git status changes), mark as failed so the
+      // orchestrator doesn't treat a no-op as done. Capture the diff into the
+      // agent archive dir before cleanup so post-mortems can see what (if
+      // anything) was left behind.
       const noWorkButCounterExpected = !workActivity.active && rendersWorkCounter(commandName);
       if (noWorkButCounterExpected) {
+        // Capture any uncommitted changes for post-mortem analysis
+        captureWorktreeDiff(cwd, agentDir).catch(() => {});
         finish({
           success: false,
           exitCode: 1,
@@ -941,8 +1196,32 @@ export async function spawnTuiAgent({
           emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
         });
       } else {
-        finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
-          emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+        // Gate idle-complete success on evidence of work in the worktree.
+        // An agent that shows activity counters but makes no file changes
+        // (rambled, invalid tool calls, hit an error) should fail, not succeed.
+        (async () => {
+          const hasChanges = await worktreeHasChanges(cwd);
+          // Capture any uncommitted changes for post-mortem analysis regardless
+          // of outcome — the diff is useful even on success for debugging.
+          await captureWorktreeDiff(cwd, agentDir).catch(() => {});
+          if (!hasChanges) {
+            finish({
+              success: false,
+              exitCode: 1,
+              error: 'TUI agent idled out with zero uncommitted file changes — the model may have processed but produced no work.',
+              reason: 'idle-no-changes',
+            }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          } else {
+            finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
+            });
+          }
+        })().catch(err => {
+          emitLog('error', `TUI agent ${agentId} idle-complete check failed: ${err.message}`, { agentId });
+          // Fall back to success if the check itself failed (don't block on git)
+          finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(() => {});
         });
       }
     }
@@ -998,7 +1277,8 @@ export async function spawnTuiAgent({
       tuiSessionId: sessionId,
       tuiCommand: tuiConfig.commandLine,
       tuiKind,
-      tuiIdleTimeoutMs: tuiConfig.idleTimeoutMs
+      tuiIdleTimeoutMs: tuiConfig.idleTimeoutMs,
+      tuiMaxRuntimeMs: tuiConfig.maxRuntimeMs
     }
   });
 

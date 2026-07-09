@@ -17,7 +17,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import {
   getWork, resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, utcDayKey,
-  linkToCreativeDirector,
+  linkToCreativeDirector, renderWorkVoiceGuide,
 } from './local.js';
 import { createProject, setTreatment, deleteProject, updateProject } from '../creativeDirector/local.js';
 import { deleteCollection } from '../mediaCollections.js';
@@ -25,7 +25,11 @@ import { defaultVideoModelId } from '../videoGen/local.js';
 import { badRequest } from './_shared.js';
 
 const STAGE = 'writers-room-continue';
-const CD_BRIDGE_STAGE = 'writers-room-cd-bridge';
+// Exported so other conductors that mint a CD project from prose — the
+// pipeline→CD "produce video from issue" bridge (CDO Phase 3, #2185) — reuse the
+// SAME stage + proposal shaper rather than duplicating the treatment-from-prose
+// contract.
+export const CD_BRIDGE_STAGE = 'writers-room-cd-bridge';
 const MAX_OPTIONS = 4;
 // CD-bridge proposal bounds. The prompt asks for 2–6 filmable scenes; we clamp
 // to that range (and the LLM may overshoot, so MAX is a hard cap) — well under
@@ -91,6 +95,12 @@ export async function suggestContinuation(workId, { before = '', after = '', sel
   const variables = {
     work: { title: manifest.title, kind: manifest.kind, status: manifest.status },
     before, after, selection,
+    // Voice exemplars (#2179) — the "tuning fork" passages anchor the drafted
+    // continuation to the chosen voice far better than the template's generic
+    // "match the established voice" line. Empty string when the work carries no
+    // passages, so the continue template's {{#voiceGuide}} section renders
+    // nothing (no per-call overhead for works that never set a voice).
+    voiceGuide: renderWorkVoiceGuide(manifest),
     returnsJson: true,
   };
   const { content } = await runStagedLLM(STAGE, variables, {
@@ -157,7 +167,7 @@ function shapeBridgeScene(raw) {
 // to the CD treatment schema caps and clamps scenes to the 2–6 prompt range.
 // Returns null when the response can't yield at least MIN_BRIDGE_SCENES usable
 // scenes — the route surfaces that as an empty proposal, not a crash.
-function shapeProposal(parsed) {
+export function shapeProposal(parsed) {
   const scenes = (Array.isArray(parsed?.scenes) ? parsed.scenes : [])
     .map(shapeBridgeScene)
     .filter(Boolean)
@@ -219,6 +229,24 @@ export async function suggestCdBridge(workId, { before = '', after = '', selecti
 }
 
 /**
+ * Assign the CD scene runtime fields the treatment schema requires but a raw
+ * CD-bridge LLM proposal doesn't carry: a stable sceneId, render order, and the
+ * continuation flag (every scene after the first continues from its prior).
+ * Exported so the pipeline→CD bridge (CDO Phase 3, #2185) maps proposal scenes
+ * into a treatment identically to the writers-room send path.
+ */
+export function bridgeScenesToTreatmentScenes(scenes) {
+  return (Array.isArray(scenes) ? scenes : []).map((s, i) => ({
+    sceneId: `sc-${i + 1}`,
+    order: i,
+    intent: s.intent,
+    prompt: s.prompt,
+    durationSeconds: s.durationSeconds,
+    useContinuationFromPrior: i > 0,
+  }));
+}
+
+/**
  * Send a reviewed CD-bridge proposal into a NEW Creative Director project.
  * Non-destructive (never clobbers an existing project's treatment): it mints a
  * fresh CD project seeded with the work's title + the proposal's styleSpec, then
@@ -236,14 +264,7 @@ export async function sendToCreativeDirector(workId, { proposal } = {}) {
 
   // Assign the CD scene runtime fields the schema requires but the LLM proposal
   // doesn't carry: a stable sceneId, render order, and the continuation flag.
-  const scenes = (proposal.scenes || []).map((s, i) => ({
-    sceneId: `sc-${i + 1}`,
-    order: i,
-    intent: s.intent,
-    prompt: s.prompt,
-    durationSeconds: s.durationSeconds,
-    useContinuationFromPrior: i > 0,
-  }));
+  const scenes = bridgeScenesToTreatmentScenes(proposal.scenes);
 
   // CD render defaults — match the client New-Project form (16:9 / standard /
   // 60s) and resolve the default video model server-side so a bridged project

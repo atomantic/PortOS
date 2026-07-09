@@ -48,6 +48,15 @@ const autopilotStartSchema = z.object({
   maxArcVerifyRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxEditorialRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   maxBeatContinuityRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  // Foundation-quality gate (#2176). Per-run overrides for the pre-draft
+  // foundation judge: `foundationGate` toggles it (defaults ON via the persisted
+  // setting), `foundationThreshold` is the weighted [0,10] bar the foundation
+  // must clear, `maxFoundationRounds` bounds the improve loop (0 = skip). When
+  // omitted, each falls back to the persisted pipelineEditorialChecks setting,
+  // then the module default. Round cap shares the convergence ceiling.
+  foundationGate: z.boolean().optional(),
+  foundationThreshold: z.number().min(0).max(10).optional(),
+  maxFoundationRounds: z.number().int().min(0).max(MAX_CONVERGENCE_ROUNDS).optional(),
   // Per-run retry budget for a failed delegated child runner (beats/text) before
   // the autopilot escalates to a pause (#1574). 0 = single attempt, no retry.
   // Per-run only (no persisted default); falls back to MAX_CHILD_RETRIES. Shares
@@ -78,6 +87,22 @@ const autopilotStartSchema = z.object({
   // pipelineEditorialChecks.notifyOnPause, then true (on by default — a zero-cost
   // informational signal). Set false to silence pause notifications for this run.
   notifyOnPause: z.boolean().optional(),
+  // Autopilot → CD teaser deliverable (CDO Phase 3, #2185). When true, once every
+  // comic issue is drafted the run mints + starts a Creative Director teaser video
+  // per issue. Falls back to pipelineEditorialChecks.produceTeaser, then off.
+  produceTeaser: z.boolean().optional(),
+  // Iterate-to-quality revision loop (CWQE Phase 7, #2171). When true, after the
+  // editorial-health gate the run cycles the weakest drafted issue through
+  // adversarial cuts + a judge-gated keep/revert, stopping on plateau /
+  // hedged-convergence / maxCycles. Falls back to the persisted
+  // pipelineEditorialChecks.revision* setting, then off. minCycles floors the
+  // stops; maxCycles is the cost ceiling; plateauDelta is the score-movement
+  // convergence threshold. Caps share MAX_CONVERGENCE_ROUNDS so a direct API call
+  // can't request an absurd cycle budget.
+  revisionEnabled: z.boolean().optional(),
+  revisionMinCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionMaxCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
+  revisionPlateauDelta: z.number().min(0).max(10).optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

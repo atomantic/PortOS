@@ -602,6 +602,76 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).toMatch(/^## Completion$/m);
   });
 
+  describe('split system/user prompt (Claude providers)', () => {
+    const wt = { branchName: 'cos/t/a', worktreePath: '/tmp/wt', baseBranch: 'main' };
+    const splitTask = () => makeTask({ metadata: { context: 'Some context', openPR: false } });
+
+    it('returns { userPrompt, systemPrompt } with the task in user and the contract in system', async () => {
+      const parts = await buildAgentPrompt(
+        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true, split: true });
+      expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
+      expect(parts.userPrompt).toMatch(/Some context/);
+      expect(parts.userPrompt).toMatch(/Begin working on the task now\./);
+      expect(parts.userPrompt).not.toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).toMatch(/## Git Worktree/);
+      expect(parts.systemPrompt).toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).not.toMatch(/Add a button to the dashboard/);
+    });
+
+    it('split parts carry exactly the combined prompt sections (no drift)', async () => {
+      const opts = { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true };
+      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, opts);
+      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, { ...opts, split: true });
+      // Combined = task sections + contract sections + Begin line; the split
+      // moves the contract out and keeps the Begin line with the user prompt.
+      const reassembled = parts.userPrompt.replace(
+        /\n\nBegin working on the task now\.\n$/,
+        '\n\n' + parts.systemPrompt.replace(/\n$/, '') + '\n\nBegin working on the task now.\n'
+      );
+      expect(reassembled).toBe(combined);
+    });
+
+    it('leanMode routes a claude TUI to the slashdo-free completion workflow', async () => {
+      const prompt = await buildAgentPrompt(
+        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { providerType: 'tui', providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true });
+      expect(prompt).not.toMatch(/`\/do:push`/);
+      expect(prompt).not.toMatch(/`\/do:pr`/);
+      // Same sentinel handshake as the OpenCode slashdo-free path.
+      expect(prompt).toMatch(/\.agent-done/);
+    });
+
+    it('without leanMode a claude TUI still gets the slashdo workflow', async () => {
+      const prompt = await buildAgentPrompt(
+        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude' });
+      expect(prompt).toMatch(/\/do:push/);
+    });
+
+    it('splits a STANDARD (non-lean) claude TUI too, keeping slashdo in the system prompt', async () => {
+      const parts = await buildAgentPrompt(
+        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude', split: true });
+      // Task in the user prompt, contract (with slashdo — NOT slashdo-free) in system.
+      expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
+      expect(parts.userPrompt).not.toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).toMatch(/## Completion Workflow/);
+      expect(parts.systemPrompt).toMatch(/\/do:push/);
+    });
+
+    it('split parts carry exactly the combined prompt for a standard claude CLI (no drift)', async () => {
+      const opts = { providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude' };
+      const combined = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, opts);
+      const parts = await buildAgentPrompt(splitTask(), {}, '/r', wt, isTruthyMeta, { ...opts, split: true });
+      const reassembled = parts.userPrompt.replace(
+        /\n\nBegin working on the task now\.\n$/,
+        '\n\n' + parts.systemPrompt.replace(/\n$/, '') + '\n\nBegin working on the task now.\n'
+      );
+      expect(reassembled).toBe(combined);
+    });
+  });
+
   it('full-context (api) review-loop follow-up emits merge command WITHOUT --auto and includes MERGED verification', async () => {
     // Regression for Copilot feedback on PR #260: the merge-without-auto +
     // MERGED-state verification instructions live in BOTH the light and full

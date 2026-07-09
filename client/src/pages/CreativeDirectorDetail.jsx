@@ -11,16 +11,19 @@ import {
 import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
 import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
+import PlanTab from '../components/creative-director/PlanTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useValidTab } from '../hooks/useValidTab';
+import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'plan', label: 'Plan' },
   { id: 'treatment', label: 'Treatment' },
   { id: 'segments', label: 'Segments' },
   { id: 'runs', label: 'Runs' },
@@ -41,8 +44,20 @@ export default function CreativeDirectorDetail() {
   // would otherwise never pick up the result without a manual Refresh.
   const [pendingAsyncWork, setPendingAsyncWork] = useState(false);
   const pendingAsyncWorkTimerRef = useRef(null);
-  const extendPollingForAsyncWork = useCallback(() => {
+  // Watch the queued first-pass music-bed job (#1933). Its completion attaches
+  // to `project.musicBed` via a durable server-side hook (picked up by polling),
+  // but a FAILURE (engine crash/OOM/sidecar error) has no other client-visible
+  // signal — so subscribe to `audio-gen:*` for the single job id and toast the
+  // outcome. Held in a ref alongside the id so the terminal-state effect below
+  // only toasts once per render, even though polling keeps re-rendering.
+  const [musicBedJobId, setMusicBedJobId] = useState(null);
+  const musicBedToastedRef = useRef(null);
+  const extendPollingForAsyncWork = useCallback((opts) => {
     setPendingAsyncWork(true);
+    if (opts?.musicBedJobId) {
+      musicBedToastedRef.current = null;
+      setMusicBedJobId(opts.musicBedJobId);
+    }
     clearTimeout(pendingAsyncWorkTimerRef.current);
     // 3 minutes covers a cold model load + render for the local image/audio
     // gen backends in the common case; if it runs longer the user can still
@@ -51,6 +66,27 @@ export default function CreativeDirectorDetail() {
     pendingAsyncWorkTimerRef.current = setTimeout(() => setPendingAsyncWork(false), 3 * 60 * 1000);
   }, []);
   useEffect(() => () => clearTimeout(pendingAsyncWorkTimerRef.current), []);
+
+  // Toast the music-bed render's terminal state exactly once. Success is mostly
+  // cosmetic (polling already renders the Music bed field), but confirms the
+  // background render the user opted into actually landed; failure is the whole
+  // point of #1933 — otherwise a crashed render is silently invisible.
+  const musicBed = useMediaJobProgress(musicBedJobId, { kind: 'audio' });
+  useEffect(() => {
+    if (!musicBedJobId || musicBedToastedRef.current === musicBedJobId) return;
+    if (musicBed.status === 'failed') {
+      musicBedToastedRef.current = musicBedJobId;
+      toast.error(`Music-bed render failed: ${musicBed.error || 'unknown error'}`);
+      setMusicBedJobId(null);
+    } else if (musicBed.status === 'completed') {
+      musicBedToastedRef.current = musicBedJobId;
+      toast.success('First-pass music bed ready');
+      setMusicBedJobId(null);
+    } else if (musicBed.status === 'canceled') {
+      musicBedToastedRef.current = musicBedJobId;
+      setMusicBedJobId(null);
+    }
+  }, [musicBedJobId, musicBed.status, musicBed.error]);
 
   const fetchProject = useCallback(async () => {
     const p = await getCreativeDirectorProject(id).catch(() => null);
@@ -94,6 +130,10 @@ export default function CreativeDirectorDetail() {
     // A pending-async-work window is per-project intent — don't carry it
     // across a route swap (the new project has its own poll-gate state).
     setPendingAsyncWork(false);
+    // Stop watching the prior project's music-bed job on a route swap so its
+    // late failure/completion toast can't land on the newly-opened project.
+    setMusicBedJobId(null);
+    musicBedToastedRef.current = null;
     clearTimeout(pendingAsyncWorkTimerRef.current);
     refetchPoll();
   }, [id, refetchPoll]);
@@ -178,6 +218,12 @@ export default function CreativeDirectorDetail() {
             project={project}
             onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)}
             onAsyncWorkQueued={extendPollingForAsyncWork}
+          />
+        )}
+        {activeTab === 'plan' && (
+          <PlanTab
+            project={project}
+            onProjectUpdate={(updated) => setProject((p) => (p ? { ...p, ...updated } : updated))}
           />
         )}
         {activeTab === 'treatment' && <TreatmentTab project={project} />}

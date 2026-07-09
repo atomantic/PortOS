@@ -110,6 +110,61 @@ export const workspaceContextParamsSchema = z.object({
   appId: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/, 'invalid app id')
 });
 
+// Layered Intelligence per-app config (the self-improvement loop). Off by
+// default; the loop is a user-enabled scheduled automation. `lastRunAt` is
+// server-managed run bookkeeping (cadence, not issue memory) but accepted here
+// so a round-tripped config doesn't 400. See server/services/layeredIntelligence.js.
+export const LAYERED_INTELLIGENCE_SCOPES = ['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self'];
+export const layeredIntelligenceConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMs: z.number().int().min(60_000).optional(),
+  providerId: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  sources: z.object({
+    goals: z.boolean().optional(),
+    cosMetrics: z.boolean().optional(),
+    healthReport: z.boolean().optional(),
+    planMd: z.boolean().optional(),
+    openIssues: z.boolean().optional(),
+    // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
+    // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
+    // `label`. gatherSources also re-enforces the file confinement + the
+    // http scheme + a cmd timeout at read time (defense in depth).
+    custom: z.array(z.discriminatedUnion('type', [
+      z.object({
+        type: z.literal('file'),
+        // A safe repo-relative path — reject absolute paths and `..` traversal so a
+        // custom source can't read files outside the app repo into the LLM prompt.
+        ref: z.string().min(1).max(500)
+          .refine(r => !r.startsWith('/') && !r.split(/[/\\]/).includes('..'), {
+            message: 'ref must be a repo-relative path (no leading / and no ".." segments)'
+          }),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('http'),
+        // Only http/https — gatherSources rejects any other scheme at read time too.
+        url: z.string().url().max(2000)
+          .refine(u => /^https?:\/\//i.test(u), { message: 'url must be http(s)' }),
+        label: z.string().max(120).optional()
+      }),
+      z.object({
+        type: z.literal('cmd'),
+        cmd: z.string().min(1).max(2000),
+        label: z.string().max(120).optional()
+      })
+    ])).optional()
+  }).optional(),
+  rules: z.string().max(8000).optional(),
+  allowedScopes: z.array(z.enum(LAYERED_INTELLIGENCE_SCOPES)).optional(),
+  // Engine-A hand-off: when enabled, a reasoner-marked trivial+safe proposal is
+  // also enqueued as an approval-gated CoS coding-agent task. Off by default.
+  handoff: z.object({
+    enabled: z.boolean().optional()
+  }).optional(),
+  lastRunAt: z.string().nullable().optional()
+});
+
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
@@ -147,7 +202,11 @@ export const appSchema = z.object({
   // — see server/lib/workTracker.js + the `claim-work` router in
   // cosTaskGenerator.js. WORK_TRACKERS is the single source of truth for the
   // value set.
-  workTracker: z.enum(WORK_TRACKERS).optional()
+  workTracker: z.enum(WORK_TRACKERS).optional(),
+  // Layered Intelligence per-app config (the self-improvement loop). Full config
+  // accepted on create/update; the dedicated updateAppLayeredIntelligence merge
+  // (server/services/apps.js) preserves untouched fields on partial PATCHes.
+  layeredIntelligence: layeredIntelligenceConfigSchema.optional()
   // referenceRepos is INTENTIONALLY not part of the create/update API
   // surface. createApp() doesn't persist it and updateApp() (via the
   // omit() in appUpdateSchema) ignores it — the dedicated
@@ -202,7 +261,11 @@ export const providerSchema = z.object({
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional()
+  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional(),
+  // Absolute wall-clock ceiling for long-running TUI agents (mirrors the
+  // aiToolkit providerSchema; the idle reaper can't bound a busy-but-stuck agent
+  // — see DEFAULT_TUI_MAX_RUNTIME_MS in tuiHandshake.js). Min 1min, max 12h.
+  tuiMaxRuntimeMs: z.number().int().min(60000).max(43200000).optional()
 });
 
 // Run command schema
@@ -260,6 +323,28 @@ export const insightRefreshSchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional()
 });
+
+// Goal effectiveness scorecard (#2157).
+export const scorecardComputeSchema = z.object({
+  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+});
+
+export const scorecardSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  feedBrainDigest: z.boolean().optional(),
+  weekStartsOn: z.number().int().min(1).max(7).optional()
+});
+
+// Per-goal mapping overrides: { [goalId]: { keywords?, personIds?, subcalendarIds?, enabled? } }.
+const scorecardRuleOverrideSchema = z.object({
+  keywords: z.array(z.string()).optional(),
+  personIds: z.array(z.string()).optional(),
+  subcalendarIds: z.array(z.string()).optional(),
+  enabled: z.boolean().optional()
+});
+export const scorecardRulesSchema = z.record(z.string(), scorecardRuleOverrideSchema);
 
 // =============================================================================
 // SEARCH SCHEMAS
@@ -370,6 +455,14 @@ export { emptyToUndefined };
 export const featureProviderConfigSchema = z.object({
   providerId: z.preprocess(emptyToUndefined, z.string().optional()),
   model: z.preprocess(emptyToUndefined, z.string().optional()),
+});
+
+// Creative Director settings slice. `evaluation` pins the vision provider/model
+// used to judge each rendered scene server-side (blank = auto-pick a local
+// vision model, else fall back to the coding agent). Reuses the shared
+// feature-provider shape so an empty-string picker value normalizes to unset.
+export const creativeDirectorSettingsSchema = z.object({
+  evaluation: featureProviderConfigSchema.partial().optional(),
 });
 
 /**
@@ -612,6 +705,7 @@ export * from './creativeDirectorValidation.js';
 export * from './musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
+export * from './privacyValidation.js';
 export * from './agentValidation.js';
 export * from './cosValidation.js';
 export * from './mediaValidation.js';

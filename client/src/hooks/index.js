@@ -46,6 +46,7 @@ export { default as useUniverse } from './useUniverse.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
+export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';
@@ -58,6 +59,7 @@ export * from './useAIStatusNotifications.js';
 export * from './useAgentFeedbackToast.jsx';
 export * from './useErrorNotifications.js';
 export * from './useNotifications.js';
+export * from './useOnDemandTaskToast.js';
 export * from './useSharingNotifications.js';
 
 // === Pipeline / Story Builder wiring ===
@@ -69,6 +71,7 @@ export * from './useImporterProgress.js';
 export * from './useInstallStream.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineProgress.js';
+export * from './useReaderPanel.js';
 export * from './useSeriesEditorial.js';
 export * from './useSseProgress.js';
 export * from './useModelDownloadStatus.js';

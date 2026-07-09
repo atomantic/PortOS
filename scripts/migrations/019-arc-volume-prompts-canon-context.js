@@ -39,6 +39,8 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-overview.md': [
     'd34d72b8e49ba303d38607845dd87f1c', // current (pre-Phase B) shipped
     '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (shape-aware), still in setup-data.js OLD list
+    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019 / pre-165 (foreshadowing ledger)
+    '612f8b04950e2ff26dd350dd76a062fe', // post-166 / pre-173 (MICE thread nesting)
   ],
   'pipeline-arc-verify.md': [
     'ff56d8387162017e08d5d0491060ddd6', // current (pre-Phase B) shipped
@@ -57,7 +59,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-overview.md':   '74d6c26548660d85fc345b2099c63b6c', // post-173 (MICE thread nesting)
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-arc-resolve.md':    'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940', // post-019

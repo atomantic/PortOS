@@ -150,6 +150,10 @@ export const enrichmentProgressSchema = z.object({
 export const digitalTwinSettingsSchema = z.object({
   autoInjectToCoS: z.boolean().default(true),
   maxContextTokens: z.number().int().min(1000).max(100000).default(4000),
+  // Global gate for injecting Privacy Vault identity facts into twin/CoS prompts
+  // (issue #2147). Default false — PII sharing is opt-in twice (this global
+  // toggle AND the per-record share_with_twin flag).
+  includePrivacyContext: z.boolean().default(false),
   // The persona currently driving the embodied-twin context (CoS agents, etc.).
   // null/absent = no persona (base twin). Tolerate the UI sentinel for "deactivate".
   activePersonaId: z.string().guid().nullable().optional()
@@ -286,7 +290,7 @@ export const digitalTwinMetaSchema = z.object({
   adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),
   multiTurnTestHistory: z.array(multiTurnTestHistoryEntrySchema).default([]),
   enrichment: enrichmentProgressSchema.default({ completedCategories: [], lastSession: null }),
-  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000 }),
+  settings: digitalTwinSettingsSchema.default({ autoInjectToCoS: true, maxContextTokens: 4000, includePrivacyContext: false }),
   personas: z.array(personaSchema).default([]),
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
@@ -632,4 +636,20 @@ export const createSnapshotInputSchema = z.object({
 export const compareSnapshotsInputSchema = z.object({
   id1: z.string().guid(),
   id2: z.string().guid()
+});
+
+// =============================================================================
+// TWIN ENRICHMENT SCHEMAS (Phase 7, #2156)
+// Observed-behavior taste + chronotype evidence. Recompute is LLM-free (empty
+// body); interpret is an explicit user-triggered provider call.
+// =============================================================================
+
+// Recompute the LLM-free rollups. No inputs — the body is ignored, but validate
+// it as an (optionally empty) object so a stray payload is rejected cleanly.
+export const twinEvidenceRecomputeInputSchema = z.object({}).strict().optional().default({});
+
+// "What does my consumption say about me" — explicit provider call.
+export const twinEvidenceInterpretInputSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().min(1).optional()
 });

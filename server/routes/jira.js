@@ -254,6 +254,30 @@ router.get('/instances/:instanceId/boards/:boardId/sprints', asyncHandler(async 
 }));
 
 /**
+ * GET /api/jira/instances/:instanceId/projects/:projectKey/boards
+ * List agile boards (Scrum + Kanban) for a project — powers the app-config board picker.
+ */
+router.get('/instances/:instanceId/projects/:projectKey/boards', asyncHandler(async (req, res) => {
+  const boards = await jiraService.getBoards(
+    req.params.instanceId,
+    req.params.projectKey
+  );
+  res.json(boards);
+}));
+
+/**
+ * GET /api/jira/instances/:instanceId/issues/:issueKey
+ * Resolve a single issue by key — used to validate a configured epicKey.
+ */
+router.get('/instances/:instanceId/issues/:issueKey', asyncHandler(async (req, res) => {
+  const issue = await jiraService.getIssue(
+    req.params.instanceId,
+    req.params.issueKey
+  );
+  res.json(issue);
+}));
+
+/**
  * GET /api/jira/instances/:instanceId/projects/:projectKey/epics?q=search
  * Search for epics by name in a project
  */

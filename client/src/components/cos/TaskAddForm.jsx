@@ -259,7 +259,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       app: newTask.app || undefined,
       createJiraTicket,
       useWorktree,
-      openPR,
+      openPR: useWorktree && openPR,
       simplify,
       reviewLoop,
       reviewers: reviewLoop ? reviewers : undefined,
@@ -449,8 +449,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               type="checkbox"
               checked={useWorktree}
               onChange={(e) => {
+                // Enabling a worktree defaults "Open PR" on (safer than an
+                // unreviewed auto-merge to the default branch); the user can
+                // still uncheck it. Disabling forces it off (openPR is
+                // meaningless without a worktree).
                 setUseWorktree(e.target.checked);
-                if (!e.target.checked) setOpenPR(false);
+                setOpenPR(e.target.checked);
               }}
               className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
             />

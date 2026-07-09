@@ -27,7 +27,49 @@ export const STYLE_GUIDE_LIMITS = Object.freeze({
   TONES_MAX: 20,
   READING_LEVEL_MIN: 1,
   READING_LEVEL_MAX: 18,
+  // Voice exemplars (#2179, CWQE Phase 14) — concrete prose anchors ("the
+  // tuning fork") beat adjective lists. Passages run ~150–300 words; the cap is
+  // ~2000 chars each and 3 apiece so the fixed per-call prompt overhead stays
+  // tight (exemplars are injected into every draft/revision prompt). Each entry
+  // is `{ passage, note }` — the note says what the passage demonstrates
+  // (exemplar) or what's wrong with it (anti-exemplar: "too ornate").
+  EXEMPLARS_MAX: 3,
+  EXEMPLAR_PASSAGE_MAX: 2000,
+  EXEMPLAR_NOTE_MAX: 200,
 });
+
+// Le Guin prose-craft doctrine (#2175, CWQE Phase 10) — always-on generation-side
+// craft guidance, the prose sibling of the Sanderson's-Laws worldbuilding doctrine
+// baked into `buildExpansionPrompt`. Ursula K. Le Guin's core lesson from *Steering
+// the Craft*: style is not decoration laid over a story — the sound and rhythm of the
+// sentences ARE the reader's experience of the world. Kept as short imperative rules
+// (not essays) per the "prompts stay lean" rule; injected only into the prose/text
+// writing stages (see composeStyleNotes' `proseCraft` option), never the structural
+// arc/episode-seed planning stages where prose-level craft would be noise. This is
+// baked-in doctrine, NOT a per-series field, so it needs no schema/migration.
+export const PROSE_CRAFT_DOCTRINE = Object.freeze([
+  'Prose craft (Le Guin — apply throughout):',
+  '- Style is not ornament — it IS the story: the sound, rhythm, and syntax of the sentences create the world the reader lives in, so shape them deliberately.',
+  '- Prefer strong, specific nouns and verbs to adjective/adverb padding. Cut dead adjective-noun clichés ("ancient wisdom", "piercing gaze", "heavy silence", "cold fury") — replace them with a concrete image or a sharper verb.',
+  '- Let concrete sensory detail carry meaning; do not summarize an emotion the scene can show.',
+  '- Vary sentence length and rhythm on purpose — short for impact, longer to build; never let every sentence fall into the same cadence.',
+].join('\n'));
+
+// Voice-discovery registers (#2179, CWQE Phase 14) — the distinct prose voices
+// the "Discover voice" flow renders the SAME scene beat in, so the user (or the
+// autonomous judge) can pick the one that fits by ear rather than by adjective.
+// `id` is stable (persisted into the discovery result); `label`/`hint` steer
+// the LLM and the side-by-side UI. Kept small and opinionated — 5 registers is
+// the autonovel "~5 trial passages" default, enough contrast without a wall of
+// near-identical drafts.
+export const VOICE_REGISTERS = Object.freeze([
+  { id: 'spare', label: 'Spare', hint: 'lean, plain, Hemingway-terse — short declaratives, concrete nouns, almost no adjectives' },
+  { id: 'lyric', label: 'Lyric', hint: 'lush and musical — rhythmic, image-dense, sentences that build and breathe' },
+  { id: 'wry', label: 'Wry', hint: 'dry, ironic, quietly funny — understatement and a knowing narrator' },
+  { id: 'close-psychic', label: 'Close-psychic', hint: 'deep interiority — the narration lives inside the POV character\'s thoughts and sensations' },
+  { id: 'cinematic', label: 'Cinematic', hint: 'camera-eye, present and kinetic — blocking, motion, and sensory cuts like a shooting script' },
+]);
+export const VOICE_REGISTER_IDS = Object.freeze(VOICE_REGISTERS.map((r) => r.id));
 
 export const STYLE_GUIDE_TENSES = Object.freeze(['past', 'present']);
 export const STYLE_GUIDE_POV_PERSONS = Object.freeze(['first', 'third-limited', 'third-omniscient', 'second']);
@@ -79,6 +121,30 @@ function cleanTone(raw) {
   return out;
 }
 
+// Sanitize a list of voice exemplar / anti-exemplar passages (#2179). Each
+// entry is `{ passage, note }`: `passage` is the concrete prose anchor (the
+// tuning fork), `note` a one-line gloss of what it demonstrates (exemplar) or
+// what's wrong with it (anti-exemplar). Drops entries with no passage, trims to
+// the char caps, and caps the list length. Returns `[]` when nothing usable.
+//
+// Exported so the Writers Room (`services/writersRoom/local.js`) can carry the
+// SAME voice-exemplar shape on a freeform work as the series style guide does —
+// one sanitizer, one set of caps, no drift between the two surfaces (#2179
+// Writers Room parity).
+export function sanitizeVoiceExemplars(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') continue;
+    const passage = trimTo(item.passage, STYLE_GUIDE_LIMITS.EXEMPLAR_PASSAGE_MAX);
+    if (!passage) continue;
+    const note = trimTo(item.note, STYLE_GUIDE_LIMITS.EXEMPLAR_NOTE_MAX);
+    out.push(note ? { passage, note } : { passage });
+    if (out.length >= STYLE_GUIDE_LIMITS.EXEMPLARS_MAX) break;
+  }
+  return out;
+}
+
 // Sanitize the copy-edit conventions sub-object. Returns null when nothing is
 // set so a guide that declares only tense/POV doesn't carry an empty husk.
 function sanitizeConventions(raw) {
@@ -107,13 +173,44 @@ export function sanitizeStyleGuide(raw) {
   const readingLevel = optReadingLevel(raw.readingLevel);
   const tone = cleanTone(raw.tone);
   const conventions = sanitizeConventions(raw.conventions);
+  const voiceExemplars = sanitizeVoiceExemplars(raw.voiceExemplars);
+  const voiceAntiExemplars = sanitizeVoiceExemplars(raw.voiceAntiExemplars);
   if (
     tense == null && povPerson == null && targetAudience == null && contentRating == null
     && profanity == null && readingLevel == null && tone.length === 0 && conventions == null
+    && voiceExemplars.length === 0 && voiceAntiExemplars.length === 0
   ) {
     return null;
   }
-  return { tense, povPerson, targetAudience, contentRating, profanity, readingLevel, tone, conventions };
+  return {
+    tense, povPerson, targetAudience, contentRating, profanity, readingLevel, tone, conventions,
+    voiceExemplars, voiceAntiExemplars,
+  };
+}
+
+// Render the voice exemplar / anti-exemplar blocks (#2179). Concrete prose
+// anchors do more to fix voice than any adjective list — so a "MATCH this
+// voice" block of exemplars and a "NEVER drift toward this" block of
+// anti-exemplars are appended to the house-style directives. Both are
+// conditional: absent exemplars render nothing (so a guide with no passages
+// carries no empty husk in the prompt). Returns `''` when neither is present.
+//
+// `carrier` is any object exposing `voiceExemplars` / `voiceAntiExemplars`
+// arrays — the series style guide OR a Writers Room work manifest — so the two
+// surfaces render byte-identical voice blocks (#2179 Writers Room parity).
+export function renderVoiceExemplars(carrier) {
+  if (!carrier || typeof carrier !== 'object') return '';
+  const blocks = [];
+  const exemplars = Array.isArray(carrier.voiceExemplars) ? carrier.voiceExemplars : [];
+  const antiExemplars = Array.isArray(carrier.voiceAntiExemplars) ? carrier.voiceAntiExemplars : [];
+  const renderPassage = (e) => (e.note ? `> ${e.passage}\n> — ${e.note}` : `> ${e.passage}`);
+  if (exemplars.length) {
+    blocks.push(`MATCH this voice — these passages are the tuning fork for the series' prose. Echo their rhythm, diction, and register; do not copy their content:\n${exemplars.map(renderPassage).join('\n\n')}`);
+  }
+  if (antiExemplars.length) {
+    blocks.push(`NEVER drift toward this — these passages are in the wrong register for the series. Avoid what each note flags:\n${antiExemplars.map(renderPassage).join('\n\n')}`);
+  }
+  return blocks.join('\n\n');
 }
 
 /**
@@ -155,8 +252,12 @@ export function renderStyleGuide(styleGuide) {
     if (conv.italicizeThoughts === true) directives.push('Render internal thoughts in italics.');
     else if (conv.italicizeThoughts === false) directives.push('Do not italicize internal thoughts.');
   }
-  if (directives.length === 0) return null;
-  return `Series style guide (house style — follow exactly):\n${directives.map((d) => `- ${d}`).join('\n')}`;
+  const voiceBlock = renderVoiceExemplars(styleGuide);
+  if (directives.length === 0 && !voiceBlock) return null;
+  const header = directives.length
+    ? `Series style guide (house style — follow exactly):\n${directives.map((d) => `- ${d}`).join('\n')}`
+    : '';
+  return [header, voiceBlock].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -169,9 +270,16 @@ export function renderStyleGuide(styleGuide) {
  *
  * The structured guide leads (deterministic house style first), the author's
  * free-text notes trail. Returns `''` when neither is present.
+ *
+ * `opts.proseCraft` (default false) appends the always-on Le Guin prose-craft
+ * doctrine (#2175). It's opt-in per stage: the prose/text writing stages pass
+ * `true` so drafting follows the craft rules; the structural arc/episode-seed
+ * planning stages leave it off, since sentence-level craft guidance is noise
+ * when the model is outlining beats rather than writing prose.
  */
-export function composeStyleNotes(series) {
+export function composeStyleNotes(series, opts = {}) {
   const guide = renderStyleGuide(series?.styleGuide);
   const notes = isStr(series?.styleNotes) ? series.styleNotes.trim() : '';
-  return [guide, notes].filter(Boolean).join('\n\n');
+  const craft = opts.proseCraft ? PROSE_CRAFT_DOCTRINE : '';
+  return [guide, notes, craft].filter(Boolean).join('\n\n');
 }

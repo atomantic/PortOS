@@ -31,19 +31,60 @@ describe('localAccuracyScore', () => {
 });
 
 describe('buildCognitiveResult', () => {
-  it('assembles the full onComplete payload shape', () => {
-    const drill = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B'] };
+  it('assembles the full onComplete payload shape (stroop keeps raw accuracy)', () => {
+    const drill = { type: 'stroop', config: { count: 2 }, trials: [] };
     const questions = [{ correct: true }, { correct: false }];
-    const result = buildCognitiveResult({ type: 'n-back', drill, questions, totalMs: 4200 });
+    const result = buildCognitiveResult({ type: 'stroop', drill, questions, totalMs: 4200 });
     expect(result).toEqual({
       module: 'cognitive',
-      type: 'n-back',
-      config: { n: 2 },
+      type: 'stroop',
+      config: { count: 2 },
       drillData: drill,
       questions,
       score: 50,
       totalMs: 4200,
     });
+  });
+
+  it('n-back pre-save score mirrors the server SDT balanced accuracy (issue #2094)', () => {
+    // A B A C A with n=2 → indices 2,4 are targets, 3 is a non-target.
+    const drill = { type: 'n-back', config: { n: 2 }, sequence: ['A', 'B', 'A', 'C', 'A'] };
+    // Never pressing: hitRate 0, correct-rejection rate 1 → balanced 50, not ~67.
+    const silent = [
+      { index: 2, answered: null, correct: false, responseMs: 0 },
+      { index: 3, answered: null, correct: true, responseMs: 0 },
+      { index: 4, answered: null, correct: false, responseMs: 0 },
+    ];
+    expect(buildCognitiveResult({ type: 'n-back', drill, questions: silent, totalMs: 1 }).score).toBe(50);
+    // Perfect run → 100.
+    const perfect = [
+      { index: 2, answered: 'match', correct: true, responseMs: 300 },
+      { index: 3, answered: null, correct: true, responseMs: 0 },
+      { index: 4, answered: 'match', correct: true, responseMs: 300 },
+    ];
+    expect(buildCognitiveResult({ type: 'n-back', drill, questions: perfect, totalMs: 1 }).score).toBe(100);
+  });
+
+  it('reaction-time pre-save score mirrors the server latency scoring (issue #2094)', () => {
+    const drill = { type: 'reaction-time', config: { mode: 'simple' }, trials: [] };
+    // All valid at 240ms median → round(100*(600-240)/400) = 90 (matches server).
+    const clean = [
+      { correct: true, falseStart: false, responseMs: 200 },
+      { correct: true, falseStart: false, responseMs: 240 },
+      { correct: true, falseStart: false, responseMs: 260 },
+    ];
+    expect(buildCognitiveResult({ type: 'reaction-time', drill, questions: clean, totalMs: 1 }).score).toBe(90);
+    // One perfect press among 3 false starts → 100 × 1/4 = 25 (valid-rate scaling).
+    const sloppy = [
+      { correct: true, falseStart: false, responseMs: 200 },
+      { correct: false, falseStart: true, responseMs: 0 },
+      { correct: false, falseStart: true, responseMs: 0 },
+      { correct: false, falseStart: true, responseMs: 0 },
+    ];
+    expect(buildCognitiveResult({ type: 'reaction-time', drill, questions: sloppy, totalMs: 1 }).score).toBe(25);
+    // A clean-but-very-slow run no longer shows a pre-save 100.
+    const slow = [{ correct: true, falseStart: false, responseMs: 580 }];
+    expect(buildCognitiveResult({ type: 'reaction-time', drill, questions: slow, totalMs: 1 }).score).toBe(5);
   });
 });
 
@@ -117,6 +158,7 @@ describe('scoreDigitSpanRecall', () => {
     expect(question).toEqual({
       prompt: '3-digit (forward)',
       index: 0,
+      expected: '123',
       answered: '123',
       correct: true,
       responseMs: 1500,
@@ -182,6 +224,7 @@ describe('scoreStroopTrial', () => {
     expect(question).toEqual({
       prompt: 'RED',
       index: 0,
+      expected: 'blue',
       answered: 'blue',
       correct: true,
       responseMs: 800,
@@ -210,6 +253,7 @@ describe('scoreMentalRotationTrial', () => {
     expect(question).toEqual({
       prompt: 'shape L',
       index: 0,
+      expected: 1,
       answered: 1,
       correct: true,
       responseMs: 650,

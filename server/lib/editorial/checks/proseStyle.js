@@ -1,6 +1,8 @@
 // Editorial checks — proseStyle group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
 import {
+  ADVERSARIAL_CUTS_STAGE,
+  CUT_TYPES,
   DEAD_METAPHOR_STAGE,
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
   INFO_DUMPING_STAGE,
@@ -36,6 +38,9 @@ import {
   styleGuideExpectations,
   z,
 } from '../checkInfra.js';
+import {
+  computeVoiceDrift, describeDrift, describeSeriesDrift, parseVoiceWells, VOICE_BASELINE_MODES,
+} from '../voiceFingerprint.js';
 
 export const proseStyleChecks = [
   {
@@ -1001,6 +1006,145 @@ export const proseStyleChecks = [
     },
   },
   {
+    id: 'style.voice-drift',
+    // Reads the style guide's voice exemplars too (#2179) so an exemplar edit
+    // re-stales the finding, exactly as its LLM siblings do — the baseline can be
+    // the CHOSEN voice, not just the drafted-issue mean.
+    sources: ['manuscript', 'series.styleGuide'],
+    label: 'Statistical voice drift (deterministic)',
+    description:
+      "Deterministic sibling of style.voice-consistency — where that LLM check judges tone subjectively, this MEASURES each issue's prose fingerprint (sentence rhythm, fragment/long-sentence rates, paragraph shape, dialogue ratio, em-dash rate, abstract-noun/simile density, dominant sentence-opener, plus any configured vocabulary wells), computes the series mean/σ per metric, and flags an issue that sits more than a threshold's σ from the series voice — naming the metric, the issue value vs the baseline, and the direction (\"issue 7 sentence-length CV 0.18 vs series 0.41 — prose has gone metronomic\"). It VERIFIES that the asserted voice is statistically true per issue. With the \"Drift baseline\" set to exemplars/blended it measures against the style guide's voice-exemplar profile (the CHOSEN voice) instead of the mean of what got drafted — so it flags drift from the voice you picked, not from the average of a corpus that may all have drifted together. Gates off below 4 issues drafted — with a tiny series the largest possible σ-distance (√(N−1)) can't reach the default 1.5σ threshold. No LLM cost.",
+    scope: 'series',
+    kind: 'deterministic',
+    category: 'style',
+    // A drift is a texture concern like its LLM sibling; a moderate wobble floors
+    // at 'low' and a strong (≥2.5σ) outlier escalates one rank in run().
+    severityDefault: 'low',
+    defaultEnabled: true,
+    // Reads the stitched manuscript (its per-issue `# Issue N` sections) — so the
+    // runner only pays the section-collection I/O when a manuscript check is on.
+    needsManuscript: true,
+    configSchema: z.object({
+      // How many σ from the series mean before an issue's metric is flagged.
+      sigmaThreshold: z.number().min(0.5).max(4).default(1.5),
+      // Minimum issues drafted before the check runs. Defaults to 4: at N=3 the
+      // largest possible σ-distance is √2 ≈ 1.41, below the default 1.5σ
+      // threshold, so a 3-issue series could never flag. An explicit 3 is honored
+      // (useful only with a lower threshold).
+      minIssues: z.number().int().min(3).max(30).default(4),
+      // Cap findings per run so a wildly-uneven series can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+      // Optional vocabulary "wells" — register categories to track coverage of,
+      // as `name: word, word; name2: word` (series-configurable per-check).
+      vocabularyWells: z.string().max(2000).default(''),
+      // Which baseline each issue's drift is measured against (#2179):
+      //   drafted   — the mean of the drafted issues (default; original behavior).
+      //   exemplars — the style guide's voice-exemplar profile (the CHOSEN voice),
+      //               so an issue is flagged for drifting from the voice the author
+      //               picked, not from the average of what got drafted.
+      //   blended   — the midpoint of the two.
+      // Preprocessed: any unrecognized value coerces to 'drafted' so a hand-typed
+      // config can't fail the whole check's safeParse (and an exemplars/blended run
+      // with no usable exemplars falls back to drafted at compute time anyway).
+      baselineMode: z.preprocess(
+        (v) => (VOICE_BASELINE_MODES.includes(v) ? v : 'drafted'),
+        z.enum(VOICE_BASELINE_MODES),
+      ).default('drafted'),
+    }),
+    configFields: [
+      {
+        key: 'sigmaThreshold',
+        label: 'Drift threshold (σ)',
+        type: 'number',
+        min: 0.5,
+        max: 4,
+        step: 0.1,
+        help: 'How far from the series mean (in standard deviations) an issue must sit on a metric before it is flagged. Lower = more sensitive.',
+      },
+      {
+        key: 'minIssues',
+        label: 'Minimum issues to run',
+        type: 'number',
+        min: 3,
+        max: 30,
+        step: 1,
+        help: 'The check stays off until at least this many issues are drafted. It defaults to 4 because the biggest σ-distance a series of N issues can show is √(N−1), and at 3 issues that (√2 ≈ 1.41) falls below the default 1.5σ threshold — so a 3-issue series can never flag drift unless you also lower the threshold.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings (most significant drift first) so a wildly uneven series can not flood the review.',
+      },
+      {
+        key: 'vocabularyWells',
+        label: 'Vocabulary wells (optional)',
+        type: 'text',
+        help: 'Register categories to track per issue, as "name: word, word; name2: word". Each becomes a tracked metric (coverage per 1k words) so a series can flag an issue that drops its trade/body/musical register.',
+      },
+      {
+        key: 'baselineMode',
+        label: 'Drift baseline',
+        type: 'text',
+        help: 'What each issue is measured against: "drafted" (the mean of the drafted issues — the default), "exemplars" (the style guide\'s voice-exemplar profile, so drift is judged against the voice you CHOSE, not the average of what got drafted), or "blended" (the midpoint). Exemplars/blended fall back to drafted when the style guide has too little exemplar prose.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      const cfg = ctx.config || {};
+      const wells = parseVoiceWells(cfg.vocabularyWells || '');
+      const drift = computeVoiceDrift(ctx.manuscript, {
+        threshold: cfg.sigmaThreshold ?? 1.5,
+        minIssues: cfg.minIssues ?? 4,
+        wells,
+        // The chosen-voice baseline (#2179): render the drift against the style
+        // guide's voice exemplars when configured. A thin/absent exemplar set makes
+        // computeVoiceDrift fall back to the drafted mean and report it.
+        baselineMode: cfg.baselineMode || 'drafted',
+        voiceExemplars: ctx.series?.styleGuide?.voiceExemplars,
+      });
+      if (drift.gatedOff) return [];
+      const cap = cfg.maxFindings ?? 12;
+      const perIssue = drift.outliers.slice(0, cap).map((o) => ({
+        // A strong outlier (≥2.5σ) reads as real drift, not noise — escalate it a
+        // rank above the low floor; a marginal one stays low.
+        severity: escalateSeverity(ctx.severityDefault, Math.abs(o.z) >= 2.5 ? 1 : 0),
+        category: 'style',
+        location: `Issue ${o.issue} — narrative voice`,
+        problem: describeDrift(o),
+        suggestion:
+          `Reread Issue ${o.issue} for its ${o.label} against the rest of the series. `
+          + 'If the shift is a scene the story earns (a grimmer, terser chapter), leave it; '
+          + 'if it is unintentional drift, revise toward the series voice.',
+        anchorQuote: null,
+        issueNumber: o.issue,
+      }));
+      // #2248 — series-level "the WHOLE corpus is uniformly off the chosen voice"
+      // findings (only under an exemplar/blended baseline). These have no
+      // issueNumber (a series-wide register mismatch, not a per-issue outlier) and
+      // escalate one rank above the low floor because a corpus-wide mismatch is a
+      // stronger signal than a single-issue wobble. They share the maxFindings cap
+      // with the per-issue outliers, listed first so a series-wide finding is never
+      // starved out by a flood of per-issue ones.
+      const seriesLevel = (drift.seriesFindings || []).map((o) => ({
+        severity: escalateSeverity(ctx.severityDefault, 1),
+        category: 'style',
+        location: `Series-wide — narrative voice (${o.label})`,
+        problem: describeSeriesDrift(o),
+        suggestion:
+          `The whole series sits off the chosen voice on its ${o.label}. `
+          + 'Revise toward the chosen voice across the run, or update the style guide\'s voice '
+          + 'exemplars if this uniform register IS the voice you want.',
+        anchorQuote: null,
+        issueNumber: null,
+      }));
+      return [...seriesLevel, ...perIssue].slice(0, cap);
+    },
+  },
+  {
     id: 'prose.kill-your-darlings',
     sources: ['manuscript'],
     label: 'Kill your darlings (precious / self-indulgent passages)',
@@ -1036,6 +1180,138 @@ export const proseStyleChecks = [
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),
     }),
+  },
+  {
+    id: 'prose.adversarial-cuts',
+    sources: ['manuscript'],
+    label: 'Adversarial cuts (prose tightening)',
+    description:
+      'Asks a ruthless literary editor persona to cut 8–12% of the text, classifying each cut as FAT, REDUNDANT, OVER-EXPLAIN, GENERIC, TELL, or STRUCTURAL. Returns fat_percentage, tightest_passage (protected), loosest_passage, and typed cut findings. Safe types (OVER-EXPLAIN, REDUNDANT) can be batch-applied mechanically via the Manuscript Editor.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'prose',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Target percentage of text to cut (the prompt asks for this much).
+      cutTargetPercent: z.number().int().min(5).max(20).default(10),
+      // Minimum cuts per run.
+      minCuts: z.number().int().min(5).max(30).default(10),
+      // Maximum cuts per run.
+      maxCuts: z.number().int().min(10).max(50).default(20),
+      // Cap findings so a long manuscript can not flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(20),
+    }),
+    configFields: [
+      {
+        key: 'cutTargetPercent',
+        label: 'Cut target (%)',
+        type: 'number',
+        min: 5,
+        max: 20,
+        step: 1,
+        help: 'Target percentage of the manuscript to cut. 8–12% is typical for tightening passes.',
+      },
+      {
+        key: 'minCuts',
+        label: 'Min cuts',
+        type: 'number',
+        min: 5,
+        max: 30,
+        step: 1,
+        help: 'Minimum number of cut passages to identify.',
+      },
+      {
+        key: 'maxCuts',
+        label: 'Max cuts',
+        type: 'number',
+        min: 10,
+        max: 50,
+        step: 1,
+        help: 'Maximum number of cut passages to identify.',
+      },
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: async (ctx) => {
+      const cfg = ctx.config || {};
+      const cutTargetPercent = cfg.cutTargetPercent ?? 10;
+      const minCuts = cfg.minCuts ?? 10;
+      const maxCuts = cfg.maxCuts ?? 20;
+      const max = cfg.maxFindings ?? 20;
+      const chunks = await ctx.planManuscriptChunks(ADVERSARIAL_CUTS_STAGE, {
+        overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      });
+      // Run the check with the cut parameters injected into the prompt.
+      const runChunk = async (manuscript) => {
+        const vars = { manuscript, cutTargetPercent, minCuts, maxCuts };
+        const { content } = await ctx.callStagedLLM(ADVERSARIAL_CUTS_STAGE, vars, {
+          returnsJson: true,
+          source: ADVERSARIAL_CUTS_STAGE,
+        });
+        return content;
+      };
+      // Merge findings across chunks, deduping by anchorQuote.
+      const seenQuotes = new Set();
+      const findings = [];
+      let fatPercentage = null;
+      let tightestPassage = null;
+      let loosestPassage = null;
+      let verdict = null;
+      for (const chunk of chunks?.sections || [chunks]) {
+        const manuscript = typeof chunk === 'string' ? chunk : chunk?.sections?.[0]?.text || ctx.manuscript;
+        const result = await runChunk(manuscript);
+        // Capture meta fields from the first chunk.
+        if (fatPercentage == null && typeof result?.fat_percentage === 'number') {
+          fatPercentage = result.fat_percentage;
+        }
+        if (!tightestPassage && typeof result?.tightest_passage === 'string') {
+          tightestPassage = result.tightest_passage;
+        }
+        if (!loosestPassage && typeof result?.loosest_passage === 'string') {
+          loosestPassage = result.loosest_passage;
+        }
+        if (!verdict && typeof result?.one_sentence_verdict === 'string') {
+          verdict = result.one_sentence_verdict;
+        }
+        const raw = Array.isArray(result?.findings) ? result.findings : [];
+        for (const f of raw) {
+          if (findings.length >= max) break;
+          const anchorQuote = typeof f?.anchorQuote === 'string' ? f.anchorQuote : '';
+          if (!anchorQuote || anchorQuote.length < 10) continue;
+          const key = anchorQuote.toLowerCase().trim();
+          if (seenQuotes.has(key)) continue;
+          seenQuotes.add(key);
+          const cutType = CUT_TYPES.includes(f?.cutType) ? f.cutType : null;
+          findings.push({
+            severity: ['high', 'medium', 'low'].includes(f?.severity) ? f.severity : ctx.severityDefault,
+            category: 'prose',
+            location: typeof f?.location === 'string' ? f.location : '',
+            problem: typeof f?.problem === 'string' ? f.problem : '',
+            suggestion: typeof f?.suggestion === 'string' ? f.suggestion : 'Cut this passage entirely.',
+            anchorQuote,
+            issueNumber: Number.isInteger(f?.issueNumber) ? f.issueNumber : null,
+            // Carry the cut type as a subtype for filtering in the applier.
+            subtype: cutType,
+          });
+        }
+        if (findings.length >= max) break;
+      }
+      // Log summary for debugging.
+      if (fatPercentage != null) {
+        console.log(`✂️ adversarial-cuts: fat=${fatPercentage}% tightest="${(tightestPassage || '').slice(0, 40)}..." verdict="${verdict || ''}"`);
+      }
+      return findings;
+    },
   },
   {
     id: 'prose.italic-thoughts',

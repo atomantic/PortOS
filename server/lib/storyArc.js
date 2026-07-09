@@ -81,6 +81,22 @@ export const TICKING_CLOCK_LIMITS = Object.freeze({
 });
 export const TICKING_CLOCK_KINDS = Object.freeze(['deadline', 'event', 'countdown', 'prophecy', 'bomb', 'custom']);
 
+// Foreshadowing ledger — the authored plant → reinforce → payoff record the
+// arc-overview stage emits (#2172). Where `readerMap.hooks`/`payoffs` are the
+// reader-experience questions/answers and `tickingClock` is a single named
+// countdown, the foreshadowing ledger is a LIST of individual seeds: for each,
+// the issue it's planted in, the issues that reinforce it, and the issue it
+// pays off in. The `chekhov.setups-payoffs` editorial check consumes this
+// ledger so it reconciles the prose against author-declared plants instead of
+// inferring every setup from scratch. Lives at `series.arc.foreshadowing`.
+export const FORESHADOW_LIMITS = Object.freeze({
+  LABEL_MAX: 200,
+  NOTE_MAX: 1000,
+  ENTRIES_MAX: 60,
+  REINFORCE_MAX: 20,
+  ISSUE_MAX: 9999,
+});
+
 // Per-episode arc roles produced by the season-episodes generator and
 // persisted on the issue so downstream stages (idea-expansion in particular)
 // know whether they're writing a pilot vs. midpoint vs. finale episode.
@@ -416,6 +432,61 @@ export function renderTickingClock(clock) {
   return parts.join(' ');
 }
 
+// Foreshadowing-ledger entry ids are minted as `fs-<uuid>` so the client can
+// key list rows and a payoff can be traced back to its seed. Accepts an
+// opaque imported id that already matches the shape.
+const FS_ID_RE = /^fs-[a-zA-Z0-9-]+$/;
+const ensureFsId = (raw) => (isStr(raw) && FS_ID_RE.test(raw) ? raw : `fs-${randomUUID()}`);
+
+// Clean a list of issue-number positions (the reinforce beats): coerce each to
+// a non-negative int within range, drop non-finite entries, dedupe, sort
+// ascending, and cap. An empty/invalid input yields [].
+function cleanReinforceIssues(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  for (const v of raw) {
+    const n = optPosition(v, FORESHADOW_LIMITS.ISSUE_MAX);
+    if (n != null) seen.add(n);
+    if (seen.size >= FORESHADOW_LIMITS.REINFORCE_MAX) break;
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Sanitize one foreshadowing-ledger entry. Returns `null` when the entry
+ * carries no identifying content (no label/note and no plant/payoff position)
+ * so an empty row from the LLM is dropped. The plant-to-payoff distance rule
+ * (>= 3 issues) is a generation instruction enforced in the arc-overview prompt,
+ * not here — the sanitizer stores the ledger faithfully as authored.
+ */
+export function sanitizeForeshadowingEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, FORESHADOW_LIMITS.LABEL_MAX);
+  const note = trimTo(raw.note, FORESHADOW_LIMITS.NOTE_MAX);
+  const plantIssue = optPosition(raw.plantIssue, FORESHADOW_LIMITS.ISSUE_MAX);
+  const payoffIssue = optPosition(raw.payoffIssue, FORESHADOW_LIMITS.ISSUE_MAX);
+  if (!label && !note && plantIssue == null && payoffIssue == null) return null;
+  const reinforceIssues = cleanReinforceIssues(raw.reinforceIssues);
+  return { id: ensureFsId(raw.id), label, plantIssue, reinforceIssues, payoffIssue, note };
+}
+
+/**
+ * Sanitize the optional `series.arc.foreshadowing` ledger. Always returns an
+ * array (empty when nothing is authored) — mirroring `themes`, which is also a
+ * plain always-array field on the arc. Drops malformed/empty entries and caps
+ * the list.
+ */
+export function sanitizeForeshadowing(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const entry of raw) {
+    const v = sanitizeForeshadowingEntry(entry);
+    if (v) out.push(v);
+    if (out.length >= FORESHADOW_LIMITS.ENTRIES_MAX) break;
+  }
+  return out;
+}
+
 /**
  * Sanitize the optional `series.arc` field. Returns `null` if the input is
  * empty (no identifying fields) — callers store `null` to mean "no arc yet."
@@ -444,9 +515,12 @@ export function sanitizeArc(raw) {
   // The ticking clock is identifying content as well — an arc whose only
   // authored decision is "this story has a countdown" must round-trip.
   const tickingClock = sanitizeTickingClock(raw.tickingClock);
-  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock) return null;
+  // The foreshadowing ledger is identifying content too — an arc whose only
+  // authored content is a set of planted seeds must survive.
+  const foreshadowing = sanitizeForeshadowing(raw.foreshadowing);
+  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock && foreshadowing.length === 0) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, status };
+  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, foreshadowing, status };
 }
 
 /**

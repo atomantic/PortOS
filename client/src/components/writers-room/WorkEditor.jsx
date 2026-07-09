@@ -23,6 +23,8 @@ import {
   Film,
   ExternalLink,
   Zap,
+  Wand2,
+  Quote,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
@@ -35,6 +37,7 @@ import {
   setWritersRoomActiveDraft,
   updateWritersRoomWork,
   runWritersRoomAnalysis,
+  getWritersRoomWork,
   listWritersRoomCharacters,
   listWritersRoomPlaces,
   listWritersRoomObjects,
@@ -48,14 +51,16 @@ import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';
 import CdBridgePanel from './CdBridgePanel';
 import AnalysisHistory from './AnalysisHistory';
+import PolishPanel from './PolishPanel';
 import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
 import ProseTokenPopover from './ProseTokenPopover';
 import WritersRoomDock from './WritersRoomDock';
+import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../VoiceExemplarEditor';
 import useImageGenQueue from '../../hooks/useImageGenQueue';
 
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
-const DRAWER = { VERSIONS: 'versions', HISTORY: 'history' };
+const DRAWER = { VERSIONS: 'versions', HISTORY: 'history', POLISH: 'polish', VOICE: 'voice' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
 const ANALYSIS_LABELS = {
@@ -160,6 +165,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // render-preview budget is a distinct counter owned by LiveRenderPanel.
   const [liveUsage, setLiveUsage] = useState(liveMode?.usage || null);
   useEffect(() => { setLiveUsage(liveMode?.usage || null); }, [liveMode?.usage]);
+  // Voice exemplars / anti-exemplars (#2179) — "the tuning fork" passages that
+  // anchor the live-continuation prompt + the polish revision brief to the
+  // chosen voice. Edited in the Voice drawer, persisted via updateWork on Save.
+  // Hoisted here (not inside the drawer body) so switching works re-seeds it and
+  // the drawer body can remount freely without losing in-progress edits.
+  const [voiceExemplars, setVoiceExemplars] = useState(work.voiceExemplars || []);
+  const [voiceAntiExemplars, setVoiceAntiExemplars] = useState(work.voiceAntiExemplars || []);
+  const [savingVoice, setSavingVoice] = useState(false);
+  useEffect(() => { setVoiceExemplars(work.voiceExemplars || []); }, [work.id, work.voiceExemplars]);
+  useEffect(() => { setVoiceAntiExemplars(work.voiceAntiExemplars || []); }, [work.id, work.voiceAntiExemplars]);
   const liveTriggerRef = useRef(null);
   const liveTimerRef = useRef(null);
   const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
@@ -476,6 +491,33 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
   };
 
+  // Persist the voice exemplars (#2179). Drop rows with a blank passage before
+  // sending (the server prunes them too, but this keeps the round-tripped state
+  // honest) and clear the drawer's dirty edits into the saved work.
+  const saveVoice = async () => {
+    const clean = (list) => (Array.isArray(list) ? list : [])
+      .map((e) => ({ passage: (e.passage || '').trim(), note: (e.note || '').trim() }))
+      .filter((e) => e.passage)
+      .map((e) => (e.note ? e : { passage: e.passage }));
+    setSavingVoice(true);
+    const updated = await updateWritersRoomWork(work.id, {
+      voiceExemplars: clean(voiceExemplars),
+      voiceAntiExemplars: clean(voiceAntiExemplars),
+    }).catch((err) => {
+      if (mountedRef.current) toast.error(`Voice save failed: ${err.message}`);
+      return null;
+    });
+    if (!mountedRef.current) return;
+    setSavingVoice(false);
+    if (updated) {
+      setVoiceExemplars(updated.voiceExemplars || []);
+      setVoiceAntiExemplars(updated.voiceAntiExemplars || []);
+      onChange?.({ ...updated, activeDraftBody: body });
+      toast.success('Voice exemplars saved');
+      setDrawer(null);
+    }
+  };
+
   // --- Phase 5 live mode ---
 
   const liveEnabled = liveMode?.enabled === true;
@@ -647,6 +689,18 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     setBody(text);
     toast('Applied to editor — save to persist', { icon: '💾' });
   };
+
+  // The Polish loop mutates the SAVED draft body on the server (cuts/revise +
+  // keep/revert). After a completed run or a manual revert, pull the fresh body
+  // back into the editor as the new saved baseline so the buffer isn't stale.
+  const reloadBodyFromServer = useCallback(async () => {
+    const fresh = await getWritersRoomWork(work.id).catch(() => null);
+    if (!fresh || !mountedRef.current) return;
+    const nextBody = fresh.activeDraftBody || '';
+    setBody(nextBody);
+    setSavedBody(nextBody);
+    onChange?.(fresh);
+  }, [work.id, onChange, mountedRef]);
 
   const activeDraft = useMemo(
     () => work.drafts?.find((d) => d.id === work.activeDraftVersionId),
@@ -867,6 +921,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Wand2} label="Polish (cut → revise)" onClick={closeOverflowAnd(() => setDrawer(DRAWER.POLISH))} />
+                <MenuItem icon={Quote} label="Voice exemplars" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VOICE))} />
                 <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
               </MenuSection>
               <MenuSection label="Open">
@@ -1092,6 +1148,43 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       </Drawer>
       <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
+      </Drawer>
+      <Drawer open={drawer === DRAWER.POLISH} onClose={() => setDrawer(null)} title="Polish" size="md">
+        <PolishPanel work={work} dirty={dirty} onBodyChanged={reloadBodyFromServer} />
+      </Drawer>
+      <Drawer open={drawer === DRAWER.VOICE} onClose={() => setDrawer(null)} title="Voice exemplars" size="md">
+        <div className="p-3">
+          <p className="text-[11px] text-gray-500 mb-2">
+            Concrete prose passages anchor this work&rsquo;s voice far better than adjectives. Exemplars are injected into live continuation suggestions and the Polish revision brief as &ldquo;MATCH this voice&rdquo;; anti-exemplars as &ldquo;NEVER drift toward this.&rdquo; Up to {VOICE_EXEMPLARS_MAX} of each.
+          </p>
+          <VoiceExemplarEditor
+            idPrefix="wr-voice-exemplar"
+            title="Voice exemplars (the tuning fork)"
+            hint="1–3 short passages (~150–300 words) that nail this work's voice. Injected as “MATCH this voice.”"
+            notePlaceholder="what this demonstrates (e.g. spare, close-psychic)"
+            entries={voiceExemplars}
+            onChange={setVoiceExemplars}
+          />
+          <VoiceExemplarEditor
+            idPrefix="wr-voice-anti"
+            title="Anti-exemplars (never drift toward this)"
+            hint="Passages in the wrong register, kept as negative examples. Injected as “NEVER drift toward this.”"
+            notePlaceholder="what's wrong (e.g. too ornate, wrong temperature)"
+            entries={voiceAntiExemplars}
+            onChange={setVoiceAntiExemplars}
+          />
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={saveVoice}
+              disabled={savingVoice}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
+            >
+              {savingVoice ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              {savingVoice ? 'Saving…' : 'Save voice'}
+            </button>
+          </div>
+        </div>
       </Drawer>
     </div>
   );

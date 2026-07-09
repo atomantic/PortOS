@@ -8,6 +8,8 @@ import {
   mergeConfidence,
   mergeSocialAccounts,
   mergeAutobiographyStories,
+  mergeTasteObserved,
+  mergeChronotypeObserved,
   safeMdName,
 } from './digital-twin-sync.js';
 
@@ -26,6 +28,91 @@ describe('mergeObjectLWW', () => {
     expect(mergeObjectLWW(local, { v: 'R', updatedAt: '2026-01-01' }).merged.v).toBe('L');
     expect(mergeObjectLWW(local, { v: 'R', updatedAt: '2026-01-03' }).merged.v).toBe('R');
     expect(mergeObjectLWW(local, { v: 'R', updatedAt: '2026-01-02' }).changed).toBe(false);
+  });
+  it('federates observed evidence (#2156) LWW on derivedAt — newest observation wins', () => {
+    // taste-observed.json / chronotype-observed.json are regenerated derived
+    // records, so the sync merges them wholesale on the derivedAt stamp.
+    const local = { source: 'observed', derivedAt: '2026-07-01T00:00:00Z', observedType: 'morning' };
+    const remote = { source: 'observed', derivedAt: '2026-07-05T00:00:00Z', observedType: 'evening' };
+    expect(mergeObjectLWW(local, remote, 'derivedAt').merged.observedType).toBe('evening');
+    expect(mergeObjectLWW(remote, local, 'derivedAt').merged.observedType).toBe('evening');
+    // A peer that sends no observed evidence can't blank the local record.
+    expect(mergeObjectLWW(local, null, 'derivedAt')).toEqual({ merged: local, changed: false });
+  });
+});
+
+describe('mergeTasteObserved (#2156 — preserve user AI interpretation across LWW)', () => {
+  // Signal = a populated month window; empty = zeroed rollups (idle peer).
+  const withSignal = (derivedAt, extra = {}) => ({
+    source: 'observed', derivedAt,
+    windows: { month: { listen: { total: 5 }, watch: { total: 0 } } },
+    ...extra,
+  });
+  const empty = (derivedAt, extra = {}) => ({
+    source: 'observed', derivedAt,
+    windows: { month: { listen: { total: 0 }, watch: { total: 0 } } },
+    ...extra,
+  });
+  const body = (derivedAt, extra = {}) => withSignal(derivedAt, extra);
+  const interp = (generatedAt, text = 'x') => ({ text, generatedAt });
+
+  it('LWW on derivedAt for the rollup body when both sides have signal', () => {
+    const local = withSignal('2026-07-01T00:00:00Z', { windows: { month: { listen: { total: 1 }, watch: { total: 0 } } } });
+    const remote = withSignal('2026-07-05T00:00:00Z', { windows: { month: { listen: { total: 9 }, watch: { total: 0 } } } });
+    expect(mergeTasteObserved(local, remote).merged.windows.month.listen.total).toBe(9);
+  });
+
+  it('a populated record is never clobbered by a newer EMPTY one (idle peer)', () => {
+    const local = withSignal('2026-07-01T00:00:00Z');
+    const remoteEmptyNewer = empty('2026-07-09T00:00:00Z'); // newer, but no signal
+    const { merged, changed } = mergeTasteObserved(local, remoteEmptyNewer);
+    expect(merged.derivedAt).toBe('2026-07-01T00:00:00Z'); // local (populated) kept
+    expect(changed).toBe(false);
+  });
+
+  it('a populated remote replaces an empty local regardless of recency', () => {
+    const localEmptyNewer = empty('2026-07-09T00:00:00Z');
+    const remotePopulatedOlder = withSignal('2026-07-01T00:00:00Z');
+    expect(mergeTasteObserved(localEmptyNewer, remotePopulatedOlder).merged.windows.month.listen.total).toBe(5);
+  });
+
+  it('keeps the local interpretation when a newer remote recompute carries none', () => {
+    // The exact drop bug: peer recompute wins the body but must NOT lose the
+    // user's interpretation.
+    const local = body('2026-07-01T00:00:00Z', { interpretation: interp('2026-07-02T00:00:00Z', 'mine') });
+    const remote = body('2026-07-05T00:00:00Z'); // newer body, no interpretation
+    const { merged, changed } = mergeTasteObserved(local, remote);
+    expect(merged.derivedAt).toBe('2026-07-05T00:00:00Z'); // remote body won
+    expect(merged.interpretation.text).toBe('mine');       // interpretation survived
+    expect(changed).toBe(true);
+  });
+
+  it('takes the newer interpretation regardless of which body won', () => {
+    const local = body('2026-07-05T00:00:00Z', { interpretation: interp('2026-07-01T00:00:00Z', 'old') });
+    const remote = body('2026-07-01T00:00:00Z', { interpretation: interp('2026-07-06T00:00:00Z', 'new') });
+    const merged = mergeTasteObserved(local, remote).merged;
+    expect(merged.derivedAt).toBe('2026-07-05T00:00:00Z'); // local body won (newer)
+    expect(merged.interpretation.text).toBe('new');        // remote interpretation is newer
+  });
+
+  it('is a no-op when neither side has an interpretation and the body is unchanged', () => {
+    const local = body('2026-07-05T00:00:00Z');
+    const remote = body('2026-07-01T00:00:00Z');
+    expect(mergeTasteObserved(local, remote).changed).toBe(false);
+  });
+});
+
+describe('mergeChronotypeObserved (#2156 — signal-aware LWW)', () => {
+  const rec = (derivedAt, sampleSize, observedType) => ({ source: 'observed', derivedAt, sampleSize, observedType });
+  it('LWW on derivedAt when both sides have activity', () => {
+    const local = rec('2026-07-01T00:00:00Z', 40, 'morning');
+    const remote = rec('2026-07-05T00:00:00Z', 60, 'evening');
+    expect(mergeChronotypeObserved(local, remote).merged.observedType).toBe('evening');
+  });
+  it('a populated histogram is not clobbered by a newer empty one (sampleSize 0)', () => {
+    const local = rec('2026-07-01T00:00:00Z', 40, 'morning');
+    const remoteEmpty = rec('2026-07-09T00:00:00Z', 0, null);
+    expect(mergeChronotypeObserved(local, remoteEmpty).merged.observedType).toBe('morning');
   });
 });
 

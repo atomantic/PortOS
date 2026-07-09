@@ -1,9 +1,25 @@
-import { readFile } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
+import { getPrivacyTwinContext } from './privacyTwinContext.js';
+
+// Twin document markdown is re-read on every agent prompt build
+// (getDigitalTwinForPrompt runs per prompt, per twin test). These files rarely
+// change, so cache their contents keyed by path + mtime and only re-read when
+// the file actually changes on disk. A cheap fs.stat gates the expensive read.
+const docContentCache = new Map();
+
+async function readTwinDoc(filePath) {
+  const { mtimeMs } = await stat(filePath);
+  const cached = docContentCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.content;
+  const content = await readFile(filePath, 'utf-8');
+  docContentCache.set(filePath, { mtimeMs, content });
+  return content;
+}
 
 /**
  * Resolve the persona to apply for this prompt. `personaId` may be a specific
@@ -65,11 +81,27 @@ export async function getDigitalTwinForPrompt(options = {}) {
   let tokenCount = preamble.length;
   const maxChars = maxTokens * 4; // Rough char-to-token estimate
 
+  // Privacy Vault identity dossier — opt-in TWICE: the GLOBAL gate here
+  // (includePrivacyContext, default false) plus the per-field share_with_twin
+  // gate inside getPrivacyTwinContext. Injected before documents as an
+  // authoritative identity block, counting toward the same token budget. Never
+  // cached to disk — decrypted at injection time only. Failures degrade to no
+  // block rather than failing the whole prompt (this also runs outside the
+  // request lifecycle for CoS agent spawns).
+  if (meta.settings?.includePrivacyContext === true) {
+    const privacyBlock = await getPrivacyTwinContext()
+      .catch(err => { console.log(`⚠️ Privacy twin context retrieval failed: ${err.message}`); return ''; });
+    if (privacyBlock && tokenCount + privacyBlock.length + 8 <= maxChars) {
+      output += `${privacyBlock}\n\n---\n\n`;
+      tokenCount += privacyBlock.length + 8;
+    }
+  }
+
   for (const doc of docs) {
     const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
     if (!existsSync(filePath)) continue;
 
-    const content = await readFile(filePath, 'utf-8');
+    const content = await readTwinDoc(filePath);
 
     if (tokenCount + content.length > maxChars) {
       // Truncate if we're over budget

@@ -6,6 +6,10 @@
 import { getAllProviders } from '../services/providers.js';
 import { startAIOp } from '../services/aiStatusEvents.js';
 import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from '../services/ollamaManager.js';
+// localModelHealing is lazy-imported at its (rare, error-recovery) call site
+// below — a static import here pulls its notifications/providers deps (which
+// eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
+// graph, breaking suites that partial-mock fileUtils without PATHS.
 import { readResponseJson } from './readResponseJson.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
@@ -243,19 +247,41 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     return { text: first.text };
   }
 
+  // Recover by retrying the call against `retryModel` (already loaded/healed),
+  // reporting completion or error under that model id. Shared by both local
+  // recovery paths below, which differ only in how they pick `retryModel`.
+  const retryWith = async (retryModel) => {
+    const retry = await postChatCompletion(provider, retryModel, prompt, opts);
+    if (!retry.error) {
+      statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: retryModel, ...throughput(retry.tokens) });
+      return { text: retry.text };
+    }
+    statusOp.error(retry.error, { model: retryModel });
+    return { error: retry.error };
+  };
+
   if (first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
     const loaded = await ensureLMStudioModelLoaded(provider, statusOp);
     if (loaded) {
       statusOp.update('start', `Calling ${provider.name || provider.id} (${loaded})…`, { model: loaded });
-      const retry = await postChatCompletion(provider, loaded, prompt, opts);
-      if (!retry.error) {
-        statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: loaded, ...throughput(retry.tokens) });
-        return { text: retry.text };
-      }
-      statusOp.error(retry.error, { model: loaded });
-      return { error: retry.error };
+      return retryWith(loaded);
     }
   }
+
+  // The configured model isn't installed on the local backend (e.g. a stale or
+  // mis-typed provider default). Auto-pick a real installed model, repoint the
+  // provider, tell the user, and retry once — instead of surfacing a dead-end
+  // "model not found". Only fires for Ollama / LM Studio providers; healing is
+  // a no-op (returns null) for remote/CLI providers, leaving the error as-is.
+  const { healMissingLocalModel, isModelNotFoundError } = await import('../services/localModelHealing.js');
+  if (isModelNotFoundError(first.body || first.error)) {
+    const healed = await healMissingLocalModel({ provider, requestedModel: model }).catch(() => null);
+    if (healed) {
+      statusOp.update('model:corrected', `"${model}" isn't installed — retrying with ${healed.model}…`, { model: healed.model });
+      return retryWith(healed.model);
+    }
+  }
+
   statusOp.error(first.error);
   return { error: first.error };
 }

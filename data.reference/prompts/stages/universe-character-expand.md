@@ -41,6 +41,15 @@ For every BLANK field in the character JSON above, propose a value that:
 - `specialTraits` — non-redundant standout details ("quick hands; chipped nail polish; scar on right eyebrow; restless energy; observant").
 - `visualIdentity` — design language axes ("knobs + sights; urban utilitarian; analog tech feel; small signals of story; hard to pin down").
 - `motivations` — primary drives in 2–3 sentences. What does the character WANT, and what does the character fear losing?
+- **Character framework (Ghost → Wound → Lie → Want → Need).** Only propose these for a lead/antagonist the universe clearly centers; leave blank for a bit-player. They must interlock — pass these checks before writing them:
+  - `ghost` — the past event that wounded the character (1–2 sentences). Must causally explain the Lie.
+  - `wound` — the lasting emotional damage the Ghost left (1 sentence).
+  - `lie` — the false belief the character holds because of the Wound. State it in ONE sentence ("I only matter if I win").
+  - `need` — the Truth that is the DIRECT OPPOSITE of the Lie ("I matter whether I win or lose").
+  - `want` — the concrete external goal the character pursues, which usually conflicts with the Need.
+- `arcType` — one of `positive` (overcomes the Lie, embraces the Truth), `negative` (consumed by the Lie), or `flat` (already knows the Truth; changes the world instead). Omit if unclear.
+- `sliders` — rate `proactivity`, `likability`, `competence` each 1–10. Rule: HIGH (≥7) on at least TWO, OR high on one with clear room to grow. All-low reads boring; all-high-from-the-start reads as a Mary Sue. Omit for a bit-player.
+- `secrets` — 2+ things this character hides (from others or themselves). Short prose items.
 - `likes` — short prose list, separated by commas or semicolons.
 - `dislikes` — same shape as likes.
 - `mannerisms` — habitual physical / verbal tics ("touches the back of the neck when lying; trails off mid-sentence when thinking; whistles tunelessly while working").
@@ -69,6 +78,14 @@ Return ONLY valid JSON, no markdown fence, no commentary. Include ONLY the keys 
   "specialTraits": "string",
   "visualIdentity": "string",
   "motivations": "string",
+  "ghost": "string",
+  "wound": "string",
+  "lie": "string",
+  "want": "string",
+  "need": "string",
+  "arcType": "positive | negative | flat",
+  "sliders": {"proactivity": 1, "likability": 1, "competence": 1},
+  "secrets": ["string"],
   "likes": "string",
   "dislikes": "string",
   "mannerisms": "string",

@@ -134,7 +134,34 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // overrides and last-writer-wins the loss back onto the newer peer. Bump makes
   // the older peer reject the ahead-version series transfer instead. Per-category
   // gate → only series sync pauses with old peers.
-  pipelineSeries: 9,
+  // v10 = `series.arc.foreshadowing` added (#2172) — the arc-overview-emitted
+  // plant → reinforce → payoff ledger the Chekhov check consumes. Same additive
+  // field INSIDE the series.arc payload as readerMap (v2) / tickingClock (v3): a
+  // ≤v9 peer that re-sanitizes a series through its foreshadowing-unaware
+  // `sanitizeArc` would silently strip the ledger and last-writer-wins the loss
+  // back onto the newer peer. Bump makes the older peer reject the ahead-version
+  // series transfer instead. Per-category gate → only series sync pauses with old peers.
+  // v11 = `series.styleGuide.voiceExemplars` + `series.styleGuide.voiceAntiExemplars`
+  // added (#2179) — the voice exemplar / anti-exemplar "tuning fork" passages. Same
+  // additive field INSIDE the federated `styleGuide` sub-object as styleGuide itself
+  // (v4): a ≤v10 peer that re-sanitizes a series through its voiceExemplars-unaware
+  // `sanitizeStyleGuide` would silently strip the passages and last-writer-wins the
+  // loss back onto the newer peer (`preserveAbsentAdditiveFields` only restores a
+  // wholly-absent `styleGuide`, not a present-but-sub-field-stripped one). Bump makes
+  // the older peer reject the ahead-version series transfer instead. Per-category gate
+  // → only series sync pauses with old peers.
+  // v12 = `series.exportSettings` added (#2181) — the per-series prose-export
+  // config (trim size, interior font, title-page fields) for the compiled-
+  // manuscript / ePub / print-interior-PDF exports. Top-level additive field
+  // like styleGuide (v4): a ≤v11 peer that re-sanitizes a series through its
+  // exportSettings-unaware `sanitizeSeries` would silently strip it and
+  // last-writer-wins the loss back onto the newer peer
+  // (`preserveAbsentAdditiveFields` restores a wholly-absent `exportSettings`
+  // from a BEHIND-version SAME-schema peer, but a wire-received record from an
+  // OLDER peer must be rejected outright). Bump makes the older peer reject the
+  // ahead-version series transfer instead. Per-category gate → only series sync
+  // pauses with old peers.
+  pipelineSeries: 12,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
@@ -303,7 +330,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // to 2 then (where a v1 peer would round-trip the new shape through an unaware
   // sanitizer). The project body is LWW-overwritten whole; scene video renders
   // ride the project's linked media collection (federated separately).
-  creativeDirectorProjects: 1,
+  // v2 = `directive` + `plan` added (CDO Phase 2, #2184) — the production-plan
+  // layer (a directive brief + a validated `plan.steps[]` the generalized advance
+  // loop executes through the gated tool registry). Additive: a legacy video
+  // project leaves both null and behaves exactly as before. Version-gated for the
+  // same reason as every prior additive field — the project body is
+  // LWW-overwritten WHOLE (`mergeProjectRecord`), so a ≤v1 peer that receives a
+  // plan-driven project, re-sanitizes it through its directive/plan-unaware
+  // path, and pushes back would silently strip both fields and last-writer-wins
+  // the loss onto the newer peer. Bumping makes the older peer reject the
+  // ahead-version project transfer instead. Per-category gate → only CD-project
+  // sync pauses with old peers; every other category keeps flowing. No record
+  // rewrite is needed — existing legacy projects simply lack both keys and the
+  // advance loop treats an absent key identically to null (falsy → legacy video
+  // flow); migration 175 only seeds the new `cd-plan` prompt stage.
+  creativeDirectorProjects: 2,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced

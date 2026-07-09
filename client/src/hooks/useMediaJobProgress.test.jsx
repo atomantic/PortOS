@@ -48,6 +48,25 @@ describe('useMediaJobProgress — canceled handling (#1791)', () => {
     expect(handlers.has('image-gen:canceled')).toBe(false);
   });
 
+  // Audio (first-pass music-bed, #1933) rides the audio-gen:* namespace so the
+  // Creative Director detail page can surface a failed background render.
+  it('subscribes to audio-gen:* events when kind=audio', () => {
+    renderHook(() => useMediaJobProgress('job-1', { kind: 'audio' }));
+    expect(handlers.has('audio-gen:failed')).toBe(true);
+    expect(handlers.has('audio-gen:completed')).toBe(true);
+    expect(handlers.has('image-gen:failed')).toBe(false);
+  });
+
+  it('settles to failed on a matching audio-gen:failed with the error', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'audio' }));
+    await waitFor(() => expect(result.current.status).toBe('running'));
+    // Re-fetch after :failed returns the still-failed job (not a canceled one).
+    getMediaJob.mockResolvedValueOnce({ status: 'failed', error: 'sidecar crashed' });
+    fire('audio-gen:failed', { generationId: 'job-1', error: 'sidecar crashed' });
+    await waitFor(() => expect(result.current.status).toBe('failed'));
+    expect(result.current.error).toBe('sidecar crashed');
+  });
+
   it('a :failed for a user-canceled running job still corrects to canceled via re-fetch', async () => {
     const { result } = renderHook(() => useMediaJobProgress('job-1'));
     await waitFor(() => expect(result.current.status).toBe('running'));

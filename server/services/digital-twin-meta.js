@@ -35,7 +35,7 @@ export const DEFAULT_META = {
   multiTurnTestHistory: [],
   personas: [],
   enrichment: { completedCategories: [], lastSession: null },
-  settings: { autoInjectToCoS: true, maxContextTokens: 4000 }
+  settings: { autoInjectToCoS: true, maxContextTokens: 4000, includePrivacyContext: false }
 };
 
 export async function loadMeta() {

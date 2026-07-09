@@ -28,7 +28,12 @@ import {
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as editorialAnalysis from '../../services/pipeline/editorialAnalysis.js';
+import * as pipelineJudge from '../../services/pipeline/pipelineJudge.js';
 import * as editorialRunner from '../../services/pipeline/editorialAnalysisRunner.js';
+import * as readerPanel from '../../services/pipeline/readerPanel.js';
+import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js';
+import * as comparativeRank from '../../services/pipeline/editorial/comparativeRank.js';
+import * as voiceFingerprint from '../../services/pipeline/voiceFingerprint.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
 import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
 import { getSettings, updateSettingsWith } from '../../services/settings.js';
@@ -44,10 +49,33 @@ const editorialAnalyzeSchema = z.object({
   force: z.boolean().optional(),
 });
 
+// Calibrated LLM issue quality judge (#2167, CWQE Phase 3). Provider/model
+// optional (writer/judge split resolves from the writer stage's judgeProvider by
+// default); `stageId` forces a particular drafted stage; `force` re-judges
+// unchanged content. Runs ONLY from this explicit action (AI-provider policy).
+const judgeIssueSchema = z.object({
+  stageId: z.enum(['prose', 'comicScript', 'teleplay']).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+});
+
 // Aggregate roadmap (Plot / Character / Reader curves + character arcs + coverage)
 router.get('/series/:id/editorial', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(await editorialAnalysis.getSeriesEditorial(req.params.id));
+}));
+
+// Voice-fingerprint matrix (#2194) — the full issues×metrics fingerprint vector
+// plus the deterministic drift result (outliers flagged), a thin read-only wrapper
+// over the pure `voiceFingerprintMatrix()`/`computeVoiceDrift()` primitives. Drives
+// the dedicated deep-linkable matrix view, which shows EVERY issue's fingerprint,
+// not just the flagged outliers that surface as editorial findings. The service's
+// `getSeries` guard is the single id-validity check (mirrors the sibling routes)
+// — an unknown/blank id resolves to a mapped 404.
+router.get('/series/:id/voice-fingerprint', asyncHandler(async (req, res) => {
+  const result = await voiceFingerprint.getVoiceFingerprint(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 // Full per-issue snapshot (section-by-section emotion log + character arcs)
@@ -92,6 +120,101 @@ router.post('/series/:id/editorial/analyze/cancel', asyncHandler(async (req, res
   res.json({ canceled });
 }));
 
+// Series quality-judge roadmap: every judged issue's qualityScore + the
+// weakest-first ranking Phases 5/7 consume as revision priorities.
+router.get('/series/:id/judge', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await pipelineJudge.getSeriesJudge(req.params.id));
+}));
+
+// One issue's stored judge score (score chip + dimension breakdown), with a
+// `stale` flag when the draft changed since it was judged.
+router.get('/issues/:id/judge', asyncHandler(async (req, res) => {
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const judge = await pipelineJudge.getIssueJudge(req.params.id);
+  res.json(judge || { issueId: req.params.id, status: 'none' });
+}));
+
+// Judge ONE issue (synchronous — returns the finished snapshot).
+router.post('/issues/:id/judge', asyncHandler(async (req, res) => {
+  const body = validateRequest(judgeIssueSchema, req.body ?? {});
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await pipelineJudge.judgeIssue(req.params.id, body));
+}));
+
+// ---------------------------------------------------------------------------
+// Reader panel (#2170, CWQE Phase 6) — four personas read a condensed arc
+// digest and answer qualitative questions; ≥3-persona consensus concerns route
+// into manuscript-review findings, disagreements surface for the human. One LLM
+// call per persona — runs only from this explicit action (AI-provider policy).
+// ---------------------------------------------------------------------------
+
+// Stored panel: { status, personas[], disagreements, seededFindings, stale, ... }
+// or { status: 'none' }.
+router.get('/series/:id/editorial/panel', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await readerPanel.getReaderPanel(req.params.id));
+}));
+
+// Convene the panel (batch — per-persona progress via SSE).
+router.post('/series/:id/editorial/panel/run', asyncHandler(async (req, res) => {
+  const body = validateRequest(editorialAnalyzeSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = readerPanelRunner.startReaderPanel(req.params.id, body);
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/editorial/panel/run/progress`,
+  });
+}));
+
+router.get('/series/:id/editorial/panel/run/progress', (req, res) => {
+  const attached = readerPanelRunner.attachClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active reader-panel run for this series', { status: 404 });
+  }
+});
+
+// Lightweight probe so a (re)mounting client can re-attach to an in-flight run.
+router.get('/series/:id/editorial/panel/run/status', (req, res) => {
+  res.json({ active: readerPanelRunner.isReaderPanelActive(req.params.id) });
+});
+
+router.post('/series/:id/editorial/panel/run/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: readerPanelRunner.cancelReaderPanel(req.params.id) });
+}));
+
+// ---------------------------------------------------------------------------
+// Head-to-head comparative Elo ranking (#2169, CWQE Phase 5) — forced-pick
+// pairwise comparison + Swiss/Elo tournament across a series' drafted issues.
+// Escapes the rubric trap where absolute 1-10 scores collapse into a 2-point
+// band; the ranking gives Phase 7 a reliable weakest-issue selector. One LLM
+// call per match — runs only from this explicit action (AI-provider policy).
+// ---------------------------------------------------------------------------
+
+// Optional compare-judge provider/model override + Swiss rounds. Provider/model
+// fall through to the compare stage's own config when omitted.
+const comparativeRankRunSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  rounds: z.coerce.number().int().min(1).max(8).optional(),
+});
+
+// Stored ranking: { status:'complete', ranking[], weakest[], matches[], stale, ... }
+// or { status:'none' } / { status:'insufficient' }.
+router.get('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await comparativeRank.getComparativeRank(req.params.id));
+}));
+
+// Run the tournament (synchronous — returns the finished ranking, like the
+// per-issue judge). Potentially many LLM calls for a large series, so it's an
+// explicit user action.
+router.post('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
+  const body = validateRequest(comparativeRankRunSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await comparativeRank.runComparativeRank(req.params.id, body));
+}));
+
 // ---------------------------------------------------------------------------
 // Editorial checks (#1284) — registry-driven editorial review.
 // ---------------------------------------------------------------------------
@@ -110,8 +233,11 @@ router.get('/editorial/checks', asyncHandler(async (req, res) => {
 // series + per issue), the readiness signal, and the revision trend +
 // regressions. Reads the same manuscript-review findings the triage view shows.
 router.get('/series/:id/editorial/health', asyncHandler(async (req, res) => {
-  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const settings = await getSettings();
+  // Independent loads — fetch the series and settings concurrently.
+  const [series, settings] = await Promise.all([
+    seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); }),
+    getSettings()
+  ]);
   const gate = readReadinessGate(settings) || DEFAULT_READINESS_GATE;
   // Per-series severity-weight override (#1616) so the returned score + `weights`
   // echo reflect the override the autopilot health gate also uses.

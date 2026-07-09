@@ -1,0 +1,187 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import PipelineVoiceFingerprint from './PipelineVoiceFingerprint';
+
+const getPipelineSeries = vi.fn();
+const getVoiceFingerprint = vi.fn();
+
+vi.mock('../services/api', () => ({
+  getPipelineSeries: (...a) => getPipelineSeries(...a),
+  getVoiceFingerprint: (...a) => getVoiceFingerprint(...a),
+}));
+
+vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+
+function renderAt(seriesId = 'ser-1') {
+  return render(
+    <MemoryRouter initialEntries={[`/pipeline/series/${seriesId}/voice-fingerprint`]}>
+      <Routes>
+        <Route path="/pipeline/series/:seriesId/voice-fingerprint" element={<PipelineVoiceFingerprint />} />
+        <Route path="/pipeline" element={<div>Pipeline index</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+const MATRIX_PAYLOAD = {
+  seriesId: 'ser-1',
+  config: { sigmaThreshold: 1.5, minIssues: 4, vocabularyWells: '' },
+  wells: [],
+  columns: [
+    { key: 'sentenceLenMean', label: 'sentence-length mean', unit: ' words', higher: 'longer', lower: 'shorter', isWell: false },
+    { key: 'dialogueRatio', label: 'dialogue ratio', unit: '%', higher: 'more dialogue', lower: 'more narration', isWell: false },
+  ],
+  gatedOff: false,
+  issueCount: 5,
+  threshold: 1.5,
+  matrix: {
+    metricKeys: ['sentenceLenMean', 'dialogueRatio'],
+    issues: [
+      { issue: 1, words: 100, sentences: 8, metrics: { sentenceLenMean: 12.5, dialogueRatio: 20 } },
+      { issue: 5, words: 40, sentences: 8, metrics: { sentenceLenMean: 4, dialogueRatio: 0 } },
+    ],
+  },
+  series: { sentenceLenMean: { mean: 10.5, std: 3 }, dialogueRatio: { mean: 15, std: 8 } },
+  outliers: [
+    { issue: 5, metricKey: 'sentenceLenMean', label: 'sentence-length mean', value: 4, mean: 10.5, std: 3, z: -2.1, direction: 'low', unit: ' words' },
+  ],
+};
+
+beforeEach(() => {
+  getPipelineSeries.mockReset();
+  getVoiceFingerprint.mockReset();
+  getPipelineSeries.mockResolvedValue({ id: 'ser-1', name: 'Test Series' });
+});
+
+describe('PipelineVoiceFingerprint', () => {
+  it('renders the issues×metrics matrix with an outlier cell highlighted', async () => {
+    getVoiceFingerprint.mockResolvedValue(MATRIX_PAYLOAD);
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // Both issue rows render.
+    expect(screen.getByText('#1')).toBeInTheDocument();
+    expect(screen.getByText('#5')).toBeInTheDocument();
+    // Column headers render.
+    expect(screen.getAllByText('sentence-length mean').length).toBeGreaterThan(0);
+    // The outlier cell (issue 5, sentenceLenMean = 4) is highlighted amber.
+    const outlierCell = screen.getByText('4 words');
+    expect(outlierCell.className).toContain('port-warning');
+  });
+
+  it('shows the gated-off notice below minIssues but still renders the matrix', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      gatedOff: true,
+      issueCount: 2,
+      outliers: [],
+      // The server returns `series: {}` below minIssues.
+      series: {},
+      matrix: { metricKeys: ['sentenceLenMean'], issues: [{ issue: 1, words: 5, sentences: 1, metrics: { sentenceLenMean: 5 } }, { issue: 2, words: 4, sentences: 1, metrics: { sentenceLenMean: 4 } }] },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText(/Drift detection is off/)).toBeInTheDocument());
+    expect(screen.getByText('#1')).toBeInTheDocument();
+    // No misleading mean/σ footer when the series stats are empty.
+    expect(screen.queryByText('mean')).not.toBeInTheDocument();
+    expect(screen.queryByText('σ')).not.toBeInTheDocument();
+  });
+
+  it('surfaces the chosen-voice baseline row + copy when exemplars mode is active (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 5 },
+        dialogueRatio: { mean: 15, std: 8, center: 2 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy names the chosen-voice baseline instead of the series mean.
+    expect(screen.getByText(/chosen voice/)).toBeInTheDocument();
+    // A dedicated "voice" baseline footer row renders (label + the centered value).
+    expect(screen.getByText('voice')).toBeInTheDocument();
+    expect(screen.getByText('5 words')).toBeInTheDocument();
+  });
+
+  it('labels blended mode as a blend, not the chosen voice alone (#2179)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'blended',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 7.75 },
+        dialogueRatio: { mean: 15, std: 8, center: 8.5 },
+      },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    // The intro copy calls it a blend, and the footer row is labeled "blend".
+    expect(screen.getByText(/blend of the series mean/)).toBeInTheDocument();
+    expect(screen.getByText('blend')).toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
+  it('does not claim the chosen-voice baseline on a gated-off run (#2179)', async () => {
+    // A gated-off run (< minIssues) still reports the configured mode, but the
+    // baseline was never applied and series is empty — the UI must fall back.
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      gatedOff: true,
+      issueCount: 2,
+      outliers: [],
+      series: {},
+      matrix: { metricKeys: ['sentenceLenMean'], issues: [{ issue: 1, words: 5, sentences: 1, metrics: { sentenceLenMean: 5 } }, { issue: 2, words: 4, sentences: 1, metrics: { sentenceLenMean: 4 } }] },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText(/Drift detection is off/)).toBeInTheDocument());
+    // No chosen-voice copy or footer row when the baseline never ran.
+    expect(screen.queryByText(/chosen voice/)).not.toBeInTheDocument();
+    expect(screen.queryByText('voice')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a series-wide mismatch banner for seriesFindings (#2248)', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      baselineMode: 'exemplars',
+      exemplarBaselineUsed: true,
+      series: {
+        sentenceLenMean: { mean: 10.5, std: 3, center: 5 },
+        dialogueRatio: { mean: 0, std: 0, center: 42.5 },
+      },
+      seriesFindings: [
+        { metricKey: 'dialogueRatio', label: 'dialogue ratio', mean: 0, center: 42.5, std: 0, distance: 1, direction: 'low', unit: '%', baselineMode: 'exemplars' },
+      ],
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    expect(screen.getByText(/series-wide voice mismatch/)).toBeInTheDocument();
+    // The banner names the corpus value and the metric (the chosen-voice center
+    // 42.5% also appears in the matrix footer row, so it's not banner-unique).
+    expect(screen.getByText(/sits at 0% on/)).toBeInTheDocument();
+    expect(screen.getByText(/uniformly below the/)).toBeInTheDocument();
+  });
+
+  it('renders no series-wide banner when seriesFindings is empty', async () => {
+    getVoiceFingerprint.mockResolvedValue(MATRIX_PAYLOAD);
+    renderAt();
+    await waitFor(() => expect(screen.getByText('Voice Fingerprint')).toBeInTheDocument());
+    expect(screen.queryByText(/series-wide voice mismatch/)).not.toBeInTheDocument();
+  });
+
+  it('renders an empty state when nothing is drafted', async () => {
+    getVoiceFingerprint.mockResolvedValue({
+      ...MATRIX_PAYLOAD,
+      gatedOff: false,
+      issueCount: 0,
+      outliers: [],
+      matrix: { metricKeys: [], issues: [] },
+    });
+    renderAt();
+    await waitFor(() => expect(screen.getByText(/Nothing is drafted yet/)).toBeInTheDocument());
+  });
+});

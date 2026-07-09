@@ -268,6 +268,23 @@ export default function OverviewTab({ status, settings, onRefresh }) {
                 />
                 <span className="text-white">Auto-inject soul context into CoS agents</span>
               </label>
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={settingsForm.includePrivacyContext || false}
+                  onChange={(e) => setSettingsForm({ ...settingsForm, includePrivacyContext: e.target.checked })}
+                  className="w-4 h-4 mt-1 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <span className="text-white">
+                  Inject Privacy Vault identity facts
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    Adds vault records you marked &ldquo;share with twin&rdquo; (legal name, contact
+                    details, addresses) plus a one-line org summary to twin &amp; CoS agent prompts.
+                    Decrypted only at injection time, never cached. Off by default — sharing PII is
+                    opt-in per-field <em>and</em> globally here.
+                  </span>
+                </span>
+              </label>
               <FormField labelClassName="block text-sm text-gray-400 mb-2" label="Max context tokens">
                 <input
                   type="number"

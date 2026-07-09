@@ -15,7 +15,9 @@ import {
   ExternalLink,
   AlertCircle,
   TrendingUp,
-  Play
+  Play,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -108,12 +110,38 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const blockedInputRef = useRef(null);
 
+  // Collapse long task prompts to the first couple of lines with an expand
+  // toggle. `isOverflowing` is measured against the clamped element so the
+  // toggle only appears when the description actually spills past two lines.
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const descRef = useRef(null);
+
   // Focus input when modal opens
   useEffect(() => {
     if (showBlockedModal && blockedInputRef.current) {
       blockedInputRef.current.focus();
     }
   }, [showBlockedModal]);
+
+  // Measure overflow while the prompt is collapsed. Kept sticky when expanded
+  // (removing the clamp collapses scrollHeight, which would otherwise hide the
+  // toggle mid-expand); recomputed only on the collapsed path when the text
+  // changes so an edit that shortens the prompt clears a stale toggle. A
+  // ResizeObserver re-measures on width changes (sidebar collapse, rotation,
+  // window resize) so a prompt that wraps to a new line at a narrower width
+  // still surfaces the toggle instead of silently clamping with no affordance.
+  useEffect(() => {
+    if (promptExpanded) return;
+    const el = descRef.current;
+    if (!el) return;
+    const measure = () => setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [task.description, promptExpanded, editing]);
 
   // Get models for selected provider in edit mode
   const editProvider = providers?.find(p => p.id === editData.provider);
@@ -340,7 +368,28 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             </div>
           ) : (
             <>
-              <p className="text-white">{task.description}</p>
+              <p
+                ref={descRef}
+                id={`task-desc-${task.id}`}
+                className={`text-white whitespace-pre-wrap break-words ${promptExpanded ? '' : 'line-clamp-2'}`}
+              >
+                {task.description}
+              </p>
+              {(isOverflowing || promptExpanded) && (
+                <button
+                  type="button"
+                  onClick={() => setPromptExpanded(v => !v)}
+                  className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
+                  aria-expanded={promptExpanded}
+                  aria-controls={`task-desc-${task.id}`}
+                >
+                  {promptExpanded ? (
+                    <><ChevronUp size={12} aria-hidden="true" /> Show less</>
+                  ) : (
+                    <><ChevronDown size={12} aria-hidden="true" /> Show more</>
+                  )}
+                </button>
+              )}
               {task.metadata?.context && (
                 <p className="text-sm text-gray-500 mt-1">{task.metadata.context}</p>
               )}

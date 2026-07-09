@@ -256,6 +256,8 @@ For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–
 ## Phase C — Serialize the merges (orchestrator, after all agents finish)
 Merge the ready ${pr}s ONE AT A TIME. For each: re-sync onto the latest default branch, gate on **required** CI (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next), then \`${mergeCmd}\`. After all merges, run Phase 7 cleanup once per merged worktree.
 
+**Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (\`.agent-done\`, with a short run summary of the issues claimed + their ${pr}s + merge outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
+
 Everything not covered above (claim mechanics, branch naming, verify/skip rules, implement conventions, ${pr} body, review loop) is exactly the single-issue flow documented below.
 
 ---
@@ -572,6 +574,10 @@ async function spawnPriority0OnDemand(ctx) {
 
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
+        // A user-initiated "Run" must re-check live state — reset any park + the
+        // reconcile convergence signature so the detector below runs fresh (see
+        // cos.dequeueNextTask for the full rationale).
+        await taskSchedule.resetPerpetualForManualRun(request.taskType, targetApp.id);
         // Advance the cooldown eagerly (deduped per app per cycle), but defer
         // binding the active agent until a task is produced — a null result
         // here must not strand `activeAgentId` (issue #978).
@@ -586,6 +592,7 @@ async function spawnPriority0OnDemand(ctx) {
         }
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
+        await taskSchedule.resetPerpetualForManualRun(request.taskType);
         await taskSchedule.recordExecution(`task:${request.taskType}`);
         await withStateLock(async () => {
           const s = await loadState();
@@ -602,6 +609,10 @@ async function spawnPriority0OnDemand(ctx) {
           tasksToSpawn.push(task);
           trackSpawn(task);
         }
+      } else if (!task) {
+        // Explicit user Run produced no task on THIS engine too — same feedback
+        // as cos.dequeueNextTask so a request drained here isn't a silent no-op.
+        await emitOnDemandEmpty({ taskScheduleMod: taskSchedule, request, targetApp, taskConfig: liveSchedule.tasks[request.taskType] });
       }
     }
   }
@@ -1288,10 +1299,14 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one. With no
+  // pin, leave metadata.model unset so selectModelForTask resolves the ACTIVE
+  // provider's tier/default model at spawn time — never a hardcoded literal.
+  // (A stale literal here once pinned an opus release that had since dropped
+  // out of the provider config, spawning claude with a --model the provider
+  // no longer lists.)
   if (interval.model) {
     metadata.model = interval.model;
-  } else {
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`);
@@ -1486,6 +1501,42 @@ async function generateManagedAppImprovementTask(app, state) {
  * @param {Object} state - Current CoS state
  * @returns {Object} Generated task
  */
+/**
+ * Surface WHY a user-initiated on-demand "Run" produced no task, so the trigger
+ * isn't a silent no-op the user only discovers in the pm2 logs. Emits
+ * `schedule:on-demand-empty` (which the client toasts) with an `outcome`:
+ *   - 'parked'    → a perpetual detector re-checked and found no actionable work;
+ *                   carries the reason + open/in-flight/filtered breakdown.
+ *   - 'transient' → a perpetual task that did NOT park — a transient gh/glab
+ *                   probe failure — so the check didn't actually complete.
+ *   - 'idle'      → a non-perpetual task produced no task: a genuine "nothing to
+ *                   do", NOT a failure (e.g. pr-watcher with no new PRs).
+ *
+ * Called from BOTH on-demand drain engines (cos.dequeueNextTask and
+ * spawnPriority0OnDemand below) so a user Run gets feedback no matter which one
+ * drains the request. `taskConfig` is the already-loaded interval for the task,
+ * passed in to avoid re-reading the schedule. The event fires ONLY on the
+ * user-initiated on-demand path, so the client can toast it without
+ * background-park noise.
+ */
+export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
+  const appId = targetApp?.id || null;
+  const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
+  const isPerpetual = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL;
+  const outcome = parkInfo ? 'parked' : (isPerpetual ? 'transient' : 'idle');
+  cosEvents.emit('schedule:on-demand-empty', {
+    requestId: request.id,
+    taskType: request.taskType,
+    appId,
+    appName: targetApp?.name || null,
+    outcome,
+    parkReason: parkInfo?.parkReason || null,
+    parkedUntil: parkInfo?.parkedUntil || null,
+    actionableCount: parkInfo?.parkActionableCount ?? null,
+    counts: parkInfo?.parkCounts || null
+  });
+}
+
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -1576,7 +1627,13 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   //     tick retries instead of waiting out a full recheck cadence.
   // The detector keys on the RESOLVED promptTaskType so a claim-work router run
   // probes the concrete tracker (claim-issue → GitHub issues, plan-task → PLAN.md).
-  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL) {
+  // branch-reconcile and issue-reconcile are PERPETUAL but are NOT gated by the
+  // generic work-detector registry — for each, the "detector" and the actual
+  // work are the SAME scan (the deterministic reconcile below), so splitting them
+  // would double the git/gh I/O. Their dedicated blocks further down do the
+  // park/clear themselves.
+  if (interval.type === taskSchedule.INTERVAL_TYPES.PERPETUAL
+      && taskType !== 'branch-reconcile' && taskType !== 'issue-reconcile') {
     const { detectActionableWork } = await import('./perpetualWork.js');
     const detection = await detectActionableWork(promptTaskType, app, {
       issueAuthorFilter: metadata.issueAuthorFilter || 'self'
@@ -1588,10 +1645,169 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
       return null;
     } else {
-      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count });
+      // Carry the detector's open/in-flight/filtered breakdown into the park so
+      // an explicit "Run" can explain WHY a non-empty queue yielded no work.
+      const counts = detection.total != null
+        ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
+        : null;
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts });
       emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
       return null;
     }
+  }
+
+  // branch-reconcile: deterministic pre-step (the migrated Tier-1 core). Run the
+  // peer-safe reconcile on THIS app's repo — remove fully-merged orphaned local
+  // branches + their worktrees, then classify the rest. The coordinator agent is
+  // dispatched only while actionable in-flight branches remain; when none do, the
+  // perpetual drain PARKS on the recheck cadence. `{inFlightBranches}` carries the
+  // actionable set into the prompt. Runs in the app's live checkout (no LLM here —
+  // git/gh only), mirroring how pr-watcher/reference-watch do their programmatic
+  // work in the generator before dispatch.
+  let inFlightBranchesBlock = '';
+  if (taskType === 'branch-reconcile') {
+    const { reconcile, filterActionable, formatInFlightForPrompt, actionableSignature } = await import('./branchReconcile.js');
+    const { getActiveAgentIds } = await import('./agentState.js');
+    // Action toggles were merged (global → per-app override) + value-constrained
+    // by sanitizeTaskMetadata into `metadata`; each is ON unless explicitly false.
+    const actions = {
+      cleanupMerged: metadata.cleanupMerged,
+      openPr: metadata.openPr,
+      resolveConflicts: metadata.resolveConflicts,
+      autoMerge: metadata.autoMerge
+    };
+    const result = await reconcile(app.repoPath, {
+      cleanup: actions.cleanupMerged !== false,
+      activeAgentIds: new Set(getActiveAgentIds())
+    }).catch((err) => {
+      emitLog('warn', `branch-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
+      return null;
+    });
+    // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
+    // so the next tick retries instead of waiting out a full recheck cadence.
+    // Trade-off: a PERSISTENT failure (bad repoPath, broken gh auth, non-git dir)
+    // re-probes git every tick. That's git/gh-only cost (no LLM), and parking on
+    // the first failure would delay recovery from a genuine blip by a full
+    // recheck cadence — so transient-skip is the intentional choice here.
+    if (!result) return null;
+    if (result.cleaned.length) {
+      emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
+    }
+    const actionable = filterActionable(result.inFlight, actions);
+    if (actionable.length === 0) {
+      // Definitive idle: nothing in-flight to drive. Park on the recheck cadence
+      // and clear the progress signature so a fresh set later dispatches.
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-in-flight-branches', actionableCount: 0, signature: null });
+      // Surface merged branches held back by a protection guard (locked / recent
+      // human-claim / active-agent / dirty) so a lingering worktree isn't an
+      // invisible "cleaned 0" — the exact confusion behind the stale-claim reaper.
+      const heldBack = (result.skipped || []).filter((s) => s.reason?.startsWith('worktree-'));
+      const heldSuffix = heldBack.length
+        ? `, ${heldBack.length} merged branch(es) held back (${[...new Set(heldBack.map((s) => s.reason))].join(', ')})`
+        : '';
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: nothing in-flight (cleaned ${result.cleaned.length}${heldSuffix})`, { appId: app.id });
+      return null;
+    }
+    // Convergence guard — kills the back-to-back re-dispatch loop WITHOUT stalling
+    // slow PRs. The signature (branch:state:pr#:mergeable) is stored at dispatch;
+    // when the perpetual-drain refill fires right after the coordinator completes
+    // (metadata.perpetual bypasses the post-completion cooldown), we compare:
+    //   - signature CHANGED → the run made progress (branch advanced
+    //     NEEDS_PR→IN_REVIEW→merged/cleaned, conflicts resolved, PR became
+    //     mergeable) → keep draining back-to-back.
+    //   - signature UNCHANGED → the run left the same branches in the same states
+    //     (a NEEDS_PR branch judged "not ready", an IN_REVIEW PR blocked on human
+    //     review / red CI). Park on the recheck cadence AND CLEAR the stored
+    //     signature — so the next DAILY recheck re-dispatches unconditionally
+    //     (re-driving the PR in case CI turned green / review cleared overnight),
+    //     rather than seeing the same signature and re-parking forever. The
+    //     signature only suppresses the immediate back-to-back refill; it never
+    //     suppresses a recheck.
+    const signature = actionableSignature(actionable);
+    const lastSignature = await taskSchedule.getPerpetualSignature(taskType, app.id);
+    if (signature === lastSignature) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: actionable.length, signature: null });
+      emitLog('info', `🔀 branch-reconcile parked for ${app.name}: ${actionable.length} branch(es) unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
+      return null;
+    }
+    // New or advanced actionable set — drive it. Resume the drain (clear any park)
+    // and record the signature so an unproductive back-to-back refill parks instead
+    // of looping. Skip the post-completion cooldown so productive progress drains
+    // back-to-back.
+    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
+    metadata.perpetual = true;
+    inFlightBranchesBlock = formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions });
+    emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
+  }
+
+  // issue-reconcile: deterministic pre-step — scan the app's forge repo (GitHub
+  // via `gh` OR GitLab via `glab`, resolved from the origin host inside reconcile)
+  // for ZOMBIE issues (open + `in-progress` yet with their PR/MR merged and no
+  // live claim anywhere) and hand the set to the coordinator agent. Same perpetual
+  // drain shape as branch-reconcile: the scan IS the work-detector (gh/glab/git
+  // only, no LLM), and the coordinator dispatches only while zombies remain — else
+  // it PARKS on the daily recheckCron. `{zombieIssues}` carries the set (with the
+  // resolved forge) into the prompt. No worktree: the coordinator mutates issue
+  // state over `gh`/`glab` only.
+  let zombieIssuesBlock = '';
+  if (taskType === 'issue-reconcile') {
+    const { reconcile, zombieSignature, formatZombiesForPrompt } = await import('./issueReconcile.js');
+    // The live-claim guard (open PR + local/remote/CoS claim branch, scanned via
+    // for-each-ref inside reconcile) already covers every agent past Phase 2 of
+    // the claim flow — the point at which it creates its claim/worktree branch.
+    // The sub-minute pre-branch window is left to the coordinator's per-zombie
+    // re-verification, so no separate active-agent set is threaded here.
+    const autoClose = metadata.autoClose !== false;
+    // Routing mirrors resolveAppWorkTracker: JIRA is NEVER auto-selected from the
+    // git host — it needs explicit per-app config (workTracker 'jira' + enabled
+    // jira.instanceId/projectKey). When resolved to JIRA, hand the gatherer the
+    // JIRA coordinates so it scans status-based zombies via the PortOS JIRA API;
+    // otherwise reconcile resolves GitHub/GitLab from the origin host as before.
+    const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
+    const wt = await resolveAppWorkTracker(app).catch(() => null);
+    const jira = (wt?.resolved === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
+      ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
+      : null;
+    const result = await reconcile(app.repoPath, { jira }).catch((err) => {
+      emitLog('warn', `issue-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
+      return null;
+    });
+    // null = unsupported remote (not GitHub/GitLab, no JIRA config) OR transient
+    // gh/glab/JIRA failure → skip WITHOUT parking so the next tick retries
+    // (gh/glab/git/JIRA-API-only cost), mirroring branch-reconcile.
+    if (!result) return null;
+    if (result.stalled.length) {
+      // In-progress issues with NO merged PR and NO live claim — a different stuck
+      // state (claimed, nothing shipped) that issue-reconcile deliberately does
+      // NOT auto-heal. Surface them so they're not silently ignored.
+      emitLog('info', `🧟 issue-reconcile ${app.name}: ${result.stalled.length} stalled in-progress issue(s) with no merged PR (left for human/branch-reconcile)`, { appId: app.id, analysisType: taskType });
+    }
+    if (result.zombies.length === 0) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null });
+      emitLog('info', `🧟 issue-reconcile parked for ${app.name}: no zombie issues`, { appId: app.id });
+      return null;
+    }
+    // Convergence guard — identical to branch-reconcile's: a productive run closes
+    // or releases zombies (changing the signature) → keep draining; an unchanged
+    // signature (coordinator errored, or a case it punted to a human) → park on
+    // the recheck cadence and CLEAR the signature so the next daily recheck
+    // re-drives unconditionally rather than re-parking forever.
+    const signature = zombieSignature(result.zombies);
+    const lastSignature = await taskSchedule.getPerpetualSignature(taskType, app.id);
+    if (signature === lastSignature) {
+      await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount: result.zombies.length, signature: null });
+      emitLog('info', `🧟 issue-reconcile parked for ${app.name}: ${result.zombies.length} zombie issue(s) unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
+      return null;
+    }
+    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
+    metadata.perpetual = true;
+    zombieIssuesBlock = formatZombiesForPrompt(result.zombies, {
+      fullName: result.fullName, forge: result.forge, autoClose,
+      projectKey: jira?.projectKey, instanceId: jira?.instanceId,
+    });
+    emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s) on ${result.forge}`, { appId: app.id, analysisType: taskType });
   }
 
   // Honor a direct claim-work prompt customization if the user set one;
@@ -1757,6 +1973,8 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     // would get mangled. The function form passes the value verbatim.
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{prData\}/g, () => prDataBlock)
+    .replace(/\{inFlightBranches\}/g, () => inFlightBranchesBlock)
+    .replace(/\{zombieIssues\}/g, () => zombieIssuesBlock)
     .replace(/\{repoFullName\}/g, () => prRepoFullName)
     .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
@@ -1768,11 +1986,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     metadata.provider = interval.providerId;
     metadata.providerId = interval.providerId;
   }
+  // Only pin a model when the schedule config explicitly sets one; otherwise
+  // leave it unset so selectModelForTask resolves the active provider's tier/
+  // default model at spawn time (see note in generateSelfImprovementTaskForType).
   if (interval.model) {
     metadata.model = interval.model;
-  } else if (!metadata.provider) {
-    // Only default to Claude when no per-stage provider overrides the selection
-    metadata.model = 'claude-opus-4-5-20251101';
   }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);

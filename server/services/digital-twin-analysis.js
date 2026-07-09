@@ -66,15 +66,20 @@ export async function validateCompleteness() {
   const documents = await getDocuments();
   const enabledDocs = documents.filter(d => d.enabled && d.category !== 'behavioral');
 
-  // Load content for all enabled documents
-  const contents = [];
-  for (const doc of enabledDocs) {
-    const filePath = join(DIGITAL_TWIN_DIR, doc.filename);
-    if (existsSync(filePath)) {
-      const content = await readFile(filePath, 'utf-8');
-      contents.push({ doc, content: content.toLowerCase() });
-    }
-  }
+  // Load content for all enabled documents in parallel. A missing file just
+  // resolves to null (dropping the synchronous existsSync pre-check that
+  // serialized the loop and hit the filesystem twice per doc); a real I/O error
+  // (EACCES/EIO) still throws — the same loud-failure behavior the existsSync +
+  // unguarded readFile had, so an unreadable enabled doc isn't silently reported
+  // as "missing sections" instead of surfacing the error.
+  const loaded = await Promise.all(
+    enabledDocs.map(async (doc) => {
+      const content = await readFile(join(DIGITAL_TWIN_DIR, doc.filename), 'utf-8')
+        .catch((err) => { if (err.code === 'ENOENT') return null; throw err; });
+      return content === null ? null : { doc, content: content.toLowerCase() };
+    })
+  );
+  const contents = loaded.filter(Boolean);
 
   const allContent = contents.map(c => c.content).join('\n');
   const found = [];

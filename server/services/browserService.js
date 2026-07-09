@@ -23,8 +23,8 @@ const LOGS_TIMEOUT_MS = 5000;
 const CDP_DEFAULT_TIMEOUT_MS = 10000;
 const CDP_EVALUATE_TIMEOUT_MS = 60000;
 
-// Auth/login redirect detection across providers (Microsoft, Okta, generic)
-const AUTH_PATTERNS = ['login.microsoftonline.com', 'okta.com', 'login.live.com', 'Sign in'];
+// Auth/login redirect detection across providers (Microsoft, Okta, Google, generic)
+const AUTH_PATTERNS = ['login.microsoftonline.com', 'okta.com', 'login.live.com', 'accounts.google.com', 'Sign in'];
 
 const CONFIG_FILE = join(PATHS.data, 'browser-config.json');
 const ECOSYSTEM_FILE = join(PATHS.root, 'ecosystem.config.cjs');
@@ -307,7 +307,21 @@ export async function navigateToUrl(url) {
  * non-empty pending set: Chrome could complete that navigation (to a private /
  * metadata target) right after we stop capturing, leaving it unpinned.
  */
-export function pickMainFrameHops(messages) {
+export function pickMainFrameHops(messages, topFrameId = null) {
+  // CDP sets `requestId === loaderId` on the main resource of EVERY frame — the
+  // top document AND cross-origin sub-frames (iframes). When the caller passes
+  // the top frame's `frameId` (from the `Page.navigate` response) we classify a
+  // top-level navigation by `frameId === topFrameId` instead, so a slow/cached
+  // iframe document can't land in the pending/empty-IP gate and over-refuse a safe
+  // public page. Defensive fallback: if NO document request in the stream carries
+  // `topFrameId` (a frameId-format surprise), retain the `requestId === loaderId`
+  // classification so the gate can never regress to refuse-all. Sub-frame /
+  // sub-resource IPs are still fully verified by `collectConnectedIps`.
+  const useFrameId = topFrameId != null && messages.some((m) => (
+    m?.method === 'Network.requestWillBeSent' && m.params?.type === 'Document' && m.params?.frameId === topFrameId
+  ));
+  const isMainDocRequest = (p) => p.type === 'Document' && p.requestId
+    && (useFrameId ? p.frameId === topFrameId : p.requestId === p.loaderId);
   const mainRequestIds = new Set();
   const respondedIds = new Set();
   const hops = [];
@@ -316,9 +330,7 @@ export function pickMainFrameHops(messages) {
     const p = msg?.params;
     if (!p) continue;
     if (msg.method === 'Network.requestWillBeSent') {
-      // A Document request whose requestId equals its loaderId is a top-level
-      // navigation; ignore sub-resource / sub-frame requests.
-      if (p.type === 'Document' && p.requestId && p.requestId === p.loaderId) {
+      if (isMainDocRequest(p)) {
         mainRequestIds.add(p.requestId);
       }
       if (mainRequestIds.has(p.requestId) && p.redirectResponse) {
@@ -390,8 +402,8 @@ export function collectWebSocketHosts(messages) {
 
 // Pure gate over a captured CDP message stream: returns a refusal reason string,
 // or null when the navigation is safe to read. Exported for unit testing.
-export function ssrfPinRefusalReason(messages, verifyRemoteIp, url) {
-  const { hops, pendingMainRequestIds } = pickMainFrameHops(messages);
+export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId = null) {
+  const { hops, pendingMainRequestIds } = pickMainFrameHops(messages, topFrameId);
   if (!hops.length) return 'no main-frame document response was observed';
   // The main document must have a verifiable (present) connection IP — an empty
   // one can't be checked, so fail closed.
@@ -485,6 +497,10 @@ export async function navigateToUrlPinned(url, {
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     let settled = false;
     let phase = 'nav';
+    // The top frame's id, reported by the `Page.navigate` response (id 2). Threaded
+    // into the pin so ONLY the top document gates the pending/empty-IP checks —
+    // slow/cached iframes (which also carry `requestId === loaderId`) don't.
+    let topFrameId = null;
     let overallTimer;
     let settleTimer = null;
     let evalTimer = null;
@@ -506,10 +522,10 @@ export async function navigateToUrlPinned(url, {
     // Settle expired: verify everything captured so far, then either read the DOM
     // on THIS same session (so no monitoring gap) or resolve for a separate read.
     const onSettleEnd = () => {
-      const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url);
+      const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId);
       if (bad) return finish({ ok: false, reason: bad });
       if (!evaluateExpression) {
-        const { finalUrl } = pickMainFrameHops(messages);
+        const { finalUrl } = pickMainFrameHops(messages, topFrameId);
         return finish({ ok: true, finalUrl, evalResult: null });
       }
       phase = 'read';
@@ -528,16 +544,21 @@ export async function navigateToUrlPinned(url, {
     ws.on('message', (data) => {
       const msg = safeJSONParse(data.toString(), null, { context: 'cdp-pin' });
       if (!msg) return;
-      // A Page.navigate Chrome rejects outright (bad scheme, etc.) errors on id 2.
-      if (msg.id === 2 && msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
+      // A Page.navigate Chrome rejects outright (bad scheme, etc.) errors on id 2;
+      // otherwise its result carries the top frame's `frameId` we pin against.
+      if (msg.id === 2) {
+        if (msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
+        if (msg.result?.frameId) topFrameId = msg.result.frameId;
+        return;
+      }
       if (msg.id === READ_ID) {
         // DOM read returned. RE-verify over ALL events captured up to now: any
         // top-level navigation that committed during the read is in `messages`,
         // so a late rebind that changed the page under us fails closed here.
-        const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url);
+        const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId);
         if (bad) return finish({ ok: false, reason: bad });
         const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : (msg.result?.result?.value ?? null);
-        const { finalUrl } = pickMainFrameHops(messages);
+        const { finalUrl } = pickMainFrameHops(messages, topFrameId);
         return finish({ ok: true, finalUrl, evalResult });
       }
       if (!msg.method) return;

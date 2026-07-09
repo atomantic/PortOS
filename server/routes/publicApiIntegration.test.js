@@ -9,11 +9,12 @@
  * else is the production code path.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync, readFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-publicapi-' });
 
@@ -36,15 +37,16 @@ vi.mock('../services/voice/tts-piper.js', () => ({
   listPiperVoices: vi.fn(async () => [{ name: 'en_GB-jenny_dioco-medium' }]),
 }));
 
+// Direct settings.json writes that also drop the getSettings() read cache —
+// see server/lib/settingsTestUtil.js for why the reset is required here
+// (a prior setPassword() warms the cache; a bypass-save() write leaves it stale).
+const { mergeSettingsFile } = bindSettingsFile(tempRoot);
+
 const resetSettings = (extra = {}) => {
   writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(extra, null, 2) + '\n');
   writeFileSync(join(tempRoot, 'auth-sessions.json'), '{"tokens":[]}\n');
 };
-const setApiAccess = (apiAccess) => {
-  const raw = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
-  raw.apiAccess = apiAccess;
-  writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(raw, null, 2) + '\n');
-};
+const setApiAccess = (apiAccess) => mergeSettingsFile({ apiAccess });
 
 const buildApp = async () => {
   const { authGate } = await import('../lib/authGate.js');
@@ -101,7 +103,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + exposed + passwordless: public synthesize works WITHOUT a token', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi', engine: 'piper' });
     expect(res.status).toBe(200);
@@ -111,7 +113,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + exposed + passwordless: config mutation is STILL 401', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).put('/api/voice/config').send({ enabled: true });
     expect(res.status).toBe(401);
@@ -121,7 +123,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + requireAuth: public synthesize 401s without a token, works with one', async () => {
     const auth = await import('../services/auth.js');
     const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: true, requireAuth: true } });
+    await setApiAccess({ voice: { exposed: true, requireAuth: true } });
     const app = await buildApp();
 
     const denied = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi' });
@@ -137,7 +139,7 @@ describe('public voice API — end-to-end through authGate', () => {
   it('auth ON + not exposed: public synthesize 401s', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    setApiAccess({ voice: { exposed: false, requireAuth: false } });
+    await setApiAccess({ voice: { exposed: false, requireAuth: false } });
     const app = await buildApp();
     const res = await request(app).post('/api/voice/public/synthesize').send({ text: 'hi' });
     expect(res.status).toBe(401);

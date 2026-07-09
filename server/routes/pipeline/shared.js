@@ -14,6 +14,7 @@ import * as manuscriptFix from '../../services/pipeline/manuscriptFix.js';
 import { ERR_NO_STORYBOARDS } from '../../services/pipeline/episodeVideo.js';
 import { ERR_NO_RENDERED_PAGES } from '../../services/pipeline/comicPdf.js';
 import { ERR_NO_VOLUME_COVER, ERR_NO_RENDERED_ISSUES } from '../../services/pipeline/volumePdf.js';
+import { ERR_NO_PROSE } from '../../services/pipeline/proseExport.js';
 import { buildCascadeContext } from '../../services/recordMerge.js';
 
 const SERVICE_ERROR_STATUS = {
@@ -37,6 +38,9 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NO_RENDERED_PAGES]: 409,
   [ERR_NO_VOLUME_COVER]: 409,
   [ERR_NO_RENDERED_ISSUES]: 409,
+  // Prose-export refusal when no issue has drafted prose (#2181) → 409, same
+  // "resource not ready for this action" idiom as the PDF exports above.
+  [ERR_NO_PROSE]: 409,
   // recordMerge validation (unresolved conflicts, bad ids, cross-universe).
   MERGE_VALIDATION: 400,
   // recordMerge cascade partially completed (the issue reassign failed) → 409 so

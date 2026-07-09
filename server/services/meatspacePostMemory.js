@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { shuffle } from '../lib/arrayUtils.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
@@ -26,6 +27,56 @@ const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 // due now (see `ensureSchedule`) and get a persisted default by migration 154.
 
 export const DEFAULT_EASE = 2.5;
+// =============================================================================
+// WINDOWED (DECAY-AWARE) MASTERY
+// =============================================================================
+//
+// Element/chunk mastery is judged over a rolling window of the most-recent
+// attempts, NOT cumulative all-time counts — so a run of recent misses lowers
+// mastery (decay-aware) instead of an early wrong answer being permanently
+// diluted, and mastery reflects whether you STILL know it. The cumulative
+// `correct`/`attempts` counts are kept for history; the window rides alongside
+// as a bounded `recent` array of per-attempt correctness (1/0, most-recent
+// last, capped at MASTERY_WINDOW). Legacy items with no `recent` array fall back
+// to the cumulative counts so old data still reports sensibly (issue #2096).
+export const MASTERY_WINDOW = 10;
+// Mastery gate: at least this many attempts (in the window) at ≥ this accuracy.
+export const MASTERY_MIN_ATTEMPTS = 3;
+export const MASTERY_TARGET_ACCURACY = 0.8;
+
+/** Push a per-attempt correctness flag onto a mastery stat's rolling window. */
+function pushRecent(stat, correct) {
+  if (!Array.isArray(stat.recent)) stat.recent = [];
+  stat.recent.push(correct ? 1 : 0);
+  if (stat.recent.length > MASTERY_WINDOW) {
+    stat.recent = stat.recent.slice(-MASTERY_WINDOW);
+  }
+}
+
+/**
+ * Recency-weighted accuracy for a mastery stat: uses the bounded `recent`
+ * window when present (decay-aware — recent misses lower it), else falls back to
+ * the cumulative all-time `correct`/`attempts` for legacy items with no window.
+ * Returns `{ attempts, accuracy }` where `attempts` is the count the mastery
+ * gate is judged against.
+ */
+export function windowedAccuracy(stat) {
+  if (Array.isArray(stat?.recent) && stat.recent.length) {
+    const attempts = stat.recent.length;
+    const correct = stat.recent.reduce((sum, r) => sum + (r ? 1 : 0), 0);
+    return { attempts, accuracy: attempts ? correct / attempts : 0 };
+  }
+  const attempts = Number.isFinite(stat?.attempts) ? stat.attempts : 0;
+  const correct = Number.isFinite(stat?.correct) ? stat.correct : 0;
+  return { attempts, accuracy: attempts ? correct / attempts : 0 };
+}
+
+/** True when a mastery stat clears the windowed gate (≥3 recent attempts, ≥0.8). */
+export function isStatMastered(stat) {
+  const { attempts, accuracy } = windowedAccuracy(stat);
+  return attempts >= MASTERY_MIN_ATTEMPTS && accuracy >= MASTERY_TARGET_ACCURACY;
+}
+
 const MIN_EASE = 1.3;
 // Ceiling mirrors `memoryScheduleSchema.ease.max(5)` in postValidation.js — the
 // per-session +0.1 bumps are unbounded otherwise, so ~26 perfect reps would push
@@ -410,6 +461,8 @@ export async function submitPractice(id, practiceData) {
     chunk.attempts += results.length;
     chunk.correct += results.filter(r => r.correct).length;
     chunk.lastPracticed = now;
+    // Rolling window for decay-aware mastery (issue #2096) — one flag per result.
+    for (const r of results) pushRecent(chunk, r.correct);
   }
 
   // Update element-level mastery (for elements song)
@@ -419,8 +472,10 @@ export async function submitPractice(id, practiceData) {
         if (!item.mastery.elements[r.element]) {
           item.mastery.elements[r.element] = { correct: 0, attempts: 0 };
         }
-        item.mastery.elements[r.element].attempts++;
-        if (r.correct) item.mastery.elements[r.element].correct++;
+        const el = item.mastery.elements[r.element];
+        el.attempts++;
+        if (r.correct) el.correct++;
+        pushRecent(el, r.correct);
       }
     }
   }
@@ -479,13 +534,54 @@ export async function advanceScheduleFromSession(memoryItemId, ratio, now = new 
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
 
-  const advanced = advanceSchedule(item.schedule, ratio, now);
-  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
-  item.updatedAt = now.toISOString();
+  applyScheduleAdvanceToItem(item, ratio, now);
   await saveMemoryItems(items);
 
   console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
   return item.schedule;
+}
+
+// In-place schedule advance shared by advanceScheduleFromSession (one load+save)
+// and applySessionToMemoryItems (one load+save for the WHOLE session). Keeping a
+// single core guarantees the consolidated one-pass path produces byte-identical
+// schedule results to the legacy per-task path.
+function applyScheduleAdvanceToItem(item, ratio, now) {
+  const advanced = advanceSchedule(item.schedule, ratio, now);
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
+  item.updatedAt = now.toISOString();
+  return item.schedule;
+}
+
+// In-place mastery merge shared by mergeMasteryFromSession and
+// applySessionToMemoryItems — same single-core-of-truth rationale as
+// applyScheduleAdvanceToItem above.
+function applyMasteryMergeToItem(item, questions, now) {
+  const nowIso = now.toISOString();
+  for (const q of questions) {
+    if (q.chunkId) {
+      if (!item.mastery.chunks[q.chunkId]) {
+        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
+      }
+      const chunk = item.mastery.chunks[q.chunkId];
+      chunk.attempts += 1;
+      if (q.correct) chunk.correct += 1;
+      chunk.lastPracticed = nowIso;
+      pushRecent(chunk, q.correct);
+    }
+    if (q.element) {
+      if (!item.mastery.elements[q.element]) {
+        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
+      }
+      const el = item.mastery.elements[q.element];
+      el.attempts += 1;
+      if (q.correct) el.correct += 1;
+      pushRecent(el, q.correct);
+    }
+  }
+
+  item.mastery.overallPct = computeOverallMastery(item);
+  item.updatedAt = nowIso;
+  return item.mastery;
 }
 
 /**
@@ -513,32 +609,48 @@ export async function mergeMasteryFromSession(memoryItemId, questions, now = new
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
 
-  const nowIso = now.toISOString();
-  for (const q of questions) {
-    if (q.chunkId) {
-      if (!item.mastery.chunks[q.chunkId]) {
-        item.mastery.chunks[q.chunkId] = { correct: 0, attempts: 0, lastPracticed: null };
-      }
-      const chunk = item.mastery.chunks[q.chunkId];
-      chunk.attempts += 1;
-      if (q.correct) chunk.correct += 1;
-      chunk.lastPracticed = nowIso;
-    }
-    if (q.element) {
-      if (!item.mastery.elements[q.element]) {
-        item.mastery.elements[q.element] = { correct: 0, attempts: 0 };
-      }
-      item.mastery.elements[q.element].attempts += 1;
-      if (q.correct) item.mastery.elements[q.element].correct += 1;
-    }
-  }
-
-  item.mastery.overallPct = computeOverallMastery(item);
-  item.updatedAt = nowIso;
+  applyMasteryMergeToItem(item, questions, now);
   await saveMemoryItems(items);
 
   console.log(`🧠 POST session mastery merged: "${item.title}" ${questions.length} answers → ${item.mastery.overallPct}% overall`);
   return item.mastery;
+}
+
+/**
+ * Consolidated post-session memory bookkeeping: advance schedule AND merge
+ * chunk/element mastery for every memory drill in a session, reading and writing
+ * the shared memory-items file exactly ONCE regardless of task count (the
+ * previous path did 2 full read-modify-write round-trips PER memory task). A
+ * task is a memory drill iff it carries a `memoryItemId` — the only tasks the
+ * submit path attaches one to (POST_SUPPORTED_MEMORY_TYPES). Per task the
+ * schedule ratio is correct-over-total, matching the legacy per-task caller.
+ *
+ * @param {Array<{memoryItemId?, questions?}>} tasks - the session's scored tasks
+ * @returns {Promise<{updated:number}>} how many memory items were touched
+ */
+export async function applySessionToMemoryItems(tasks, now = new Date()) {
+  const memoryTasks = (Array.isArray(tasks) ? tasks : []).filter(t => t?.memoryItemId);
+  if (!memoryTasks.length) return { updated: 0 };
+
+  const items = await loadMemoryItems();
+  let updated = 0;
+  for (const task of memoryTasks) {
+    const item = items.find(i => i.id === task.memoryItemId);
+    if (!item) continue;
+    const questions = Array.isArray(task.questions) ? task.questions : [];
+    const total = questions.length;
+    const correct = questions.filter(q => q?.correct).length;
+    const ratio = total ? correct / total : 0;
+    applyScheduleAdvanceToItem(item, ratio, now);
+    // mergeMasteryFromSession is a no-op on empty questions; mirror that so the
+    // one-pass path stays identical to the legacy schedule+mastery sequence.
+    if (questions.length) applyMasteryMergeToItem(item, questions, now);
+    updated += 1;
+    console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+  }
+
+  if (updated) await saveMemoryItems(items);
+  return { updated };
 }
 
 /**
@@ -629,7 +741,7 @@ function generateFillBlank(item, count) {
   if (!lines.length) return null;
 
   const questions = [];
-  const shuffled = [...lines].sort(() => Math.random() - 0.5).slice(0, Math.min(count, lines.length));
+  const shuffled = shuffle(lines).slice(0, Math.min(count, lines.length));
 
   for (const line of shuffled) {
     const words = line.text.split(/\s+/);
@@ -665,6 +777,13 @@ function generateFillBlank(item, count) {
     questions.push({
       prompt: display,
       fullText: line.text,
+      // Scalar primary answer (the first blanked word) — kept alongside the
+      // full `answers[]` acceptable-word list so consumers that expect a
+      // single `expected` field (DrillQuestionReview, scoring) have a
+      // consistent value instead of always reading "—"/undefined (issue
+      // #2116). Scoring still checks `answers[]` for a match against ANY
+      // blanked word, not just this primary one.
+      expected: answers[0]?.word ?? null,
       answers,
       chunkId: findChunkForLine(item, lines.indexOf(line)),
     });
@@ -684,7 +803,7 @@ function generateSequenceRecall(item, count) {
   if (lines.length < 2) return null;
 
   const questions = [];
-  const indices = [...Array(lines.length - 1).keys()].sort(() => Math.random() - 0.5).slice(0, Math.min(count, lines.length - 1));
+  const indices = shuffle([...Array(lines.length - 1).keys()]).slice(0, Math.min(count, lines.length - 1));
 
   for (const idx of indices) {
     questions.push({
@@ -708,7 +827,7 @@ function generateElementFlash(item, count) {
   if (item.id !== 'elements-song' || !item.content.elementMap) return null;
 
   const elements = Object.entries(item.content.elementMap);
-  const shuffled = [...elements].sort(() => Math.random() - 0.5).slice(0, Math.min(count, elements.length));
+  const shuffled = shuffle(elements).slice(0, Math.min(count, elements.length));
 
   const questions = shuffled.map(([symbol, info]) => {
     // Randomly ask name→symbol or symbol→name
@@ -731,23 +850,26 @@ function generateElementFlash(item, count) {
 // HELPERS
 // =============================================================================
 
-function computeOverallMastery(item) {
-  // For elements song: mastery is based on per-element accuracy
+export function computeOverallMastery(item) {
+  // For elements song: mastery is per-element, judged over the recency window
+  // (decay-aware, issue #2096) — a recent run of misses lowers the count. The
+  // ≥3-attempt gate is kept, but applied to the window (or the cumulative
+  // fallback for legacy items with no window).
   if (item.id === 'elements-song' && item.content.elementMap) {
     const totalElements = Object.keys(item.content.elementMap).length;
     if (totalElements === 0) return 0;
     let masteredCount = 0;
     for (const sym of Object.keys(item.content.elementMap)) {
       const m = item.mastery.elements[sym];
-      if (m && m.attempts >= 3 && m.correct / m.attempts >= 0.8) masteredCount++;
+      if (m && isStatMastered(m)) masteredCount++;
     }
     return Math.round((masteredCount / totalElements) * 100);
   }
 
-  // For generic items: mastery is based on chunk accuracy
+  // For generic items: mastery is based on windowed chunk accuracy.
   const chunks = Object.values(item.mastery.chunks);
   if (!chunks.length) return 0;
-  const avgAccuracy = chunks.reduce((sum, c) => sum + (c.attempts > 0 ? c.correct / c.attempts : 0), 0) / chunks.length;
+  const avgAccuracy = chunks.reduce((sum, c) => sum + windowedAccuracy(c).accuracy, 0) / chunks.length;
   return Math.round(avgAccuracy * 100);
 }
 

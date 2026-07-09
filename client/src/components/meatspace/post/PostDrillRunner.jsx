@@ -81,7 +81,9 @@ export default function PostDrillRunner({ session }) {
   if (state !== 'drilling' || !currentDrill) return null;
 
   const question = currentDrill.questions?.[currentQuestionIndex];
-  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type) || currentDrill.type === 'memory-fill-blank';
+  // MEMORY_DRILL_TYPES now includes 'memory-fill-blank' (issue #2099/#2116),
+  // so the explicit extra check this used to need is gone.
+  const isTextDrill = MEMORY_DRILL_TYPES.includes(currentDrill.type);
   const timePct = timeLimitMs > 0 ? (timeLeft / timeLimitMs) * 100 : 0;
   const progressPct = totalQuestions > 0 ? ((currentQuestionIndex + 1) / totalQuestions) * 100 : 0;
 
@@ -154,6 +156,11 @@ export default function PostDrillRunner({ session }) {
       <div className="flex items-center justify-between text-sm text-gray-400">
         <span className={isTraining ? 'text-port-accent-2' : ''}>
           {DRILL_LABELS[currentDrill.type] || currentDrill.type}
+          {currentDrill.progression && (
+            <span className="ml-2 text-xs text-port-accent">
+              Lvl {currentDrill.progression.level + 1} · {currentDrill.progression.label}
+            </span>
+          )}
           {isTraining && ' — Training'}
         </span>
         <span>Drill {currentDrillIndex + 1} of {drillCount}</span>

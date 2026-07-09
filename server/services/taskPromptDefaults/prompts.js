@@ -13,7 +13,7 @@
 import { PORTOS_API_URL } from '../../lib/ports.js';
 
 // ============================================================
-// Unified DEFAULT_TASK_PROMPTS (17 task types)
+// Unified DEFAULT_TASK_PROMPTS — one entry per scheduled task type / pipeline stage
 // All prompts use {appName} and {repoPath} template variables
 // ============================================================
 
@@ -575,7 +575,7 @@ This flow ships GitHub issues — it does NOT touch PLAN.md. The audit trail is 
 
 1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. If no changelog convention exists, skip this — the PR + commit history is the record.
 2. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`
-3. Open the PR with \`gh pr create\`. The body MUST contain \`Closes #\${NUM}\` so the merge auto-closes the issue. Summarize what shipped + a short test plan.
+3. Open the PR with \`gh pr create\`. Summarize what shipped + a short test plan. **Choose the issue trailer deliberately:** if this PR FULLY satisfies the issue's scope, the body MUST contain \`Closes #\${NUM}\` so the merge auto-closes it. If you deliberately shipped only PART of the issue (a valuable slice, with real scope still remaining), use \`Refs #\${NUM}\` instead (NOT \`Closes\`) and add a \`## Remaining\` section listing what's left — Phase 7 reconciles the issue so it is never stranded.
 
 ## Phase 6 — Review and ship
 
@@ -603,7 +603,14 @@ git worktree remove "\${WORKTREE}"
 git branch -d "claim/issue-\${NUM}"
 \`\`\`
 
-If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` trailer auto-closes it on merge); if it's still open, close it manually (\`gh issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`gh issue edit "\${NUM}" --remove-label in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitHub via \`gh pr merge\`; leave the user's working tree alone.`,
+If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged, so the local branch is redundant.
+
+**Reconcile the issue — did this PR FULLY satisfy its scope?**
+- **Yes (full)** — the \`Closes #\${NUM}\` trailer already auto-closed it; if it's somehow still open, close it (\`gh issue close "\${NUM}"\`) and remove the label (\`gh issue edit "\${NUM}" --remove-label in-progress\`).
+- **No — the remainder is a clean, separable chunk** — close THIS issue with a summarizing comment (shipped ✓ / moved to #NEW), remove \`in-progress\`, and file ONE tightly-scoped follow-up for the remainder: \`gh issue create --title "…" --label plan --body "…\\n\\nRefs #\${NUM}"\` (carry over any \`area:*\` labels the issue had).
+- **No — the remainder is a continuation of the same scope** — keep the issue OPEN, post a \`Done ✓ / Remaining ▢\` comment, and release the claim so the queue re-picks it: \`gh issue edit "\${NUM}" --remove-label in-progress --remove-assignee @me\`.
+
+NEVER leave the issue OPEN with \`in-progress\` still on it — that strands it as a zombie (the claim queue skips \`in-progress\`, so the remaining scope is never re-picked). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitHub via \`gh pr merge\`; leave the user's working tree alone.`,
 
   // GitLab sibling of 'claim-issue' above. SAME 7-phase flow, branch naming,
   // and no-local-merge cleanup — only the forge CLI differs (\`glab\` issues +
@@ -699,7 +706,7 @@ This flow ships GitLab issues — it does NOT touch PLAN.md. The audit trail is 
 
 1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. If no changelog convention exists, skip this.
 2. Push the branch: \`git push -u origin "claim/issue-\${NUM}"\`
-3. Open the MR with \`glab mr create --fill --source-branch "claim/issue-\${NUM}" --target-branch "\${DEFAULT_BRANCH}" --yes\`. The MR description MUST contain \`Closes #\${NUM}\` so the merge auto-closes the issue. Summarize what shipped + a short test plan (pass \`--description\` if \`--fill\` didn't capture it).
+3. Open the MR with \`glab mr create --fill --source-branch "claim/issue-\${NUM}" --target-branch "\${DEFAULT_BRANCH}" --yes\`. **Choose the issue trailer deliberately:** if this MR FULLY satisfies the issue's scope, the description MUST contain \`Closes #\${NUM}\` so the merge auto-closes it; if you deliberately shipped only PART of the issue (a valuable slice with real scope remaining), use \`Refs #\${NUM}\` instead (NOT \`Closes\`) and add a \`## Remaining\` section listing what's left — Phase 7 reconciles the issue so it is never stranded. Summarize what shipped + a short test plan (pass \`--description\` if \`--fill\` didn't capture it).
 
 ## Phase 6 — Review and ship
 
@@ -726,7 +733,14 @@ git worktree remove "\${WORKTREE}"
 git branch -d "claim/issue-\${NUM}"
 \`\`\`
 
-If \`git branch -d\` refuses, use \`-D\` — the MR is confirmed merged, so the local branch is redundant. Verify the issue closed (the \`Closes #\${NUM}\` line auto-closes it on merge to the default branch); if it's still open, close it manually (\`glab issue close "\${NUM}"\`) and remove the \`in-progress\` label (\`glab issue update "\${NUM}" --unlabel in-progress\`). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitLab via \`glab mr merge\`; leave the user's working tree alone.`,
+If \`git branch -d\` refuses, use \`-D\` — the MR is confirmed merged, so the local branch is redundant.
+
+**Reconcile the issue — did this MR FULLY satisfy its scope?**
+- **Yes (full)** — the \`Closes #\${NUM}\` line already auto-closed it on merge to the default branch; if it's somehow still open, close it (\`glab issue close "\${NUM}"\`) and remove the label (\`glab issue update "\${NUM}" --unlabel in-progress\`).
+- **No — the remainder is a clean, separable chunk** — close THIS issue with a summarizing note (shipped ✓ / moved to #NEW), remove \`in-progress\`, and file ONE tightly-scoped follow-up for the remainder: \`glab issue create --title "…" --label plan --description "…\\n\\nRefs #\${NUM}"\` (carry over any \`area:*\` labels the issue had).
+- **No — the remainder is a continuation of the same scope** — keep the issue OPEN, post a \`Done ✓ / Remaining ▢\` note, and release the claim so the queue re-picks it: \`glab issue update "\${NUM}" --unassign --unlabel in-progress\`.
+
+NEVER leave the issue OPEN with \`in-progress\` still on it — that strands it as a zombie (the claim queue skips \`in-progress\`, so the remaining scope is never re-picked). **Do NOT \`git pull\`** from inside this phase — the work is already integrated on GitLab via \`glab mr merge\`; leave the user's working tree alone.`,
 
   // JIRA sibling of 'claim-issue' / 'claim-issue-gitlab'. SAME claim-one-item,
   // self-managed-worktree, ship-and-review shape — but the work source is the
@@ -828,7 +842,7 @@ The audit trail is the merged MR/PR + \`git log\`. Detect the forge from the git
    - GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transitions again (transitions change once In Progress).
    - Pick the transition whose target status best matches "In Review" (e.g. "In Review", "Code Review", "Review", "Ready for Review"); match case-insensitively.
    - POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transition with body {"transitionId": "<id>"}.
-5. Add the MR/PR link to the ticket: POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments with body {"comment": "Implementation complete. MR/PR: \${PR_URL}\\n\\nReady for code review."}. If a transition in step 4 failed (status unreachable), say so in this comment AND in the Phase 6 summary — do not silently drop it.
+5. Add the MR/PR link to the ticket: POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments with body {"comment": "Implementation complete. MR/PR: \${PR_URL}\\n\\nReady for code review."}. **If you shipped only PART of the ticket's scope** (a valuable slice with real work remaining), make the comment a \`Done ✓ / Remaining ▢\` summary so the remaining scope is not lost when a human lands the MR/PR; when that remainder is a clean, separable chunk, ALSO file a new follow-up ticket for it (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets with a summary + a description referencing \`KEY\`) so it re-enters the sprint queue. If a transition in step 4 failed (status unreachable), say so in this comment AND in the Phase 6 summary — do not silently drop it.
 
 ## Phase 6 — Review and clean up
 
@@ -1233,6 +1247,72 @@ Repository: {repoPath}
     - Any errors encountered
 
 IMPORTANT: Never delete unmerged branches. Only delete branches fully merged into the default branch. Use \`git branch -d\` (not -D) for local branches to ensure safety.`,
+
+  'branch-reconcile': `[Improvement: {appName}] Branch & PR Reconciliation
+
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has already run the deterministic pass (removed fully-merged, orphaned local branches + their worktrees) and handed you ONLY the branches that need judgment.
+
+Repository: {repoPath}
+
+Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a machine that is a federated sync peer, branches created on OTHER machines exist here only as remote-tracking refs (\`origin/*\`) and are deliberately NOT listed — never open, rebase, or merge anything that is not in the list below.
+
+{inFlightBranches}
+
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one.
+
+## Rules
+- Work ONLY on the branches listed above. Never touch a branch that is not listed.
+- Never force-push the default branch and never merge unreviewed work.
+- If a sub-agent reports a branch is incomplete or blocked, leave it as-is and note it in your summary.
+- Summarize what each branch ended up doing (PR opened / conflicts resolved / merged / left incomplete).`,
+
+  'issue-reconcile': `[Improvement: {appName}] Zombie Issue Reconciliation
+
+You are the coordinator for healing {appName}'s ZOMBIE issues. A zombie is a work item the claim queue reads as "claimed and being worked" yet that already SHIPPED with no live claim anywhere (no open PR/MR, no local/remote/CoS claim branch, no running agent) — a partial ship left the claim marker on, so the queue skips it forever and the remaining scope is never finished. On **GitHub/GitLab** the marker is the \`in-progress\` label on an OPEN issue whose PR/MR already MERGED. On **JIRA** there is no label — the marker is the ticket STATUS: a ticket left **In Review** whose MR/PR merged (or was abandoned). The scheduler already ran the deterministic scan and handed you ONLY the confirmed zombie set.
+
+Repository: {repoPath}
+
+{zombieIssues}
+
+**Which tracker.** The header above names the tracker (GitHub, GitLab, or JIRA) and how to drive it. Follow the matching arm below — the GitHub/GitLab CLI arm, or the JIRA-API arm. Work through the items one at a time (they touch shared tracker state — do NOT parallelize), applying the hybrid and honoring the **autoClose** directive shown above the list.
+
+━━━━━━━━━━ GitHub / GitLab arm (forge CLI) ━━━━━━━━━━
+
+Every command is shown as \`gh\` (GitHub) / \`glab\` (GitLab) — run the one matching the header. The \`in-progress\` label, \`plan\` label, \`Refs #<num>\` dedup marker, and \`claim/issue-<num>\` branch convention are identical on both forges. On GitLab the "PR" is an MR and its number is an \`iid\`.
+
+## Verify before you act
+- Read the issue AND the merged PR/MR before touching anything — GitHub: \`gh issue view <num> --comments\` + \`gh pr view <pr>\`; GitLab: \`glab issue view <num> --comments\` + \`glab mr view <mr>\`. Confirm the merged PR/MR actually shipped work FOR this issue (not just a coincidental \`#<num>\` mention) AND that real scope REMAINS. If it fully satisfied the issue, just close it (GitHub: \`gh issue close <num>\`; GitLab: \`glab issue close <num>\`) and remove \`in-progress\` — it was mislabeled, not partial. If the PR/MR did NOT address this issue at all, leave it untouched and note it in your summary — it is not a zombie.
+
+## The partial-ship hybrid (per the "Do:" line)
+- **Separable remainder** → close the original with a comment summarizing what shipped (✓) and what moved out, then file ONE tightly-scoped follow-up issue for the remainder. Carry over any \`area:*\` labels the original had, then remove the claim label (closing already drops it from the queue, but be explicit).
+  - GitHub: \`gh issue create --title "…" --label plan --body "…\\n\\nRefs #<num>"\` then \`gh issue edit <num> --remove-label in-progress\`.
+  - GitLab: \`glab issue create --title "…" --label plan --description "…\\n\\nRefs #<num>"\` then \`glab issue update <num> --unlabel in-progress\`.
+- **Continuation of the same scope** → keep the issue OPEN, post a \`Done ✓ / Remaining ▢\` comment, and release the claim so the queue re-picks it.
+  - GitHub: \`gh issue edit <num> --remove-label in-progress --remove-assignee @me\`.
+  - GitLab: \`glab issue update <num> --unlabel in-progress --unassign\`.
+
+## Peer safety — avoid duplicate follow-ups
+{appName} may run on several federated machines that share one forge repo. Before filing a follow-up, search for one you (or a peer) may already have filed — GitHub: \`gh issue list --state open --search "Refs #<num> in:body"\`; GitLab: \`glab issue list --search "Refs #<num>"\` (then confirm the match references \`#<num>\`). If a matching open follow-up already exists, do NOT file another — just close/relabel the original and reference the existing follow-up.
+
+━━━━━━━━━━ JIRA arm (PortOS JIRA API) ━━━━━━━━━━
+
+Use only if the header names JIRA. There is no forge CLI — every action is a PortOS JIRA API call. All calls are relative to this base URL: ${PORTOS_API_URL}. The header gives the \`<instanceId>\` and \`<projectKey>\`; each zombie's KEY is shown as \`PROJ-1234\`. The \`claim/<KEY>\` branch convention and the \`Refs <KEY>\` dedup marker are the JIRA analogs of \`claim/issue-<num>\` / \`Refs #<num>\`.
+
+## Verify before you act
+- Read the ticket AND its linked MR/PR before touching anything: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>. Find the linked MR/PR (its dev-panel link, or search the repo for a branch/PR referencing \`<KEY>\`) and confirm it actually shipped work FOR this ticket AND that real scope REMAINS. If it fully satisfied the ticket, just transition it to **Done** (no follow-up) — it was left in review, not partial. If nothing shipped for it at all, leave it untouched and note it in your summary — it is not a zombie.
+- To transition: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transitions to list the available transitions, pick the one whose target status matches your intent (case-insensitive), then POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transition with body {"transitionId": "<id>"}.
+
+## The partial-ship hybrid (JIRA)
+- **Separable remainder** → post a \`Done ✓ / Remaining ▢\` comment (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments with body {"comment": "…"}), transition the original to **Done**, then file ONE tightly-scoped follow-up ticket for the remainder: POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets with body {"projectKey": "<projectKey>", "summary": "…", "description": "…\\n\\nRefs <KEY>"}. Carry over the epic/labels where sensible.
+- **Continuation of the same scope** → post the \`Done ✓ / Remaining ▢\` comment, then transition the ticket BACK to a not-started status (To Do / Selected for Development / Backlog — pick the transition that returns it to the To Do column) so the claim queue re-picks it. Do NOT file a follow-up.
+
+## Peer safety — avoid duplicate follow-ups
+{appName} may run on several federated machines that share one JIRA project. Before filing a follow-up ticket, list your sprint tickets (GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/my-sprint-tickets/<projectKey>) and check for one whose description already carries \`Refs <KEY>\`. If a matching follow-up already exists, do NOT file another — just transition the original and reference the existing follow-up.
+
+━━━━━━━━━━ Rules (all trackers) ━━━━━━━━━━
+- Work ONLY on the items listed above. Never open, close, transition, or relabel an item that is not listed.
+- Every follow-up you file MUST carry the \`Refs #<num>\` / \`Refs <KEY>\` dedup marker in its body and (on the forges) be labeled \`plan\` so the claim queue can pick it up.
+- Summarize what each item ended up doing (closed/Done + follow-up #NEW / released for re-claim / left as-is because it was not a zombie).`,
 
   // pr-reviewer is now a pipeline — this prompt is kept as fallback for non-pipeline mode
   'pr-reviewer': `[Improvement: {appName}] PR Review — Security Scan & Code Review Pipeline

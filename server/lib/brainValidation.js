@@ -528,3 +528,16 @@ export const dailyLogSettingsSchema = z.object({
   obsidianFolder: z.string().optional(),
   autoSync: z.boolean().optional()
 }).strict();
+
+// Activity-digest (daily-log auto-drafts, #2155) settings. Managed fields
+// (lastRunDate/lastRunAt) are server-owned and intentionally NOT accepted here —
+// the service strips anything but these client-settable keys. Empty-string
+// provider/model (UI "None" sentinel) coerces to null so the non-LLM path runs.
+const emptyToNull = (v) => (v === '' ? null : v);
+export const activityDigestSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.preprocess(emptyToNull, z.string().nullable().optional()),
+  model: z.preprocess(emptyToNull, z.string().nullable().optional()),
+  runTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected HH:MM (24h)').optional(),
+  catchUpDays: z.number().int().min(0).max(30).optional()
+}).strict();

@@ -47,9 +47,77 @@ export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 // marker "never appeared" only because the matcher ran against the raw stream;
 // the fast path was effectively dead and every run fell back to the blind timer.
 export const PASTE_MARKER_POLL_MS = 150;
+
+// Paste verification: after paste-commit (marker or fallback), verify the prompt
+// text actually rendered in the buffer before submitting. If verification fails,
+// retry the paste with backoff. This catches TUIs that were still initializing
+// when the paste was sent and silently swallowed it (issue #2192).
+export const PASTE_VERIFY_POLL_MS = 200;
+export const PASTE_VERIFY_WINDOW_MS = 2000; // max time to wait for verification after paste-commit
+export const PASTE_RETRY_MAX_ATTEMPTS = 3;
+export const PASTE_RETRY_BASE_DELAY_MS = 800;
+// Minimum prefix length for verification (shorter prompts verify whole-text)
+const MIN_VERIFIABLE_PREFIX_LEN = 15;
 export const PASTE_MARKER_PATTERN = /\[Pasted\s*text\s*#\d+/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
+
+/**
+ * Extract a verifiable prefix from a prompt for paste verification. The prefix
+ * is a unique-enough substring from the prompt's first "content" line (skipping
+ * leading whitespace/common prefixes) that's unlikely to appear in TUI chrome.
+ * Used to verify the paste actually rendered rather than being silently swallowed.
+ *
+ * @param {string} prompt — the full prompt text being pasted.
+ * @returns {string|null} a verifiable prefix, or null if the prompt is too short.
+ */
+export function extractVerifiablePromptPrefix(prompt) {
+  if (typeof prompt !== 'string' || !prompt.trim()) return null;
+  // Collapse whitespace and take the first content chunk. Skip leading boilerplate
+  // that might match TUI chrome (e.g., "You are a..." is generic).
+  const normalized = prompt.replace(/\s+/g, ' ').trim();
+  if (normalized.length < MIN_VERIFIABLE_PREFIX_LEN) {
+    // Very short prompt: use the whole thing
+    return normalized.length >= 5 ? normalized : null;
+  }
+  // For longer prompts, take a prefix from the middle portion to avoid common
+  // prefixes like "You are" or "Please" that might appear elsewhere
+  const startOffset = Math.min(10, Math.floor(normalized.length * 0.1));
+  const prefixLen = Math.min(40, normalized.length - startOffset);
+  return normalized.slice(startOffset, startOffset + prefixLen);
+}
+
+/**
+ * True when the verifiable prompt prefix appears in the post-paste buffer.
+ * ANSI-stripped input; internal whitespace differences are ignored (see below).
+ * A null/empty prefix always returns true (no verification possible).
+ *
+ * Whitespace is stripped ENTIRELY (not just collapsed to a single space) before
+ * comparing, on both sides. Claude Code (and potentially other TUIs) can
+ * redraw/reflow a pasted multi-word line using cursor-positioning escapes
+ * instead of literal space bytes between words — the same "inter-glyph cursor
+ * moves" quirk already documented above (BRACKETED_PASTE_MODE_PATTERN) as the
+ * reason createInputReadyTracker avoids literal footer-text matching. ANSI
+ * stripping drops those inter-word spaces entirely, so a genuinely-rendered
+ * paste can still fail a single-space-normalized substring match (real
+ * incident: every claude-code-tui CoS agent failed immediately with
+ * "paste-not-rendered" after 3 retries — see tuiHandshake.test.js's "real
+ * incident" regression test for the captured transcript). Comparing with all
+ * whitespace removed makes the match robust to however a given TUI reflows a
+ * line, at the cost of a (very low, given the ~40-char prefix) chance of a
+ * spurious match spanning a word boundary that only lines up once spaces are
+ * gone.
+ *
+ * @param {string} strippedBuffer — ANSI-stripped post-paste output.
+ * @param {string|null} prefix — the prefix from extractVerifiablePromptPrefix.
+ * @returns {boolean}
+ */
+export function verifyPasteRendered(strippedBuffer, prefix) {
+  if (!prefix) return true; // no verification possible
+  if (typeof strippedBuffer !== 'string') return false;
+  const collapseWhitespace = (s) => s.replace(/\s+/g, '');
+  return collapseWhitespace(strippedBuffer).includes(collapseWhitespace(prefix));
+}
 
 /**
  * Count the `[Pasted text #N …]` paste-commit markers in `strippedText`.
@@ -64,9 +132,14 @@ export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
  * presence check would then fire the submit-Enters ~200ms in, while the paste is
  * still reflowing, reintroducing the unsent-prompt bug (issue #1229 review). So
  * callers gate on the count EXCEEDING the count already present in the prompt —
- * the TUI's genuine (N+1)th marker. (A normal prompt has 0, so the common case
- * is unchanged; a large transcript paste that Claude Code collapses to its own
- * single marker simply falls back to the timer, which is safe.)
+ * the TUI's genuine (N+1)th marker. A normal prompt has 0, so the common case is
+ * unchanged. When Claude Code COLLAPSES a self-marker-containing multi-line
+ * prompt to its own single chip, this count-only comparison false-negatives
+ * (`1 > 1` is false) even though the paste landed — `isCollapsedPasteChip` below
+ * is what rescues that case in isPasteConfirmed (issue #2228). It is NOT safe to
+ * "simply fall back to the timer" there: the collapse HIDES the body, so the
+ * verifyPasteRendered text fallback also fails and the agent dies
+ * `paste-not-rendered`.
  *
  * @param {string} strippedText — ANSI-stripped text (prompt or post-paste output).
  * @returns {number}
@@ -89,6 +162,77 @@ export function countPasteMarkers(strippedText) {
  */
 export function detectPasteMarker(strippedText) {
   return countPasteMarkers(strippedText) > 0;
+}
+
+// Claude Code's "this chip is a collapsed multi-line paste, click to see the
+// body" affordance, rendered right next to the `[Pasted text #N]` chip whenever
+// it folds a multi-line paste and HIDES the body. Matched against ANSI-stripped
+// output; whitespace-tolerant for the same inter-glyph-cursor-move reason as
+// PASTE_MARKER_PATTERN. This chrome is emitted by the TUI ITSELF — it never
+// appears in a raw prompt's own echoed `[Pasted text #N]` literal — so it's the
+// discriminator that separates issue #2228's genuine collapse (confirm) from the
+// echoed-marker false-positive the promptMarkerCount subtraction guards (reject).
+export const COLLAPSED_PASTE_CHIP_PATTERN = /paste\s*again\s*to\s*expand/i;
+
+/**
+ * True when `strippedText` shows Claude Code's COLLAPSED-paste chip shape: a
+ * paste-commit marker present alongside the "paste again to expand" affordance
+ * the TUI renders when it folds a multi-line paste and hides the body. A
+ * collapsed chip is the TUI's own commit by construction, so its mere presence
+ * proves delivery even when the marker count doesn't exceed promptMarkerCount
+ * (the self-marker-containing multi-line prompt case, issue #2228). Callers MUST
+ * pass an ANSI-STRIPPED buffer.
+ *
+ * @param {string} strippedText — ANSI-stripped post-paste output accumulator.
+ * @returns {boolean}
+ */
+export function isCollapsedPasteChip(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  return countPasteMarkers(strippedText) >= 1 && COLLAPSED_PASTE_CHIP_PATTERN.test(strippedText);
+}
+
+/**
+ * True when a post-paste buffer proves the TUI actually RECEIVED the prompt
+ * paste — the gate before sending the submit Enter(s). Two independent signals,
+ * checked in priority order:
+ *
+ *   1. The TUI's own paste-commit MARKER (`[Pasted text #N]`) count exceeds the
+ *      count the prompt itself carried (promptMarkerCount). This is AUTHORITATIVE
+ *      and is checked FIRST because Claude Code collapses a multi-line bracketed
+ *      paste INTO that chip and HIDES the pasted body text from the buffer — so on
+ *      every multi-line prompt the literal text is genuinely absent even though
+ *      the paste landed perfectly. Real incident (2026-07-05): every
+ *      claude-code-tui CoS agent failed `paste-not-rendered` after 3 retries
+ *      because #2192's text-only check never saw the collapsed body — while the
+ *      marker was sitting right there. (agent-656efa6e et al.)
+ *   1b. The COLLAPSED-CHIP shape (`isCollapsedPasteChip`) — a marker present
+ *      alongside Claude's "paste again to expand" affordance. This rescues the
+ *      subtraction's blind spot: when the prompt ITSELF embeds `[Pasted text #N]`
+ *      literals AND is multi-line, Claude folds it into its own single chip and
+ *      hides the body, so `count (1) > promptMarkerCount (1)` is false — yet the
+ *      collapse chrome proves the visible marker is the TUI's own commit. The
+ *      chrome never rides in on an echoed prompt literal, so this can't
+ *      re-introduce the echoed-marker false-positive the subtraction guards
+ *      (issue #2228; the inline/uncollapsed echo path has no such chrome and keeps
+ *      subtracting).
+ *   2. Fallback for the MARKERLESS path — a paste too small to render the marker,
+ *      or one genuinely SWALLOWED by a still-initializing TUI (the #2192 case,
+ *      which renders no marker at all): fall back to confirming the prompt text
+ *      literally rendered. A null/empty verifiablePrefix means no verification is
+ *      possible, so this returns true (nothing to disconfirm).
+ *
+ * Callers MUST pass an ANSI-STRIPPED buffer (both signals require it — see
+ * countPasteMarkers / verifyPasteRendered).
+ *
+ * @param {string} strippedBuffer — ANSI-stripped post-paste output accumulator.
+ * @param {{ verifiablePrefix?: string|null, promptMarkerCount?: number }} [opts]
+ * @returns {boolean}
+ */
+export function isPasteConfirmed(strippedBuffer, { verifiablePrefix = null, promptMarkerCount = 0 } = {}) {
+  if (countPasteMarkers(strippedBuffer) > promptMarkerCount) return true; // marker is authoritative
+  if (isCollapsedPasteChip(strippedBuffer)) return true; // collapsed chip is the TUI's own commit (#2228)
+  if (!verifiablePrefix) return true; // nothing to verify against
+  return verifyPasteRendered(strippedBuffer, verifiablePrefix);
 }
 
 // Positive "the launched program's input is ready to receive a bracketed paste"
@@ -313,6 +457,24 @@ export function scheduleSubmitEnters(write, isFinalized) {
 export const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
 export const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
 
+// Absolute wall-clock ceiling for a long-running TUI agent, applied from prompt
+// submission. This is the honest backstop the idle reaper CAN'T be: the reaper
+// resets on every PTY chunk, but Claude Code repaints its `(Ns · …)` working
+// counter ~1×/sec while ANY tool/API call is in flight — INCLUDING one stuck
+// retrying a stalled Bedrock/network operation. A "busy-but-stuck" agent keeps
+// `lastOutputAt` advancing forever, so idle-reap never fires and the run has NO
+// ceiling at all (real incident 2026-07-06: agent-b1c56083 churned the counter
+// for 98min on a `/do:next --swarm` claim-issue task before Claude Code's OWN
+// internal "Operation timed out" finally stopped it — had the CLI not self-
+// terminated, the agent would have run unbounded, holding a lane, blocking the
+// app's cooldown, and leaking a shell session). The one-shot runner already has
+// this backstop (tuiPromptRunner.js `hardTimeoutTimer`); the agent path omitted
+// it. 3h sits comfortably above the longest legitimate single run observed
+// (swarm claim-issue orchestrations routinely take 40–98min, and the merge-queue
+// / review-loop idle windows are 15min each) while bounding a genuinely-stuck
+// agent. Provider-configurable via `tuiMaxRuntimeMs`.
+export const DEFAULT_TUI_MAX_RUNTIME_MS = 3 * 60 * 60 * 1000;
+
 // Extended idle threshold applied ONLY while a `/do:next --swarm` orchestrator
 // is in its Phase C serialized merge queue (issue #2074). Merging PRs one at a
 // time makes each subsequent PR rebase onto the new `main` and re-run required
@@ -372,6 +534,106 @@ export function createMergeQueueTracker() {
     observe(strippedText) {
       if (active) return true;
       if (isMergeQueueSignal(strippedText)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
+// Extended idle threshold applied while a `/do:release`, `/do:pr`, or `/do:rpr`
+// multi-reviewer loop is waiting on a slow external reviewer (a Copilot cloud
+// review, a headless codex/agy/claude review pass, an Ollama pass, or an
+// arbitrary @<login> human reviewer). Observed 2026-07-02 (agent-61508f36): the
+// review loop correctly backgrounds the reviewer and polls for it rather than
+// blocking — but the reviewer itself can go silent in the wrapped TUI for well
+// over the 3-minute default while it works (e.g. codex reading a large diff),
+// and the runner reaped the still-waiting release agent as `idle-complete` (a
+// false SUCCESS) before it ever reached the merge gate, leaving the release PR
+// open and unmerged. Mirrors the merge-queue grace (#2074) exactly: 15 minutes
+// comfortably covers one reviewer's silent working stretch while still
+// bounding a genuinely-dead agent's reap.
+export const REVIEW_LOOP_IDLE_TIMEOUT_MS = 900000;
+
+// Distinctive markers the multi-reviewer loop (do:release/do:pr/do:rpr) prints
+// once it starts waiting on a reviewer pass. Detection is deliberately
+// conservative, same rationale as MERGE_QUEUE_MARKERS above: a false POSITIVE
+// only extends the (bounded) idle window, and a false NEGATIVE just preserves
+// prior behavior. Matched against ANSI-stripped output.
+//
+// Both patterns are anchored to the literal RENDERED shape rather than a bare
+// substring, because this repo bundles the slashdo docs that DESCRIBE these
+// banners — `lib/slashdo/lib/multi-reviewer-loop.md` alone contains the word
+// "multi-reviewer" dozens of times, the literal phrase "Review plan:" once
+// (inside its own instruction text), AND a fully-rendered example of its own
+// aggregate-report heading ("## Multi-Reviewer Summary", in the doc's sample
+// output block) — so a THIRD marker keyed on that heading alone would latch
+// on any agent reading/quoting that one doc file (codex review flagged this
+// exact collision; verified via `grep -rn "multi-reviewer summary"
+// lib/slashdo/` — it's the only bundled doc containing that literal string).
+// This project's CLAUDE.md convention text is also "run a simplify/
+// self-review pass before committing", whose substring "review pass" would
+// otherwise latch on ANY CoS agent's ordinary narration — not just an actual
+// do:release/do:pr/do:rpr run. Anchoring on the shape only the runtime output
+// actually has (a rendered `[...]` agent list, or a digit/slash pass counter)
+// — verified clean against every bundled slashdo doc — keeps the
+// false-positive rate low without weakening true-positive detection: the
+// review-plan banner alone is a complete, sufficient signal (it prints once,
+// unconditionally, before ANY reviewer pass begins) and the tracker latches
+// permanently once set, so the pass-banner pattern only needs to catch the
+// (rare) case where the plan banner itself was missed.
+const REVIEW_PLAN_PATTERN = /review plan:\s*\[/i;
+const REVIEW_PASS_BANNER_PATTERN = /review pass\s+\d+\s*\/\s*\d+/i;
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the multi-reviewer loop
+ * (do:release/do:pr/do:rpr) has started a reviewer pass. Callers MUST pass
+ * stripped output. Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isReviewLoopSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  return REVIEW_PLAN_PATTERN.test(strippedText) || REVIEW_PASS_BANNER_PATTERN.test(strippedText);
+}
+
+// Rolling tail cap for createReviewLoopTracker's cross-chunk buffer (below).
+// The banner text itself is well under 100 chars (e.g. "Review plan: [claude,
+// codex] (mode: series, stop-mode: all)" is ~62), so this is generous
+// headroom for intervening chrome without letting the buffer grow unbounded
+// over a long-running session.
+const REVIEW_LOOP_TAIL_CAP = 512;
+
+/**
+ * Latching tracker for "this agent is waiting inside a multi-reviewer loop"
+ * (do:release/do:pr/do:rpr). Feed it each ANSI-stripped post-submit chunk via
+ * `observe(text)`; it becomes `active` the first time a review-loop marker
+ * appears and STAYS active thereafter (same latching rationale as
+ * createMergeQueueTracker — the failure mode is a silent external-reviewer
+ * wait, so a recency window would age the flag out exactly when the extended
+ * grace is needed). Once latched, the idle reaper uses
+ * REVIEW_LOOP_IDLE_TIMEOUT_MS instead of the 3-minute default.
+ *
+ * Keeps a small rolling buffer of the most recent REVIEW_LOOP_TAIL_CAP
+ * characters (codex review finding, iteration 2): a real TUI can deliver the
+ * one-shot `Review plan: [` / `Review pass N/M` banner split across two
+ * `onData` chunks — plausible during token-by-token streaming — so checking
+ * only the current chunk in isolation would miss it if the split lands
+ * mid-marker. Concatenating each new chunk onto the tail before testing means
+ * a marker split across a chunk boundary still appears whole on the very next
+ * observation.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createReviewLoopTracker() {
+  let active = false;
+  let tail = '';
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (typeof strippedText !== 'string' || !strippedText) return active;
+      tail = (tail + strippedText).slice(-REVIEW_LOOP_TAIL_CAP);
+      if (isReviewLoopSignal(tail)) active = true;
       return active;
     },
     get active() { return active; },

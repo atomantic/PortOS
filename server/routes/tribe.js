@@ -25,6 +25,10 @@ const personSchema = z.object({
   // counterparts to this person (#2033). Service-side `normalizeEmails` lowercases
   // and de-duplicates; the UI splits its single-line input to an array like tags.
   emails: z.array(z.string().max(320)).max(100).optional().default([]),
+  // Known phone handles used to auto-match iMessage/Signal counterparts to this
+  // person (#2151). Service-side `normalizePhones` E.164-normalizes and
+  // de-duplicates; the UI splits its single-line input to an array like tags.
+  phones: z.array(z.string().max(40)).max(100).optional().default([]),
   nextMove: z.string().max(2000).optional().default(''),
   notes: z.string().max(10000).optional().default(''),
 });

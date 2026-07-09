@@ -21,11 +21,12 @@ import { existsSync } from 'fs';
 import { link, readFile, rename, rm, stat, unlink } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { randomBytes } from 'crypto';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS } from '../lib/fileUtils.js';
+import { verifySafetensorsStructure } from '../lib/hfCache.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   applyDownloadToken,
@@ -257,9 +258,20 @@ export const resolveCivitaiKey = async () => {
 // `.partial` from a previous crashed install (and prevents two concurrent
 // installs of the same target from racing on the same temp path).
 // fetchImpl is injectable for tests.
-const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai' } = {}) => {
+// `onProgress({ received, total })` (optional) fires with byte counts during
+// the stream download — the manager's streaming install endpoint forwards these
+// as SSE `progress` frames so the UI can show a percentage. `total` is 0 when
+// the response carries no Content-Length (chunked / some CDN redirects), in
+// which case the client renders an indeterminate bar.
+const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} , hasApiKey = false, source = 'civitai', onProgress = null, signal = null } = {}) => {
   const tmpPath = `${destPath}.${randomBytes(6).toString('hex')}.partial`;
-  const res = await fetchImpl(url, { headers, redirect: 'follow' });
+  // `signal` (optional) aborts the fetch + stream mid-download — the streaming
+  // install route passes it so an SSE client disconnect actually cancels a
+  // multi-GB transfer instead of letting it run to completion unwatched. On
+  // abort the fetch rejects (or the body stream errors), the pipeline().catch
+  // below unlinks the .partial, and the throw propagates before any sidecar is
+  // written — so a cancelled install leaves nothing behind.
+  const res = await fetchImpl(url, { headers, redirect: 'follow', signal });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
       // HuggingFace LoRAs: a 401/403 means the repo is gated and the token is
@@ -291,7 +303,30 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
   // On stream failure (network drop, disk full) the .partial would otherwise
   // accumulate in PATHS.loras across retries.
   const writer = createWriteStream(tmpPath);
-  await pipeline(Readable.fromWeb(res.body), writer).catch(async (err) => {
+  const stages = [Readable.fromWeb(res.body)];
+  if (onProgress) {
+    // Count bytes via a passthrough Transform — NOT a bare `.on('data')`
+    // listener, which flips the source into flowing mode and defeats pipeline's
+    // backpressure. `res.headers?.get?.` is defensive: injected test fetch
+    // mocks return a bare `{ ok, body }` with no headers object.
+    const total = Number(res.headers?.get?.('content-length')) || 0;
+    let received = 0;
+    let lastEmit = 0;
+    stages.push(new Transform({
+      transform(chunk, _enc, cb) {
+        received += chunk.length;
+        // Throttle to ~150ms so a fast link doesn't flood the SSE stream.
+        const now = Date.now();
+        if (now - lastEmit >= 150) { lastEmit = now; onProgress({ received, total }); }
+        cb(null, chunk);
+      },
+      // Final flush guarantees a 100% (received === total) tick even if the
+      // last data chunk landed inside the throttle window.
+      flush(cb) { onProgress({ received, total }); cb(); },
+    }));
+  }
+  stages.push(writer);
+  await pipeline(...stages).catch(async (err) => {
     await rm(tmpPath, { force: true }).catch(() => {});
     throw err;
   });
@@ -331,6 +366,43 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
     await rm(tmpPath, { force: true }).catch(() => {});
     throw err;
   });
+};
+
+// After a LoRA finishes downloading, verify the on-disk `.safetensors` before
+// we commit to it by writing the sidecar. A truncated (short download) or
+// right-size-but-wrong-bytes file otherwise installs silently and renders
+// garbage ("mosaic" output) at generate time — the leading non-Metal cause of
+// corrupt output (issue #2199; mirrors the HF-cache integrity check in
+// hfCache.js / #1324). Always runs the cheap structural header/size check
+// (reads only the header region, never the multi-GB payload); adds a deep
+// sha256 compare only when the source metadata carried a digest (Civitai
+// `file.hashes.SHA256`). On any failure the file is deleted so the next install
+// re-downloads instead of training/rendering against corrupt weights.
+const verifyDownloadedLora = async (destPath, { expectedSha256 = null, source = 'civitai' } = {}) => {
+  const label = source === 'huggingface' ? 'HuggingFace' : 'Civitai';
+  const code = source === 'huggingface' ? 'HF_LORA_CORRUPT' : 'CIVITAI_LORA_CORRUPT';
+  const st = await stat(destPath).catch(() => null);
+  const structural = await verifySafetensorsStructure(destPath, st?.size ?? 0);
+  if (!structural.ok) {
+    await rm(destPath, { force: true }).catch(() => {});
+    throw new ServerError(
+      `${label} LoRA download is corrupt (${structural.reason}) — the partial file was deleted. Retry the install.`,
+      { status: 502, code },
+    );
+  }
+  // Civitai hashes are uppercase hex; sha256File returns lowercase — compare
+  // case-insensitively and only when the digest is a well-formed sha256.
+  const want = typeof expectedSha256 === 'string' ? expectedSha256.trim().toLowerCase() : '';
+  if (/^[0-9a-f]{64}$/.test(want)) {
+    const actual = await sha256File(destPath).catch(() => null);
+    if (actual && actual.toLowerCase() !== want) {
+      await rm(destPath, { force: true }).catch(() => {});
+      throw new ServerError(
+        `${label} LoRA failed SHA-256 verification (expected ${want.slice(0, 12)}…, got ${actual.slice(0, 12)}…) — the file was deleted. Retry the install.`,
+        { status: 502, code },
+      );
+    }
+  }
 };
 
 // Install a LoRA from a Civitai URL. Returns the new sidecar JSON so the
@@ -401,6 +473,7 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
     headers: { 'User-Agent': 'PortOS/civitai-installer' },
     hasApiKey: !!apiKey,
   });
+  await verifyDownloadedLora(destPath, { expectedSha256: file?.hashes?.SHA256 || null, source: 'civitai' });
 
   const sidecar = buildSidecar({ model, version, file, filename });
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
@@ -418,7 +491,7 @@ const VIDEO_LORA_FAMILY_VALUES = new Set(Object.values(VIDEO_LORA_FAMILIES));
 // sidecar. The family is auto-detected from the repo id / tags / base_model,
 // or taken from an explicit `input.family` override (validated against the
 // known video families). Returns the new sidecar JSON.
-export const installFromHuggingface = async (input, { fetchImpl = fetch } = {}) => {
+export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgress = null, signal = null } = {}) => {
   const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
   // Stored/env/CLI HF token — only needed for gated repos, but harmless to
   // send on public ones (HF ignores a bearer it doesn't require).
@@ -469,7 +542,13 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch } = {}) 
     headers: { 'User-Agent': 'PortOS/hf-lora-installer', ...buildHfAuthHeaders(token) },
     hasApiKey: !!token,
     source: 'huggingface',
+    onProgress,
+    signal,
   });
+  // HF's model metadata doesn't expose a per-file digest through pickHfLoraFile,
+  // so the structural header/size check is the integrity guard here (no deep
+  // sha256 compare available for this path).
+  await verifyDownloadedLora(destPath, { source: 'huggingface' });
 
   const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');

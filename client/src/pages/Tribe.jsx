@@ -54,6 +54,7 @@ const emptyDraft = () => ({
   energy: 'steady',
   tags: '',
   emails: '',
+  phones: '',
   nextMove: '',
   notes: '',
 });
@@ -314,6 +315,18 @@ function ContactForm({ draft, onChange, onSave, onDelete, onNew, isExisting, sav
           </span>
         </label>
         <label className="block sm:col-span-2">
+          <span className="text-xs text-gray-500">Phone numbers</span>
+          <input
+            value={draft.phones}
+            onChange={(event) => update('phones', event.target.value)}
+            className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
+            placeholder="+1 555 123 4567, 555 987 6543"
+          />
+          <span className="mt-1 block text-[11px] text-gray-600">
+            Matches this person to iMessage conversations (saved in +E.164 form).
+          </span>
+        </label>
+        <label className="block sm:col-span-2">
           <span className="text-xs text-gray-500">Next Move</span>
           <textarea
             value={draft.nextMove}
@@ -470,6 +483,7 @@ function MemoryLinksPanel({ personId }) {
 const SOURCE_BADGES = {
   calendar: { Icon: Calendar, label: 'Calendar' },
   message: { Icon: MessageCircle, label: 'Message' },
+  imessage: { Icon: MessageCircle, label: 'iMessage' },
   import: { Icon: Users, label: 'Import' },
   user: { Icon: UserRound, label: 'Manual' },
 };
@@ -542,14 +556,16 @@ function EmptyState({ onNew }) {
 function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
-  // them to the top alongside genuinely-overdue contacts).
-  const queue = contacts.filter((contact) => contact.ring !== 'external').sort((a, b) => {
-    const aStatus = contactStatus(a);
-    const bStatus = contactStatus(b);
-    const aScore = aStatus.daysRemaining == null ? -999 : aStatus.daysRemaining;
-    const bScore = bStatus.daysRemaining == null ? -999 : bStatus.daysRemaining;
-    return aScore - bScore;
-  });
+  // them to the top alongside genuinely-overdue contacts). Memoized + status
+  // computed once per contact (instead of twice per comparison in the sort).
+  const queue = useMemo(() => contacts
+    .filter((contact) => contact.ring !== 'external')
+    .map((contact) => {
+      const score = contactStatus(contact).daysRemaining;
+      return { contact, score: score == null ? -999 : score };
+    })
+    .sort((a, b) => a.score - b.score)
+    .map(({ contact }) => contact), [contacts]);
 
   if (!queue.length) return <EmptyState onNew={onNew} />;
 
@@ -569,12 +585,12 @@ function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
 }
 
 function FocusPanel({ contacts }) {
-  const byEnergy = ENERGY.map((energy) => ({
+  const byEnergy = useMemo(() => ENERGY.map((energy) => ({
     ...energy,
     count: contacts.filter((contact) => contact.energy === energy.id).length,
-  }));
-  const support = contacts.filter((contact) => contact.ring === 'support');
-  const nextMoves = contacts.filter((contact) => contact.nextMove).slice(0, 8);
+  })), [contacts]);
+  const support = useMemo(() => contacts.filter((contact) => contact.ring === 'support'), [contacts]);
+  const nextMoves = useMemo(() => contacts.filter((contact) => contact.nextMove).slice(0, 8), [contacts]);
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
@@ -762,6 +778,7 @@ export default function Tribe() {
     ...contact,
     tags: tagsToInput(contact.tags),
     emails: tagsToInput(contact.emails),
+    phones: tagsToInput(contact.phones),
     cadenceDays: contact.cadenceDays || ringFor(contact.ring).cadenceDays,
   });
 
@@ -779,6 +796,7 @@ export default function Tribe() {
       energy: draft.energy,
       tags: tagsToArray(draft.tags),
       emails: tagsToArray(draft.emails),
+      phones: tagsToArray(draft.phones),
       nextMove: draft.nextMove.trim(),
       notes: draft.notes.trim(),
     };

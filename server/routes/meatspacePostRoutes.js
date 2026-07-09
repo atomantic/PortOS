@@ -18,15 +18,19 @@ import {
   memoryItemUpdateSchema,
   memoryPracticeSchema,
   memoryDrillRequestSchema,
+  morseRoundSchema,
+  morseLevelUpdateSchema,
   LLM_DRILL_TYPES,
   MEMORY_DRILL_TYPES,
   trainingEntrySchema,
+  postProgressQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
 import * as memoryService from '../services/meatspacePostMemory.js';
 import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
 import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
 import * as trainingService from '../services/meatspacePostTraining.js';
+import * as morseService from '../services/meatspacePostMorse.js';
 // meatspacePostReminder.js is not imported here — updatePostConfig() itself
 // reschedules the daily reminder (via meatspacePost.js's postConfigEvents) so
 // any current or future caller gets that behavior for free (#2015). Loaded
@@ -107,6 +111,32 @@ router.get('/post/stats', asyncHandler(async (req, res) => {
 }));
 
 /**
+ * GET /api/meatspace/post/progress
+ * Unified time-series progress: per-day score/accuracy/response-time/minutes
+ * buckets, per-domain and per-drill series, totals, ONE unified streak (scored
+ * sessions OR training-log activity), and a mastery block (issue #2091).
+ */
+router.get('/post/progress', asyncHandler(async (req, res) => {
+  const { days, bucket } = validateRequest(postProgressQuerySchema, req.query);
+  const progress = await postService.getPostProgress({ days, bucket });
+  res.json(progress);
+}));
+
+/**
+ * GET /api/meatspace/post/recommendations
+ * Ordered "what to practice next" list (issue #2100): due memory items, due
+ * skill re-verifications, the weakest recent skill, and stalled ladder
+ * progressions — each with a deep link into the exact drill/mode. Never empty
+ * (falls back to a sensible default when nothing specific is actionable).
+ */
+router.get('/post/recommendations', asyncHandler(async (req, res) => {
+  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;
+  const limit = Number.isNaN(rawLimit) || rawLimit == null ? undefined : Math.max(1, Math.min(10, rawLimit));
+  const result = await postService.getPostRecommendations(limit != null ? { limit } : {});
+  res.json(result);
+}));
+
+/**
  * POST /api/meatspace/post/drill
  * Generate a drill with questions and expected answers.
  * Supports both math drills (sync) and LLM drills (async, requires AI provider).
@@ -146,13 +176,59 @@ router.post('/post/drill', asyncHandler(async (req, res) => {
   // Adaptive difficulty (opt-in): when the Adaptive toggle is on, math drill
   // params are nudged from recent scored performance; otherwise config passes
   // through unchanged. Attaches an `adaptive` explainer when an adjustment ran.
-  const { config: effectiveConfig, adaptive } = await postService.resolveDrillConfig(data.type, data.config);
+  const { config: effectiveConfig, adaptive, progression } = await postService.resolveDrillConfig(data.type, data.config);
   const drill = postService.generateDrill(data.type, effectiveConfig);
   if (!drill) {
     throw new ServerError('Unknown drill type', { status: 400, code: 'INVALID_DRILL_TYPE' });
   }
   if (adaptive) drill.adaptive = adaptive;
+  // Progressive multiplication ladder explainer (current level + per-rung mastery)
+  // so the drill runner can show which rung the user is on and why.
+  if (progression) drill.progression = progression;
+  // Maintenance-review rep (issue #2096): the drill generators rebuild their own
+  // config, so re-stamp the review markers from the requested config onto the
+  // returned drill. This ties the scored task back to the review scheduler on
+  // submit (getSessionSkillContext reads task.config.reviewSkillId).
+  if (effectiveConfig?.review && effectiveConfig?.reviewSkillId) {
+    drill.config = { ...(drill.config || {}), review: true, reviewSkillId: effectiveConfig.reviewSkillId };
+    drill.isReview = true;
+  }
   res.json(drill);
+}));
+
+/**
+ * GET /api/meatspace/post/multiplication-progress
+ * Current progressive-multiplication ladder level + per-rung mastery status,
+ * so the config UI can show the ramp before a session starts.
+ */
+router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getMultiplicationProgress();
+  res.json(progress);
+}));
+
+/**
+ * GET /api/meatspace/post/cognitive-progress
+ * Per-drill progressive-ladder level + per-rung mastery for the laddered
+ * cognitive drills (n-back / digit-span / schulte / mental-rotation / stroop),
+ * keyed by drill type, so the config UI can show each drill's current rung.
+ */
+router.get('/post/cognitive-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getCognitiveProgress();
+  res.json(progress);
+}));
+
+/**
+ * GET /api/meatspace/post/review/reps
+ * Ready-to-run "maintenance rep" drill specs for mastered-but-inactive skills
+ * currently due for re-verification (issue #2096). The launcher mixes 1–2 of
+ * these into a Quick session as labeled review items. Empty until a skill is
+ * mastered and its review interval elapses.
+ */
+router.get('/post/review/reps', asyncHandler(async (req, res) => {
+  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : 2;
+  const limit = Number.isNaN(rawLimit) ? 2 : Math.max(0, Math.min(5, rawLimit));
+  const reps = await postService.getPostReviewReps(new Date(), limit);
+  res.json({ reps });
 }));
 
 /**
@@ -233,6 +309,42 @@ router.get('/post/training/entries', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
   const entries = await trainingService.getTrainingEntries(limit);
   res.json(entries);
+}));
+
+// =============================================================================
+// POST - Morse Trainer Progress
+// =============================================================================
+
+/**
+ * POST /api/meatspace/post/morse/rounds
+ * Append a completed Morse round (per-item sent→guessed results).
+ */
+router.post('/post/morse/rounds', asyncHandler(async (req, res) => {
+  const data = validateRequest(morseRoundSchema, req.body);
+  const round = await morseService.appendMorseRound(data);
+  res.status(201).json(round);
+}));
+
+/**
+ * GET /api/meatspace/post/morse/progress?days=N
+ * Koch level, per-mode accuracy/WPM trends, confusion matrix, and per-character
+ * accuracy (worst-first).
+ */
+router.get('/post/morse/progress', asyncHandler(async (req, res) => {
+  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
+  const progress = await morseService.getMorseProgress(days);
+  res.json(progress);
+}));
+
+/**
+ * PUT /api/meatspace/post/morse/level
+ * Explicit Koch level change (advance/reset) or one-time localStorage adoption.
+ */
+router.put('/post/morse/level', asyncHandler(async (req, res) => {
+  const data = validateRequest(morseLevelUpdateSchema, req.body);
+  const result = await morseService.setKochLevel(data);
+  res.json(result);
 }));
 
 // =============================================================================

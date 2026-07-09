@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
-import { loadCache, saveCache, logCalendarTouchpoints } from './calendarSync.js';
+import { loadCache, saveCache, logCalendarTouchpoints, recordCalendarActivity } from './calendarSync.js';
 import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
@@ -129,6 +129,13 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
   // effect, must not fail the sync; idempotent on event id.
   await logCalendarTouchpoints(accountId, normalized).catch((err) =>
     console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+
+  // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+  // fail the sync. Google calendars sync through this push path (not
+  // calendarSync.syncAccount), so the activity hook is wired here too, mirroring
+  // the touchpoint call above. Idempotent on (source, dedupe_key). Machine-local.
+  await recordCalendarActivity(account, normalized).catch((err) =>
+    console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
 
   io?.emit('calendar:sync:completed', {
     accountId,

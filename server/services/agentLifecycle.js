@@ -22,6 +22,9 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
+import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
+import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
@@ -331,13 +334,36 @@ export async function spawnAgentForTask(task) {
 
     const isTui = isTuiProvider(provider);
 
+    // Lean mode: an Ollama-backed Claude session gets `--bare --strict-mcp-config`
+    // (see applyLeanClaudeArgs) so the user's personal environment — hooks,
+    // plugins, MCP servers, global CLAUDE.md — doesn't drown the small local
+    // model. This is orthogonal to the prompt split below.
+    const leanMode = isOllamaClaudeProvider(provider);
+
+    // System/user prompt split: for ANY Claude Code session (TUI or headless
+    // CLI), the PortOS operating contract rides in a real system prompt via
+    // `--append-system-prompt-file` while the pasted/stdin prompt carries only
+    // the task — so the model weights the contract as instructions, not
+    // conversation (and hosted providers get better prompt-cache reuse on the
+    // stable system block). Gated on a light-context Claude command: non-Claude
+    // providers (codex, antigravity, opencode) have no equivalent flag and keep
+    // the combined prompt; API providers never take the light path so the split
+    // is a no-op for them. `--append-system-prompt-file` validated on claude CLI
+    // v2.1.201 in both `--print` and stream-json arg shapes.
+    const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
+    const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
+
     // Build the agent prompt. `provider.type` drives the light-vs-full split
     // inside buildAgentPrompt — see its doc comment.
-    const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
+    const promptResult = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
       providerType: provider.type,
       providerId: provider.id,
-      providerCommand: provider.command
+      providerCommand: provider.command,
+      leanMode,
+      split: splitSystemPrompt
     });
+    const prompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+    const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
 
     // Create agent directory
     const agentDir = join(AGENTS_DIR, agentId);
@@ -347,6 +373,11 @@ export async function spawnAgentForTask(task) {
 
     // Save prompt to file
     await writeFile(join(agentDir, 'prompt.txt'), prompt);
+    let systemPromptFile = null;
+    if (systemPrompt) {
+      systemPromptFile = join(agentDir, 'system-prompt.md');
+      await writeFile(systemPromptFile, systemPrompt);
+    }
 
     // Create run entry for usage tracking
     const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
@@ -444,8 +475,8 @@ export async function spawnAgentForTask(task) {
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
     const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(provider, selectedModel)
-      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv);
+      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile })
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,
@@ -602,13 +633,21 @@ export async function spawnViaRunner(agentId, task, opts) {
     ? await getClaudeSettingsEnv()
     : {};
 
+  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with the
+  // models map so the injected `--model ollama/<id>` is accepted (empty/no-op
+  // otherwise). The direct-spawn path (agentCliSpawning.spawnDirectly) and the
+  // "Run Prompt" path (server/services/runner.js) already do this; the runner
+  // path omitted it, so an OpenCode Ollama CoS task on the runner would reject
+  // the model even after the spawn itself succeeds. See issue #2243 / #2190.
+  const opencodeEnv = buildOpencodeEnvVars(provider, model);
+
   const result = await spawnAgentViaRunner({
     agentId,
     taskId: task.id,
     prompt,
     workspacePath,
     model,
-    envVars: { ...claudeSettingsEnv, ...provider.envVars },
+    envVars: { ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });

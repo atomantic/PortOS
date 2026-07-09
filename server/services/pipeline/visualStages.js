@@ -25,10 +25,10 @@
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
-import { getSeries } from './series.js';
-import { getIssue, updateStage, assertStageUnlocked, VISUAL_STAGE_IDS } from './issues.js';
+import { getSeries, updateSeasonOnSeries } from './series.js';
+import { getIssue, updateStage, updateStageWithLatest, assertStageUnlocked, VISUAL_STAGE_IDS } from './issues.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
-import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner } from './owners.js';
+import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner, slotKeyForVariant } from './owners.js';
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -151,9 +151,12 @@ const resolveVariant = (target) => (target === 'final' ? 'final' : 'proof');
 
 // `buildRenderSlot` moved to server/lib/renderSlot.js so season-cover
 // render paths (which don't import from visualStages.js) can share the
-// shape. Re-exported here for back-compat with route-level callers that
-// still import it from this module.
-export { buildRenderSlot } from '../../lib/renderSlot.js';
+// shape. Imported for the shared cover-render persist path below and
+// re-exported for back-compat with route-level callers that still import it
+// from this module.
+import { buildRenderSlot } from '../../lib/renderSlot.js';
+
+export { buildRenderSlot };
 
 // Default denoise strength for the "use proof as base" upscale path. Low
 // enough to preserve composition (panel layout, character placement),
@@ -651,6 +654,57 @@ export async function enqueueComicBackCover(issueId, options = {}) {
   return { ...rest, backCoverScript: script };
 }
 
+/**
+ * Enqueue + persist a comic-issue cover render (front or back) in ONE service
+ * call — the shared entry point behind both the route handler and the CDO
+ * orchestrator tool (#2220). The bare `enqueueComicCover*` only queues the job;
+ * the filename hook attaches the completed render ONLY if the active cover slot
+ * already carries the returned jobId, and that slot write used to live in the
+ * route factory. Extracting it here means the orchestrator gets orchestrated
+ * covers instead of silently dropping them.
+ *
+ * Persists the in-flight render slot onto
+ * `stages.comicPages.{cover|backCover}.{proofImage|finalImage}` through
+ * `updateStageWithLatest` (the series write tail) so it serializes against a
+ * concurrent blur-save of the script field — the script-gate mirrors the route:
+ * only overwrite `script` when the option is a string (absent preserves, empty
+ * clears). `options` mirrors the route body (coverScript/backCoverScript,
+ * width/height, target, useProofAsBase, mode, …).
+ *
+ * Returns { jobId, mode, prompt, variant, fromProof, coverScript|backCoverScript,
+ * issue, stage } — the enqueue result plus the persisted issue + comicPages stage.
+ */
+async function renderComicCoverLike(issueId, target, options = {}) {
+  const scriptField = target === 'cover' ? 'coverScript' : 'backCoverScript';
+  const { script, ...rest } = await enqueueComicCoverLike(issueId, target, options);
+  const slotKey = slotKeyForVariant(rest.variant);
+  const slotRecord = buildRenderSlot({
+    slotKey, jobId: rest.jobId, prompt: rest.prompt,
+    width: options.width, height: options.height, fromProof: rest.fromProof,
+  });
+  const { issue, stage } = await updateStageWithLatest(issueId, 'comicPages', (current) => {
+    const currentSlot = current?.[target] || {};
+    const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+    if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
+    return { [target]: nextSlot };
+  });
+  return { ...rest, [scriptField]: script, issue, stage };
+}
+
+/**
+ * Enqueue + persist a comic-issue FRONT cover render. Wraps `enqueueComicCover`
+ * plus the slot persist the filename hook depends on. See `renderComicCoverLike`.
+ */
+export const renderComicCover = (issueId, options = {}) =>
+  renderComicCoverLike(issueId, 'cover', options);
+
+/**
+ * Enqueue + persist a comic-issue BACK cover render. Lands on
+ * `stages.comicPages.backCover`. See `renderComicCoverLike`.
+ */
+export const renderComicBackCover = (issueId, options = {}) =>
+  renderComicCoverLike(issueId, 'backCover', options);
+
 // ---- Volume (season) covers ---------------------------------------------
 
 const loadSeasonContext = async (seriesId, seasonId) => {
@@ -774,6 +828,49 @@ export async function enqueueVolumeBackCover(seriesId, seasonId, options = {}) {
   const { script, ...rest } = await enqueueVolumeCoverLike(seriesId, seasonId, 'backCover', options);
   return { ...rest, backCoverScript: script };
 }
+
+/**
+ * Enqueue + persist a volume (season) cover render (front or back) in ONE
+ * service call — the shared entry point behind both the route handler and the
+ * CDO orchestrator (#2220). Mirrors `renderComicCoverLike` but persists the
+ * in-flight slot onto `series.seasons[].{cover|backCover}` through
+ * `updateSeasonOnSeries` (the per-series write tail) so the season-cover
+ * filename hook can attach the completed render.
+ *
+ * Returns { jobId, mode, prompt, variant, fromProof, coverScript|backCoverScript,
+ * season, series } — the enqueue result plus the updated season + series.
+ */
+async function renderVolumeCoverLike(seriesId, seasonId, target, options = {}) {
+  const scriptField = target === 'cover' ? 'coverScript' : 'backCoverScript';
+  const { script, ...rest } = await enqueueVolumeCoverLike(seriesId, seasonId, target, options);
+  const slotKey = slotKeyForVariant(rest.variant);
+  const slotRecord = buildRenderSlot({
+    slotKey, jobId: rest.jobId, prompt: rest.prompt,
+    width: options.width, height: options.height, fromProof: rest.fromProof,
+  });
+  const series = await updateSeasonOnSeries(seriesId, seasonId, (current) => {
+    const currentSlot = current?.[target] || {};
+    const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+    if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
+    return { [target]: nextSlot };
+  });
+  const season = (series.seasons || []).find((s) => s.id === seasonId);
+  return { ...rest, [scriptField]: script, season, series };
+}
+
+/**
+ * Enqueue + persist a volume (season) FRONT cover render. See
+ * `renderVolumeCoverLike`.
+ */
+export const renderVolumeCover = (seriesId, seasonId, options = {}) =>
+  renderVolumeCoverLike(seriesId, seasonId, 'cover', options);
+
+/**
+ * Enqueue + persist a volume (season) BACK cover render. See
+ * `renderVolumeCoverLike`.
+ */
+export const renderVolumeBackCover = (seriesId, seasonId, options = {}) =>
+  renderVolumeCoverLike(seriesId, seasonId, 'backCover', options);
 
 export function composeComicPagePrompt({
   series, world, page, pageNumber, extraStyle = '',
@@ -983,6 +1080,57 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
 }
 
 /**
+ * Splice an in-flight render slot onto
+ * `stages.comicPages.pages[pageIndex].{proofImage|finalImage}` through
+ * `updateStageWithLatest` (the serialized issue write tail) so a concurrent
+ * page edit or sibling render that wrote between the enqueue and this persist
+ * can't be reverted by a stale snapshot. Shared by `renderComicPage` and
+ * `refineComicPageRender` — the filename hook only attaches the completed
+ * image when the target slot already carries the returned jobId (the reason
+ * this write must live behind the shared entry points, not only in the route).
+ *
+ * Returns { issue, stage } from the write tail.
+ */
+async function persistComicPageSlot(issueId, pageIndex, { variant, jobId, prompt, width, height, fromProof }) {
+  const slotKey = slotKeyForVariant(variant);
+  const slotRecord = buildRenderSlot({ slotKey, jobId, prompt, width, height, fromProof });
+  return updateStageWithLatest(issueId, 'comicPages', (currentStage) => {
+    const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+    if (!currentPages[pageIndex]) {
+      throw new ServerError(
+        `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+        { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+      );
+    }
+    const nextPages = [...currentPages];
+    nextPages[pageIndex] = { ...currentPages[pageIndex], [slotKey]: slotRecord };
+    return { status: 'edited', pages: nextPages };
+  });
+}
+
+/**
+ * Enqueue + persist a full comic-page render in ONE service call — the shared
+ * entry point behind both the route handler and the CDO orchestrator tool
+ * (#2241, mirroring the #2234 cover treatment). The bare `enqueueVisualComicPage`
+ * only queues the job; the filename hook attaches the completed render ONLY if
+ * `pages[pageIndex]`'s active variant slot already carries the returned jobId,
+ * and that slot write used to live in the route handler. Extracting it here
+ * means the orchestrator gets orchestrated pages instead of silently dropping
+ * them. `options` mirrors the route body (target/useProofAsBase/referencePage,
+ * width/height, mode, …).
+ *
+ * Returns the enqueue result plus the persisted { issue, stage }.
+ */
+export async function renderComicPage(issueId, options = {}) {
+  const result = await enqueueVisualComicPage(issueId, options);
+  const { issue, stage } = await persistComicPageSlot(issueId, result.pageIndex, {
+    variant: result.variant, jobId: result.jobId, prompt: result.prompt,
+    width: options.width, height: options.height, fromProof: result.fromProof,
+  });
+  return { ...result, issue, stage };
+}
+
+/**
  * AI prompt-refine + image-to-image re-render for a SMALL correction to an
  * already-rendered comic page (issue #1534). Unlike `enqueueVisualComicPage`
  * (which composes a fresh prompt from the page's panels and re-renders from
@@ -1102,7 +1250,10 @@ export async function refineComicPageRender(issueId, options = {}) {
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
     logLine: `🪄 Pipeline comic page refine — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} variant=${variant} strength=${initImageStrength}`,
   });
-  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId };
+  const { issue: persistedIssue, stage } = await persistComicPageSlot(issueId, pageIndex, {
+    variant, jobId, prompt: refined, width: options.width, height: options.height,
+  });
+  return { jobId, mode, prompt: refined, pageIndex, variant, changes, runId, providerId, issue: persistedIssue, stage };
 }
 
 /**

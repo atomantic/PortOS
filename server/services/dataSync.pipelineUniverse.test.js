@@ -22,6 +22,13 @@ vi.mock('../lib/fileUtils.js', async () => {
 afterAll(cleanup);
 
 const dataSync = await import('./dataSync.js');
+// Derive the receiver's pipelineSeries version from the source of truth so this
+// test doesn't false-fail every time the constant is bumped (it drifted red on
+// the 10→11 bump). "Sender ahead" is always receiver + 1. Dynamic-imported after
+// the vi.mock hoist so the static import doesn't disturb mock initialization.
+const schemaVersionsMod = await import('../lib/schemaVersions.js');
+const RECEIVER_PIPELINE_SERIES_V = schemaVersionsMod.PORTOS_SCHEMA_VERSIONS.pipelineSeries;
+const SENDER_AHEAD_PIPELINE_SERIES_V = RECEIVER_PIPELINE_SERIES_V + 1;
 const conflictJournal = await import('../lib/conflictJournal.js');
 const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 
@@ -1053,12 +1060,12 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     const result = await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', name: 'Foundry', updatedAt: '2026-05-17T11:00:00Z' }],
       issues: [],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 10, pipelineIssues: 1, mediaCollections: 1 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: SENDER_AHEAD_PIPELINE_SERIES_V, pipelineIssues: 1, mediaCollections: 1 } } });
     expect(result.applied).toBe(false);
     expect(result.blockedBySchema).toBeDefined();
     // The reported gap is scoped to the relevant category — NOT mis-attributed.
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'pipelineSeries', senderV: 10, receiverV: 9 },
+      { category: 'pipelineSeries', senderV: SENDER_AHEAD_PIPELINE_SERIES_V, receiverV: RECEIVER_PIPELINE_SERIES_V },
     ]);
     expect(readSeriesState()).toEqual([]); // nothing written
   });

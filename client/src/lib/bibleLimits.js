@@ -23,6 +23,16 @@ export const BIBLE_LIMITS = Object.freeze({
   SPECIAL_TRAITS_MAX: 2000,
   VISUAL_IDENTITY_MAX: 1000,
   MOTIVATIONS_MAX: 2000,
+  // Character framework (CWQE Phase 10, #2175).
+  GHOST_MAX: 1000,
+  WOUND_MAX: 1000,
+  LIE_MAX: 600,
+  WANT_MAX: 600,
+  NEED_MAX: 600,
+  SECRET_MAX: 600,
+  SECRETS_PER_CHARACTER_MAX: 12,
+  SLIDER_MIN: 1,
+  SLIDER_MAX: 10,
   LIKES_MAX: 1500,
   DISLIKES_MAX: 1500,
   MANNERISMS_MAX: 1500,
@@ -78,6 +88,9 @@ export const BIBLE_LIMITS = Object.freeze({
   SOURCE_SERIES_ID_MAX: 64,
   VOICE_ID_MAX: 200,
   INGREDIENT_ID_MAX: 64,
+  // Reveal-gated canon / spoiler scoping (#2178).
+  SURFACE_DESCRIPTOR_MAX: 2000,
+  REVEAL_ISSUE_MAX: 100000,
 });
 
 // Client-only helper (the cap *value* IMAGE_REFS_PER_ENTRY_MAX is mirrored from

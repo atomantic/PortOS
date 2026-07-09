@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync, writeFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from './mockPathsDataRoot.js';
+import { bindSettingsFile } from './settingsTestUtil.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -9,6 +10,11 @@ vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return makeProxy(actual);
 });
+
+// Direct settings.json writes that also drop the getSettings() read cache —
+// see server/lib/settingsTestUtil.js for why the reset is required here
+// (a prior setPassword() warms the cache; a bypass-save() write leaves it stale).
+const { mergeSettingsFile } = bindSettingsFile(tempRoot);
 
 const resetSettings = () => {
   writeFileSync(join(tempRoot, 'settings.json'), '{}\n');
@@ -18,11 +24,7 @@ const resetSettings = () => {
 // Merge an apiAccess block into settings.json (preserving any auth secrets a
 // prior setPassword() call wrote). setPassword persists secrets to the same
 // file, so read-modify-write rather than clobbering.
-const writeApiAccess = (apiAccess) => {
-  const raw = JSON.parse(readFileSync(join(tempRoot, 'settings.json'), 'utf-8'));
-  raw.apiAccess = apiAccess;
-  writeFileSync(join(tempRoot, 'settings.json'), JSON.stringify(raw, null, 2) + '\n');
-};
+const writeApiAccess = (apiAccess) => mergeSettingsFile({ apiAccess });
 
 beforeEach(() => {
   vi.resetModules();
@@ -247,7 +249,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
   it('opens /api/voice/public/* when voice is exposed + passwordless', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     const { authGate } = await import('./authGate.js');
     const synth = await runGate(authGate, { path: '/api/voice/public/synthesize', headers: {} });
     expect(synth.called).toBe(true);
@@ -260,7 +262,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
     // config / process-control routes on the main /api/voice router.
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     const { authGate } = await import('./authGate.js');
     for (const path of ['/api/voice/config', '/api/voice/whisper', '/api/voice/test']) {
       const result = await runGate(authGate, { path, headers: {} });
@@ -272,7 +274,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
   it('gates the public surface when exposed but requireAuth is true', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ voice: { exposed: true, requireAuth: true } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: true } });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/api/voice/public/synthesize', headers: {} });
     expect(result.called).toBe(false);
@@ -282,7 +284,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
   it('gates the public surface when not exposed', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ voice: { exposed: false, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: false, requireAuth: false } });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/api/voice/public/synthesize', headers: {} });
     expect(result.called).toBe(false);
@@ -292,7 +294,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
   it('opens /sdapi/* when sdapi is exposed + passwordless', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ sdapi: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ sdapi: { exposed: true, requireAuth: false } });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/sdapi/v1/txt2img', headers: {} });
     expect(result.called).toBe(true);
@@ -301,7 +303,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
   it('still applies the CSRF cross-origin guard to an exposed public path', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    writeApiAccess({ voice: { exposed: true, requireAuth: false } });
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false } });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, {
       path: '/api/voice/public/synthesize',
@@ -314,7 +316,7 @@ describe('authGate per-API public registry (apiAccess)', () => {
 
   it('ignores apiAccess entirely when auth is disabled (no regression)', async () => {
     // Auth off → everything passes regardless of apiAccess flags.
-    writeApiAccess({ voice: { exposed: false, requireAuth: true } });
+    await writeApiAccess({ voice: { exposed: false, requireAuth: true } });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/api/voice/public/synthesize', headers: {} });
     expect(result.called).toBe(true);

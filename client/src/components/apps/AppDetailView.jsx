@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Hammer, RefreshCw, Pencil, AlertTriangle, Sparkles } from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
@@ -24,6 +24,7 @@ import UpdateTab from './tabs/UpdateTab';
 export default function AppDetailView() {
   const { appId, tab } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = tab || 'overview';
 
   const [app, setApp] = useState(null);
@@ -60,6 +61,19 @@ export default function AppDetailView() {
   useEffect(() => {
     setEditing(false);
   }, [appId]);
+
+  // Deep-link into the Edit App drawer (e.g. the Layered Intelligence overview
+  // links here with `?edit=1&appTab=intelligence` to open the Intelligence tab).
+  // The `edit` trigger is consumed immediately so closing the drawer doesn't
+  // re-open it; `appTab` is preserved for the drawer's own useDrawerTab to read.
+  // Declared AFTER the appId-close effect so it wins on the same-commit mount.
+  useEffect(() => {
+    if (searchParams.get('edit') == null) return;
+    setEditing(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Real-time updates
   useEffect(() => {

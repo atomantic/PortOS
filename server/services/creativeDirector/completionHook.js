@@ -25,10 +25,13 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
-import { enqueueTreatmentTask, enqueueEvaluateTask } from './agentBridge.js';
+import { enqueueTreatmentTask } from './agentBridge.js';
+import { advanceAfterPlanStepSettled } from './planAdvance.js';
+import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
+import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { PATHS } from '../../lib/fileUtils.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
@@ -81,6 +84,14 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
   if (!fresh) return;
   if (fresh.status === 'paused' || fresh.status === 'failed') return;
 
+  // CDO Phase 2 (#2184): a directive-driven project runs the generalized plan
+  // advance loop (the `plan` completion is the planner writing the plan; every
+  // subsequent step runs server-side through the tool registry, no agent task).
+  // Legacy video projects (no directive) stay on the scene loop below.
+  if (fresh.directive) {
+    return advanceAfterPlanStepSettled(fresh.id);
+  }
+
   // Always advance — advanceAfterSceneSettled is idempotent and inspects
   // project state to decide what comes next. Calling it for unknown kinds
   // (e.g. legacy 'scene' tasks from before the treatment/evaluate split)
@@ -109,8 +120,90 @@ const inflightStitch = new Set();
 // scene as orphaned and double-enqueue. Per-projectId+sceneId set
 // closes that window in the same way inflightTreatment/inflightStitch do.
 const inflightEvaluator = new Set();
+// #1929: scenes we're deferring the first render for while their seeded
+// first-pass reference frame is still generating on the media-job queue.
+// Keyed `${projectId}:${sceneId}` so a second advance() while a defer
+// listener is already armed doesn't register a duplicate listener (which
+// would re-fire advanceAfterSceneSettled twice on the same job settle).
+const inflightSeedDefer = new Set();
+// #1929: cleanup callbacks for every currently-armed seed-frame defer, keyed
+// by deferKey — lets __resetInflightState() (tests) tear down real listeners +
+// backstop timers, not just the dedup set, so a deferred-but-never-settled test
+// can't leak a live listener that later fires a stray advance.
+const seedDeferCleanups = new Map();
 
-export async function advanceAfterSceneSettled(projectId) {
+/**
+ * #1929 — find the still-in-flight first-pass reference-frame job seeded for
+ * `sceneId` on `projectId`. `enqueueFirstPassSceneFrames` (firstPassGen.js)
+ * queues one `image` job per scene tagged `params.creativeDirector` (no
+ * `owner`), which `creativeDirectorSceneImageHook` files onto the scene's
+ * `sourceImageFile` when it completes. Returns the queued/running job (so the
+ * caller can wait on its settle) or null if none is pending.
+ *
+ * Pure over an injected `jobs` array so it can be unit-tested without the
+ * live queue; the module wrapper below passes `listJobs({ kind: 'image' })`.
+ */
+export function findPendingSeedFrameJob(jobs, projectId, sceneId) {
+  if (!Array.isArray(jobs)) return null;
+  return jobs.find((j) => {
+    if (j?.kind !== 'image') return false;
+    if (j.status !== 'queued' && j.status !== 'running') return false;
+    const tag = j.params?.creativeDirector;
+    return tag?.projectId === projectId && tag?.sceneId === sceneId;
+  }) || null;
+}
+
+// #1929 — how long to poll for the seed frame's `sourceImageFile` to land
+// after its media job completes. The scene-image hook (creativeDirectorScene
+// ImageHook) files it on the SAME 'completed' event our defer listener sees,
+// but both handlers run async so the write may still be in flight when we
+// re-advance. A short bounded poll lets scene-0 pick up the seeded frame
+// without wedging the pipeline if the attach failed (frame simply won't be
+// there and the scene renders text-to-video, per the fire-and-forget contract).
+// Poll fast at first (the scene-image hook usually files sourceImageFile
+// within a tick or two of the same 'completed' event), then back off — so a
+// successful attach is picked up almost immediately, while a genuinely failed
+// attach still gives up promptly instead of blocking scene-0 for the full
+// window. Values are the delay BEFORE each successive re-read.
+const SEED_FRAME_ATTACH_POLL_SCHEDULE_MS = [25, 50, 100, 250, 250, 500, 500];
+const SEED_FRAME_ATTACH_MAX_WAIT_MS = SEED_FRAME_ATTACH_POLL_SCHEDULE_MS.reduce((a, b) => a + b, 0);
+
+// Backstop for a seed job that never emits a terminal event (worker crash,
+// queue stall, a pm2 restart that drops the in-memory job). Without it the
+// defer listeners + inflightSeedDefer entry would leak forever and wedge the
+// scene in 'pending'. Generous — a real image render can take a while — but
+// finite so the pipeline always makes progress.
+const SEED_DEFER_BACKSTOP_MS = 5 * 60 * 1000;
+
+async function waitForSeedFrameThenAdvance(projectId, sceneId) {
+  // Poll until the scene-image hook has filed sourceImageFile, the project
+  // leaves a runnable state (paused/failed/deleted), the scene stops being
+  // pending, or we exhaust the schedule.
+  for (let i = 0; ; i += 1) {
+    const fresh = await getProject(projectId).catch(() => null);
+    if (!fresh || fresh.status === 'paused' || fresh.status === 'failed') return;
+    const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
+    // Scene gone, no longer pending (something else advanced it), or the
+    // reference frame has landed → stop waiting and let advance() take over.
+    if (!scene || scene.status !== 'pending' || scene.sourceImageFile) break;
+    if (i >= SEED_FRAME_ATTACH_POLL_SCHEDULE_MS.length) {
+      console.log(`⏳ CD scene ${sceneId} on ${projectId}: seed frame did not attach within ${SEED_FRAME_ATTACH_MAX_WAIT_MS}ms — rendering without it (text-to-video).`);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, SEED_FRAME_ATTACH_POLL_SCHEDULE_MS[i]));
+  }
+  // Force past the seed-defer gate for THIS scene: the job we were waiting on
+  // is terminal (or backstopped), so if a stale/duplicate seed job for the
+  // same scene is still sitting queued/running we must not re-arm another
+  // defer on it — that would loop forever on a stalled queue (codex review).
+  return advanceAfterSceneSettled(projectId, { skipSeedDeferSceneId: sceneId });
+}
+
+export async function advanceAfterSceneSettled(projectId, opts = {}) {
+  // #1929: when a seed-frame defer's wait resolves, the re-advance passes the
+  // scene id here so this pass renders it immediately instead of re-arming a
+  // fresh defer on a stale/stalled duplicate seed job (which would loop).
+  const skipSeedDeferSceneId = opts.skipSeedDeferSceneId || null;
   const project = await getProject(projectId);
   if (!project) return;
   if (project.status === 'paused' || project.status === 'failed') return;
@@ -279,7 +372,7 @@ export async function advanceAfterSceneSettled(projectId) {
       console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
       const sceneRefreshed = recheck?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
       if (recheck && sceneRefreshed) {
-        await enqueueEvaluateTask(recheck, { ...sceneRefreshed, evaluationFrames: frames });
+        await dispatchSceneEvaluation(recheck, { ...sceneRefreshed, evaluationFrames: frames });
       }
       return;
     } finally {
@@ -295,6 +388,100 @@ export async function advanceAfterSceneSettled(projectId) {
   // re-requested by the evaluator).
   const nextPending = scenes.find((s) => s.status === 'pending');
   if (nextPending) {
+    // #1929: first-pass seeded reference frames are enqueued fire-and-forget
+    // right after the treatment is written (firstPassGen.js), and this hook
+    // fires the moment the treatment task settles. For the very first scene
+    // that renders after auto-compose, this almost always beats the just-
+    // queued image-gen job — so runSceneRender would read an empty
+    // sourceImageFile and render text-to-video instead of picking up the
+    // seeded frame (silently degrading the establishing shot). If the project
+    // opted into first-pass gen, the scene has no reference frame yet, AND its
+    // seed job is still queued/running on the media-job queue, defer this
+    // render: re-fire advanceAfterSceneSettled once the seed job settles
+    // (creativeDirectorSceneImageHook will have filed sourceImageFile by then,
+    // since it's serialized on the same 'completed' event). Later scenes have
+    // a natural multi-minute buffer (each renders only after the prior scene's
+    // full video render + evaluation), so this only matters for scene-0.
+    if (project.generateFirstPass && !nextPending.sourceImageFile
+        && nextPending.sceneId !== skipSeedDeferSceneId) {
+      const seedJob = findPendingSeedFrameJob(
+        listJobs({ kind: 'image' }), project.id, nextPending.sceneId,
+      );
+      if (seedJob) {
+        const deferKey = `${project.id}:${nextPending.sceneId}`;
+        if (inflightSeedDefer.has(deferKey)) {
+          console.log(`⏳ CD scene ${nextPending.sceneId} on ${project.id}: seed frame still generating — defer already armed, waiting.`);
+          return;
+        }
+        inflightSeedDefer.add(deferKey);
+        console.log(`⏳ CD scene ${nextPending.sceneId} on ${project.id}: deferring render until seeded reference frame job ${seedJob.id.slice(0, 8)} settles.`);
+        const sceneId = nextPending.sceneId;
+        let fired = false;
+        const fireOnce = () => {
+          if (fired) return;
+          fired = true;
+          clearTimeout(backstopTimer);
+          mediaJobEvents.off('completed', onSeedSettled);
+          mediaJobEvents.off('failed', onSeedSettled);
+          mediaJobEvents.off('canceled', onSeedSettled);
+          inflightSeedDefer.delete(deferKey);
+          seedDeferCleanups.delete(deferKey);
+          // Re-advance once a seed job for this scene is terminal. On success
+          // the scene-image hook (creativeDirectorSceneImageHook) fires on the
+          // SAME 'completed' event to file sourceImageFile — but both handlers
+          // run async, so the write can still be in flight when we re-read.
+          // Poll briefly for sourceImageFile before falling through to
+          // runSceneRender so scene-0 reliably picks up its seeded frame. On
+          // failure/cancel the frame never lands and the scene renders
+          // text-to-video, exactly as the fire-and-forget contract allowed.
+          // Runs outside the request lifecycle — never throw.
+          waitForSeedFrameThenAdvance(project.id, sceneId)
+            .catch((e) => console.log(`⚠️ CD deferred advance for ${project.id}/${sceneId} failed: ${e.message}`));
+        };
+        // Match by scene TAG, not the single job id we happened to sample: if
+        // a duplicate/re-queued seed job for the same scene completes first and
+        // attaches sourceImageFile, that's just as good — wake on it rather
+        // than waiting for the specific job we first saw (codex review).
+        const onSeedSettled = (job) => {
+          const tag = job?.params?.creativeDirector;
+          if (job?.kind === 'image' && tag?.projectId === project.id && tag?.sceneId === sceneId) fireOnce();
+        };
+        mediaJobEvents.on('completed', onSeedSettled);
+        mediaJobEvents.on('failed', onSeedSettled);
+        mediaJobEvents.on('canceled', onSeedSettled);
+        // Backstop: a seed job that never emits a terminal event (worker
+        // crash, queue stall, restart that drops the in-memory job) would
+        // otherwise leave these listeners + the inflightSeedDefer entry
+        // attached forever, wedging the scene in 'pending' permanently. Force
+        // a fall-through after the backstop; the re-advance passes
+        // skipSeedDeferSceneId so it renders this scene instead of re-arming a
+        // fresh defer on the same stalled job (which would loop). Unref so the
+        // timer can't hold the process open.
+        const backstopTimer = setTimeout(() => {
+          console.log(`⏳ CD scene ${sceneId} on ${project.id}: seed frame job ${seedJob.id.slice(0, 8)} never settled within ${SEED_DEFER_BACKSTOP_MS}ms — proceeding without waiting.`);
+          fireOnce();
+        }, SEED_DEFER_BACKSTOP_MS);
+        backstopTimer.unref?.();
+        // Record a teardown so tests (and future callers) can cancel an armed
+        // defer cleanly — clears the listeners, timer, and dedup entry without
+        // firing the advance.
+        seedDeferCleanups.set(deferKey, () => {
+          clearTimeout(backstopTimer);
+          mediaJobEvents.off('completed', onSeedSettled);
+          mediaJobEvents.off('failed', onSeedSettled);
+          mediaJobEvents.off('canceled', onSeedSettled);
+        });
+        // Close the race where the job settled between the listJobs() read
+        // above and attaching the listeners — its terminal event already
+        // fired and would never fire again, wedging the scene in 'pending'
+        // forever. Re-check now that we're listening; if it's already gone,
+        // fire immediately.
+        if (!findPendingSeedFrameJob(listJobs({ kind: 'image' }), project.id, sceneId)) {
+          fireOnce();
+        }
+        return;
+      }
+    }
     if (project.status !== 'rendering') {
       await updateProject(project.id, { status: 'rendering' });
     }
@@ -345,8 +532,26 @@ export async function advanceAfterSceneSettled(projectId) {
 
 /**
  * Convenience: kick off the project from the user's "Start" button. Skips
- * straight to advancing.
+ * straight to advancing. Routes a directive-driven project (CDO Phase 2) to the
+ * generalized plan advance loop; legacy video projects to the scene loop.
  */
 export async function startCreativeDirectorProject(projectId) {
+  const project = await getProject(projectId).catch(() => null);
+  if (project?.directive) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
+}
+
+// Test-only: clear the module-level in-memory dedup sets so suites that leave
+// a seed-frame defer armed (deferred but never fired the settle event) don't
+// bleed the deferKey into a later test that reuses the same projectId.
+export function __resetInflightState() {
+  // Tear down any armed seed-frame defers (real listeners + backstop timers),
+  // not just the dedup set — a deferred-but-never-settled test would otherwise
+  // leak a live listener that fires a stray advance into a later test.
+  for (const cleanup of seedDeferCleanups.values()) cleanup();
+  seedDeferCleanups.clear();
+  inflightTreatment.clear();
+  inflightStitch.clear();
+  inflightEvaluator.clear();
+  inflightSeedDefer.clear();
 }

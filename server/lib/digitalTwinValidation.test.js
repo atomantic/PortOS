@@ -133,6 +133,12 @@ describe('persona input schemas', () => {
     expect(digitalTwinSettingsSchema.safeParse({ activePersonaId: null }).success).toBe(true);
     expect(digitalTwinSettingsSchema.safeParse({}).success).toBe(true);
   });
+
+  it('defaults includePrivacyContext to false and accepts an explicit boolean (#2147)', () => {
+    expect(digitalTwinSettingsSchema.parse({}).includePrivacyContext).toBe(false);
+    expect(digitalTwinSettingsSchema.safeParse({ includePrivacyContext: true }).success).toBe(true);
+    expect(digitalTwinSettingsSchema.safeParse({ includePrivacyContext: 'yes' }).success).toBe(false);
+  });
 });
 
 // Trait-blending (M34 P7) — personas may carry structured `traitAdjustments`.

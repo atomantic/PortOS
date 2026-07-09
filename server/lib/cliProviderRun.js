@@ -18,6 +18,7 @@
 
 import { spawn } from 'child_process';
 import { buildCliArgs } from './cliProviderArgs.js';
+import { buildOpencodeEnvVars } from './opencodeConfig.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
 
 /**
@@ -97,7 +98,11 @@ export function runCliProviderPrompt(args = {}) {
 
     // CLAUDECODE is deleted from the child env so a nested invocation doesn't
     // think it's running inside the parent Claude Code session.
-    const childEnv = { ...process.env, ...provider.envVars };
+    // buildOpencodeEnvVars rebuilds OPENCODE_CONFIG_CONTENT with a declared
+    // models map for OpenCode Ollama providers (empty/no-op otherwise) so the
+    // injected `--model ollama/<id>` isn't rejected as "not valid" — see
+    // issue-2190. effectiveProvider carries the per-call model as defaultModel.
+    const childEnv = { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(effectiveProvider, effectiveProvider.defaultModel) };
     delete childEnv.CLAUDECODE;
 
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap

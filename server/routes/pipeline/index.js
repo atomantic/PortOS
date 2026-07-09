@@ -58,6 +58,7 @@ import continuityBibleRoutes from './continuityBible.js';
 import perspectiveRewriteRoutes from './perspectiveRewrite.js';
 import autopilotRoutes from './autopilot.js';
 import canonRoutes from './canon.js';
+import proseExportRoutes from './proseExport.js';
 
 const router = Router();
 
@@ -73,5 +74,6 @@ router.use(continuityBibleRoutes);
 router.use(perspectiveRewriteRoutes);
 router.use(autopilotRoutes);
 router.use(canonRoutes);
+router.use(proseExportRoutes);
 
 export default router;

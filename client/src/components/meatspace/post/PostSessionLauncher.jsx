@@ -1,24 +1,129 @@
 import { useState, useEffect } from 'react';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { getProviders } from '../../../services/api';
+import { Link } from 'react-router-dom';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, Layers } from 'lucide-react';
+import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
+import { streakGlyph } from '../../../lib/streakGlyph.js';
 
-// Streak glyph tiers mirror DailyPostWidget so the launcher and dashboard agree.
-const streakGlyph = (streak) => (streak >= 7 ? '🔥' : streak >= 3 ? '⚡' : '✨');
+// Canonical domain visiting order for interleaved "Full POST" composition
+// (issue #2100): alternate domains — math → cognitive → memory → verbal — so a
+// session is spaced/varied rather than blocked (all math, then all cognitive).
+// Domains not listed here interleave after, in first-seen order.
+export const INTERLEAVE_DOMAIN_ORDER = ['math', 'cognitive', 'memory', 'verbal', 'wordplay', 'imagination'];
+
+/**
+ * Round-robin interleave drill configs by their `domain` tag: one drill from
+ * each domain per round, in INTERLEAVE_DOMAIN_ORDER, until every drill is
+ * placed. Preserves per-domain input order. Pure — exported for unit tests.
+ */
+export function interleaveByDomain(drills, order = INTERLEAVE_DOMAIN_ORDER) {
+  const groups = new Map();
+  for (const d of drills || []) {
+    const key = d.domain || 'other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  }
+  const domainOrder = [
+    ...order.filter(k => groups.has(k)),
+    ...[...groups.keys()].filter(k => !order.includes(k)),
+  ];
+  const lengths = [...groups.values()].map(g => g.length);
+  const maxLen = lengths.length ? Math.max(...lengths) : 0;
+  const result = [];
+  for (let round = 0; round < maxLen; round++) {
+    for (const key of domainOrder) {
+      const list = groups.get(key);
+      if (round < list.length) result.push(list[round]);
+    }
+  }
+  return result;
+}
 
 const scoreColorClass = (score) =>
   score >= 80 ? 'text-port-success' : score >= 50 ? 'text-port-warning' : 'text-port-error';
+
+// Short "at a glance" summary chip per cognitive drill type, shown next to
+// its label in the launcher sidebar. Pure — no closures over component state.
+export function cognitiveSummary(type, cfg) {
+  if (type === 'n-back') return `${cfg.n ?? 2}-back`;
+  if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
+  if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
+  if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
+  return cfg.count ? `${cfg.count} trials` : '';
+}
+
+// Pure: sanitizes the optional condition-tags map before submit — drops
+// empty/whitespace-only values so a session with no conditions filled in
+// doesn't persist `{ sleep: '', caffeine: '', stress: '' }` to history.
+// `tags` is passed explicitly (lifted from the component's `tags` state).
+export function buildCleanTags(tags) {
+  const cleanTags = {};
+  for (const [k, v] of Object.entries(tags)) {
+    if (v.trim()) cleanTags[k] = v.trim();
+  }
+  return cleanTags;
+}
 
 export default function PostSessionLauncher({ config, recentSessions, stats, statsWeek, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
+  // Mastered-but-inactive skills due for a maintenance review (issue #2096) —
+  // the Quick session mixes up to 2 of these in as labeled review reps. Empty
+  // until a skill is mastered and its review interval elapses; a load failure
+  // silently degrades to a plain Quick session.
+  const [reviewReps, setReviewReps] = useState([]);
+  // Ordered "what to practice next" recommendations (issue #2100). A load
+  // failure silently degrades to an empty list (the panel hides). The top
+  // recommendation also biases the Quick session's drill picks.
+  const [recommendations, setRecommendations] = useState([]);
+  // Current effective Morse WPM — fetched only when a Morse WPM goal is set, so
+  // that goal can render progress (issue #2100). null when unset/unavailable.
+  const [morseWpm, setMorseWpm] = useState(null);
+  // Today's TOTAL training minutes (scored sessions + training-log practice —
+  // Training mode, Morse, memory) for the daily-minutes goal. Fetched only when
+  // that goal is set; null falls back to the scored-session-only estimate.
+  const [todayMinutesTotal, setTodayMinutesTotal] = useState(null);
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
+    getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
+    getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
   }, []);
+
+  // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
+  // request on the common path. Effective WPM prefers the Farnsworth setting.
+  useEffect(() => {
+    if (!config?.goals?.morseWpmTarget) { setMorseWpm(null); return; }
+    let cancelled = false;
+    getMorseProgress(30, { silent: true })
+      .then(m => {
+        if (cancelled) return;
+        const wpm = m?.settings?.farnsworthWpm ?? m?.settings?.wpm ?? null;
+        setMorseWpm(typeof wpm === 'number' ? wpm : null);
+      })
+      .catch(() => { if (!cancelled) setMorseWpm(null); });
+    return () => { cancelled = true; };
+  }, [config?.goals?.morseWpmTarget]);
+
+  // Today's total training minutes (incl. training-log practice) — fetched only
+  // when a daily-minutes goal is set, so that goal counts Training/Morse/memory
+  // time, not just scored sessions (issue #2100 review).
+  useEffect(() => {
+    if (!config?.goals?.dailyMinutes) { setTodayMinutesTotal(null); return; }
+    let cancelled = false;
+    getPostProgress(1, { silent: true })
+      .then(p => {
+        if (cancelled) return;
+        const t = new Date().toISOString().split('T')[0];
+        const todayBucket = (p?.series?.byDay || []).find(d => d.date === t);
+        setTodayMinutesTotal(todayBucket ? todayBucket.minutes : 0);
+      })
+      .catch(() => { if (!cancelled) setTodayMinutesTotal(null); });
+    return () => { cancelled = true; };
+  }, [config?.goals?.dailyMinutes]);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
@@ -44,17 +149,18 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     : [];
 
   // Only the fields each cognitive generator reads; extras are harmless.
-  // stimulusMs/showMs are intentionally NOT forwarded here — no UI field ever
-  // sets them (PostDrillConfig.jsx exposes no such control), so this config
-  // never carries them; the generators always fall back to their own internal
-  // defaults (server/services/meatspacePostCognitive.js). Forwarding them
-  // would have been dead pass-through (issue #2008).
+  // stimulusMs (n-back) / showMs (digit-span) are forwarded so that manual mode
+  // (Progressive off) actually uses the presentation-speed values the user set
+  // in PostDrillConfig.jsx (issue #2095) — under the progressive ladder the
+  // server overrides them per rung anyway, so forwarding is safe in both modes.
   const cognitiveDrillConfig = (cfg) => ({
     n: cfg.n,
     length: cfg.length,
+    stimulusMs: cfg.stimulusMs,
     direction: cfg.direction,
     startLength: cfg.startLength,
     maxLength: cfg.maxLength,
+    showMs: cfg.showMs,
     count: cfg.count,
     size: cfg.size,
     mode: cfg.mode,
@@ -63,27 +169,25 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     choices: cfg.choices,
   });
 
-  // Short "at a glance" summary chip per cognitive drill type, shown next to
-  // its label in the launcher sidebar.
-  function cognitiveSummary(type, cfg) {
-    if (type === 'n-back') return `${cfg.n ?? 2}-back`;
-    if (type === 'digit-span') return `${cfg.startLength ?? 3}–${cfg.maxLength ?? 8}`;
-    if (type === 'schulte-table') return `${cfg.size ?? 5}×${cfg.size ?? 5}`;
-    if (type === 'reaction-time') return `${cfg.count ?? 15} trials (${cfg.mode ?? 'simple'})`;
-    return cfg.count ? `${cfg.count} trials` : '';
-  }
-
-  function buildCleanTags() {
-    const cleanTags = {};
-    for (const [k, v] of Object.entries(tags)) {
-      if (v.trim()) cleanTags[k] = v.trim();
-    }
-    return cleanTags;
-  }
+  // Composed sessions (Full POST / Quick) honor `sessionModules` (issue #2100):
+  // a module's drills are only added when it's listed. The default
+  // (mental-math + cognitive + memory) excludes LLM drills, so wit/verbal work
+  // is never auto-added to a default session — provider-cost consent stays
+  // opt-in (CLAUDE.md AI-provider policy). An empty/absent list means "all
+  // enabled" (back-compat). Focus-practice on a specific weak domain bypasses
+  // this filter (it's an explicit user choice, not a default composition).
+  // `null` = no sessionModules set (legacy/absent) → include all enabled
+  // (back-compat). An explicit array — INCLUDING an empty one — is honored as-is:
+  // unchecking every module in Config is a deliberate "no composed sessions"
+  // choice, not the same as never having set it (issue #2100 review).
+  const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : null;
+  const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive' };
+  const moduleAllowed = (source) => sessionModules === null || sessionModules.includes(SOURCE_TO_MODULE[source]);
 
   function handleStart() {
-    const mathConfigs = enabledMathDrills.map(([type, cfg]) => ({
+    const mathConfigs = (moduleAllowed('math') ? enabledMathDrills : []).map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: {
         steps: cfg.steps,
         count: cfg.count,
@@ -97,23 +201,29 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       timeLimitSec: cfg.timeLimitSec || 120
     }));
 
-    const llmConfigs = enabledLlmDrills.map(([type, cfg]) => ({
+    const llmConfigs = (moduleAllowed('llm') ? enabledLlmDrills : []).map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: { count: cfg.count || 5 },
       timeLimitSec: cfg.timeLimitSec || 120,
       providerId: cfg.providerId || llmProviderId,
       model: cfg.model || llmModel
     }));
 
-    const cognitiveConfigs = enabledCognitiveDrills.map(([type, cfg]) => ({
+    const cognitiveConfigs = (moduleAllowed('cognitive') ? enabledCognitiveDrills : []).map(([type, cfg]) => ({
       type,
+      domain: DRILL_TO_DOMAIN[type],
       config: cognitiveDrillConfig(cfg)
       // No timeLimitSec — cognitive drills are self-paced/stimulus-driven and
       // never enforce a countdown (see PostCognitiveDrillRunner.jsx).
     }));
 
-    const drillConfigs = [...mathConfigs, ...llmConfigs, ...cognitiveConfigs];
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    // Interleave across domains (math → cognitive → memory → verbal …) rather
+    // than running each module blocked, so a full session spaces varied work
+    // for better retention (issue #2100). Full coverage is preserved — every
+    // enabled drill still runs, just reordered.
+    const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs]);
+    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
   // Build domain → enabled drills map for quick session
@@ -131,12 +241,36 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     enabledDomains[domain].push({ type, cfg, source });
   }
 
+  // Domains eligible for a COMPOSED (Full/Quick) session, after the
+  // sessionModules filter — so a default Quick session never silently pulls in
+  // an opt-out module's drills (issue #2100).
+  const sessionEnabledDomains = {};
+  for (const [domainKey, drills] of Object.entries(enabledDomains)) {
+    const allowed = drills.filter(d => moduleAllowed(d.source));
+    if (allowed.length) sessionEnabledDomains[domainKey] = allowed;
+  }
+
   function handleQuickSession() {
+    // Bias toward the top recommendation instead of pure random (issue #2100):
+    // if it names a drill type in an enabled domain, run that domain first and
+    // pick that exact drill; every other domain still gets a random pick.
+    const topRec = recommendations[0] || null;
+    const recDrill = topRec?.drillType || null;
+    const recDomain = recDrill ? DRILL_TO_DOMAIN[recDrill] : null;
+    const domainKeys = Object.keys(sessionEnabledDomains);
+    const orderedKeys = recDomain && sessionEnabledDomains[recDomain]
+      ? [recDomain, ...domainKeys.filter(k => k !== recDomain)]
+      : domainKeys;
+
     const drillConfigs = [];
-    for (const [domainKey, drills] of Object.entries(enabledDomains)) {
+    for (const domainKey of orderedKeys) {
+      const drills = sessionEnabledDomains[domainKey];
       const domain = DOMAINS[domainKey];
-      // Pick one random drill from this domain
-      const pick = drills[Math.floor(Math.random() * drills.length)];
+      // Prefer the recommended drill in its domain; otherwise pick at random.
+      const recommendedPick = domainKey === recDomain
+        ? drills.find(d => d.type === recDrill)
+        : null;
+      const pick = recommendedPick || drills[Math.floor(Math.random() * drills.length)];
       const cfg = pick.cfg;
 
       let quickConfig;
@@ -173,7 +307,57 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       drillConfigs.push(drillConfig);
     }
 
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    // Mix in up to 2 maintenance reps for mastered-but-inactive skills that are
+    // due for re-verification (issue #2096). Each carries the review markers so
+    // the server re-verifies the specific rung and records the pass/fail.
+    for (const rep of reviewReps.slice(0, 2)) {
+      drillConfigs.push({
+        type: rep.type,
+        domain: DRILL_TO_DOMAIN[rep.type],
+        config: rep.config,
+        timeLimitSec: DOMAINS[DRILL_TO_DOMAIN[rep.type]]?.timeBudgetSec,
+        isReview: true,
+        reviewLabel: rep.label,
+        ...(rep.providerId && { providerId: rep.providerId }),
+      });
+    }
+
+    onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
+  }
+
+  // Build a full-length (non-abbreviated) drill config for a single enabled
+  // drill, shared by domain-focus and single-drill starts. `domainKey` overrides
+  // the drill's own domain only for consistency with the caller's grouping.
+  function buildFocusDrillConfig({ type, cfg, source }, domainKey = DRILL_TO_DOMAIN[type]) {
+    const domain = DOMAINS[domainKey];
+    let focusConfig;
+    if (source === 'math') {
+      focusConfig = {
+        steps: cfg.steps,
+        count: cfg.count,
+        maxDigits: cfg.maxDigits,
+        subtrahend: cfg.subtrahend,
+        startRange: cfg.startRange,
+        bases: cfg.bases,
+        maxExponent: cfg.maxExponent,
+        tolerancePct: cfg.tolerancePct,
+      };
+    } else if (source === 'cognitive') {
+      focusConfig = cognitiveDrillConfig(cfg);
+    } else {
+      focusConfig = { count: cfg.count || 5 };
+    }
+    const drillConfig = {
+      type,
+      domain: domainKey,
+      config: focusConfig,
+      timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
+    };
+    if (source === 'llm') {
+      drillConfig.providerId = cfg.providerId || llmProviderId;
+      drillConfig.model = cfg.model || llmModel;
+    }
+    return drillConfig;
   }
 
   // Focused practice on a single domain: run every enabled drill in that domain
@@ -182,42 +366,57 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   function handleFocusDomain(domainKey) {
     const drills = enabledDomains[domainKey];
     if (!drills || drills.length === 0) return;
-    const domain = DOMAINS[domainKey];
-    const drillConfigs = drills.map(({ type, cfg, source }) => {
-      let focusConfig;
-      if (source === 'math') {
-        focusConfig = {
-          steps: cfg.steps,
-          count: cfg.count,
-          maxDigits: cfg.maxDigits,
-          subtrahend: cfg.subtrahend,
-          startRange: cfg.startRange,
-          bases: cfg.bases,
-          maxExponent: cfg.maxExponent,
-          tolerancePct: cfg.tolerancePct,
-        };
-      } else if (source === 'cognitive') {
-        focusConfig = cognitiveDrillConfig(cfg);
-      } else {
-        focusConfig = { count: cfg.count || 5 };
-      }
-      const drillConfig = {
-        type,
-        domain: domainKey,
-        config: focusConfig,
-        timeLimitSec: cfg.timeLimitSec || domain?.timeBudgetSec || 120,
-      };
-      if (source === 'llm') {
-        drillConfig.providerId = cfg.providerId || llmProviderId;
-        drillConfig.model = cfg.model || llmModel;
-      }
-      return drillConfig;
-    });
-    onStart(drillConfigs, buildCleanTags(), mode === 'train');
+    onStart(drills.map(d => buildFocusDrillConfig(d, domainKey)), buildCleanTags(tags), mode === 'train');
+  }
+
+  // Start a session with exactly ONE recommended drill (issue #2100): an Up next
+  // rec that names a specific drill takes the user into THAT drill, not every
+  // drill in its domain. No-op if the drill isn't currently enabled.
+  function startDrillByType(type) {
+    const entry = allEnabledDrills.find(d => d.type === type);
+    if (!entry) return;
+    onStart([buildFocusDrillConfig(entry)], buildCleanTags(tags), mode === 'train');
+  }
+
+  // Launch a single due maintenance-review rep from an "Up next" skill-review
+  // recommendation (issue #2100). The rep carries the `review`/`reviewSkillId`
+  // markers the server needs to record the re-verification — a plain focus/Full
+  // session would NOT resolve the scheduled review, so we NEVER fall back to one.
+  // If the matching rep isn't in the preloaded set (still pending, or beyond the
+  // first page), fetch fresh on demand; if it still can't be found there's no
+  // runnable rep, so do nothing rather than start an unrelated session.
+  async function startReviewRep(rec) {
+    const skillId = rec.id.replace(/^skill-review:/, '');
+    let rep = reviewReps.find(r => r.skillId === skillId);
+    if (!rep) {
+      const fresh = await getPostReviewReps(5).then(r => r?.reps || []).catch(() => []);
+      rep = fresh.find(r => r.skillId === skillId);
+    }
+    if (!rep) return;
+    const drillConfig = {
+      type: rep.type,
+      domain: DRILL_TO_DOMAIN[rep.type],
+      config: rep.config,
+      timeLimitSec: DOMAINS[DRILL_TO_DOMAIN[rep.type]]?.timeBudgetSec,
+      isReview: true,
+      reviewLabel: rep.label,
+      ...(rep.providerId && { providerId: rep.providerId }),
+    };
+    onStart([drillConfig], buildCleanTags(tags), mode === 'train');
   }
 
   const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
-  const domainCount = Object.keys(enabledDomains).length;
+  // Quick-session domain count reflects the sessionModules-filtered set, so the
+  // "Quick 5 Min (N domains)" button matches what it will actually run.
+  const domainCount = Object.keys(sessionEnabledDomains).length;
+  // A COMPOSED session (Full/Quick) only has drills to run if the
+  // sessionModules-filtered set is non-empty — the buttons gate on this, not on
+  // the unfiltered `hasAnyDrills`, so selecting only empty modules disables them
+  // instead of failing with "No drills configured" (issue #2100 review).
+  const hasSessionDrills = domainCount > 0;
+  // Drills are configured/enabled but the Session Composition filter excludes
+  // them all — surface why the start buttons are disabled.
+  const compositionExcludesAll = hasAnyDrills && !hasSessionDrills;
 
   // Analytics derived from the 30-day stats window. Streaks span all history.
   const hasStats = stats && stats.sessionCount > 0;
@@ -234,6 +433,20 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const weakestDomain = domainAverages
     .filter(d => enabledDomains[d.key])
     .reduce((weakest, d) => (!weakest || d.score < weakest.score ? d : weakest), null);
+
+  // Goal progress (issue #2100). Metrics come from data already on hand — no
+  // extra fetch: today's minutes from today's sessions, week sessions from the
+  // 7-day stats window, streak from the unified streak. Morse WPM has no metric
+  // here (would need a Morse fetch), so a morseWpmTarget goal is simply omitted
+  // — computeGoalProgress skips goals whose metric is unavailable.
+  const todaysSessions = (recentSessions || []).filter(s => s.date === today);
+  // Prefer the training-log-inclusive total (fetched when a daily goal is set);
+  // fall back to the scored-session-only estimate otherwise.
+  const todayMinutes = todayMinutesTotal != null
+    ? todayMinutesTotal
+    : Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
+  const weekSessions = statsWeek?.sessionCount ?? 0;
+  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak, morseWpm });
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
@@ -292,6 +505,89 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
               )}
             </div>
           </div>
+
+          {/* Goals — progress vs the user's configured targets (issue #2100).
+              Hidden entirely until at least one goal is set. */}
+          {goalRows.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-400 mb-3">Goals</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {goalRows.map(g => (
+                  <div key={g.key}>
+                    <div className="flex items-baseline justify-between gap-1">
+                      <span className="text-xs text-gray-500 truncate">{g.label}</span>
+                      {g.met && <span className="text-xs text-port-success" aria-hidden="true">✓</span>}
+                    </div>
+                    <div className={`text-sm font-mono ${g.met ? 'text-port-success' : 'text-white'}`}>
+                      {g.current}/{g.target}{g.unit ? ` ${g.unit}` : ''}
+                    </div>
+                    <div className="h-1.5 mt-1 rounded-full bg-port-bg overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${g.met ? 'bg-port-success' : 'bg-port-accent'}`}
+                        style={{ width: `${g.pct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* "Up next" — prioritized recommendations with deep links into the
+              exact drill/mode (issue #2100). Hidden if none loaded. */}
+          {recommendations.length > 0 && (
+            <div className="bg-port-card border border-port-border rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Compass size={16} className="text-port-accent" />
+                <h3 className="text-sm font-medium text-gray-300">Up next</h3>
+              </div>
+              <div className="space-y-2">
+                {recommendations.map(rec => {
+                  const rowClass = 'flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/60 transition-colors group w-full text-left';
+                  const inner = (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm text-white truncate">{rec.title}</div>
+                        {rec.detail && <div className="text-xs text-gray-500 truncate">{rec.detail}</div>}
+                      </div>
+                      <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
+                    </>
+                  );
+                  // A rec that targets the launcher should DO the practice, not
+                  // just navigate to the page the user is already on (issue #2100
+                  // review): focus the recommended drill's domain when it maps to
+                  // a runnable one, else start a Full POST. Routed recs
+                  // (/post/memory, /post/morse/copy) stay navigational links.
+                  if (rec.deepLink === '/post/launcher') {
+                    let onClick;
+                    if (rec.kind === 'skill-review') {
+                      // Launch the actual review rep (with markers), not plain practice.
+                      onClick = () => startReviewRep(rec);
+                    } else {
+                      const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
+                      // Start the EXACT recommended drill when it's enabled and in
+                      // an allowed module; else (no specific drill) start a Full POST.
+                      const drillRunnable = domainKey && sessionEnabledDomains[domainKey]
+                        && sessionEnabledDomains[domainKey].some(d => d.type === rec.drillType);
+                      onClick = drillRunnable
+                        ? () => startDrillByType(rec.drillType)
+                        : (hasSessionDrills ? handleStart : null);
+                    }
+                    return (
+                      <button key={rec.id} type="button" onClick={onClick || undefined} disabled={!onClick} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                        {inner}
+                      </button>
+                    );
+                  }
+                  return (
+                    <Link key={rec.id} to={rec.deepLink} className={rowClass}>
+                      {inner}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Progress analytics — streak, 7-vs-30-day trend, weakest-domain focus.
               Degrades to nothing until there's scored history to summarize. */}
@@ -414,12 +710,33 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             </div>
           </div>}
 
+          {/* Maintenance-review nudge (issue #2096) — mastered skills due for a
+              refresh, mixed into the next Quick session as labeled review reps. */}
+          {reviewReps.length > 0 && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
+              <Target size={16} className="mt-0.5 shrink-0" />
+              <span>
+                {reviewReps.length} skill{reviewReps.length > 1 ? 's' : ''} due for a maintenance rep
+                {' '}— a Quick session will mix {reviewReps.length > 1 ? 'them' : 'it'} in: {reviewReps.slice(0, 2).map(r => r.label).join(', ')}
+              </span>
+            </div>
+          )}
+
+          {/* Composition-excludes-everything notice — the start buttons below are
+              disabled because Session Composition filtered out all enabled drills. */}
+          {compositionExcludesAll && (
+            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
+              <Layers size={16} className="mt-0.5 shrink-0" />
+              <span>Your Session Composition excludes every enabled drill — adjust it under Config → Session Composition to run a session.</span>
+            </div>
+          )}
+
           {/* Start Buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             {domainCount >= 2 && (
               <button
                 onClick={handleQuickSession}
-                disabled={!hasAnyDrills}
+                disabled={!hasSessionDrills}
                 className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
                   mode === 'train'
                     ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
@@ -432,7 +749,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             )}
             <button
               onClick={handleStart}
-              disabled={!hasAnyDrills}
+              disabled={!hasSessionDrills}
               className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
                 mode === 'train'
                   ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
@@ -488,6 +805,13 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                   </div>
                 ))}
               </div>
+              {/* These are enabled but not in a default composed session — LLM
+                  drills stay opt-in for provider-cost consent (issue #2100). */}
+              {!moduleAllowed('llm') && (
+                <p className="mt-3 text-xs text-gray-500">
+                  Not in Full POST / Quick sessions. Add “Wit &amp; Memory (AI)” under Config → Session Composition to include them.
+                </p>
+              )}
             </div>
           )}
 

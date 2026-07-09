@@ -9,6 +9,8 @@ vi.mock('../../services/api', () => ({
   getDatadogInstances: vi.fn(),
   getJiraProjects: vi.fn(),
   getAppWorkTracker: vi.fn(),
+  getAppLayeredIntelligence: vi.fn(),
+  getProviders: vi.fn(),
   updateApp: vi.fn(),
   upgradeAppTls: vi.fn(),
 }));
@@ -50,6 +52,20 @@ beforeEach(() => {
     forge: 'gh',
     source: 'origin',
   });
+  api.getAppLayeredIntelligence.mockResolvedValue({
+    appId: 'app-1',
+    isPortos: false,
+    config: {
+      enabled: false,
+      intervalMs: 86400000,
+      providerId: null,
+      model: null,
+      rules: '',
+      sources: { goals: true, cosMetrics: true, healthReport: true, planMd: true, openIssues: true, custom: [] },
+      allowedScopes: ['app-improvement', 'app-data-gap'],
+    },
+  });
+  api.getProviders.mockResolvedValue({ providers: [] });
   api.updateApp.mockResolvedValue({});
 });
 

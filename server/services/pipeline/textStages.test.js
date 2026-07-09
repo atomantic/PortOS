@@ -69,10 +69,19 @@ vi.mock('../promptService.js', () => ({
   getStage: vi.fn(() => null),
 }));
 
+// The draft gate (#2169) dynamic-imports the judge; mock it so the gate tests
+// drive per-attempt scores without a real judge LLM call. A no-op for every
+// non-gated test (default draftAttempts=1 never enters runDraftGate).
+vi.mock('./pipelineJudge.js', () => ({
+  judgeIssue: vi.fn(async () => ({ status: 'no-content' })),
+}));
+
 const issuesSvc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
 const universeSvc = await import('../universeBuilder.js');
+const promptSvc = await import('../promptService.js');
+const pipelineJudge = await import('./pipelineJudge.js');
 const textStages = await import('./textStages.js');
 
 // Strip the `RENDERED:<stage>:` prefix that the mocked buildPrompt prepends
@@ -491,6 +500,169 @@ describe('pipeline text stage generator', () => {
 
   // -- end idea-stage context augment --
 
+  // ---- prose-stage cross-issue continuity augment (#2177 / CWQE Phase 12) ----
+  // Exercises buildProseContextAugment via the public generateStage entry so we
+  // hit the same path the LLM caller does. The mocked provider resolves to a
+  // large-window API provider, so budgeting never trims in these fixtures.
+
+  it('prose continuity: injects prior issue prose tail + next issue beats for a middle issue', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A opens.\n\nA middle.\n\nA closes on a held breath.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'C', seasonId: sea.id, arcPosition: 3,
+      stages: { idea: { status: 'ready', output: 'C beat 1\nC beat 2' } },
+    });
+
+    await textStages.generateStage(b.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.hasNeighborContinuity).toBe(true);
+    expect(ctx.priorIssueProseTail).toContain('held breath');
+    expect(ctx.nextIssueBeats).toContain('C beat 1');
+  });
+
+  it('prose continuity: no prior tail for the first issue of a volume (no fake continuity)', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    const a = await issuesSvc.createIssue({ seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2,
+      stages: { idea: { status: 'ready', output: 'B beat 1' } },
+    });
+    await textStages.generateStage(a.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    // The next issue's beats still flow in — only the absent side is blank.
+    expect(ctx.nextIssueBeats).toContain('B beat 1');
+    expect(ctx.hasNeighborContinuity).toBe(true);
+  });
+
+  it('prose continuity: prior block does NOT render when the prior issue has no prose yet', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    // Prior issue exists but its prose stage is empty (non-linear generation).
+    await issuesSvc.createIssue({ seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1 });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await textStages.generateStage(b.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    expect(ctx.nextIssueBeats).toBe('');
+    expect(ctx.hasNeighborContinuity).toBe(false);
+  });
+
+  it('prose continuity: an ungrouped issue (no season) gets no continuity blocks', async () => {
+    const { issue } = await seed();
+    await textStages.generateStage(issue.id, 'prose');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.priorIssueProseTail).toBe('');
+    expect(ctx.nextIssueBeats).toBe('');
+    expect(ctx.hasNeighborContinuity).toBe(false);
+  });
+
+  it('prose continuity: next-issue beats fall back to synopsis when beats are not expanded', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A closes.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'C', seasonId: sea.id, arcPosition: 3,
+      stages: { idea: { status: 'draft', input: 'C synopsis only' } },
+    });
+    await textStages.generateStage(b.id, 'prose');
+    expect(ctxFromCall(llmCalls[0]).nextIssueBeats).toBe('C synopsis only');
+  });
+
+  it('prose continuity: the idea stage does NOT get the prose-tail blocks', async () => {
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: 'A closes.' } },
+    });
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await textStages.generateStage(b.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx).not.toHaveProperty('priorIssueProseTail');
+    expect(ctx).not.toHaveProperty('hasNeighborContinuity');
+  });
+
+  // -- pure helpers (extraction + tail length) --
+
+  it('extractProseTail returns the whole prose when it is under the cap', () => {
+    expect(textStages.__testing.extractProseTail('short prose', 2000)).toBe('short prose');
+  });
+
+  it('extractProseTail returns at most maxChars of the tail', () => {
+    const long = 'x'.repeat(5000);
+    const tail = textStages.__testing.extractProseTail(long, 2000);
+    expect(tail.length).toBeLessThanOrEqual(2000);
+    // It is the TAIL — the end of the source, not the head.
+    expect(long.endsWith(tail)).toBe(true);
+  });
+
+  it('extractProseTail starts on a clean paragraph boundary when one is near the top of the slice', () => {
+    // Source is over the 200-char cap so it slices; the paragraph break lands
+    // in the first third of the 200-char slice window (index ~18), so the tail
+    // opens on the clean boundary rather than mid-word.
+    const head = 'A'.repeat(100);
+    const finalPara = `Final paragraph opens the tail cleanly. ${'x'.repeat(150)}`;
+    const src = `${head}\n\n${finalPara}`;
+    const tail = textStages.__testing.extractProseTail(src, 200);
+    expect(tail.startsWith('Final paragraph')).toBe(true);
+  });
+
+  it('extractProseTail returns empty string for absent / blank prose (no fake continuity)', () => {
+    expect(textStages.__testing.extractProseTail('', 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail('   \n  ', 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail(null, 2000)).toBe('');
+    expect(textStages.__testing.extractProseTail(undefined, 2000)).toBe('');
+  });
+
+  it('extractNextIssueBeats prefers beats, falls back to synopsis, else empty', () => {
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: { output: 'BEATS', input: 'SYN' } } })).toBe('BEATS');
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: { input: 'SYN' } } })).toBe('SYN');
+    expect(textStages.__testing.extractNextIssueBeats({ stages: { idea: {} } })).toBe('');
+    expect(textStages.__testing.extractNextIssueBeats(null)).toBe('');
+  });
+
+  it('prose continuity: a small-context provider trims the injected block rather than erroring', async () => {
+    // A small (but non-degenerate) window: after the fixed output reserve the
+    // usable input budget is tight enough that the 25% continuity slice is well
+    // under the ~2000-char prose tail, so the budgeter must trim it.
+    const providers = await import('../providers.js');
+    providers.getActiveProvider.mockResolvedValueOnce({
+      id: 'small-local', name: 'Small', type: 'api', enabled: true,
+      defaultModel: 'small-model', endpoint: 'http://localhost:1234/v1', contextWindow: 10_000,
+    });
+    const { series } = await seed();
+    const sea = await seasonsSvc.createSeason(series.id, { title: 'V1' });
+    // Distinct opening vs closing markers so we can prove the trim keeps the END
+    // (the actual close the model must flow from), not the head.
+    const bigTail = `PRIOR_OPENING. ${'The tide rolls in. '.repeat(2000)}PRIOR_CLOSING.`;
+    await issuesSvc.createIssue({
+      seriesId: series.id, title: 'A', seasonId: sea.id, arcPosition: 1,
+      stages: { prose: { status: 'ready', output: bigTail } },
+    });
+    // B is the last issue → no next beats, so the tail gets the whole slice.
+    const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'B', seasonId: sea.id, arcPosition: 2 });
+    await expect(textStages.generateStage(b.id, 'prose')).resolves.toBeTruthy();
+    const ctx = ctxFromCall(llmCalls[0]);
+    // Present but trimmed below the raw ~2000-char tail cap — degraded, not dropped or errored.
+    expect(ctx.priorIssueProseTail.length).toBeGreaterThan(0);
+    expect(ctx.priorIssueProseTail.length).toBeLessThan(2_000);
+    // Regression guard: the trim must keep the CLOSING of the prior issue (the
+    // seam the prose template tells the model to open from), not its opening.
+    expect(ctx.priorIssueProseTail).toContain('PRIOR_CLOSING');
+    expect(ctx.priorIssueProseTail).not.toContain('PRIOR_OPENING');
+  });
+
   it('prompt context carries derived lengthTargets for the custom profile', async () => {
     const { series } = await seed();
     // 44 pages is 2× the standard 22-page baseline, so all derived ranges
@@ -762,6 +934,79 @@ describe('pipeline text stage generator', () => {
     expect(text).toContain('SRC-B');
   });
 
+  it('buildStageContext reveal-gates canon: hides a later-reveal character before its issue, reveals it at/after (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [
+        { id: 'c1', name: 'Mira', role: 'lead', physicalDescription: 'the detective' },
+        {
+          id: 'c2', name: 'Vex', role: 'suspect',
+          physicalDescription: 'the true killer who poisoned the well',
+          background: 'committed the murder in Issue 8',
+          revealIssue: 8,
+          surfaceDescriptor: 'a reclusive apothecary nobody trusts',
+        },
+      ],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    // The idea stage keeps the full cast (not roster-scoped), so the surfaced
+    // full record is visible directly in `series.characters`.
+    const early = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 2, title: 'T', stages: {} }, stageId: 'idea',
+    });
+    const vexEarly = early.series.characters.find((c) => c.name === 'Vex');
+    // Surfaced view only — the secret is gone, the surface descriptor stands in.
+    expect(vexEarly.physicalDescription).toBe('a reclusive apothecary nobody trusts');
+    expect(vexEarly.surfaced).toBe(true);
+    expect(vexEarly.background).toBeUndefined();
+
+    const late = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 8, title: 'T', stages: {} }, stageId: 'idea',
+    });
+    const vexLate = late.series.characters.find((c) => c.name === 'Vex');
+    expect(vexLate.physicalDescription).toBe('the true killer who poisoned the well');
+    expect(vexLate.background).toBe('committed the murder in Issue 8');
+  });
+
+  it('buildStageContext reveal-gates the prose roster: surfaced view in worldEntitiesSummary, not the secret (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [
+        { id: 'c1', name: 'Mira', role: 'lead', physicalDescription: 'the detective' },
+        {
+          id: 'c2', name: 'Vex', role: 'suspect',
+          physicalDescription: 'the true killer who poisoned the well',
+          revealIssue: 8,
+          surfaceDescriptor: 'a reclusive apothecary nobody trusts',
+        },
+      ],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    // Prose scopes the full-record block to principals/named — Vex (not named)
+    // lands in the roster, which must show its surface view, never the secret.
+    const ctx = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 2, title: 'T', stages: {} }, stageId: 'prose',
+    });
+    expect(ctx.worldEntitiesSummary).not.toContain('true killer');
+    expect(ctx.worldEntitiesSummary).toContain('reclusive apothecary');
+  });
+
+  it('buildStageContext drops a hard-spoiler canon entry with no surface descriptor from context (#2178)', () => {
+    const series = { name: 'S', logline: 'l', premise: 'p' };
+    const canon = {
+      characters: [{ id: 'c1', name: 'Ghost', physicalDescription: 'the villain behind it all', spoiler: true }],
+      places: [], objects: [],
+    };
+    const world = { characters: canon.characters, places: [], objects: [] };
+    const ctx = textStages.__testing.buildStageContext({
+      series, canon, world, issue: { number: 3, title: 'T', stages: {} }, stageId: 'prose',
+    });
+    expect(ctx.series.characters.find((c) => c.name === 'Ghost')).toBeUndefined();
+    expect(ctx.worldEntitiesSummary).not.toContain('villain behind it all');
+  });
+
   it('does NOT scope the idea stage — it gets the full cast (no roster in that template)', async () => {
     const { series } = await seed();
     const world = await universeSvc.createUniverse({ name: 'Seed Verse' });
@@ -878,5 +1123,139 @@ describe('pipeline-idea-expansion template render', () => {
 
     const withoutClock = applyTemplate(ideaTemplate, renderCtx({ tickingClock: renderTickingClock({ enabled: false, label: 'x' }) }));
     expect(withoutClock).not.toContain('Ticking clock the reader is anticipating');
+  });
+});
+
+describe('multi-candidate draft gate (#2169, CWQE Phase 5)', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    llmCalls.length = 0;
+    vi.clearAllMocks();
+    // Default: single-shot (no gate) unless a test opts in.
+    promptSvc.getStage.mockReturnValue(null);
+    pipelineJudge.judgeIssue.mockResolvedValue({ status: 'no-content' });
+  });
+
+  async function seedProse() {
+    const series = await seriesSvc.createSeries({ name: 'Gate', logline: 'L', premise: 'P' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'One' });
+    return { series, issue };
+  }
+
+  // Score each attempt in order; extra (re-judge) calls reuse the last score.
+  function scoreAttempts(scores) {
+    let i = 0;
+    pipelineJudge.judgeIssue.mockImplementation(async () => {
+      const q = scores[Math.min(i, scores.length - 1)];
+      i += 1;
+      return { status: 'complete', qualityScore: q, overall: q, slopPenalty: 0 };
+    });
+  }
+
+  describe('resolveDraftGate (pure)', () => {
+    it('is off (attempts=1) for a non-judgeable stage even when configured', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+      expect(textStages.resolveDraftGate('idea', 'pipeline-idea-expansion', {})).toEqual({ attempts: 1, threshold: null });
+    });
+
+    it('reads draftAttempts/threshold from stage config and clamps to 1..3 / 0..10', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 9, draftGateThreshold: 42 });
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', {})).toEqual({ attempts: 3, threshold: 10 });
+    });
+
+    it('lets an explicit options override beat the stage config', () => {
+      promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', { draftAttempts: 2, draftGateThreshold: 7 }))
+        .toEqual({ attempts: 2, threshold: 7 });
+    });
+
+    it('defaults to attempts=1 with no config (the pre-#2169 single-shot path)', () => {
+      promptSvc.getStage.mockReturnValue(null);
+      expect(textStages.resolveDraftGate('prose', 'pipeline-prose', {})).toEqual({ attempts: 1, threshold: null });
+    });
+  });
+
+  describe('pickBestAttempt (pure)', () => {
+    it('returns the highest-scoring attempt, keeping the earlier on ties', () => {
+      const a = { runId: 'r1', qualityScore: 8 };
+      const b = { runId: 'r2', qualityScore: 8 };
+      const c = { runId: 'r3', qualityScore: 5 };
+      expect(textStages.pickBestAttempt([a, b, c])).toBe(a);
+    });
+    it('falls back to the last attempt when none scored', () => {
+      const list = [{ runId: 'r1', qualityScore: null }, { runId: 'r2', qualityScore: null }];
+      expect(textStages.pickBestAttempt(list)).toBe(list[1]);
+    });
+    it('returns null for an empty list', () => {
+      expect(textStages.pickBestAttempt([])).toBeNull();
+    });
+  });
+
+  it('generates and judges each attempt, keeping the best-scoring one (winner is last)', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 });
+    scoreAttempts([5, 8]); // second attempt is better → kept, no restore
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', { seedInput: 'beats' });
+
+    expect(llmCalls).toHaveLength(2);               // two fresh generations
+    expect(pipelineJudge.judgeIssue).toHaveBeenCalledTimes(2); // judged each, no re-judge (winner=last)
+    const gate = result.stage.draftGate;
+    expect(gate.attempts).toHaveLength(2);
+    expect(gate.winner).toBe(result.stage.lastRunId);
+    const winner = gate.attempts.find((a) => a.runId === gate.winner);
+    expect(winner.qualityScore).toBe(8);
+    expect(winner.rejected).toBe(false);
+    expect(gate.attempts.find((a) => a.qualityScore === 5).rejected).toBe(true);
+  });
+
+  it('restores the earlier attempt when it out-scores the last, and re-judges the winner', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 }); // no threshold → run all, pick best
+    scoreAttempts([8, 5]); // first attempt is better → restore it
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+
+    expect(llmCalls).toHaveLength(2);
+    // 2 attempt judges + 1 re-judge of the restored winner.
+    expect(pipelineJudge.judgeIssue).toHaveBeenCalledTimes(3);
+    const gate = result.stage.draftGate;
+    expect(gate.winner).toBe(result.stage.lastRunId);
+    expect(gate.attempts.find((a) => a.runId === gate.winner).qualityScore).toBe(8);
+    // The rejected attempt's text stays recoverable in runHistory.
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.prose.runHistory.length).toBeGreaterThan(0);
+  });
+
+  it('early-stops re-rolling once an attempt clears the threshold', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 3, draftGateThreshold: 7 });
+    scoreAttempts([9]); // first attempt already clears 7
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+
+    expect(llmCalls).toHaveLength(1);                 // stopped after the first good draft
+    expect(result.stage.draftGate.stoppedEarly).toBe(true);
+    expect(result.stage.draftGate.attempts).toHaveLength(1);
+  });
+
+  it('bills one cos action per re-roll via chargeAction and stops when it returns false', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 3 });
+    scoreAttempts([4, 4, 4]);
+    const charge = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const { issue } = await seedProse();
+    await textStages.generateStage(issue.id, 'prose', { chargeAction: charge });
+
+    // attempt 1 (baseline, not charged) + attempt 2 (charged true) generated;
+    // attempt 3 short-circuits when chargeAction returns false.
+    expect(charge).toHaveBeenCalledTimes(2);
+    expect(llmCalls).toHaveLength(2);
+  });
+
+  it('is a no-op single-shot when draftAttempts is 1 (default) — judge never runs', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 1 });
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+    expect(llmCalls).toHaveLength(1);
+    expect(pipelineJudge.judgeIssue).not.toHaveBeenCalled();
+    expect(result.stage.draftGate).toBeNull();
   });
 });

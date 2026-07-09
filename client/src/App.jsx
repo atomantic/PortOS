@@ -31,12 +31,14 @@ const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDeta
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
+const Timeline = lazyWithReload(() => import('./pages/Timeline'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
 const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
+const LayeredIntelligence = lazyWithReload(() => import('./pages/LayeredIntelligence'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
@@ -74,6 +76,7 @@ const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
 const Brain = lazyWithReload(() => import('./pages/Brain'));
 const Security = lazyWithReload(() => import('./pages/Security'));
 const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
+const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
@@ -107,8 +110,10 @@ const PipelineSeriesRoadmap = lazyWithReload(() => import('./pages/PipelineSerie
 const PipelineEditorialChecks = lazyWithReload(() => import('./pages/PipelineEditorialChecks'));
 const PipelineFindingRedirect = lazyWithReload(() => import('./pages/PipelineFindingRedirect'));
 const PipelineReverseOutline = lazyWithReload(() => import('./pages/PipelineReverseOutline'));
+const PipelineVoiceFingerprint = lazyWithReload(() => import('./pages/PipelineVoiceFingerprint'));
 const PipelineContinuityBible = lazyWithReload(() => import('./pages/PipelineContinuityBible'));
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
+const PipelineExport = lazyWithReload(() => import('./pages/PipelineExport'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 const Login = lazyWithReload(() => import('./pages/Login'));
 
@@ -200,6 +205,7 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
+          <Route path="layered-intelligence" element={<LayeredIntelligence />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/flows" element={<FlowsDoc />} />
@@ -223,6 +229,8 @@ export default function App() {
           <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
+          <Route path="privacy" element={<Navigate to="/privacy/overview" replace />} />
+          <Route path="privacy/:tab" element={<Privacy />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
           <Route path="goals/:tab" element={<Goals />} />
           <Route path="feature-agents" element={<FeatureAgents />} />
@@ -258,6 +266,8 @@ export default function App() {
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           <Route path="messages/:tab" element={<Messages />} />
           <Route path="tribe" element={<Tribe />} />
+          <Route path="timeline" element={<Timeline />} />
+          <Route path="timeline/:date" element={<Timeline />} />
           <Route path="openclaw" element={<OpenClawPage />} />
           <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
@@ -354,10 +364,12 @@ export default function App() {
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/series/:seriesId/roadmap" element={<PipelineSeriesRoadmap />} />
           <Route path="pipeline/series/:seriesId/reverse-outline" element={<PipelineReverseOutline />} />
+          <Route path="pipeline/series/:seriesId/voice-fingerprint" element={<PipelineVoiceFingerprint />} />
           <Route path="pipeline/series/:seriesId/continuity-bible" element={<PipelineContinuityBible />} />
           {/* Splat (not a :param route) so navigating between issues reuses the
               same component instance instead of remounting + refetching. */}
           <Route path="pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
+          <Route path="pipeline/series/:seriesId/export" element={<PipelineExport />} />
           <Route path="pipeline/series/:seriesId/sync" element={<SyncView kind="series" param="seriesId" backPath="/pipeline" />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
           <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />

@@ -12,7 +12,7 @@ Six drill domains, each individually enable/disable-able (`client/src/components
 `doubling-chain` (sequential doubling from a seed), `serial-subtraction` (countdown by a fixed subtrahend), `multiplication` (random N-digit problems), `powers` (base^exponent), `estimation` (approximate large arithmetic within tolerance).
 
 ### Memory (~90s)
-Memory Builder drills drawn from the user's memory items: `memory-sequence`, `memory-element-flash`, and `memory-fill-blank`, practiced in the standalone Memory Builder (see below). The server's scored-session rescoring accepts `memory-sequence`/`memory-element-flash` (`POST_SUPPORTED_MEMORY_TYPES`), but the session launcher currently composes scored sessions from the math, wordplay/verbal/imagination (LLM), and cognitive domains only — memory training runs separately.
+Memory Builder drills drawn from the user's memory items: `memory-sequence`, `memory-element-flash`, and `memory-fill-blank`, practiced in the standalone Memory Builder (see below). The server's scored-session rescoring accepts all three types (`POST_SUPPORTED_MEMORY_TYPES`, issue #2099), but the session launcher currently composes scored sessions from the math, wordplay/verbal/imagination (LLM), and cognitive domains only — memory training runs separately (`memory-fill-blank` isn't yet one of the types `DOMAINS.memory.drillTypes` offers to pick from).
 
 ### Wordplay (~60s)
 `pun-wordplay` and `word-association`, plus the cacheable wordplay set: `compound-chain`, `bridge-word`, `double-meaning`, `idiom-twist`. All LLM-scored.
@@ -57,11 +57,11 @@ Configurable memory training for songs, poems, sequences, speeches, or any order
 - **Math**: server-rescored — the server strips client-provided correctness and re-derives expected answers (`meatspacePost.js`, "never trust client-provided expected"); estimation compares within tolerance. Accuracy plus speed bonus.
 - **Cognitive**: deterministic server-side rescoring per drill type.
 - **Wordplay/Verbal/Imagination**: LLM-scored against per-drill rubrics (e.g. wit-comeback: humor 40% / cleverness 30% / relevance 30%), blended as quality 80% + speed bonus 20% (`server/services/meatspacePostLlm.js`).
-- **Session score**: plain arithmetic mean across completed drills (`computeSessionScore`).
+- **Session score**: per-module weighted mean across completed drills (`computeSessionScore`, weights from `config.scoring.weights`, issue #2099). Every module defaults to weight `1.0`, so an unconfigured install still gets the plain arithmetic mean; a module absent from a saved `weights` map also defaults to `1.0` rather than dropping out.
 
 ## Adaptive Difficulty
 
-Opt-in adaptive tuning for math drills (`server/lib/postAdaptive.js`): recent scored performance nudges drill parameters, with a transparent preview of what would change (`GET /api/meatspace/post/adaptive-preview`).
+Opt-in adaptive tuning for math drills (`server/lib/postAdaptive.js`): recent scored performance nudges drill parameters, with a transparent preview of what would change (`GET /api/meatspace/post/adaptive-preview`). Multiplication is a special case: whenever the progressive ladder is on (the default), it owns multiplication's difficulty entirely and the preview reflects the ladder rung, not the generic `maxDigits` knob — the two are mutually exclusive per drill type, never blended.
 
 ## Drill Cache
 

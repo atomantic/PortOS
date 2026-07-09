@@ -5,28 +5,24 @@ vi.mock('../../../services/api', () => ({
   updatePostConfig: vi.fn(),
   getProviders: vi.fn(),
   getPostAdaptivePreview: vi.fn(),
+  getPostMultiplicationProgress: vi.fn(),
+  getPostCognitiveProgress: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
+import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
-// The 14 generatable LLM drill types (mirror server + client constants).
-const ALL_LLM_TYPES = [
-  'pun-wordplay', 'word-association', 'compound-chain', 'bridge-word',
-  'double-meaning', 'idiom-twist', 'story-recall', 'verbal-fluency',
-  'wit-comeback', 'what-if', 'alternative-uses', 'story-prompt',
-  'invention-pitch', 'reframe',
-];
-const LABELS = {
-  'pun-wordplay': 'Pun & Wordplay', 'word-association': 'Word Association',
-  'compound-chain': 'Compound Chain', 'bridge-word': 'Bridge Word',
-  'double-meaning': 'Double Meaning', 'idiom-twist': 'Idiom Twist',
-  'story-recall': 'Story Recall', 'verbal-fluency': 'Verbal Fluency',
-  'wit-comeback': 'Wit & Comeback', 'what-if': 'What If?',
-  'alternative-uses': 'Alternative Uses', 'story-prompt': 'Story Prompt',
-  'invention-pitch': 'Invention Pitch', 'reframe': 'Reframe',
-};
+// The generatable LLM drill types + labels, imported from the canonical
+// client constant (mirrors server LLM_DRILL_TYPES in meatspacePostLlm.js) —
+// NOT a hardcoded parallel copy, so this test can't stay green against a
+// stale list if a drill type is ever added/removed/relabeled.
+const ALL_LLM_TYPES = LLM_DRILL_TYPES;
+// The 5 legacy drills that ship enabled by default (server DEFAULT_CONFIG);
+// everything else in ALL_LLM_TYPES is newly-exposed and defaults to opt-in.
+const LEGACY_ENABLED_TYPES = ['pun-wordplay', 'word-association', 'story-recall', 'verbal-fluency', 'wit-comeback'];
+const NEWLY_EXPOSED_TYPES = ALL_LLM_TYPES.filter(t => !LEGACY_ENABLED_TYPES.includes(t));
 
 // Mirrors the server DEFAULT_CONFIG: only the 5 legacy LLM drills ship enabled.
 const config = {
@@ -50,13 +46,36 @@ beforeEach(() => {
   getProviders.mockResolvedValue({ providers: [] });
   updatePostConfig.mockResolvedValue(config);
   getPostAdaptivePreview.mockResolvedValue({ enabled: false, drills: {} });
+  getPostMultiplicationProgress.mockResolvedValue({
+    level: 0,
+    label: '1×1-digit',
+    atHardest: false,
+    currentMastered: false,
+    levels: [
+      { level: 0, label: '1×1-digit', mastered: false },
+      { level: 1, label: '1×2-digit', mastered: false },
+    ],
+    thresholds: { minSamples: 12, targetAccuracy: 0.9 },
+    windowDays: 30,
+  });
+  getPostCognitiveProgress.mockResolvedValue({
+    'n-back': {
+      type: 'n-back', level: 1, label: '2-back @ 2500ms', atHardest: false, currentMastered: false,
+      levels: [
+        { level: 0, label: '1-back @ 2500ms', mastered: true },
+        { level: 1, label: '2-back @ 2500ms', mastered: false },
+        { level: 2, label: '3-back @ 2500ms', mastered: false },
+      ],
+      thresholds: { minSamples: 3, targetAccuracy: 0.85 }, windowDays: 30,
+    },
+  });
 });
 
 describe('PostDrillConfig', () => {
   it('renders a card for every one of the 14 LLM drill types', () => {
     render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     for (const type of ALL_LLM_TYPES) {
-      expect(screen.getByText(LABELS[type])).toBeTruthy();
+      expect(screen.getByText(DRILL_LABELS[type])).toBeTruthy();
     }
   });
 
@@ -77,14 +96,34 @@ describe('PostDrillConfig', () => {
     // Every type is persisted so the config never silently omits a card the user saw.
     expect(Object.keys(saved).sort()).toEqual([...ALL_LLM_TYPES].sort());
     // The 5 legacy drills stay enabled...
-    for (const t of ['pun-wordplay', 'word-association', 'story-recall', 'verbal-fluency', 'wit-comeback']) {
+    for (const t of LEGACY_ENABLED_TYPES) {
       expect(saved[t].enabled).toBe(true);
     }
-    // ...and the 9 newly-exposed drills default to disabled (opt-in).
-    for (const t of ['compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist',
-      'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe']) {
+    // ...and the newly-exposed drills default to disabled (opt-in).
+    for (const t of NEWLY_EXPOSED_TYPES) {
       expect(saved[t].enabled).toBe(false);
     }
+  });
+
+  it('saves goals and sessionModules (issue #2100)', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    // Set a streak-target goal, then include AI drills in composed sessions.
+    fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Wit & Memory (AI)' }));
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    const payload = updatePostConfig.mock.calls[0][0];
+    expect(payload.goals).toEqual({ streakTarget: 10 });
+    expect(payload.sessionModules).toContain('llm-drills');
+    expect(payload.sessionModules).toContain('mental-math');
+  });
+
+  it('clears a previously-set goal to an empty goals patch on save', async () => {
+    render(<PostDrillConfig config={{ ...config, goals: { streakTarget: 5 } }} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/Streak/i), { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].goals).toEqual({});
   });
 
   it('enabling a newly-exposed drill persists it as enabled', async () => {
@@ -141,7 +180,14 @@ describe('PostDrillConfig', () => {
         multiplication: { type: 'multiplication', field: 'maxDigits', from: 2, to: 3, applied: true, score: 94, samples: 5, reason: 'harder' },
       },
     });
-    const withAdaptive = { ...config, adaptive: { enabled: true } };
+    // Multiplication defaults to the progressive ladder (which supersedes the
+    // adaptive badge on that card); turn it off here so the adaptive preview is
+    // what renders for this test.
+    const withAdaptive = {
+      ...config,
+      mentalMath: { drillTypes: { multiplication: { enabled: true, count: 10, progressive: false } } },
+      adaptive: { enabled: true },
+    };
     render(<PostDrillConfig config={withAdaptive} onSaved={vi.fn()} onBack={vi.fn()} />);
     expect(screen.getByRole('switch', { name: 'Adaptive difficulty' }).getAttribute('aria-checked')).toBe('true');
     await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
@@ -167,6 +213,48 @@ describe('PostDrillConfig', () => {
     await waitFor(() => expect(getPostAdaptivePreview).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText(/hardest tolerance % 3/)).toBeTruthy());
     expect(screen.queryByText(/at max tolerance/)).toBeNull();
+  });
+
+  it('multiplication defaults to Progressive difficulty on, hiding Max Digits and showing the ladder', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty — Multiplication' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    // Max Digits is ignored while progressive is on, so its field is hidden.
+    expect(screen.queryByText('Max Digits')).toBeNull();
+    // The fetched ladder status renders.
+    await waitFor(() => expect(getPostMultiplicationProgress).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/Level 1 of 2 · 1×1-digit/)).toBeTruthy());
+  });
+
+  it('toggling Progressive off reveals Max Digits and persists progressive=false', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — Multiplication' }));
+    expect(screen.getByText('Max Digits')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.multiplication.progressive).toBe(false);
+  });
+
+  it('cognitive drills default to Progressive on — n-back hides its knobs and shows its rung', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty — N-Back' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    // Progressive on → the ladder-managed knobs (incl. Stimulus) are hidden.
+    expect(screen.queryByText('Stimulus (ms)')).toBeNull();
+    await waitFor(() => expect(getPostCognitiveProgress).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/Level 2 of 3 · 2-back @ 2500ms/)).toBeTruthy());
+    // `length` is NOT ladder-managed, so it stays visible + editable even under
+    // progressive (only n/stimulusMs are hidden) — the knob is honestly forwarded.
+    expect(screen.getByText('Sequence Length')).toBeTruthy();
+  });
+
+  it('turning n-back Progressive off exposes the Stimulus (ms) knob and persists progressive=false', async () => {
+    render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Progressive difficulty — N-Back' }));
+    expect(screen.getByText('Stimulus (ms)')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].cognitive.drillTypes['n-back'].progressive).toBe(false);
   });
 
   it('toggling Adaptive on persists enabled=true', async () => {
@@ -202,5 +290,165 @@ describe('PostDrillConfig', () => {
     render(<PostDrillConfig config={withReminder} onSaved={vi.fn()} onBack={vi.fn()} />);
     expect(screen.getByRole('switch', { name: 'Daily reminder' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByLabelText('Remind me at').value).toBe('20:15');
+  });
+
+  describe('presets', () => {
+    it('"Balanced daily" enables 2 math + 2 cognitive drills, turns cognitive on, and turns LLM off', async () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Balanced daily'));
+      expect(screen.getByRole('switch', { name: 'Multiplication' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Estimation' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Doubling Chain' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByRole('switch', { name: 'N-Back' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Stroop' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      // LLM section collapses once its domain toggle is switched off by the preset.
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.queryByText('AI Provider')).toBeNull();
+
+      fireEvent.click(screen.getByText('Save'));
+      await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+      const payload = updatePostConfig.mock.calls[0][0];
+      expect(payload.mentalMath.drillTypes.multiplication.enabled).toBe(true);
+      expect(payload.mentalMath.drillTypes.estimation.enabled).toBe(true);
+      expect(payload.mentalMath.drillTypes['doubling-chain'].enabled).toBe(false);
+      expect(payload.cognitive.enabled).toBe(true);
+      expect(payload.cognitive.drillTypes['n-back'].enabled).toBe(true);
+      expect(payload.cognitive.drillTypes['stroop'].enabled).toBe(true);
+      expect(payload.cognitive.drillTypes['digit-span'].enabled).toBe(false);
+      expect(payload.llmDrills.enabled).toBe(false);
+    });
+
+    it('"Math focus" enables every math drill and turns cognitive + LLM off', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Math focus'));
+      for (const label of ['Doubling Chain', 'Serial Subtraction', 'Multiplication', 'Powers', 'Estimation']) {
+        expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('true');
+      }
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('"Cognitive focus" disables all math drills and enables every cognitive drill', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Cognitive focus'));
+      expect(screen.getByRole('switch', { name: 'Multiplication' }).getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      for (const label of ['N-Back', 'Digit Span', 'Stroop', 'Schulte Table', 'Mental Rotation', 'Reaction Time']) {
+        expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('true');
+      }
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('"Everything (local-only)" enables every math + cognitive drill but never LLM', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Everything (local-only)'));
+      expect(screen.getByRole('switch', { name: 'Powers' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Mental Rotation' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+    });
+  });
+
+  describe('per-group enable/disable-all', () => {
+    it('Mental Math "Enable all" / "Disable all" toggle every math drill', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByLabelText('Enable all Mental Math drills'));
+      for (const label of ['Doubling Chain', 'Serial Subtraction', 'Multiplication', 'Powers', 'Estimation']) {
+        expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('true');
+      }
+      fireEvent.click(screen.getByLabelText('Disable all Mental Math drills'));
+      for (const label of ['Doubling Chain', 'Serial Subtraction', 'Multiplication', 'Powers', 'Estimation']) {
+        expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('false');
+      }
+    });
+
+    it('Cognitive "Enable all" / "Disable all" toggle every cognitive drill', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByLabelText('Enable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByLabelText('Disable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('Cognitive "Enable all" also turns the domain toggle on when a preset had turned it off', async () => {
+      // Regression: bulk-enabling drills in a collapsed/off domain used to
+      // flip only the hidden per-drill flags — Save would persist
+      // cognitive.enabled=false and the launcher would never run them.
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByText('Math focus')); // sets cognitiveEnabled=false
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(screen.getByLabelText('Enable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Digit Span' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByText('Save'));
+      await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+      const payload = updatePostConfig.mock.calls[0][0];
+      expect(payload.cognitive.enabled).toBe(true);
+      expect(payload.cognitive.drillTypes['digit-span'].enabled).toBe(true);
+    });
+
+    it('Cognitive "Disable all" leaves the domain toggle alone', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByLabelText('Disable all Cognitive drills'));
+      expect(screen.getByRole('switch', { name: 'Cognitive drills' }).getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('LLM "Enable all" is blocked without a chosen provider — no toggles flip, an error toast fires', async () => {
+      const toastModule = await import('../../ui/Toast');
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      // Untouched drills stay at their config-seeded (opt-in-disabled) state.
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+      expect(toastModule.default.error).toHaveBeenCalled();
+    });
+
+    it('a blocked LLM "Enable all" reveals the collapsed LLM section so the provider picker is visible', () => {
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      // Every preset collapses the LLM section; the bulk button stays visible.
+      fireEvent.click(screen.getByText('Balanced daily'));
+      expect(screen.queryByText('AI Provider')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      // The gate blocks the bulk enable (no provider chosen) but opens the
+      // section so the "pick a provider above" toast points at a real control.
+      expect(screen.getByText('AI Provider')).toBeTruthy();
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('LLM "Enable all" enables every LLM drill once a provider is chosen', async () => {
+      getProviders.mockResolvedValue({
+        providers: [{ id: 'prov-1', name: 'Test Provider', type: 'api', enabled: true, models: [] }],
+      });
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      await waitFor(() => expect(getProviders).toHaveBeenCalled());
+      const providerSelect = screen.getByLabelText('Provider');
+      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(2));
+      fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(screen.getByLabelText('Disable all LLM drills'));
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('LLM "Enable all" also turns the LLM domain toggle back on when it was off', async () => {
+      // Same domain-on rule as cognitive: bulk-enable must not leave
+      // llmDrills.enabled=false or the launcher ignores the enabled drills.
+      getProviders.mockResolvedValue({
+        providers: [{ id: 'prov-1', name: 'Test Provider', type: 'api', enabled: true, models: [] }],
+      });
+      render(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+      await waitFor(() => expect(getProviders).toHaveBeenCalled());
+      const providerSelect = screen.getByLabelText('Provider');
+      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(2));
+      fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
+      // Turn the LLM section off (provider selection survives in state).
+      fireEvent.click(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }));
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
+      expect(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('true');
+    });
   });
 });

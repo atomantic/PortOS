@@ -61,6 +61,7 @@ vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 import { initSocket } from './socket.js';
 import { cosEvents } from './cosEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
+import { audioGenEvents } from './audioGen/events.js';
 import { detachSocketSessions } from './shell.js';
 import * as shellService from './shell.js';
 
@@ -180,6 +181,31 @@ describe('socket.js — initSocket', () => {
   it('does NOT bridge a canceled training job onto image-gen:canceled', () => {
     mediaJobEvents.emit('canceled', { id: 'train-2', kind: 'training' });
     expect(io.emitted.some(([ev]) => ev === 'image-gen:canceled' || ev === 'video-gen:canceled')).toBe(false);
+  });
+
+  // ===========================================================================
+  // Audio (first-pass music-bed) gen bridge (#1933): audio jobs ride the same
+  // gen-event contract as image/video, so both the mediaJobEvents queue-level
+  // bridge AND the direct audioGenEvents forwarding must reach `audio-gen:*`.
+  // ===========================================================================
+  it('bridges a failed audio job to audio-gen:failed keyed by generationId with the error', () => {
+    mediaJobEvents.emit('failed', { id: 'aud-fail', kind: 'audio', error: 'audio-gen sidecar crashed' });
+    expect(io.emitted).toContainEqual(['audio-gen:failed', { generationId: 'aud-fail', error: 'audio-gen sidecar crashed' }]);
+  });
+
+  it('bridges a canceled audio job to audio-gen:canceled', () => {
+    mediaJobEvents.emit('canceled', { id: 'aud-1', kind: 'audio' });
+    expect(io.emitted).toContainEqual(['audio-gen:canceled', { generationId: 'aud-1' }]);
+  });
+
+  it('forwards audioGenEvents failed straight onto audio-gen:failed', () => {
+    audioGenEvents.emit('failed', { generationId: 'aud-run-fail', error: 'OOM during render' });
+    expect(io.emitted).toContainEqual(['audio-gen:failed', { generationId: 'aud-run-fail', error: 'OOM during render' }]);
+  });
+
+  it('forwards audioGenEvents completed onto audio-gen:completed', () => {
+    audioGenEvents.emit('completed', { generationId: 'aud-ok', filename: 'bed.wav', durationSec: 12 });
+    expect(io.emitted).toContainEqual(['audio-gen:completed', { generationId: 'aud-ok', filename: 'bed.wav', durationSec: 12 }]);
   });
 
   it('two independent sockets can both subscribe to cos independently', () => {

@@ -23,6 +23,7 @@ import CharacterDetailEditor from '../universe/CharacterDetailEditor';
 import ObjectAttachmentsEditor from '../universe/ObjectAttachmentsEditor';
 import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
 import CharacterLoraChip from '../loraTraining/CharacterLoraChip';
+import Pill from '../ui/Pill';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 
 // Place metadata enums — kept in lock-step with `PLACE_INT_EXT` and
@@ -95,6 +96,113 @@ function ReadonlyChip({ children }) {
     <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-port-card border border-port-border text-gray-400">
       {children}
     </span>
+  );
+}
+
+// A canon entry is reveal-gated (#2178) when it carries a hard `spoiler` flag
+// or a numeric `revealIssue`. Mirrors the server's `isEntryRevealGated`.
+const isEntryGated = (entry) => entry?.spoiler === true || Number.isInteger(entry?.revealIssue);
+
+// Spoiler badge shown in the card title when an entry is reveal-gated (#2178).
+// Purely informational; the gating itself happens server-side in
+// `buildStageContext`. Uses the shared `Pill` primitive (warning tone).
+function SpoilerBadge({ entry }) {
+  if (!isEntryGated(entry)) return null;
+  const label = entry.spoiler === true ? 'spoiler' : `reveal #${entry.revealIssue}`;
+  const title = entry.spoiler === true
+    ? 'Hard spoiler — hidden from every issue’s drafting prompt'
+    : `Hidden from drafting context until Issue ${entry.revealIssue}`;
+  return (
+    <Pill tone="warning" size="xs" title={title} className="rounded-full uppercase tracking-wider">
+      {label}
+    </Pill>
+  );
+}
+
+// Reveal-timing editor (#2178) — sets when a canon fact may enter a drafting
+// prompt. Applies to every kind. `revealIssue` (int) hides the entry from
+// issues before that number; `spoiler` hard-hides it from all drafting;
+// `surfaceDescriptor` is the pre-reveal stand-in substituted into context.
+// Absent = always visible (backward-compatible default). Labels are
+// `htmlFor`/`id` paired per the accessibility convention.
+function RevealTimingField({ entry, editable, onPatch }) {
+  const idBase = `reveal-${entry.id}`;
+  const surfaceDraft = useFieldDraft(
+    typeof entry.surfaceDescriptor === 'string' ? entry.surfaceDescriptor : '',
+    (v) => onPatch({ surfaceDescriptor: v || null }),
+  );
+  const gated = isEntryGated(entry);
+  if (!editable) {
+    if (!gated) return null;
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+        <span className="uppercase tracking-wider">Reveal:</span>
+        {entry.spoiler === true
+          ? <ReadonlyChip>hard spoiler</ReadonlyChip>
+          : <ReadonlyChip>Issue {entry.revealIssue}</ReadonlyChip>}
+        {entry.surfaceDescriptor
+          ? <span className="italic text-gray-500">surface: {entry.surfaceDescriptor}</span>
+          : null}
+      </div>
+    );
+  }
+  return (
+    <details className="mt-2 group">
+      <summary className="cursor-pointer list-none flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-300">
+        <ChevronRight size={11} className="group-open:hidden" />
+        <ChevronDown size={11} className="hidden group-open:inline" />
+        Reveal timing (spoiler scoping)
+        {gated ? <span className="ml-1 text-port-warning normal-case tracking-normal">· gated</span> : null}
+      </summary>
+      <div className="mt-1.5 space-y-2 pl-3 border-l border-port-border">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor={`${idBase}-issue`} className="text-[10px] uppercase tracking-wider text-gray-500">
+              Reveal in issue #
+            </label>
+            <input
+              id={`${idBase}-issue`}
+              type="number"
+              min={1}
+              max={BIBLE_LIMITS.REVEAL_ISSUE_MAX}
+              value={Number.isInteger(entry.revealIssue) ? entry.revealIssue : ''}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                const n = v === '' ? null : Math.trunc(Number(v));
+                onPatch({ revealIssue: Number.isInteger(n) && n >= 1 ? n : null });
+              }}
+              placeholder="—"
+              className="w-20 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200"
+            />
+          </div>
+          <label htmlFor={`${idBase}-spoiler`} className="flex items-center gap-1.5 text-[11px] text-gray-400 mt-3">
+            <input
+              id={`${idBase}-spoiler`}
+              type="checkbox"
+              checked={entry.spoiler === true}
+              onChange={(e) => onPatch({ spoiler: e.target.checked })}
+              className="accent-port-warning"
+            />
+            Hard spoiler (never in drafting)
+          </label>
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <label htmlFor={`${idBase}-surface`} className="text-[10px] uppercase tracking-wider text-gray-500">
+            Surface descriptor (pre-reveal stand-in)
+          </label>
+          <textarea
+            id={`${idBase}-surface`}
+            value={surfaceDraft.value}
+            onChange={surfaceDraft.onChange}
+            onBlur={surfaceDraft.onBlur}
+            rows={2}
+            maxLength={BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX}
+            placeholder="What the world looks like BEFORE the reveal (e.g. &quot;the locked east wing&quot;). Substituted into drafting context until the reveal issue."
+            className="w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
+          />
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -346,6 +454,7 @@ export default function CanonCard({
           seriesName={seriesNameMap?.[entry.sourceSeriesId]}
         />
       ) : null}
+      <SpoilerBadge entry={entry} />
     </div>
   );
 
@@ -390,6 +499,13 @@ export default function CanonCard({
           {entry.timeOfDay ? <ReadonlyChip>{entry.timeOfDay}</ReadonlyChip> : null}
         </div>
       ) : null}
+      {/* Reveal-gated canon / spoiler scoping (#2178) — every kind. Editable
+          when a PATCH channel exists and the entry isn't locked. */}
+      <RevealTimingField
+        entry={entry}
+        editable={!!onPatchEntry && !locked}
+        onPatch={(patch) => onPatchEntry?.(entry.id, patch)}
+      />
       {kind.key === 'characters' ? (
         <WardrobeSection
           wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}

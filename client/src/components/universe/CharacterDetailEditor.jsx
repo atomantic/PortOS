@@ -14,6 +14,7 @@ import { useState } from 'react';
 import {
   ChevronDown, ChevronRight, Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
+  Drama, KeyRound,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
@@ -45,6 +46,16 @@ const SECTIONS = Object.freeze([
     ],
   },
   {
+    key: 'framework', label: 'Character framework', icon: Drama,
+    fields: [
+      { name: 'ghost', label: 'Ghost (backstory wound cause)', placeholder: 'the past event that wounded them — must causally explain the Lie', max: L.GHOST_MAX, type: 'textarea' },
+      { name: 'wound', label: 'Wound', placeholder: 'the lasting emotional damage the Ghost left', max: L.WOUND_MAX, type: 'textarea' },
+      { name: 'lie', label: 'Lie (false belief)', placeholder: 'state in one sentence — "I only matter if I win"', max: L.LIE_MAX, type: 'textarea' },
+      { name: 'need', label: 'Need (Truth — opposite of the Lie)', placeholder: 'the direct opposite of the Lie — "I matter whether I win or lose"', max: L.NEED_MAX, type: 'textarea' },
+      { name: 'want', label: 'Want (external goal)', placeholder: 'the concrete goal they pursue — usually conflicts with the Need', max: L.WANT_MAX, type: 'textarea' },
+    ],
+  },
+  {
     key: 'visualIdentity', label: 'Visual identity', icon: Eye,
     fields: [
       { name: 'silhouetteNotes', label: 'Silhouette notes', placeholder: 'compact upper body; tapered lower half; short hair adds 5cm height', max: L.SILHOUETTE_NOTES_MAX, type: 'textarea' },
@@ -65,6 +76,12 @@ const RELATIONSHIP_LINK_TYPES = Object.freeze([
 const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
+
+// Mirrors `CHARACTER_ARC_TYPES` in server/lib/storyBible.js (#2175). The server
+// sanitizer coerces an unrecognized value to null, so an empty selection clears
+// the field. `''` = unset.
+const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
+const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
 
 const LIST_SECTIONS = Object.freeze([
   {
@@ -105,6 +122,19 @@ const LIST_SECTIONS = Object.freeze([
       { name: 'description', placeholder: 'wide eyes; lips parted; brow raised', max: L.EXPRESSION_DESC_MAX },
     ],
     summary: (e) => `${e.name}${e.description ? ` — ${e.description}` : ''}`,
+  },
+  {
+    key: 'secrets', label: 'Secrets', icon: KeyRound, field: 'secrets',
+    addLabel: 'Add secret', singular: 'secret',
+    // `secrets` is a plain string[] on the server (cleanStringArray). The
+    // generic ListRow works on row objects keyed by column name, so this
+    // section stores each secret as `{ text }` and marshals to/from string[]
+    // via `toRows` / `fromRows` below (see ListSectionEditor).
+    stringList: true,
+    columns: [
+      { name: 'text', placeholder: 'something they hide from others or themselves', max: L.SECRET_MAX },
+    ],
+    summary: (s) => s.text,
   },
   {
     key: 'handGestures', label: 'Hand gestures', icon: Hand, field: 'handGestures',
@@ -212,14 +242,40 @@ function CollapsibleSection({ icon: Icon, label, summary, defaultOpen = false, c
 // `<kind>-<uuid>` under its own convention — see usePendingListRows.js for
 // the trade-off this strip implies for sibling drafts.
 function ListSectionEditor({ section, entry, onPatchList, disabled }) {
-  const persisted = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+  const rawPersisted = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+  // A `stringList` section (e.g. `secrets`) persists a plain string[] on the
+  // server, but the generic row editor works on objects keyed by the single
+  // column name. Marshal string → { [col]: string } on the way in and back to
+  // string on the way out so the section stays server-shape-correct.
+  const col0 = section.columns[0].name;
+  // Stamp a CONTENT-derived stable id on each marshalled string-list row so
+  // ListRow's React key (and its `useRowDraft` buffer) survives a delete/reorder
+  // of an earlier row — a plain index key would shift a sibling's draft onto the
+  // wrong secret, the exact footgun the ListRow key comment warns about. The
+  // per-content occurrence counter disambiguates exact-duplicate strings.
+  const stringListRows = () => {
+    const seen = new Map();
+    return rawPersisted.map((s) => {
+      const text = typeof s === 'string' ? s : '';
+      const n = seen.get(text) || 0;
+      seen.set(text, n + 1);
+      return { id: `${section.key}-${n}-${text}`, [col0]: text };
+    });
+  };
+  const persisted = section.stringList ? stringListRows() : rawPersisted;
+  const emit = (next) => onPatchList(
+    section.field,
+    section.stringList
+      ? next.map((r) => (r?.[col0] || '').trim()).filter(Boolean)
+      : next,
+  );
   const { merged, addRow, updateRow, removeRow } = usePendingListRows({
     persisted,
-    requiredColumn: section.columns[0].name,
+    requiredColumn: col0,
     idPrefix: `pending-${section.key}-`,
     stripIdOnPromote: true,
     blankRow: () => Object.fromEntries(section.columns.map((c) => [c.name, ''])),
-    onChange: (next) => onPatchList(section.field, next),
+    onChange: emit,
   });
   const summary = merged.length === 0
     ? 'empty'
@@ -456,6 +512,82 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
   );
 }
 
+// Declared arc type + Three Sliders (CWQE Phase 10, #2175). Arc type is a plain
+// enum <select> ('' clears); each slider is an integer 1–10 range input with an
+// explicit "unset" state (null) so an un-rated axis stays absent rather than
+// snapping to a default. Patches commit immediately (no draft buffer needed —
+// these are discrete controls, not free text). `idPrefix` scopes the field ids
+// so two open cards don't collide.
+function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
+  const sliders = (entry.sliders && typeof entry.sliders === 'object') ? entry.sliders : {};
+  const arcId = `chr-arc-${idPrefix || 'unknown'}`;
+  const patchSlider = (axis, value) => onPatch?.({ sliders: { ...sliders, [axis]: value } });
+  const setCount = SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
+  const summary = `${entry.arcType || 'no arc'}${setCount ? ` · ${setCount}/3 sliders` : ''}`;
+  return (
+    <CollapsibleSection icon={Drama} label="Arc type & sliders" summary={summary}>
+      <div className="space-y-0.5">
+        <label htmlFor={arcId} className="block text-[10px] uppercase tracking-wider text-gray-500">
+          Arc type
+        </label>
+        <select
+          id={arcId}
+          value={entry.arcType || ''}
+          onChange={(e) => onPatch?.({ arcType: e.target.value })}
+          disabled={disabled}
+          className="w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
+        >
+          <option value="">— unset —</option>
+          {CHARACTER_ARC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+      <p className="text-[10px] text-gray-500 leading-snug">
+        Rule: HIGH (≥7) on at least two sliders, or high on one with room to grow. All-low = boring; all-high = Mary Sue.
+      </p>
+      {SLIDER_AXES.map((axis) => {
+        const id = `chr-slider-${idPrefix || 'unknown'}-${axis}`;
+        const val = sliders[axis];
+        const set = val != null;
+        return (
+          <div key={axis} className="space-y-0.5">
+            <div className="flex items-center justify-between">
+              <label htmlFor={id} className="text-[10px] uppercase tracking-wider text-gray-500 capitalize">
+                {axis}
+              </label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-gray-400 tabular-nums w-6 text-right">{set ? val : '—'}</span>
+                {set ? (
+                  <button
+                    type="button"
+                    onClick={() => patchSlider(axis, null)}
+                    disabled={disabled}
+                    title={`Clear ${axis}`}
+                    className="text-gray-500 hover:text-port-error disabled:opacity-30"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <input
+              id={id}
+              type="range"
+              min={L.SLIDER_MIN}
+              max={L.SLIDER_MAX}
+              step={1}
+              value={set ? val : L.SLIDER_MIN}
+              onChange={(e) => patchSlider(axis, Number(e.target.value))}
+              disabled={disabled}
+              className="w-full disabled:opacity-50"
+              aria-label={`${axis} rating 1 to 10`}
+            />
+          </div>
+        );
+      })}
+    </CollapsibleSection>
+  );
+}
+
 export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false, characters = [] }) {
   if (!entry) return null;
 
@@ -511,6 +643,13 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
           ) : null}
         </CollapsibleSection>
       ))}
+
+      <ArcFrameworkControls
+        entry={entry}
+        onPatch={onPatch}
+        disabled={disabled}
+        idPrefix={entry.id}
+      />
 
       <RelationshipsSection
         entry={entry}

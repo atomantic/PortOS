@@ -15,6 +15,9 @@ import {
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
   isMergeQueueSignal,
   createMergeQueueTracker,
+  REVIEW_LOOP_IDLE_TIMEOUT_MS,
+  isReviewLoopSignal,
+  createReviewLoopTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -31,6 +34,14 @@ import {
   buildTuiInvocation,
   detectMissingTuiBinary,
   scheduleSubmitEnters,
+  PASTE_VERIFY_POLL_MS,
+  PASTE_VERIFY_WINDOW_MS,
+  PASTE_RETRY_MAX_ATTEMPTS,
+  PASTE_RETRY_BASE_DELAY_MS,
+  extractVerifiablePromptPrefix,
+  verifyPasteRendered,
+  isPasteConfirmed,
+  isCollapsedPasteChip,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
 
@@ -290,6 +301,80 @@ describe('tuiHandshake — merge-queue idle suppression (#2074)', () => {
   });
 });
 
+// Observed 2026-07-02 (agent-61508f36) — a do:release run's multi-reviewer
+// loop correctly backgrounded a slow codex review and polled for it rather
+// than blocking, but the reviewer's silent working stretch exceeded the
+// 3-minute default and the runner reaped the still-waiting release as a false
+// `idle-complete` success before it reached the merge gate, leaving PR #2084
+// open. Mirrors the merge-queue suppression above.
+describe('tuiHandshake — review-loop idle suppression', () => {
+  it('extends the idle timeout well past the default 3-minute window', () => {
+    expect(REVIEW_LOOP_IDLE_TIMEOUT_MS).toBe(900000);
+    expect(REVIEW_LOOP_IDLE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TUI_IDLE_TIMEOUT_MS);
+  });
+
+  it('isReviewLoopSignal matches multi-reviewer-loop chrome (case-insensitive)', () => {
+    expect(isReviewLoopSignal('Review plan: [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(isReviewLoopSignal('--- Review pass 1/2: codex ---')).toBe(true);
+  });
+
+  it('isReviewLoopSignal ignores ordinary implementation/output chrome', () => {
+    expect(isReviewLoopSignal('Editing server/services/agentTuiSpawning.js')).toBe(false);
+    expect(isReviewLoopSignal('● high · (12s · running tests)')).toBe(false);
+    expect(isReviewLoopSignal('')).toBe(false);
+    expect(isReviewLoopSignal(null)).toBe(false);
+    expect(isReviewLoopSignal(undefined)).toBe(false);
+  });
+
+  // Regression for false-positive latches found across three rounds of local
+  // review: bare substrings ('review pass', 'review loop', 'multi-reviewer',
+  // 'multi-reviewer summary') would match this project's own CLAUDE.md
+  // convention ("run a simplify/self-review pass before committing") and this
+  // repo's bundled slashdo docs — which say "review loop"/"multi-reviewer"
+  // dozens of times, include the literal instruction text "Review plan:
+  // {REVIEW_AGENTS}...", AND (codex review's finding) render a fully-formed
+  // example of their own "## Multi-Reviewer Summary" aggregate-report heading
+  // in a sample output block — latching the tracker for ANY CoS agent's
+  // ordinary narration or docs-editing, not just an actual do:release/do:pr/
+  // do:rpr run.
+  it('isReviewLoopSignal does NOT match ordinary self-review narration or doc prose', () => {
+    expect(isReviewLoopSignal('running the self-review pass before committing')).toBe(false);
+    expect(isReviewLoopSignal('## Local Agent Code Review Loop')).toBe(false);
+    expect(isReviewLoopSignal('You are a Copilot review loop agent.')).toBe(false);
+    expect(isReviewLoopSignal('the multi-reviewer wrapper dispatches each listed agent')).toBe(false);
+    expect(isReviewLoopSignal('Print the resolved plan before starting: `Review plan: {REVIEW_AGENTS} (mode: ...)`')).toBe(false);
+    expect(isReviewLoopSignal('## Multi-Reviewer Summary')).toBe(false);
+  });
+
+  it('createReviewLoopTracker latches on first signal and stays active through silence', () => {
+    const tracker = createReviewLoopTracker();
+    expect(tracker.active).toBe(false);
+    tracker.observe('implementing the fix, running the suite');
+    expect(tracker.active).toBe(false);
+    // Enters the multi-reviewer loop — latches.
+    expect(tracker.observe('Review plan: [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(tracker.active).toBe(true);
+    // Subsequent quiet reviewer-wait chunks (no marker) must NOT un-latch it —
+    // the whole point is that the silent gap is when the grace is needed.
+    tracker.observe('waiting for codex...');
+    tracker.observe('');
+    expect(tracker.active).toBe(true);
+  });
+
+  // Regression for codex review [P2] (iteration 2): a real TUI can deliver
+  // the banner split across two onData chunks (token-by-token streaming),
+  // so checking only the current chunk in isolation would miss it.
+  it('createReviewLoopTracker latches on a marker split across two chunks', () => {
+    const tracker = createReviewLoopTracker();
+    // Split right before the '[' that anchors the pattern — neither half
+    // alone contains "review plan: [".
+    tracker.observe('Now starting the review loop. Review plan:');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe(' [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(tracker.active).toBe(true);
+  });
+});
+
 describe('tuiHandshake.inferTuiCommand', () => {
   // Catch-all default also returns claude; the claude rows just confirm
   // an explicit match isn't accidentally tagged codex/antigravity/gemini.
@@ -510,5 +595,232 @@ describe('tuiHandshake.scheduleSubmitEnters', () => {
     vi.advanceTimersByTime(SUBMIT_ENTER_SPACING_MS * (SUBMIT_ENTER_ATTEMPTS + 2));
     // The immediate write already happened; no interval-driven writes follow.
     expect(write).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Paste verification helpers (issue #2192)
+describe('tuiHandshake — paste verification constants', () => {
+  it('pins paste verification constants', () => {
+    expect(PASTE_VERIFY_POLL_MS).toBe(200);
+    expect(PASTE_VERIFY_WINDOW_MS).toBe(2000);
+    expect(PASTE_RETRY_MAX_ATTEMPTS).toBe(3);
+    expect(PASTE_RETRY_BASE_DELAY_MS).toBe(800);
+    // Verification window should be shorter than the overall paste deadline
+    expect(PASTE_VERIFY_WINDOW_MS).toBeLessThan(PASTE_DEADLINE_MS);
+  });
+});
+
+describe('tuiHandshake.extractVerifiablePromptPrefix', () => {
+  it('extracts a prefix from a normal prompt', () => {
+    const prompt = 'Please implement the feature described in issue #123. The feature should...';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).toBeTruthy();
+    expect(prefix.length).toBeGreaterThanOrEqual(15);
+    expect(prefix.length).toBeLessThanOrEqual(40);
+    // The prefix should be from the prompt, not the very beginning (skips common prefixes)
+    expect(prompt.includes(prefix)).toBe(true);
+    expect(prompt.startsWith(prefix)).toBe(false);
+  });
+
+  it('returns the whole prompt for very short prompts', () => {
+    const prompt = 'Fix the bug';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).toBe('Fix the bug');
+  });
+
+  it('returns null for prompts too short to verify', () => {
+    expect(extractVerifiablePromptPrefix('Hi')).toBeNull();
+    expect(extractVerifiablePromptPrefix('')).toBeNull();
+    expect(extractVerifiablePromptPrefix(null)).toBeNull();
+    expect(extractVerifiablePromptPrefix(undefined)).toBeNull();
+  });
+
+  it('collapses whitespace in the prefix', () => {
+    const prompt = 'Please  implement\n\nthe   feature';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    expect(prefix).not.toMatch(/\s{2,}/);
+    expect(prefix).not.toContain('\n');
+  });
+
+  it('handles prompts with leading boilerplate', () => {
+    const prompt = 'You are a helpful assistant. Please implement the truncateMiddle function.';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    // Should skip the first few characters to avoid matching common prefixes
+    expect(prefix.startsWith('You are')).toBe(false);
+    expect(prompt.replace(/\s+/g, ' ').includes(prefix)).toBe(true);
+  });
+});
+
+describe('tuiHandshake.verifyPasteRendered', () => {
+  it('returns true when prefix is found in buffer', () => {
+    const prefix = 'implement the truncateMiddle function';
+    const buffer = 'Some TUI chrome... implement the truncateMiddle function ...more text';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+  });
+
+  it('returns false when prefix is not found in buffer', () => {
+    const prefix = 'implement the truncateMiddle function';
+    const buffer = 'Some TUI chrome without the prompt text';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(false);
+  });
+
+  it('handles whitespace normalization', () => {
+    const prefix = 'implement the function';
+    const buffer = 'implement   the\n  function';
+    expect(verifyPasteRendered(buffer, prefix)).toBe(true);
+  });
+
+  it('returns true for null/empty prefix (no verification possible)', () => {
+    expect(verifyPasteRendered('any buffer', null)).toBe(true);
+    expect(verifyPasteRendered('any buffer', '')).toBe(true);
+    expect(verifyPasteRendered('any buffer', undefined)).toBe(true);
+  });
+
+  it('returns false for non-string buffer', () => {
+    expect(verifyPasteRendered(null, 'prefix')).toBe(false);
+    expect(verifyPasteRendered(undefined, 'prefix')).toBe(false);
+    expect(verifyPasteRendered(123, 'prefix')).toBe(false);
+  });
+
+  it('handles real-world OpenCode scenario (issue #2192)', () => {
+    // Simulates the case where OpenCode was still initializing
+    const prompt = 'Run /do:next --issues --swarm using the truncateMiddle helper';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+
+    // Empty buffer = paste was swallowed
+    expect(verifyPasteRendered('', prefix)).toBe(false);
+
+    // Only TUI chrome = paste was swallowed
+    expect(verifyPasteRendered('Ask anything... (ESC to exit)', prefix)).toBe(false);
+
+    // Prompt text visible (with the full prompt echoed) = paste succeeded
+    // The buffer would contain the actual prompt text after a successful paste
+    expect(verifyPasteRendered(`Ask anything... ${prompt}`, prefix)).toBe(true);
+
+    // Also verify partial echo (just the middle portion where the prefix is from)
+    expect(verifyPasteRendered(`Ask anything... o:next --issues --swarm using the trunca...`, prefix)).toBe(true);
+  });
+
+  // Every claude-code-tui CoS agent started failing immediately after #2192
+  // shipped, all with identical "paste-not-rendered" after 3 retries — 100%
+  // reproduction across real agent runs (agent-65e4d17f, agent-1f0bda99,
+  // agent-ec5a000c, agent-7dda893e, agent-9916b7be, agent-f5c8ca2a,
+  // agent-d0fa3cdc, 2026-07-05). Root cause: Claude Code redraws/reflows a
+  // pasted multi-word line using cursor-positioning escapes instead of literal
+  // space bytes between words — the exact "inter-glyph cursor moves" quirk
+  // already documented above (BRACKETED_PASTE_MODE_PATTERN comment) as the
+  // reason createInputReadyTracker deliberately avoids literal footer-text
+  // matching. #2192's verifyPasteRendered was never carved out for Claude (the
+  // changelog claimed "Claude TUIs ... are unaffected" but sendPrompt/
+  // attemptPaste is shared across all providers), so it inherited the same
+  // trap: normalizing to a SINGLE space still requires a space to exist, and a
+  // reflowed line has none. Captured verbatim (post-production-ansiStrip) from
+  // agent-147ad88f's raw.txt.
+  it('finds a pasted prompt whose words got glued together by Claude Code reflow (real incident)', () => {
+    const prompt = 'On the tasks page when we render pending/active/blocked task cards, I want to truncate the prompt and only show the first couple of lines with an expand button\n\nBegin working on the task now.';
+    const prefix = extractVerifiablePromptPrefix(prompt);
+    const renderedBuffer = '⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents Opus 4.8 (1M context) │ agent-147ad88f [Pastedtext#1+3lines] paste again to expand ctrl+g to edit in Vim ──────── ❯ Onthetaskspagewhenwerenderpending/active/blockedtaskcards,Iwant totruncatethepromptandonlyshowthefirstcoupleoflineswithan expandbutton Begin working on the task now.';
+    expect(verifyPasteRendered(renderedBuffer, prefix)).toBe(true);
+  });
+});
+
+describe('tuiHandshake.isPasteConfirmed', () => {
+  const PROMPT = 'On the tasks page when we render pending/active/blocked task cards, I want to truncate the prompt and only show the first couple of lines with an expand button\n\nBegin working on the task now.';
+  const prefix = extractVerifiablePromptPrefix(PROMPT);
+
+  // THE core regression: Claude Code collapses a multi-line paste into a
+  // `[Pasted text #1 +3 lines]` chip and HIDES the body text. Verbatim
+  // (ANSI-stripped) from agent-656efa6e's failed run, 2026-07-05 — the body text
+  // ("On the tasks page…") is genuinely absent, only the marker + the trailing
+  // "Begin working…" line survive. The old text-only gate false-failed here and
+  // killed every claude-code-tui CoS agent after 3 retries. The marker is
+  // authoritative proof the paste landed, so this MUST confirm.
+  it('confirms a multi-line paste that Claude collapsed to a chip (body text hidden) — real incident', () => {
+    const collapsedBuffer = 'Opus 4.8 │ agent-656efa6e [Pastedtext#1+3lines] paste again to expand ──────── ❯ [Pastedtext#1+3lines] ──────── Begin working on the task now. ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    // The body prefix really is NOT in the buffer — verifyPasteRendered alone fails…
+    expect(verifyPasteRendered(collapsedBuffer, prefix)).toBe(false);
+    // …but the marker proves delivery, so isPasteConfirmed confirms it.
+    expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
+  it('confirms when the prompt text DID render inline (markerless small paste)', () => {
+    const inlineBuffer = '❯ Onthetaskspagewhenwerenderpending/active/blockedtaskcards Begin working on the task now.';
+    expect(isPasteConfirmed(inlineBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
+  it('does NOT confirm when neither the marker nor the text appears (paste swallowed by a not-ready TUI)', () => {
+    const swallowedBuffer = '❯ Try "how does PipelineEditorialChecks.jsx work?" ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    expect(isPasteConfirmed(swallowedBuffer, { verifiablePrefix: prefix, promptMarkerCount: 0 })).toBe(false);
+  });
+
+  it('ignores paste markers echoed from the prompt itself (count must EXCEED promptMarkerCount)', () => {
+    // A transcript-analysis prompt that itself contains a `[Pasted text #1]` chip:
+    // the echoed marker must not be mistaken for the TUI's own commit marker.
+    const echoOnlyBuffer = '❯ [Pastedtext#1+2lines] analyze this transcript';
+    expect(isPasteConfirmed(echoOnlyBuffer, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(false);
+    // One MORE marker than the prompt carried → the TUI's genuine commit → confirmed.
+    const echoPlusCommit = '❯ [Pastedtext#1+2lines] analyze this transcript [Pastedtext#2+2lines]';
+    expect(isPasteConfirmed(echoPlusCommit, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(true);
+  });
+
+  // Issue #2228: a MULTI-LINE prompt that itself embeds a `[Pasted text #N]`
+  // literal (a TUI-transcript-analysis task — the promptMarkerCount defense was
+  // added for exactly this domain). Claude Code collapses the whole multi-line
+  // paste into its OWN single chip and hides the body — including the prompt's
+  // embedded marker. So the buffer carries only Claude's 1 chip while
+  // promptMarkerCount is also 1: `count (1) > promptMarkerCount (1)` is false,
+  // AND the hidden body defeats the verifyPasteRendered text fallback. Before the
+  // fix this false-negatived and the agent died `paste-not-rendered` despite the
+  // paste landing. The collapsed-chip chrome ("paste again to expand") proves the
+  // visible marker is the TUI's own commit, so this MUST confirm.
+  it('confirms a collapsed multi-line paste even when the prompt embeds a marker literal (#2228)', () => {
+    // Prompt is multi-line AND embeds a `[Pasted text #1]` literal → promptMarkerCount = 1.
+    const selfMarkerPrompt = 'Analyze this TUI transcript where the agent hit a paste bug:\n\n[Pasted text #1 +40 lines]\n\nExplain why the paste false-negatived.';
+    const selfMarkerPrefix = extractVerifiablePromptPrefix(selfMarkerPrompt);
+    const promptMarkerCount = 1;
+    // Claude collapsed the whole thing to ITS OWN chip and hid the body — only the
+    // marker + collapse affordance survive; the prompt body is genuinely gone.
+    const collapsedBuffer = 'Opus 4.8 │ agent-2228abcd ❯ [Pastedtext#1+42lines] paste again to expand ──────── ⏵⏵ bypass permissions on (shift+tab to cycle)';
+    // The count-only comparison false-negatives (1 is not > 1)…
+    expect(countPasteMarkers(collapsedBuffer) > promptMarkerCount).toBe(false);
+    // …and the hidden body defeats the text fallback too…
+    expect(verifyPasteRendered(collapsedBuffer, selfMarkerPrefix)).toBe(false);
+    // …but the collapsed-chip shape proves the paste landed, so this MUST confirm.
+    expect(isPasteConfirmed(collapsedBuffer, { verifiablePrefix: selfMarkerPrefix, promptMarkerCount })).toBe(true);
+  });
+
+  it('does NOT re-introduce the echoed-marker false-positive: inline (uncollapsed) echo without collapse chrome still rejects (#2228)', () => {
+    // The prompt's `[Pasted text #1]` echoed INLINE (uncollapsed) with no
+    // "paste again to expand" chrome — the paste has NOT committed. The
+    // collapsed-chip rescue must not fire here; the subtraction must still reject.
+    const inlineEchoBuffer = '❯ [Pastedtext#1+40lines] analyze this TUI transcript where the agent hit a paste bug';
+    expect(isCollapsedPasteChip(inlineEchoBuffer)).toBe(false);
+    expect(isPasteConfirmed(inlineEchoBuffer, { verifiablePrefix: prefix, promptMarkerCount: 1 })).toBe(false);
+  });
+
+  it('confirms when there is nothing to verify against (no verifiable prefix)', () => {
+    expect(isPasteConfirmed('anything at all', { verifiablePrefix: null, promptMarkerCount: 0 })).toBe(true);
+    expect(isPasteConfirmed('anything at all', {})).toBe(true);
+  });
+});
+
+describe('tuiHandshake.isCollapsedPasteChip', () => {
+  it('is true only when a marker AND the "paste again to expand" affordance are both present', () => {
+    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] paste again to expand')).toBe(true);
+    // Marker but no collapse affordance → not a collapsed chip.
+    expect(isCollapsedPasteChip('[Pastedtext#1+3lines] analyze this transcript')).toBe(false);
+    // Collapse affordance but no marker → nothing committed.
+    expect(isCollapsedPasteChip('paste again to expand')).toBe(false);
+  });
+
+  it('tolerates the inter-glyph whitespace Claude renders (ANSI-stripped)', () => {
+    expect(isCollapsedPasteChip('[Pastedtext#2+9lines] pasteagaintoexpand')).toBe(true);
+  });
+
+  it('returns false for non-string / empty input', () => {
+    expect(isCollapsedPasteChip(null)).toBe(false);
+    expect(isCollapsedPasteChip(undefined)).toBe(false);
+    expect(isCollapsedPasteChip('')).toBe(false);
+    expect(isCollapsedPasteChip(123)).toBe(false);
   });
 });

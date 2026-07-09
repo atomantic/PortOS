@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink, copyFile } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -95,6 +95,13 @@ export const PATHS = {
   // never surfaces them, and so a future per-render cleanup pass can drop
   // the whole dir without touching the gallery.
   imageRefs: join(INSTALL_ROOT, 'data/image-refs'),
+  // Ephemeral working dir for the Image Cleaner's GPU FLUX round-trip (issue
+  // #2264). The sync-cleaned init bytes and the finished render land here as
+  // `<jobId>-init.png` / `<jobId>-result.png` so the cleaner can render WITHOUT
+  // writing a gallery file + sidecar (the default is not to keep the result).
+  // A sibling of `images/` — never surfaced by the gallery's flat `.png`
+  // enumeration; swept by imageCleanTmpGc.js on an age gate. Not federated.
+  imageCleanTmp: join(INSTALL_ROOT, 'data/image-clean-tmp'),
   loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout:
   // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
@@ -892,6 +899,27 @@ export function sanitizeFilename(filename) {
 }
 
 /**
+ * Move a temp file into the uploads dir (`PATHS.uploads`) and return the
+ * persisted filename, mirroring the `/api/uploads` route's naming
+ * (`<uuid8>-<sanitized-name>`) so a server-produced file (e.g. a yt-dlp audio
+ * extraction, #2120) is served and referenced exactly like a user upload.
+ *
+ * copyFile + unlink instead of rename — the source usually lives in
+ * `os.tmpdir()`, which may sit on a different filesystem (rename across devices
+ * throws EXDEV on Linux); copy works regardless. The temp unlink is best-effort
+ * cleanup. Returns `{ filename, sizeBytes }`.
+ */
+export async function importFileToUploads(tempPath, originalName) {
+  await ensureDir(PATHS.uploads);
+  const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
+  const dest = join(PATHS.uploads, filename);
+  await copyFile(tempPath, dest);
+  await unlink(tempPath).catch(() => {});
+  const s = await stat(dest).catch(() => null);
+  return { filename, sizeBytes: s?.size ?? 0 };
+}
+
+/**
  * Validate a user-supplied filename is a safe basename with one of the
  * allowed extensions — refuses path-traversal, null bytes, separators, and
  * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
@@ -1075,6 +1103,15 @@ export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 
 /**
+ * Resolve an Image Cleaner temp init/result filename to an absolute path under
+ * `PATHS.imageCleanTmp` (issue #2264). The GPU FLUX round-trip stages the
+ * sync-cleaned init bytes here and renders the result back here, so the runner
+ * must accept this root as a valid `initImagePath` source. Same defense-in-depth
+ * as the gallery/refs resolvers, anchored at the temp root.
+ */
+export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
+
+/**
  * Resolve a shipped visual template filename (e.g. character reference-sheet
  * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
  * successful resolutions because the template assets are shipped and stable
@@ -1124,6 +1161,9 @@ const IMAGE_INPUT_RESOLVERS = [
   ['images', resolveGalleryImage],
   ['imageRefs', resolveImageRef],
   ['visualTemplates', resolveTemplateAsset],
+  // Image Cleaner temp init images (issue #2264) — the GPU FLUX round-trip
+  // stages sync-cleaned bytes here as the img2img init.
+  ['imageCleanTmp', resolveImageCleanTmp],
 ];
 
 export function resolveImageInputPath(rawPath) {

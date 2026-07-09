@@ -253,10 +253,39 @@ const sanitizeStage = (raw) => {
 // characters/places/objects extraction run against the stage output (used on
 // `prose`). Layered here rather than in `sanitizeStage` so visual/audio shapes
 // never inherit a concern that doesn't apply to them. `null` = never attempted.
+// Per-attempt record of the last multi-candidate draft-gate run (#2169, CWQE
+// Phase 5). `null` = the gate never ran (single-shot generation, the default).
+// Each attempt carries its runId (so its full text is recoverable from
+// runHistory) + the composite qualityScore it was judged at, and `winner` names
+// the kept attempt's runId — so the UI can show "kept 8.1, rejected 6.4 / 5.9".
+const sanitizeDraftGate = (raw) => {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.attempts)) return null;
+  const num = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
+  const attempts = raw.attempts
+    .filter((a) => a && typeof a === 'object' && isStr(a.runId) && a.runId)
+    .slice(0, STAGE_RUN_HISTORY_MAX)
+    .map((a) => ({
+      runId: a.runId,
+      qualityScore: num(a.qualityScore),
+      overall: num(a.overall),
+      slopPenalty: num(a.slopPenalty),
+      rejected: a.rejected === true,
+    }));
+  if (!attempts.length) return null;
+  return {
+    winner: isStr(raw.winner) && raw.winner ? raw.winner : null,
+    threshold: num(raw.threshold),
+    attempts,
+    stoppedEarly: raw.stoppedEarly === true,
+    at: isStr(raw.at) ? raw.at : null,
+  };
+};
+
 const sanitizeTextStage = (raw) => ({
   ...sanitizeStage(raw),
   canonExtraction: sanitizeCanonExtraction(raw?.canonExtraction),
   descGaps: sanitizeDescGaps(raw?.descGaps),
+  draftGate: sanitizeDraftGate(raw?.draftGate),
 });
 
 /**

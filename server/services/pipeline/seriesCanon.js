@@ -31,6 +31,18 @@ export const pickCanon = (universe) => ({
  * universe record in scope. Returns frozen-empty when the series is orphan
  * (no universeId) or the linked universe is missing.
  *
+ * Returns the FULL canon — this reader does NOT reveal-gate (#2178). The
+ * reveal-gating contract is: a **writer-facing generative prompt** (prose /
+ * script drafting, alternate-POV rewrite) must run the result through
+ * `filterCanonForIssue` / `filterCanonListForIssue` from
+ * `server/lib/storyBible.js` before injecting it, so a later-reveal secret
+ * can't leak into an earlier issue. The **judge, editorial checks, canon
+ * extraction, arc/scene planning** intentionally consume the full canon (they
+ * need the truth and have no single issue number). New prompt-builders that
+ * load canon here for a drafting prompt MUST apply the filter; see
+ * `textStages.buildStageContext` and `perspectiveRewrite.resolveCast` for the
+ * reference call sites.
+ *
  * @returns {Promise<{ characters, places, objects }>}
  */
 export async function getSeriesCanon(series) {

@@ -11,10 +11,19 @@ vi.mock('../../../services/api', () => ({
     currentStreak: 3,
     byDrill: { 'morse:morse-copy': { practiceCount: 4, accuracy: 80, totalMs: 1000, daysActive: 2 } },
   })),
+  // Morse server-progress API: a fresh install (kochLevelSet:false, no rounds)
+  // by default so the trainer mounts without adopting or rendering populated
+  // panel content (avoids text collisions with the mode-grid assertions).
+  submitMorseRound: vi.fn(() => Promise.resolve({})),
+  getMorseProgress: vi.fn(() => Promise.resolve({
+    days: 30, kochLevel: 2, kochLevelSet: false, settings: null, totalRounds: 0,
+    series: { copy: [], 'head-copy': [], send: [] }, confusionMatrix: {}, confusionPairs: [], charAccuracy: [],
+  })),
+  updateMorseLevel: vi.fn(() => Promise.resolve({ kochLevel: 2, kochLevelSet: true, adopted: false, settings: null })),
 }));
 
-import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, isNodeOnPath } from './MorseTrainer';
-import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
+import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, isNodeOnPath, resultsToItems } from './MorseTrainer';
+import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
 
 // Minimal Web Audio mock so CopyDrill's round flow (which calls ensureCtx →
 // playMorse) can run in jsdom without a real AudioContext. No existing shared
@@ -22,7 +31,9 @@ import { submitTrainingEntry, getTrainingStats } from '../../../services/api';
 // own) — mirrors that convention. `stop()` resolves playMorse's promise on
 // the next tick, matching the real oscillator's `onended` callback shape.
 class MockOscillator {
-  constructor() { this.onended = null; this.frequency = { value: 0 }; }
+  // `context` mirrors the real AudioNode.context — stopTone reads currentTime
+  // off it instead of re-resolving the AudioContext.
+  constructor(context = { currentTime: 0 }) { this.onended = null; this.frequency = { value: 0 }; this.context = context; }
   connect() { return this; }
   start() {}
   stop() { if (this.onended) setTimeout(() => this.onended(), 0); }
@@ -185,6 +196,167 @@ describe('MorseTrainer training log integration', () => {
         }));
       });
     });
+
+    it('submits the completed round to the server with per-character items', async () => {
+      submitMorseRound.mockClear();
+      renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+
+      fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+      for (let i = 0; i < 10; i++) {
+        const input = await screen.findByPlaceholderText('????');
+        fireEvent.change(input, { target: { value: 'ZZZZZ' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        if (i < 9) {
+          fireEvent.click(await screen.findByRole('button', { name: /Next/i }));
+        }
+      }
+
+      await waitFor(() => {
+        expect(submitMorseRound).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: 'head-copy',
+            items: expect.arrayContaining([
+              expect.objectContaining({ sent: expect.any(String), guessed: expect.any(String), correct: expect.any(Boolean) }),
+            ]),
+          }),
+          expect.objectContaining({ silent: true }),
+        );
+      });
+      // Every item carries the sent/guessed/correct shape the confusion matrix needs.
+      const round = submitMorseRound.mock.calls[0][0];
+      expect(round.items.length).toBeGreaterThan(0);
+      expect(round.kochLevel).toBeTypeOf('number');
+    });
+  });
+});
+
+describe('resultsToItems (per-character flatten for the confusion matrix)', () => {
+  it('aligns each prompt character with its guess positionally', () => {
+    const items = resultsToItems([{ prompt: 'KM', guess: 'KR', correct: false, responseMs: 500 }]);
+    expect(items).toEqual([
+      { sent: 'K', guessed: 'K', correct: true, responseMs: 500 },
+      { sent: 'M', guessed: 'R', correct: false, responseMs: 500 },
+    ]);
+  });
+
+  it('scores a missing/short guess as an empty-guess miss', () => {
+    const items = resultsToItems([{ prompt: 'SOS', guess: 'SO', correct: false, responseMs: 0 }]);
+    expect(items[2]).toEqual({ sent: 'S', guessed: '', correct: false, responseMs: 0 });
+  });
+
+  it('records an extra typed character as an empty-sent insertion error', () => {
+    // K→KM: K is a correct copy, but the extra M must not vanish (which would
+    // read as a perfect round) — it becomes an empty-sent error item.
+    const items = resultsToItems([{ prompt: 'K', guess: 'KM', correct: false, responseMs: 100 }]);
+    expect(items).toEqual([
+      { sent: 'K', guessed: 'K', correct: true, responseMs: 100 },
+      { sent: '', guessed: 'M', correct: false, responseMs: 100 },
+    ]);
+  });
+
+  it('flattens a multi-question round into per-character items', () => {
+    const items = resultsToItems([
+      { prompt: 'K', guess: 'K', correct: true, responseMs: 100 },
+      { prompt: 'MU', guess: 'MU', correct: true, responseMs: 200 },
+    ]);
+    expect(items).toHaveLength(3);
+    expect(items.every((i) => i.correct)).toBe(true);
+  });
+});
+
+describe('MorseTrainer server Koch-level hydration', () => {
+  beforeEach(() => {
+    getMorseProgress.mockClear();
+    updateMorseLevel.mockClear();
+    window.localStorage.clear();
+  });
+
+  it('fetches server progress on mount', async () => {
+    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
+  });
+
+  it('adopts a cached localStorage level once when the server has none', async () => {
+    // Cache a level beyond the base (2) and a server with kochLevelSet:false.
+    window.localStorage.setItem('portos-post-morse-prefs', JSON.stringify({ kochLevel: 9 }));
+    updateMorseLevel.mockResolvedValueOnce({ kochLevel: 9, kochLevelSet: true, adopted: true, settings: null });
+    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await waitFor(() => {
+      expect(updateMorseLevel).toHaveBeenCalledWith(
+        expect.objectContaining({ kochLevel: 9, adopt: true }),
+        expect.objectContaining({ silent: true }),
+      );
+    });
+  });
+
+  it('does not adopt when the cached level is only the base default', async () => {
+    window.localStorage.setItem('portos-post-morse-prefs', JSON.stringify({ kochLevel: 2 }));
+    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
+    expect(updateMorseLevel).not.toHaveBeenCalled();
+  });
+});
+
+describe('MorseTrainer iOS audio unlock', () => {
+  // Regression for "audio doesn't work on mobile Safari": iOS starts the
+  // AudioContext suspended and resume() is async. If a tone is scheduled before
+  // resume() settles, it's laid down against a still-suspended clock and never
+  // sounds. The trainer must await resume() (like metronome.js / scorePlayback.js)
+  // so no oscillator is ever created while the context is still 'suspended'.
+  let createdWhileSuspended;
+  let oscCount;
+  class SuspendedAudioContext {
+    constructor() { this.currentTime = 0; this.destination = {}; this.state = 'suspended'; }
+    // Resolve on a macrotask (setTimeout), NOT a microtask. iOS resume latency
+    // is real time, and the component must AWAIT it before touching
+    // createOscillator. A microtask-resolving mock would let the unawaited
+    // (buggy) path pass too — playPrompt's own `await ensureCtx()` yields a
+    // microtask, so a microtask state-flip always beats createOscillator
+    // regardless of the await. The macrotask makes the missing-await path
+    // schedule the oscillator while still 'suspended', so the test fails if the
+    // fix regresses.
+    resume() { return new Promise((resolve) => { setTimeout(() => { this.state = 'running'; resolve(); }, 0); }); }
+    createOscillator() {
+      if (this.state === 'suspended') createdWhileSuspended = true;
+      oscCount += 1;
+      return new MockOscillator();
+    }
+    createGain() { return new MockGainNode(); }
+    close() {}
+  }
+
+  beforeEach(() => {
+    createdWhileSuspended = false;
+    oscCount = 0;
+    submitTrainingEntry.mockClear();
+    getTrainingStats.mockClear();
+    window.AudioContext = SuspendedAudioContext;
+  });
+  afterEach(() => { delete window.AudioContext; });
+
+  it('awaits resume() before scheduling any tone (no oscillator while suspended)', async () => {
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    // The round input only renders once playMorse has finished, so by here the
+    // first tone has been scheduled and played.
+    await screen.findByPlaceholderText('????');
+    expect(createdWhileSuspended).toBe(false);
+  });
+
+  it('ignores a second Start-Round tap during the audio-unlock window (no overlapping prompt)', async () => {
+    // While the first play awaits resume() (the iOS unlock window), prompt/playing
+    // aren't set yet, so the Start Round button is still live. A second tap in that
+    // window must be ignored — otherwise two playPrompt runs schedule two Morse
+    // prompts over each other. playMorse uses exactly one oscillator per prompt, so
+    // two overlapping prompts would create two oscillators for one round start.
+    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    const startBtn = await screen.findByRole('button', { name: /Start Round/i });
+    // Two synchronous taps land inside the unlock window (resume() resolves on a
+    // later macrotask, so neither startRound has reached createOscillator yet).
+    fireEvent.click(startBtn);
+    fireEvent.click(startBtn);
+    await screen.findByPlaceholderText('????');
+    expect(oscCount).toBe(1);
   });
 });
 

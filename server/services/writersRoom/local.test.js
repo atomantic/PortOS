@@ -19,6 +19,7 @@ const {
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
+  renderWorkVoiceGuide,
 } = local;
 
 beforeEach(() => {
@@ -153,6 +154,36 @@ describe('work CRUD', () => {
     // Original title preserved on the persisted manifest
     const reloaded = await getWork(work.id);
     expect(reloaded.title).toBe('Keep');
+  });
+
+  it('updateWork sanitizes and stores voice exemplars, and renders the voice guide (#2179)', async () => {
+    const work = await createWork({ title: 'Voiced' });
+    // renderWorkVoiceGuide is empty until exemplars are set.
+    expect(renderWorkVoiceGuide(await getWork(work.id))).toBe('');
+
+    const updated = await updateWork(work.id, {
+      voiceExemplars: [
+        { passage: 'She counted the exits, then the lies.', note: 'terse interiority' },
+        { passage: '   ' }, // dropped: no usable passage
+      ],
+      voiceAntiExemplars: [
+        { passage: 'The gossamer light danced upon the ancient stones of yore.', note: 'too ornate' },
+      ],
+    });
+    expect(updated.voiceExemplars).toHaveLength(1);
+    expect(updated.voiceExemplars[0]).toEqual({ passage: 'She counted the exits, then the lies.', note: 'terse interiority' });
+    expect(updated.voiceAntiExemplars).toHaveLength(1);
+
+    const guide = renderWorkVoiceGuide(await getWork(work.id));
+    expect(guide).toContain('MATCH this voice');
+    expect(guide).toContain('She counted the exits, then the lies.');
+    expect(guide).toContain('NEVER drift toward this');
+    expect(guide).toContain('too ornate');
+
+    // An explicit empty array clears the list; an absent key leaves it untouched.
+    const cleared = await updateWork(work.id, { voiceExemplars: [] });
+    expect(cleared.voiceExemplars).toEqual([]);
+    expect(cleared.voiceAntiExemplars).toHaveLength(1); // untouched
   });
 
   it('updateWork rejects unknown folderId and accepts null', async () => {

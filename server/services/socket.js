@@ -26,6 +26,7 @@ import { catalogEvents } from './catalogEvents.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
+import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import * as shellService from './shell.js';
@@ -184,10 +185,11 @@ export function initSocket(io) {
       try {
         const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
         if (!data) return;
-        const { repoPath, providerId } = data;
+        const { repoPath, providerId, overwriteEcosystem = false } = data;
         console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
         const outcome = await pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+          overwriteEcosystem,
           onStep: ({ step, status, data }) => {
             socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
           },
@@ -390,15 +392,19 @@ export function initSocket(io) {
 
         // Step 3: Apply
         emit('apply', 'running', 'Writing ecosystem.config.cjs...');
-        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis)
-          .catch(err => ({ success: false, errors: [err.message] }));
+        const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis, {
+          overwriteEcosystem: data.overwriteEcosystem ?? false
+        }).catch(err => ({ success: false, errors: [err.message] }));
 
         if (result.errors?.length > 0) {
           emit('apply', 'error', result.errors.join(', '));
           socket.emit('app:standardize:error', { message: result.errors.join(', ') });
           return;
         }
-        emit('apply', 'done', `Modified ${result.filesModified.length} files`);
+        const preserved = result.filesPreserved || [];
+        emit('apply', 'done', preserved.length
+          ? `Modified ${result.filesModified.length} files, preserved ${preserved.length}`
+          : `Modified ${result.filesModified.length} files`);
 
         // Update app with new PM2 process names
         if (analysis.proposedChanges?.processes) {
@@ -411,6 +417,7 @@ export function initSocket(io) {
           result: {
             backupBranch: result.backupBranch,
             filesModified: result.filesModified,
+            filesPreserved: preserved,
             processes: analysis.proposedChanges.processes
           }
         });
@@ -722,6 +729,11 @@ function setupCosEventForwarding() {
   // Watcher events
   cosEvents.on('watcher:started', (data) => broadcastToCos('cos:watcher:started', data));
   cosEvents.on('watcher:stopped', (data) => broadcastToCos('cos:watcher:stopped', data));
+
+  // A user-initiated on-demand "Run" that produced no task — the client toasts
+  // this so an explicit trigger that finds no actionable work (parked) isn't a
+  // silent no-op.
+  cosEvents.on('schedule:on-demand-empty', (data) => broadcastToCos('cos:schedule:on-demand-empty', data));
 }
 
 // Set up error event forwarding
@@ -935,13 +947,34 @@ function setupMediaGenEventForwarding() {
     if (ioInstance) ioInstance.emit('video-gen:failed', data);
   });
 
-  // Map a media-job kind to its gen-event namespace prefix. Only image/video
-  // jobs drive scene spinners and have `*-gen:*` consumers; the shared media
-  // queue also runs `training` (LoRA) jobs, which have their own UI and NO
+  // Audio (first-pass music-bed, #1928/#1933) rides the same gen-event contract
+  // as image/video. Forward it onto `audio-gen:*` so a user-triggered music-bed
+  // render surfaces progress/failure like any other media job, rather than only
+  // populating `project.musicBed` silently (or silently failing) with the user
+  // left to poll the Render Queue to notice a crash/OOM/sidecar error.
+  audioGenEvents.on('started', (data) => {
+    if (ioInstance) ioInstance.emit('audio-gen:started', data);
+  });
+  audioGenEvents.on('progress', (data) => {
+    if (ioInstance) ioInstance.emit('audio-gen:progress', data);
+  });
+  audioGenEvents.on('completed', (data) => {
+    if (ioInstance) ioInstance.emit('audio-gen:completed', data);
+  });
+  audioGenEvents.on('failed', (data) => {
+    if (ioInstance) ioInstance.emit('audio-gen:failed', data);
+  });
+
+  // Map a media-job kind to its gen-event namespace prefix. image/video/audio
+  // jobs drive per-job spinners/toasts and have `*-gen:*` consumers; the shared
+  // media queue also runs `training` (LoRA) jobs, which have their own UI and NO
   // `*-gen:*` listener — so they must NOT be forwarded onto the image channel
   // (returning null skips them) rather than falling through to `image-gen:*`.
   const genEvtPrefix = (kind) =>
-    kind === 'video' ? 'video-gen' : kind === 'image' ? 'image-gen' : null;
+    kind === 'video' ? 'video-gen'
+      : kind === 'image' ? 'image-gen'
+        : kind === 'audio' ? 'audio-gen'
+          : null;
 
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
   // `generationId` (#1791). The internal gen modules emit started/progress/

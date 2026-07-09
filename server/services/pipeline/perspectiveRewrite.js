@@ -25,6 +25,8 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { richCanonDescriptorFragments, flattenCanonDescriptorFragments } from '../../lib/canonPrompt.js';
+import { filterCanonListForIssue } from '../../lib/storyBible.js';
+import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
@@ -110,9 +112,27 @@ function shapeCastEntry(char) {
   };
 }
 
-async function resolveCast(series) {
+// Resolve the cast for a rewrite prompt at `issueNumber`. This is a
+// writer-facing GENERATIVE prompt (it grounds regenerated prose in the cast's
+// full canon, incl. background/personality), so it must reveal-gate the canon
+// exactly like `buildStageContext` (#2178) — a later-reveal character's secret
+// must not leak into an earlier issue's rewrite. `keepFullPov` (the POV
+// character being rewritten FROM) is exempt: the narrator knows their own
+// secrets, so they keep their full record even when gated. The exemption
+// matches the SAME id-OR-name identity the caller resolves the POV with
+// (`c.id === keepFullPov || c.name === keepFullPov`) — otherwise a name-form
+// POV request on a reveal-gated narrator would surface/drop them and either
+// lose their private canon or return `unknown-character`. Absent `issueNumber`
+// = no gate (backward compatible).
+async function resolveCast(series, issueNumber, keepFullPov = null) {
   const canon = series ? await getSeriesCanon(series).catch(() => ({ characters: [] })) : { characters: [] };
-  return (canon.characters || []).map(shapeCastEntry).filter(Boolean);
+  const chars = Array.isArray(canon.characters) ? canon.characters : [];
+  const isPov = (c) => keepFullPov != null && ((c?.id && c.id === keepFullPov) || (c?.name && c.name === keepFullPov));
+  const gated = Number.isFinite(issueNumber)
+    ? chars.map((c) => (isPov(c) ? c : filterCanonListForIssue([c], 'character', issueNumber)[0]))
+      .filter(Boolean)
+    : chars;
+  return gated.map(shapeCastEntry).filter(Boolean);
 }
 
 // ---------- sanitize LLM analysis ----------
@@ -221,14 +241,20 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
   if (!picked) return { status: 'no-content', issueId, seriesId: issue.seriesId };
 
   const series = await getSeries(issue.seriesId).catch(() => null);
-  const cast = await resolveCast(series);
+  // Reveal-gate the cast to this issue's horizon (#2178) — but keep the POV
+  // character (the narrator) full, since they know their own secrets.
+  const cast = await resolveCast(series, issue.number, povCharacterId);
   const pov = cast.find((c) => c.id === povCharacterId || c.name === povCharacterId);
   if (!pov) return { status: 'unknown-character', issueId, seriesId: issue.seriesId, povCharacterId };
 
   const seriesVars = {
     name: series?.name || 'Untitled series',
     logline: series?.logline || '',
-    styleNotes: series?.styleNotes || '',
+    // POV rewrite is a prose-generating stage, so fold in the structured style
+    // guide, #2179 voice exemplars, and the #2175 Le Guin prose-craft doctrine
+    // via composeStyleNotes — not the raw free-text notes, which would bypass
+    // all three. proseCraft:true matches the prose/comicScript/teleplay stages.
+    styleNotes: composeStyleNotes(series, { proseCraft: true }),
     characters: cast,
   };
   const issueVars = { number: issue.number, title: issue.title };

@@ -21,7 +21,7 @@ import { ServerError } from './errorHandler.js';
 import { VIDEO_LORA_FAMILIES } from './runners.js';
 import { readResponseJson } from './readResponseJson.js';
 
-const HF_API = 'https://huggingface.co/api/models';
+export const HF_API = 'https://huggingface.co/api/models';
 const HF_HOSTS = new Set(['huggingface.co', 'www.huggingface.co']);
 
 // Parse any HuggingFace ref shape into `{ repo, revision }`:
@@ -121,13 +121,18 @@ export const fetchHuggingfaceModel = async (repo, { token, revision, fetchImpl =
   return readResponseJson(res);
 };
 
-// List the `.safetensors` siblings of an HF model response.
-const safetensorsSiblings = (model) => {
+// All sibling rfilenames of an HF model response (any extension). Shared by the
+// LoRA picker and the base-model classifier (huggingfaceModel.js).
+export const modelSiblingFilenames = (model) => {
   const siblings = Array.isArray(model?.siblings) ? model.siblings : [];
   return siblings
     .map((s) => (typeof s?.rfilename === 'string' ? s.rfilename : null))
-    .filter((f) => f && /\.safetensors$/i.test(f));
+    .filter(Boolean);
 };
+
+// List the `.safetensors` siblings of an HF model response.
+const safetensorsSiblings = (model) =>
+  modelSiblingFilenames(model).filter((f) => /\.safetensors$/i.test(f));
 
 // Pick the LoRA weights file to download. Most LoRA repos ship a single
 // .safetensors; when several are present we prefer the canonical diffusers
@@ -150,21 +155,32 @@ export const pickHfLoraFile = (model) => {
   return canonical || files[0];
 };
 
+// Lowercased signal blob for classifying an HF repo: repo id + tags +
+// cardData.base_model (string or array). Shared by the LoRA family detector and
+// the base-model classifier (huggingfaceModel.js extends it with pipeline_tag /
+// library_name). Kept in one place so the two classifiers read the same fields.
+export const modelClassificationBlob = ({ repo, model } = {}) => {
+  const parts = [String(repo || '').toLowerCase()];
+  const tags = Array.isArray(model?.tags) ? model.tags : [];
+  for (const t of tags) parts.push(String(t).toLowerCase());
+  const baseModel = model?.cardData?.base_model;
+  if (typeof baseModel === 'string') parts.push(baseModel.toLowerCase());
+  else if (Array.isArray(baseModel)) for (const b of baseModel) parts.push(String(b).toLowerCase());
+  return parts.join(' ');
+};
+
+// `ltxv` / `ltx-video` / `ltx2` / `ltx-2` / `ltx 2.3` all collapse to ltx.
+// Exported so the base-model classifier reuses the exact same LTX detection.
+export const LTX_VIDEO_RE = /\bltx[\s._-]?v?(?:ideo)?\b|\bltx[\s._-]?2/;
+export const looksLikeLtxVideo = (blob) => LTX_VIDEO_RE.test(blob) || /ltxvideo/.test(blob);
+
 // Detect the PortOS video-LoRA family for an HF repo. LTX-2 / LTX-Video LoRAs
 // (fal, Lightricks) map to the `ltx-video` family — the only video family with
 // a working runtime today. Looks at the repo id, HF tags, and the card's
 // `base_model`. Returns a VIDEO_LORA_FAMILIES value or null (unrecognized →
 // the installer surfaces a clear error rather than mis-tagging it).
 export const detectVideoLoraFamily = ({ repo, model } = {}) => {
-  const haystacks = [String(repo || '').toLowerCase()];
-  const tags = Array.isArray(model?.tags) ? model.tags : [];
-  for (const t of tags) haystacks.push(String(t).toLowerCase());
-  const baseModel = model?.cardData?.base_model;
-  if (typeof baseModel === 'string') haystacks.push(baseModel.toLowerCase());
-  else if (Array.isArray(baseModel)) for (const b of baseModel) haystacks.push(String(b).toLowerCase());
-  const blob = haystacks.join(' ');
-  // `ltxv` / `ltx-video` / `ltx2` / `ltx-2` / `ltx 2.3` all collapse to ltx.
-  if (/\bltx[\s._-]?v?(?:ideo)?\b|\bltx[\s._-]?2/.test(blob) || /ltxvideo/.test(blob)) {
+  if (looksLikeLtxVideo(modelClassificationBlob({ repo, model }))) {
     return VIDEO_LORA_FAMILIES.LTX_VIDEO;
   }
   return null;

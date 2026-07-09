@@ -25,7 +25,7 @@ import {
   restoreRequestSchema,
   subdirFilterSchema,
   isPaginationRequested,
-  paginateArray
+  paginateArray,
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -809,6 +809,18 @@ describe('validation.js', () => {
     it('leaves timeout untouched when absent', () => {
       const out = stageConfigUpdateSchema.parse({ name: 'x' });
       expect('timeout' in out).toBe(false);
+    });
+
+    it('preserves the writer/judge split fields (#2167) instead of stripping them', () => {
+      const out = stageConfigUpdateSchema.parse({ judgeProvider: 'codex', judgeModel: 'heavy' });
+      expect(out.judgeProvider).toBe('codex');
+      expect(out.judgeModel).toBe('heavy');
+    });
+
+    it('accepts null judgeProvider/judgeModel as a cleared pin', () => {
+      const out = stageConfigUpdateSchema.parse({ judgeProvider: null, judgeModel: null });
+      expect(out.judgeProvider).toBeNull();
+      expect(out.judgeModel).toBeNull();
     });
 
     it('rejects non-digit numeric strings (1e3 / 1.5 / 0x10) to mirror client parseTimeoutMs', () => {

@@ -16,7 +16,8 @@
 
 import { randomUUID } from 'crypto';
 import { addTask, cosEvents } from '../cos.js';
-import { buildTreatmentPrompt, buildEvaluatePrompt } from '../../lib/creativeDirectorPrompts.js';
+import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
+import { getToolSpecs } from '../creative/toolRegistry.js';
 import { recordRun } from './local.js';
 
 function buildTaskRecord(project, kind, scene, context) {
@@ -53,6 +54,9 @@ function buildDescription(project, kind, scene) {
   if (kind === 'treatment') {
     return `Creative Director — Treatment for "${project.name}"`;
   }
+  if (kind === 'plan') {
+    return `Creative Director — Production Plan for "${project.name}"`;
+  }
   if (kind === 'evaluate' && scene) {
     const total = project.treatment?.scenes?.length || '?';
     const intent = (scene.intent || '').slice(0, 60);
@@ -81,6 +85,18 @@ export async function enqueueTreatmentTask(project) {
   const context = await buildTreatmentPrompt(project);
   const built = buildTaskRecord(project, 'treatment', null, context);
   return persistAndEmit(built, project, 'treatment', null);
+}
+
+// CDO Phase 2 (#2184) — the planner. Mirrors enqueueTreatmentTask: an internal
+// CoS task whose prompt (cd-plan) receives the directive + the resolved creative
+// tool registry specs + the current plan (on a re-plan), and PATCHes a validated
+// plan back via /:id/plan. `getToolSpecs()` runs here (services) so lib's prompt
+// builder never imports the registry. Malformed plan output retries like the
+// treatment stage — the agent reads the 4xx error body and re-PATCHes.
+export async function enqueuePlanTask(project) {
+  const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs() });
+  const built = buildTaskRecord(project, 'plan', null, context);
+  return persistAndEmit(built, project, 'plan', null);
 }
 
 export async function enqueueEvaluateTask(project, scene) {

@@ -47,13 +47,18 @@ export async function getMessages(options = {}) {
   await ensureDir(CACHE_DIR);
   const { readdir } = await import('fs/promises');
   const files = await readdir(CACHE_DIR).catch(() => []);
+  const accountIds = files
+    .filter(file => file.endsWith('.json'))
+    .map(file => file.replace('.json', ''))
+    .filter(id => UUID_RE.test(id));
+  // Load each account's cache in parallel rather than serializing one disk read
+  // per account before we can aggregate the combined inbox.
+  const caches = await Promise.all(
+    accountIds.map(async id => ({ id, cache: await loadCache(id) }))
+  );
   let allMessages = [];
-  for (const file of files) {
-    if (!file.endsWith('.json')) continue;
-    const fileAccountId = file.replace('.json', '');
-    if (!UUID_RE.test(fileAccountId)) continue;
-    const cache = await loadCache(fileAccountId);
-    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || fileAccountId })));
+  for (const { id, cache } of caches) {
+    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || id })));
   }
   allMessages = filterBySearch(allMessages, search);
   allMessages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
@@ -194,6 +199,12 @@ export async function syncAccount(accountId, io, options = {}) {
     // (partial unique index), so re-scanning already-logged messages is a no-op.
     await logMessageTouchpoints(account, cache.messages).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+
+    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
+    // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
+    // cache each sync is a no-op for already-recorded messages. Machine-local.
+    await recordMessageActivity(account, cache.messages).catch((err) =>
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
 
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {
@@ -392,4 +403,16 @@ export async function logMessageTouchpoints(account, messages = []) {
     console.log(`🤝 Auto-logged ${result.created} message touchpoint(s) for account ${account?.id}`);
   }
   return result;
+}
+
+// Record synced messages into the machine-local human-activity timeline (#2150).
+// Deterministic + idempotent (dedupe on source + message externalId), so
+// re-scanning the full cache each sync is a no-op for already-recorded messages.
+// humanActivity is imported dynamically to keep this hook lazy (mirrors the tribe
+// auto-log path) and off the module graph for callers that never sync.
+export async function recordMessageActivity(account, messages = []) {
+  const { messageActivityCandidates, recordEvents } = await import('./humanActivity.js');
+  const candidates = messageActivityCandidates(account, messages);
+  if (candidates.length === 0) return { recorded: 0, skipped: 0 };
+  return recordEvents(candidates);
 }

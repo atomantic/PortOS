@@ -15,17 +15,14 @@ import {
   refineImagePixelCap,
   PIXEL_CAP_MESSAGE,
 } from '../../lib/validation.js';
-import * as seriesSvc from '../../services/pipeline/series.js';
-import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import {
-  enqueueComicCover,
-  enqueueComicBackCover,
-  enqueueVolumeCover,
-  enqueueVolumeBackCover,
-  buildRenderSlot,
+  renderComicCover,
+  renderComicBackCover,
+  renderVolumeCover,
+  renderVolumeBackCover,
 } from '../../services/pipeline/visualStages.js';
-import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../../services/pipeline/owners.js';
+import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
 import { IMAGE_GEN_MODE } from '../../services/imageGen/modes.js';
 import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
@@ -95,70 +92,34 @@ router.post('/series/:id/seasons/:seasonId/cover-concepts/generate', asyncHandle
   res.json(result);
 }));
 
-// Cover-render factory — shared by the four cover-render routes (volume
-// front/back + comic-issue front/back).
-//
-// Script-gate semantics: only update `script` when the body carried the
-// field as a string — absent preserves, empty-string intentionally clears.
-// Blur-save (PATCH stages/.../cover) owns the script field and races
-// against render; writing the *resolved* value (which falls back to the
-// persisted record's script when absent) would clobber a concurrent blur.
-const buildCoverPatchFn = ({ slotField, scriptField, body, slotKey, slotRecord }) => (current) => {
-  const currentSlot = current?.[slotField] || {};
-  const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
-  if (typeof body[scriptField] === 'string') nextSlot.script = body[scriptField];
-  return { [slotField]: nextSlot };
-};
-
-const makeCoverRenderHandler = ({
-  schema, slotField, scriptField, enqueue, applyWrite, buildResponse,
-}) => asyncHandler(async (req, res) => {
+// Cover-render route factory — shared by the four cover-render routes (volume
+// front/back + comic-issue front/back). The enqueue+persist flow (build the
+// render slot, script-gate, write it onto the record through the serialized
+// write tail) now lives in the shared `renderXxx` service entry points
+// (visualStages.js) so the route and the CDO orchestrator tool share ONE code
+// path (#2220). The route keeps only Zod validation, service dispatch, and
+// response shaping.
+const makeCoverRenderHandler = ({ schema, render, buildResponse }) => asyncHandler(async (req, res) => {
   const body = validateRequest(schema, req.body ?? {});
-  const result = await enqueue(req, body).catch((err) => { throw mapServiceError(err); });
-
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const computeFn = buildCoverPatchFn({ slotField, scriptField, body, slotKey, slotRecord });
-  const writeResult = await applyWrite(req, computeFn)
-    .catch((err) => { throw mapServiceError(err); });
-  res.json(buildResponse({ result, writeResult, req }));
+  const result = await render(req, body).catch((err) => { throw mapServiceError(err); });
+  res.json(buildResponse({ result, req }));
 });
 
-const buildVolumeCoverResponse = ({ result, writeResult: series, req }) => {
-  const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
-  return { ...result, season, series };
-};
-
-const updateVolumeSeason = (req, computeFn) =>
-  seriesSvc.updateSeasonOnSeries(req.params.id, req.params.seasonId, computeFn);
-
-const updateComicPagesStage = (req, computeFn) =>
-  issuesSvc.updateStageWithLatest(req.params.id, 'comicPages', computeFn);
-
-// Render the volume front cover. Persists the in-flight render slot onto
-// season.cover via seriesSvc.updateSeasonOnSeries (queue-serialized) — the
-// season-cover filename hook stamps the completed filename later.
+// Render the volume front cover. `renderVolumeCover` persists the in-flight
+// render slot onto season.cover through updateSeasonOnSeries (queue-serialized)
+// — the season-cover filename hook stamps the completed filename later.
 // (Missing series / season surface as PIPELINE_SEASON_NOT_FOUND from
 // enqueueVolumeCover's loadSeasonContext, mapped to 404 by mapServiceError.)
 router.post('/series/:id/seasons/:seasonId/cover/render', makeCoverRenderHandler({
   schema: volumeCoverRenderSchema,
-  slotField: 'cover',
-  scriptField: 'coverScript',
-  enqueue: (req, body) => enqueueVolumeCover(req.params.id, req.params.seasonId, body),
-  applyWrite: updateVolumeSeason,
-  buildResponse: buildVolumeCoverResponse,
+  render: (req, body) => renderVolumeCover(req.params.id, req.params.seasonId, body),
+  buildResponse: ({ result }) => result,
 }));
 
 router.post('/series/:id/seasons/:seasonId/back-cover/render', makeCoverRenderHandler({
   schema: volumeBackCoverRenderSchema,
-  slotField: 'backCover',
-  scriptField: 'backCoverScript',
-  enqueue: (req, body) => enqueueVolumeBackCover(req.params.id, req.params.seasonId, body),
-  applyWrite: updateVolumeSeason,
-  buildResponse: buildVolumeCoverResponse,
+  render: (req, body) => renderVolumeBackCover(req.params.id, req.params.seasonId, body),
+  buildResponse: ({ result }) => result,
 }));
 
 // Compile a trade-paperback PDF: volume front → for each issue
@@ -203,12 +164,8 @@ router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res)
 // running; the filename hook stamps `filename` on completion.
 router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler({
   schema: comicCoverRenderSchema,
-  slotField: 'cover',
-  scriptField: 'coverScript',
-  enqueue: (req, body) => enqueueComicCover(req.params.id, body),
-  applyWrite: updateComicPagesStage,
-  buildResponse: ({ result, writeResult: { issue, stage } }) =>
-    ({ ...result, cover: stage.cover, issue, stage }),
+  render: (req, body) => renderComicCover(req.params.id, body),
+  buildResponse: ({ result }) => ({ ...result, cover: result.stage.cover }),
 }));
 
 // Render the comic-issue BACK cover. Same flow as the front-cover route;
@@ -216,12 +173,8 @@ router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler
 // persisted slot (`stages.comicPages.backCover.{proofImage|finalImage}`).
 router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHandler({
   schema: comicBackCoverRenderSchema,
-  slotField: 'backCover',
-  scriptField: 'backCoverScript',
-  enqueue: (req, body) => enqueueComicBackCover(req.params.id, body),
-  applyWrite: updateComicPagesStage,
-  buildResponse: ({ result, writeResult: { issue, stage } }) =>
-    ({ ...result, backCover: stage.backCover, issue, stage }),
+  render: (req, body) => renderComicBackCover(req.params.id, body),
+  buildResponse: ({ result }) => ({ ...result, backCover: result.stage.backCover }),
 }));
 
 // Print-ready PDF export of a comic issue's rendered pages. Streams the

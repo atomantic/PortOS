@@ -155,12 +155,34 @@ describe('perpetualWork', () => {
       expect(out.actionable).toBe(true);
       expect(out.count).toBe(2); // #1 and #5 (plan is claimable); #2 #3 #4 excluded
       expect(out.sample).toEqual([1, 5]);
+      // Breakdown surfaced for the UI: 5 open, 1 in-flight (#4), 2 filtered
+      // (#2 needs-input, #3 assigned), 2 actionable.
+      expect(out.total).toBe(5);
+      expect(out.inFlightCount).toBe(1);
+      expect(out.filteredCount).toBe(2);
+    });
+
+    it('reports the open/in-flight breakdown when nothing is claimable (the "40 open but parked" case)', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'shipped, stale branch', assignees: [], labels: [] },
+          { number: 2, title: 'shipped, stale branch', assignees: [], labels: [] },
+          { number: 3, title: 'blocked', assignees: [], labels: [{ name: 'blocked' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-1\norigin/claim/issue-2\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      expect(out.total).toBe(3);
+      expect(out.inFlightCount).toBe(2); // #1 + #2 held by stale claim branches
+      expect(out.filteredCount).toBe(1); // #3 blocked
     });
 
     it('parks (no-open-issues) on an empty list', async () => {
       routeSpawn({ 'gh issue': { stdout: '[]' } });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
-      expect(out).toMatchObject({ actionable: false, reason: 'no-open-issues' });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-open-issues', total: 0, inFlightCount: 0 });
     });
 
     it('reports a transient failure when gh exits non-zero', async () => {

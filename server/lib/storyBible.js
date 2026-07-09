@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, resolveImageRef } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
+import { shortCanonPrimaryField } from './canonPrompt.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
@@ -45,6 +46,27 @@ export const BIBLE_LIMITS = Object.freeze({
   SPECIAL_TRAITS_MAX: 2000,
   VISUAL_IDENTITY_MAX: 1000,
   MOTIVATIONS_MAX: 2000,
+  // Character framework (CWQE Phase 10, #2175). The Ghost → Wound → Lie →
+  // Want → Need chain + Three Sliders + declared arc type. All OPTIONAL so
+  // every pre-existing character round-trips unchanged (absent vs empty rule).
+  // The checkable-test discipline (state the Lie in one sentence; Truth is its
+  // direct opposite; Ghost causally explains the Lie) lives in the prompt, not
+  // the sanitizer — these caps just bound each field's length.
+  GHOST_MAX: 1000,
+  WOUND_MAX: 1000,
+  LIE_MAX: 600,
+  WANT_MAX: 600,
+  NEED_MAX: 600,
+  // Secrets the character keeps (≥2 encouraged in the prompt). Short prose
+  // items, capped per-item and per-character like other string lists.
+  SECRET_MAX: 600,
+  SECRETS_PER_CHARACTER_MAX: 12,
+  // Three Sliders — proactivity / likability / competence on a 1–10 scale.
+  // Stored as integers; a value outside the range (or a non-integer) collapses
+  // to null (unset). Rule (prompt-enforced, not sanitizer-enforced): HIGH on ≥2,
+  // or HIGH on one with clear growth; all-low = boring, all-high = Mary Sue.
+  SLIDER_MIN: 1,
+  SLIDER_MAX: 10,
   LIKES_MAX: 1500,
   DISLIKES_MAX: 1500,
   MANNERISMS_MAX: 1500,
@@ -127,6 +149,15 @@ export const BIBLE_LIMITS = Object.freeze({
   // `piper:en_GB-northern_english_male`). Caps generously since 3rd-party
   // providers (ElevenLabs) use uuid-shaped voice ids.
   VOICE_ID_MAX: 200,
+  // Reveal-gated canon (#2178): `surfaceDescriptor` is the pre-reveal
+  // stand-in — what the world looks like BEFORE the spoiler is due ("the
+  // locked east wing" vs "the wing where the heir is imprisoned"). Roomy
+  // like a place description so a full surface-level paragraph fits.
+  SURFACE_DESCRIPTOR_MAX: 2000,
+  // Upper bound for the issue number a canon fact is revealed in. A generous
+  // cap that comfortably exceeds any real series length while still rejecting
+  // a hallucinated/overflowed integer.
+  REVEAL_ISSUE_MAX: 100000,
 });
 
 // Canonical provenance vocabulary. `BIBLE_SOURCE.SERIES_EXTRACT` is the
@@ -184,6 +215,13 @@ export const PLACE_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night'])
 const PLACE_INT_EXT_SET = new Set(PLACE_INT_EXT);
 const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 
+// Declared character arc type (CWQE Phase 10, #2175). A positive arc overcomes
+// the Lie and embraces the Truth; a negative arc is consumed by the Lie; a flat
+// arc holds a truth the character already knows and changes the world around
+// them instead. Unset (null) keeps the field absent for every pre-#2175 record.
+export const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
+const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
+
 const trimEnum = (raw, allowed) => {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -216,7 +254,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -741,6 +779,41 @@ function sanitizeAttachment(raw) {
   return out;
 }
 
+// Normalize a reveal-issue gate to a positive integer or null. Accepts a
+// finite number or a numeric string (LLM/JSON both occur); a 0/negative/
+// non-integer/over-cap value collapses to null (no gate). Null = the entry is
+// always visible — the backward-compatible default for every existing canon
+// entry that predates reveal gating (#2178).
+function ensureRevealIssue(raw) {
+  const n = typeof raw === 'number' ? raw : (isStr(raw) && raw.trim() !== '' ? Number(raw) : NaN);
+  if (!Number.isInteger(n) || n < 1 || n > BIBLE_LIMITS.REVEAL_ISSUE_MAX) return null;
+  return n;
+}
+
+// Normalize a Three-Sliders value (proactivity/likability/competence) to an
+// integer in [SLIDER_MIN, SLIDER_MAX] or null (unset). Accepts a finite number
+// or numeric string (LLM/JSON both occur); out-of-range / non-integer collapses
+// to null so an absent or hallucinated value doesn't masquerade as a real rating
+// (CWQE Phase 10, #2175). Null = the slider was never authored — distinct from a
+// deliberate low rating.
+function ensureSlider(raw) {
+  const n = typeof raw === 'number' ? raw : (isStr(raw) && raw.trim() !== '' ? Number(raw) : NaN);
+  if (!Number.isInteger(n) || n < BIBLE_LIMITS.SLIDER_MIN || n > BIBLE_LIMITS.SLIDER_MAX) return null;
+  return n;
+}
+
+// Build the Three-Sliders object from a raw payload. Returns an object with the
+// three keys always present (each null when unset) so the shape is stable and a
+// round-trip never strips it — mirrors the reveal-gating always-present pattern.
+function sanitizeCharacterSliders(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    proactivity: ensureSlider(src.proactivity),
+    likability: ensureSlider(src.likability),
+    competence: ensureSlider(src.competence),
+  };
+}
+
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
 // AND `locked: false` so a Universe-Builder caller can flip the bit and have
 // the change survive round-trips. Missing `locked` still collapses to absent
@@ -756,9 +829,21 @@ function applyCanonExtras(raw) {
     // every entry so the round-trip never strips it on a not-yet-promoted
     // record. See migrateBibleToCatalog.js for the backfill path.
     ingredientId: trimTo(raw.ingredientId, BIBLE_LIMITS.INGREDIENT_ID_MAX) || null,
+    // Reveal-gated canon / spoiler scoping (#2178). All three collapse to
+    // null/absent so every pre-existing entry stays "always visible" (full
+    // backward compat; peers store the fields verbatim). `revealIssue` is the
+    // issue number at/after which the fact may enter a drafting prompt;
+    // `surfaceDescriptor` is the pre-reveal stand-in substituted into context
+    // before then. `spoiler` is a soft flag (gate without a specific issue) —
+    // an entry the writer wants excluded from drafting context regardless of
+    // issue number (autonovel's "MYSTERY.md is not for drafting" pattern).
+    revealIssue: ensureRevealIssue(raw.revealIssue),
+    surfaceDescriptor: trimTo(raw.surfaceDescriptor, BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX) || null,
   };
   if (raw.locked === true) out.locked = true;
   else if (raw.locked === false) out.locked = false;
+  if (raw.spoiler === true) out.spoiler = true;
+  else if (raw.spoiler === false) out.spoiler = false;
   return out;
 }
 
@@ -806,6 +891,26 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     visualIdentity: trimTo(raw.visualIdentity, BIBLE_LIMITS.VISUAL_IDENTITY_MAX),
     // Narrative depth — drives dialogue + arc planning.
     motivations: trimTo(raw.motivations, BIBLE_LIMITS.MOTIVATIONS_MAX),
+    // Character framework (CWQE Phase 10, #2175). Ghost → Wound → Lie → Want →
+    // Need chain + declared arc type + Three Sliders + secrets. All optional —
+    // a blank string / null / empty array keeps the legacy shape so every
+    // pre-#2175 character round-trips unchanged (absent vs empty rule). The
+    // arc.*/character.consistency editorial checks read the authored Lie/Want/
+    // Need/arc-type when present so they compare plan-vs-delivery instead of
+    // inferring both.
+    ghost: trimTo(raw.ghost, BIBLE_LIMITS.GHOST_MAX),
+    wound: trimTo(raw.wound, BIBLE_LIMITS.WOUND_MAX),
+    lie: trimTo(raw.lie, BIBLE_LIMITS.LIE_MAX),
+    want: trimTo(raw.want, BIBLE_LIMITS.WANT_MAX),
+    need: trimTo(raw.need, BIBLE_LIMITS.NEED_MAX),
+    // Declared arc type — null (unset) unless it's one of the three known
+    // values, so a legacy record with no arc type stays absent.
+    arcType: trimEnum(raw.arcType, CHARACTER_ARC_TYPE_SET),
+    // Three Sliders — always-present object, each axis null when unset.
+    sliders: sanitizeCharacterSliders(raw.sliders),
+    // Secrets the character keeps (≥2 encouraged). Plain string list; empty
+    // array is the legacy shape.
+    secrets: cleanStringArray(raw.secrets, BIBLE_LIMITS.SECRET_MAX, BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX),
     likes: trimTo(raw.likes, BIBLE_LIMITS.LIKES_MAX),
     dislikes: trimTo(raw.dislikes, BIBLE_LIMITS.DISLIKES_MAX),
     mannerisms: trimTo(raw.mannerisms, BIBLE_LIMITS.MANNERISMS_MAX),
@@ -955,6 +1060,172 @@ export const SANITIZERS = Object.freeze({
   object: sanitizeObject,
 });
 
+// ---------------------------------------------------------------------------
+// Reveal-gated canon / spoiler scoping (#2178)
+// ---------------------------------------------------------------------------
+//
+// Canon context is injected into every issue's drafting prompt, so a character
+// secret or late-story fact could leak into the prose long before it's due.
+// A canon entry can carry a reveal gate:
+//   - `revealIssue` (int)  — the entry's fact is hidden from any issue numbered
+//     BEFORE this. At/after it, the entry is fully visible.
+//   - `spoiler: true`      — a hard gate with no specific issue: excluded from
+//     ALL drafting context (autonovel's "MYSTERY.md is not for drafting").
+//   - `surfaceDescriptor`  — the pre-reveal stand-in. When present on a gated
+//     entry, the entry is KEPT in context but reduced to a spoiler-free surface
+//     view (identity + surfaceDescriptor only). When absent, the gated entry is
+//     dropped from context entirely.
+//
+// Absent gate fields = always visible — every pre-#2178 entry round-trips
+// unchanged. The JUDGE (#2167) and editorial checks receive the FULL canon:
+// this filter is ONLY for the writer-facing drafting/revision context.
+
+// The field a surface view replaces with `surfaceDescriptor` is the kind's
+// SHORT primary descriptor — sourced from canonPrompt's SHORT_SPEC via
+// `shortCanonPrimaryField` so there's no parallel per-kind map to drift.
+
+// True when an entry carries ANY reveal gate (a hard `spoiler` flag or a valid
+// numeric `revealIssue`) — the shared predicate behind `canonHasRevealGated`,
+// `revealGatedCanonRows`, and the client badge. Issue-agnostic: use
+// `isCanonEntryGatedForIssue` when you need "gated FOR this issue".
+export function isEntryRevealGated(entry) {
+  return !!entry && (entry.spoiler === true || ensureRevealIssue(entry.revealIssue) != null);
+}
+
+/**
+ * True when a canon entry is reveal-gated for the given issue number:
+ * a hard `spoiler` flag, OR a `revealIssue` the issue hasn't reached yet.
+ * A non-finite/absent `issueNumber` is treated as "unknown position" and only
+ * the hard `spoiler` flag gates (a numeric reveal gate can't be evaluated
+ * without knowing which issue we're drafting).
+ */
+export function isCanonEntryGatedForIssue(entry, issueNumber) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (entry.spoiler === true) return true;
+  const reveal = ensureRevealIssue(entry.revealIssue);
+  if (reveal == null) return false;
+  const n = typeof issueNumber === 'number' ? issueNumber : Number(issueNumber);
+  if (!Number.isFinite(n)) return false;
+  return n < reveal;
+}
+
+/**
+ * Reduce a gated entry to its spoiler-free surface view: identity fields plus
+ * the `surfaceDescriptor` substituted into the kind's primary descriptor
+ * field. Every other narrative/prose field is dropped so no spoiler-bearing
+ * text (background, significance, motivations, …) leaks through. Returns null
+ * when the entry has no `surfaceDescriptor` — the caller drops it from context.
+ */
+function surfaceCanonEntry(kind, entry) {
+  const surface = trimTo(entry?.surfaceDescriptor, BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX);
+  if (!surface) return null;
+  const descField = shortCanonPrimaryField(kind);
+  const out = {
+    id: entry.id,
+    name: entry.name || '',
+    aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+    // Preserve the identity/continuity keys a matcher or roster needs, but
+    // nothing that carries the secret.
+    ...(kind === 'character' && entry.role ? { role: entry.role } : {}),
+    ...(kind === 'place' && entry.slugline ? { slugline: entry.slugline } : {}),
+    // Flag so any downstream renderer / debugging can tell this is a masked view.
+    surfaced: true,
+  };
+  if (descField) out[descField] = surface;
+  return out;
+}
+
+/**
+ * Filter one kind's canon list for a drafting/revision prompt at `issueNumber`.
+ * Ungated entries pass through untouched; gated entries with a
+ * `surfaceDescriptor` are reduced to their surface view; gated entries without
+ * one are dropped. Pure — returns a new array, never mutates the input.
+ */
+export function filterCanonListForIssue(list, kind, issueNumber) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const entry of list) {
+    if (!isCanonEntryGatedForIssue(entry, issueNumber)) {
+      out.push(entry);
+      continue;
+    }
+    const surfaced = surfaceCanonEntry(kind, entry);
+    if (surfaced) out.push(surfaced);
+    // else: no surface stand-in → hidden from drafting context entirely.
+  }
+  return out;
+}
+
+/**
+ * Filter a whole `{ characters, places, objects }` canon bundle for a drafting
+ * prompt at `issueNumber`. Returns a NEW bundle with each list reveal-filtered;
+ * a nullish canon returns empty lists. Used by `buildStageContext` and the
+ * revision-loop cast builder — NOT by the editorial checks (they get full canon).
+ */
+export function filterCanonForIssue(canon, issueNumber) {
+  return {
+    characters: filterCanonListForIssue(canon?.characters, 'character', issueNumber),
+    places: filterCanonListForIssue(canon?.places, 'place', issueNumber),
+    objects: filterCanonListForIssue(canon?.objects, 'object', issueNumber),
+  };
+}
+
+/**
+ * True when ANY entry across a `{ characters, places, objects }` canon bundle
+ * carries a reveal gate (a `revealIssue` or a `spoiler` flag). The
+ * `continuity.premature-reveal` editorial check gates on this so it never fires
+ * on a series that authored no reveal-gated canon.
+ */
+export function canonHasRevealGated(canon) {
+  for (const key of BIBLE_KEYS) {
+    const list = canon?.[key];
+    if (Array.isArray(list) && list.some(isEntryRevealGated)) return true;
+  }
+  return false;
+}
+
+// The spoiler-bearing narrative fields per kind whose content the
+// premature-reveal prompt names as "the gated fact" (what a leak looks like).
+// Keyed by BIBLE_KIND so a future kind added to the enum surfaces here.
+const SECRET_FIELDS_BY_KIND = Object.freeze({
+  [BIBLE_KIND.CHARACTER]: ['physicalDescription', 'personality', 'background', 'motivations', 'specialTraits'],
+  [BIBLE_KIND.PLACE]: ['description', 'recurringDetails'],
+  [BIBLE_KIND.OBJECT]: ['description', 'significance'],
+});
+
+/**
+ * Enumerate every reveal-gated canon entry across a bundle as a compact row
+ * `{ kind, name, revealIssue, spoiler, surfaceDescriptor, fact }` for the
+ * `continuity.premature-reveal` prompt. `fact` is the spoiler content the prose
+ * must NOT reveal early — the kind's primary descriptor plus the deeper
+ * narrative field so the model knows what "leaked" looks like. Pure.
+ */
+export function revealGatedCanonRows(canon) {
+  const rows = [];
+  // Iterate kinds via BIBLE_KIND → BIBLE_FIELD (kind → plural key) so the
+  // kind↔key mapping stays derived from the module's single source of truth.
+  for (const kind of BIBLE_KINDS) {
+    const list = canon?.[BIBLE_FIELD[kind]];
+    if (!Array.isArray(list)) continue;
+    for (const e of list) {
+      if (!isEntryRevealGated(e)) continue;
+      const fact = SECRET_FIELDS_BY_KIND[kind]
+        .map((f) => trimTo(e[f], 600))
+        .filter(Boolean)
+        .join(' — ');
+      rows.push({
+        kind,
+        name: trimTo(e.name, BIBLE_LIMITS.NAME_MAX) || '(unnamed)',
+        revealIssue: ensureRevealIssue(e.revealIssue),
+        spoiler: e.spoiler === true,
+        surfaceDescriptor: trimTo(e.surfaceDescriptor, BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX) || null,
+        fact,
+      });
+    }
+  }
+  return rows;
+}
+
 // Per-kind merge config:
 //   userEditable — fields filled only when blank on the existing entry
 //   keyFields — which fields contribute to the dedup lookup map, paired
@@ -975,6 +1246,8 @@ const MERGE_CONFIG = Object.freeze({
       'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
       'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
       'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
+      // Character framework (CWQE Phase 10, #2175) — fill only when blank.
+      'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'secrets',
     ],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },

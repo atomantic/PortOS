@@ -3,6 +3,7 @@ import express from 'express';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { request } from '../lib/testHelper.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-auth-routes-' });
@@ -12,9 +13,16 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makeProxy(actual);
 });
 
-const resetSettings = () => {
-  writeFileSync(join(tempRoot, 'settings.json'), '{}\n');
+// Reset settings.json through the shared helper so the getSettings() read cache
+// is dropped on every reset — see server/lib/settingsTestUtil.js. This suite
+// passes today only because buildApp()'s vi.resetModules() incidentally discards
+// the cache AFTER this write; routing through the helper makes the invalidation
+// an explicit invariant so a future warm-then-direct-write can't regress silently.
+const { writeSettingsFile } = bindSettingsFile(tempRoot);
+
+const resetSettings = async () => {
   writeFileSync(join(tempRoot, 'auth-sessions.json'), '{"tokens":[]}\n');
+  await writeSettingsFile({});
 };
 
 const buildApp = async () => {
@@ -28,8 +36,8 @@ const buildApp = async () => {
   return app;
 };
 
-beforeEach(() => {
-  resetSettings();
+beforeEach(async () => {
+  await resetSettings();
 });
 
 afterAll(() => {

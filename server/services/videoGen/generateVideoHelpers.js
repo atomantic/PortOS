@@ -11,7 +11,73 @@
 import { existsSync, statSync } from 'fs';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
+import { formatBytes } from '../../lib/fileUtils.js';
 import { videoGenEvents } from './events.js';
+
+/**
+ * Parse byte size values from strings, returning bytes as a number.
+ * Handles formats like: "1.5G", "500MB", "1.5GiB", "1.00G/2.00G"
+ * Returns null if no parseable byte value found.
+ * @param {string} str
+ * @returns {{ downloaded: number|null, total: number|null }}
+ */
+export function parseByteProgress(str) {
+  // Pattern matches: 1.5G, 500MB, 2.00GiB, etc.
+  // Group 1: number (with optional decimal)
+  // Group 2: unit (B, K, KB, KiB, M, MB, MiB, G, GB, GiB, T, TB, TiB)
+  const bytePattern = /(\d+(?:\.\d+)?)\s*(B|Ki?B?|Mi?B?|Gi?B?|Ti?B?)(?![a-zA-Z])/gi;
+  const matches = [...str.matchAll(bytePattern)];
+  if (matches.length === 0) return { downloaded: null, total: null };
+
+  const parseUnit = (val, unit) => {
+    const num = parseFloat(val);
+    const u = unit.toUpperCase().replace(/I?B$/, '');
+    switch (u) {
+      case '': case 'B': return num;
+      case 'K': return num * 1024;
+      case 'M': return num * 1024 ** 2;
+      case 'G': return num * 1024 ** 3;
+      case 'T': return num * 1024 ** 4;
+      default: return num;
+    }
+  };
+
+  // If we have two matches in "X/Y" format, first is downloaded, second is total
+  if (matches.length >= 2) {
+    return {
+      downloaded: parseUnit(matches[0][1], matches[0][2]),
+      total: parseUnit(matches[1][1], matches[1][2]),
+    };
+  }
+  // Single match — treat as total (or downloaded, context-dependent)
+  return {
+    downloaded: null,
+    total: parseUnit(matches[0][1], matches[0][2]),
+  };
+}
+
+// Re-export formatBytes from fileUtils for consumers of this module
+export { formatBytes };
+
+/**
+ * Format a download progress message with optional byte counts.
+ * @param {string} rawText - Original text after DOWNLOAD: prefix
+ * @param {{ downloaded: number|null, total: number|null }} byteInfo
+ * @returns {string}
+ */
+export function formatDownloadMessage(rawText, byteInfo) {
+  const { downloaded, total } = byteInfo;
+  if (total != null && total > 0) {
+    const totalStr = formatBytes(total);
+    if (downloaded != null && downloaded > 0) {
+      const downloadedStr = formatBytes(downloaded);
+      return `Downloading model · first run · ${downloadedStr} / ${totalStr}`;
+    }
+    return `Downloading model · first run · ${totalStr}`;
+  }
+  // Fall back to raw text if no byte info parsed
+  return `Downloading model... ${rawText}`;
+}
 
 /**
  * Build the stdout/stderr line handler for one generation. Parses the
@@ -28,6 +94,11 @@ import { videoGenEvents } from './events.js';
  * @param {RegExp} ctx.pythonNoiseRe - lines to silently drop (PYTHON_NOISE_RE)
  */
 export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
+  // Phase tracking — download vs inference, so tqdm bars with byte counts can
+  // be formatted as "Downloading model · first run · X.X GB" during downloads.
+  let currentPhase = 'starting';
+  let isDownloading = false;
+
   return (raw) => {
     const line = raw.trim();
     if (!line) return true;
@@ -66,6 +137,11 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     }
     if (line.startsWith('STAGE:')) {
       const parts = line.split(':');
+      // Track phase for tqdm bar formatting — STAGE:download* sets download mode,
+      // other phases (inference, encode, decode, etc.) clear it.
+      const stage = (parts[1] || '').toLowerCase();
+      currentPhase = stage;
+      isDownloading = stage.startsWith('download');
       // Three STAGE: shapes ship today:
       //   STAGE:<stage>:step:<cur>:<total>:<msg>  — explicit progress (parts[2]='step')
       //   STAGE:<stage>:heartbeat:<N>s            — idle-watchdog ping (parts[2]='heartbeat')
@@ -89,7 +165,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         const step = parseInt(parts[3], 10) || 0;
         const total = parseInt(parts[4], 10) || 1;
         const label = parts.slice(5).join(':');
-        broadcastSse(job, { type: 'progress', progress: step / total, message: label });
+        broadcastSse(job, { type: 'progress', progress: step / total, message: label, phase: currentPhase });
         // Pass the python-side label as `message` so the dispatcher surfaces
         // it to the client instead of falling back to the synthesized
         // "Rendering step X/Y" (which hides useful labels like "Loading
@@ -106,15 +182,34 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       return true;
     }
     if (line.startsWith('DOWNLOAD:')) {
-      const message = `Downloading model... ${line.slice(9)}`;
-      broadcastSse(job, { type: 'status', message });
-      videoGenEvents.emit('status', { generationId: jobId, message });
+      isDownloading = true;
+      currentPhase = 'download';
+      const rawText = line.slice(9);
+      const byteInfo = parseByteProgress(rawText);
+      const message = formatDownloadMessage(rawText, byteInfo);
+      // Include downloadedBytes/totalBytes fields for clients that want numeric progress
+      const frame = { type: 'status', message, phase: currentPhase };
+      if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
+      if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
+      broadcastSse(job, frame);
+      videoGenEvents.emit('status', { generationId: jobId, message, ...byteInfo });
       return true;
     }
     const m = line.match(/(\d+)%\|/);
     if (m) {
       const pct = parseInt(m[1], 10) / 100;
-      broadcastSse(job, { type: 'progress', progress: pct, message: line });
+      // Check for byte sizes in tqdm bars (e.g., "50%|█████     | 1.00G/2.00G")
+      // which appear during HF downloads. Format nicely during download phase.
+      const byteInfo = parseByteProgress(line);
+      let displayMessage = line;
+      const frame = { type: 'progress', progress: pct, phase: currentPhase };
+      if (isDownloading && (byteInfo.downloaded != null || byteInfo.total != null)) {
+        displayMessage = formatDownloadMessage(line, byteInfo);
+        if (byteInfo.downloaded != null) frame.downloadedBytes = byteInfo.downloaded;
+        if (byteInfo.total != null) frame.totalBytes = byteInfo.total;
+      }
+      frame.message = displayMessage;
+      broadcastSse(job, frame);
       // Omit `message` on the queue-dispatcher emit: the raw tqdm bar
       // (`60%|██████    | 6/10 [00:30<00:20, ...]`) is terminal noise that
       // would clobber the last meaningful STATUS/STAGE line on every
@@ -127,13 +222,22 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
 }
 
 /**
- * Whether a watchdog-triggered SIGKILL should be treated as success: the
- * render emitted its completion marker (so the watchdog armed + fired) and
- * the output file is actually on disk and non-empty. A marker without a real
- * output (malformed runtime) still fails loudly.
+ * Whether a PortOS-fired SIGKILL should be treated as success rather than a
+ * failure. Two Node-side watchdogs can SIGKILL a render:
+ *   - the completion watchdog (armed after a completion marker, guards a
+ *     post-completion teardown hang), and
+ *   - the pre-output idle-stall deadline (fires when a render goes silent).
+ * Either kill is a SUCCESS when a real output file is already on disk and
+ * non-empty — e.g. a runtime that wrote its .mp4 but never printed a
+ * recognized completion marker (so the completion watchdog never armed) and
+ * then hung: the idle timer kills it, but the finished video must still be
+ * kept, not discarded as "no output". A kill with no output on disk (a genuine
+ * pre-output stall, or a marker from a malformed runtime that wrote nothing)
+ * still fails loudly. `idleStallFired` defaults false so existing callers that
+ * only track the completion watchdog keep their exact prior behavior.
  */
-export function isWatchdogSuccess({ completionWatchdogFired, signal, outputPath }) {
-  return completionWatchdogFired && signal === 'SIGKILL'
+export function isWatchdogSuccess({ completionWatchdogFired, idleStallFired = false, signal, outputPath }) {
+  return (completionWatchdogFired || idleStallFired) && signal === 'SIGKILL'
     && existsSync(outputPath) && statSync(outputPath).size > 0;
 }
 

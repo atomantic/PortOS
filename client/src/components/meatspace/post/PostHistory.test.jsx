@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 vi.mock('../../../services/api', () => ({
   getPostSessions: vi.fn(),
@@ -10,6 +11,23 @@ vi.mock('../../../services/api', () => ({
 // assertions below target the non-chart DOM (stat cards + drill breakdown).
 import PostHistory from './PostHistory';
 import { getPostSessions, getPostStats } from '../../../services/api';
+
+// Surfaces the current router path so navigation-on-row-click can be asserted —
+// rows now open the deep-linkable /post/session/:id detail (issue #2098) rather
+// than expanding inline.
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname}</div>;
+}
+
+function renderHistory() {
+  return render(
+    <MemoryRouter initialEntries={['/post/history']}>
+      <PostHistory onBack={() => {}} />
+      <LocationProbe />
+    </MemoryRouter>
+  );
+}
 
 // Runners save COARSE module keys (`mental-math`, `llm-drills`) — not DOMAINS
 // keys — so getPostStats keys byModule/byDrill by those. The dashboard must
@@ -48,7 +66,7 @@ beforeEach(() => {
 
 describe('PostHistory analytics dashboard', () => {
   it('surfaces streaks and overall stats without opening a session', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('Current Streak')).toBeTruthy());
     expect(screen.getByText('Longest Streak')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy(); // current streak
@@ -57,7 +75,7 @@ describe('PostHistory analytics dashboard', () => {
   });
 
   it('renders per-domain and per-drill breakdowns from getPostStats', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('Drill Breakdown')).toBeTruthy());
     // Domain labels come from DOMAINS metadata, not raw keys.
     expect(screen.getAllByText('Mental Math').length).toBeGreaterThan(0);
@@ -65,14 +83,10 @@ describe('PostHistory analytics dashboard', () => {
     // Per-drill labels render inside the breakdown.
     expect(screen.getByText('Multiplication')).toBeTruthy();
     expect(screen.getByText('Pun & Wordplay')).toBeTruthy();
-    // The 'Mental Math' / 'Wordplay' domain labels above can ONLY appear when the
-    // domain is derived from the drill TYPE (multiplication→math, pun-wordplay→
-    // wordplay). The coarse `byModule`/byDrill keys are 'mental-math'/'llm-drills',
-    // so the earlier byModule-keyed implementation would have rendered those raw.
   });
 
   it('reloads stats when the range selector changes', async () => {
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(30));
     fireEvent.click(screen.getByText('7d'));
     await waitFor(() => expect(getPostStats).toHaveBeenCalledWith(7));
@@ -81,8 +95,48 @@ describe('PostHistory analytics dashboard', () => {
   it('shows an empty state when no sessions are in range', async () => {
     getPostSessions.mockResolvedValue([]);
     getPostStats.mockResolvedValue({ ...STATS, sessionCount: 0, overall: null, byModule: {}, byDrill: {} });
-    render(<PostHistory onBack={() => {}} />);
+    renderHistory();
     await waitFor(() => expect(screen.getByText('No sessions found for this range.')).toBeTruthy());
     expect(screen.queryByText('Drill Breakdown')).toBeNull();
+  });
+});
+
+// Rows are now navigation controls into the deep-linkable session detail
+// (/post/session/:id) — the per-question review (#2093) lives on that page now.
+describe('PostHistory session rows navigate to the detail route (issue #2098)', () => {
+  it('exposes each session row as a keyboard-focusable navigation control', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    const row = screen.getByRole('button', { name: /Session 2026-06-01/ });
+    expect(row).toHaveAttribute('tabindex', '0');
+    expect(row).not.toHaveAttribute('aria-expanded');
+  });
+
+  it('navigates to /post/session/:id on click', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Session 2026-06-01/ }));
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
+  });
+
+  it('navigates via the Enter key (default prevented so the page does not scroll)', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-02')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-02/ }), { key: 'Enter' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/b');
+  });
+
+  it('navigates via the Space key', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: ' ' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/session/a');
+  });
+
+  it('ignores unrelated keys — a row does not navigate on an arbitrary keypress', async () => {
+    renderHistory();
+    await waitFor(() => expect(screen.getByText('2026-06-01')).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole('button', { name: /Session 2026-06-01/ }), { key: 'a' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/post/history');
   });
 });

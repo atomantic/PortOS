@@ -21,6 +21,7 @@ import {
   Edit3,
   Check,
   X,
+  Building2,
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -107,6 +108,9 @@ export default function AccountsTab() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  // Map socialAccountId → { orgId, orgName } for the "in org registry" badge (#2147).
+  const [orgLinks, setOrgLinks] = useState({});
+  const [linkingId, setLinkingId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -114,15 +118,36 @@ export default function AccountsTab() {
   }, []);
 
   const loadData = async () => {
-    const [accountsData, platformsData, statsData] = await Promise.all([
+    const [accountsData, platformsData, statsData, linksData] = await Promise.all([
       api.getSocialAccounts().catch(() => ({ accounts: [] })),
       api.getSocialAccountPlatforms().catch(() => ({ platforms: [] })),
-      api.getSocialAccountStats().catch(() => null)
+      api.getSocialAccountStats().catch(() => null),
+      // Degrades to no badges if Privacy Center isn't provisioned yet.
+      api.getSocialAccountOrgLinks({ silent: true }).catch(() => [])
     ]);
     setAccounts(accountsData.accounts || []);
     setPlatforms(platformsData.platforms || []);
     setStats(statsData);
+    setOrgLinks(Object.fromEntries((linksData || []).map(l => [l.socialAccountId, l])));
     setLoading(false);
+  };
+
+  // "Add to org registry": create a platform-category org linked to this account.
+  const handleAddToOrgRegistry = async (account) => {
+    setLinkingId(account.id);
+    const created = await api.createPrivacyOrg({
+      name: account.displayName || account.username,
+      category: 'platform',
+      website: account.url || '',
+      socialAccountId: account.id,
+      notes: `Linked from Digital Twin social account: ${account.platform}/${account.username}`
+    }).catch(() => null);
+    if (created) {
+      // Reactive update — no full refetch.
+      setOrgLinks(prev => ({ ...prev, [account.id]: { socialAccountId: account.id, orgId: created.id, orgName: created.name } }));
+      toast.success(`Added ${created.name} to org registry`);
+    }
+    setLinkingId(null);
   };
 
   const handleSubmit = async () => {
@@ -470,6 +495,28 @@ export default function AccountsTab() {
                         <ExternalLink className="w-3 h-3" />
                       </a>
                     )}
+                    {/* Org-registry cross-link (#2147) */}
+                    <div className="mt-1">
+                      {orgLinks[account.id] ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-port-success/15 text-port-success rounded border border-port-success/30"
+                          title={`In org registry as "${orgLinks[account.id].orgName}"`}
+                        >
+                          <Building2 className="w-3 h-3" />
+                          In org registry
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => handleAddToOrgRegistry(account)}
+                          disabled={linkingId === account.id}
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 text-gray-400 hover:text-white border border-port-border rounded hover:bg-port-bg transition-colors disabled:opacity-50"
+                          title="Track this account in the Privacy Center org registry"
+                        >
+                          {linkingId === account.id ? <BrailleSpinner /> : <Building2 className="w-3 h-3" />}
+                          Add to org registry
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Actions */}

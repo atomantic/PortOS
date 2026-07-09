@@ -38,6 +38,7 @@ import {
   GraduationCap,
   Settings,
   Users,
+  CalendarClock,
   Upload,
   SquareTerminal,
   Globe,
@@ -69,6 +70,8 @@ import {
   FileInput,
   FilePen,
   MessageCircle,
+  Radio,
+  TrendingUp,
   Swords,
   HardDrive,
   Layers,
@@ -93,6 +96,7 @@ import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
+import { useOnDemandTaskToast } from '../hooks/useOnDemandTaskToast';
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
@@ -150,6 +154,7 @@ const navItems = [
       { to: '/brain/notes', label: 'Notes', icon: FileText },
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
+      { to: '/timeline', label: 'Timeline', icon: CalendarClock },
       { to: '/tribe', label: 'Tribe', icon: Users },
       { to: '/brain/trust', label: 'Trust', icon: Shield },
       { to: '/wiki/overview', label: 'Wiki', icon: BookOpen },
@@ -182,6 +187,7 @@ const navItems = [
       { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
       { to: '/cos/health', label: 'Health', icon: Activity },
+      { to: '/layered-intelligence', label: 'Layered Intelligence', icon: Layers },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
@@ -313,6 +319,7 @@ const navItems = [
       { to: '/digital-twin/import', label: 'Import', icon: Upload },
       { to: '/digital-twin/interview', label: 'Interview', icon: MessageSquare },
       { to: '/digital-twin/overview', label: 'Overview', icon: Heart },
+      { to: '/privacy/overview', label: 'Privacy', icon: Shield },
       { to: '/digital-twin/taste', label: 'Taste', icon: Palette },
       { to: '/digital-twin/test', label: 'Test', icon: CheckCircle },
       { to: '/digital-twin/time-capsule', label: 'Time Capsule', icon: Archive },
@@ -327,6 +334,8 @@ const navItems = [
       { to: '/post/history', label: 'History', icon: History },
       { to: '/post/launcher', label: 'Launcher', icon: Play },
       { to: '/post/memory', label: 'Memory', icon: Brain },
+      { to: '/post/morse', label: 'Morse', icon: Radio },
+      { to: '/post/progress', label: 'Progress', icon: TrendingUp },
       { to: '/post/wordplay', label: 'Wordplay', icon: MessageCircle },
     ],
   },
@@ -489,6 +498,9 @@ export default function Layout() {
 
   // Subscribe to agent completion feedback toasts
   useAgentFeedbackToast();
+
+  // Toast when a user-triggered on-demand task run found no actionable work
+  useOnDemandTaskToast();
 
   // Live AI operation status (model loads, "calling LM Studio…", etc.)
   useAIStatusNotifications();

@@ -13,12 +13,23 @@
  * directly). This is file-backed sidecar data (media-adjacent binary + vector
  * blobs, no relational shape) per the docs/STORAGE.md classification — the same
  * class as media-annotations.json / thumbnails, NOT a db-primary record.
+ *
+ * Phase 3 adds free-standing **blank-canvas sketches** (no backing image) keyed
+ * by `sketch:<id>`, attachable to pipeline storyboard scenes. That `sketch`
+ * kind is DELIBERATELY local to this service and is NOT part of the shared
+ * `mediaItemKey` vocabulary (ITEM_KINDS stays image|video) — so it can never
+ * leak into media collections, peer-sync asset manifests, or the media_assets
+ * table, all of which enumerate the shared kinds. Storage layout is identical:
+ * the same base64url-of-key → `<id>.json` + `<id>.png` sidecar pair. A blank
+ * sketch's flattened PNG is a self-contained raster (no source image to
+ * composite), so the Phase 2 img2img feedback path works on it unchanged.
  */
 
 import { join } from 'path';
-import { unlink } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { unlink, access } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, tryReadFile } from '../lib/fileUtils.js';
-import { isValidKey, parseKey } from '../lib/mediaItemKey.js';
+import { isValidKey as isValidMediaKey, parseKey } from '../lib/mediaItemKey.js';
 
 const SKETCH_DIR = join(PATHS.data, 'media-sketches');
 
@@ -30,7 +41,21 @@ export const MAX_STROKES = 5000;
 export const MAX_POINTS_PER_STROKE = 20000;
 export const STROKE_MODES = new Set(['draw', 'erase']);
 
-export { isValidKey };
+// Blank-canvas sketch keys (Phase 3). `sketch:<uuid>` — a namespace local to
+// this service (see the module header). The id half is a UUID we mint, so it's
+// always a safe single path token.
+const BLANK_SKETCH_PREFIX = 'sketch:';
+const BLANK_SKETCH_ID = /^sketch:[a-f0-9-]{36}$/;
+
+/** A `sketch:<uuid>` blank-canvas key this service owns (not a shared media key). */
+export const isBlankSketchKey = (key) => typeof key === 'string' && BLANK_SKETCH_ID.test(key);
+
+/** Mint a fresh blank-canvas sketch key. */
+export const createBlankSketchKey = () => `${BLANK_SKETCH_PREFIX}${randomUUID()}`;
+
+// A key this service can persist: either a shared `image:<ref>` media key OR a
+// locally-owned `sketch:<uuid>` blank canvas. Video keys stay unsupported.
+export const isValidKey = (key) => isBlankSketchKey(key) || isValidMediaKey(key);
 
 // A ref is an arbitrary filename (e.g. `image:my file:v2.png` is rejected by
 // parseKey, but `image:my-file.png` is fine and still needs escaping for a
@@ -110,14 +135,29 @@ export async function getSketchPng(key) {
 }
 
 /**
+ * Absolute path to a key's flattened PNG sidecar when it exists on disk, else
+ * null. Phase 2 (issue #2036) feeds this file to the img2img regen pipeline as
+ * the init image, so it needs the path (not the bytes) to hand off to the runner.
+ */
+export async function getSketchPngPath(key) {
+  if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  const path = pngPathFor(key);
+  return access(path).then(() => path).catch(() => null);
+}
+
+/**
  * Persist (or replace) the sketch for a key. An empty stroke list removes the
  * sidecar entirely so a fully-erased canvas doesn't leave a stale record.
  * Returns the stored projection `{ key, width, height, strokes, updatedAt, hasPng }`.
  */
 export async function saveSketch(key, input) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
-  const parsed = parseKey(key);
-  if (parsed.kind !== 'image') throw makeErr('Only image media can be annotated', ERR_VALIDATION);
+  // A blank-canvas sketch (`sketch:<uuid>`) has no backing media; any other key
+  // must be an `image:<ref>` — video and the rest of the shared vocabulary stay
+  // unsupported (a video can't carry a stroke overlay in this UI).
+  if (!isBlankSketchKey(key) && parseKey(key)?.kind !== 'image') {
+    throw makeErr('Only image media or blank-canvas sketches can be annotated', ERR_VALIDATION);
+  }
   const clean = sanitizeSketchInput(input);
   await ensureDir(SKETCH_DIR);
 

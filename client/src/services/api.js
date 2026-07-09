@@ -23,6 +23,9 @@ export * from './apiPersonalities.js';
 export * from './apiAccounts.js';
 export * from './apiSchedules.js';
 export * from './apiMessages.js';
+export * from './apiSignal.js';
+export * from './apiSpotify.js';
+export * from './apiYoutube.js';
 export * from './apiCalendar.js';
 export * from './apiGoals.js';
 export * from './apiReview.js';
@@ -34,6 +37,7 @@ export * from './apiGithub.js';
 export * from './apiLoops.js';
 export * from './apiMemory.js';
 export * from './apiTribe.js';
+export * from './apiTimeline.js';
 export * from './apiBrain.js';
 export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';
@@ -67,6 +71,7 @@ export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
 export * from './apiAuth.js';
 export * from './apiCity.js';
+export * from './apiPrivacy.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

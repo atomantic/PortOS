@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ClipboardList,
@@ -234,11 +234,33 @@ export default function Review() {
     if (ok) handleQueueDismiss(item.id);
   };
 
-  const grouped = items.reduce((acc, item) => {
+  // Derived review state. Memoized because this page subscribes to
+  // review:item:created/updated/deleted socket events and re-renders on each —
+  // without memoization every one of these filter/sort passes over `items` reruns
+  // on unrelated re-renders (typing, hover state). Hooks must run before the
+  // loading early-return, so they live here above it.
+  const grouped = useMemo(() => items.reduce((acc, item) => {
     if (!acc[item.type]) acc[item.type] = [];
     acc[item.type].push(item);
     return acc;
-  }, {});
+  }, {}), [items]);
+
+  const queueItems = useMemo(
+    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id)),
+    [queue, dismissedQueueIds]);
+  const queueSourceErrors = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
+    [queue]);
+
+  const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+
+  const actionableItems = useMemo(() => pendingItems
+    .filter(isActionableItem)
+    .sort((a, b) => {
+      const priority = TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type];
+      if (priority !== 0) return priority;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    }), [pendingItems]);
 
   if (loading) {
     return (
@@ -248,24 +270,15 @@ export default function Review() {
     );
   }
 
-  const queueItems = (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id));
-  const queueSourceErrors = Object.entries(queue?.sources || {}).filter(([, s]) => s.error);
-
-  const pendingItems = items.filter(i => i.status === 'pending');
-  const pendingCount = pendingItems.length;
+  // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain
+  // consts, not memos: each is O(n) filter or O(8) slice with no consumer that
+  // needs referential stability, so a hook here would be pure ceremony.
   const pendingAlerts = pendingItems.filter(i => i.type === 'alert');
   const pendingCos = pendingItems.filter(i => i.type === 'cos');
   const pendingTodos = pendingItems.filter(i => i.type === 'todo');
-
-  const actionableItems = pendingItems
-    .filter(isActionableItem)
-    .sort((a, b) => {
-      const priority = TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type];
-      if (priority !== 0) return priority;
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    });
-
   const topActionItems = actionableItems.slice(0, 8);
+
+  const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
 
   return (

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { presetToRenderParams, ASPECT_PRESETS, QUALITY_PRESETS, ASPECT_RATIOS } from './creativeDirectorPresets.js';
+import { presetToRenderParams, ASPECT_PRESETS, QUALITY_PRESETS, ASPECT_RATIOS, resolveAspectDimensions } from './creativeDirectorPresets.js';
 
 describe('presetToRenderParams', () => {
   it('returns valid params for all current aspect ratios', () => {
@@ -31,5 +31,23 @@ describe('presetToRenderParams', () => {
   it('rounds numFrames to a multiple of 8 and floors at 8', () => {
     const params = presetToRenderParams({ aspectRatio: '1:1', quality: 'draft', durationSeconds: 0.1 });
     expect(params.numFrames).toBe(8);
+  });
+});
+
+describe('resolveAspectDimensions (#1938)', () => {
+  it('returns the preset dims for a known ratio', () => {
+    expect(resolveAspectDimensions('16:9')).toEqual({ width: 768, height: 432 });
+  });
+
+  it('degrades to the default { width: 0, height: 0 } for an unknown ratio', () => {
+    expect(resolveAspectDimensions('bogus')).toEqual({ width: 0, height: 0 });
+    expect(resolveAspectDimensions(undefined)).toEqual({ width: 0, height: 0 });
+  });
+
+  it('honors a caller-supplied fallback (first-pass gen passes {} so the worker default applies)', () => {
+    const dims = resolveAspectDimensions('bogus', {});
+    expect(dims).toEqual({});
+    expect(dims.width).toBeUndefined();
+    expect(dims.height).toBeUndefined();
   });
 });

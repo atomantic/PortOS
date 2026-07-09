@@ -29,6 +29,7 @@ const TABBED_PAGES = [
   { prefix: '/calendar', file: 'client/src/pages/Calendar.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/goals', file: 'client/src/pages/Goals.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/insights', file: 'client/src/pages/Insights.jsx', kind: 'ids', constName: 'TABS' },
+  { prefix: '/privacy', file: 'client/src/pages/Privacy.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },

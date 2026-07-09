@@ -42,32 +42,34 @@ async function collectTwinData() {
   const jsonFiles = ['meta.json', 'identity.json', 'goals.json', 'taste-profile.json',
     'feedback.json', 'genome.json', 'longevity.json', 'chronotype.json'];
 
-  for (const filename of jsonFiles) {
-    const filePath = join(DIGITAL_TWIN_DIR, filename);
-    if (existsSync(filePath)) {
-      const content = await readFile(filePath, 'utf-8');
-      files[filename] = JSON.parse(content);
-    }
-  }
+  // Read the fixed JSON set plus the autobiography stories concurrently — they
+  // are independent files, so a sequential loop just serialized disk latency on
+  // snapshot creation.
+  const jsonTargets = [
+    ...jsonFiles.map(filename => ({ key: filename, path: join(DIGITAL_TWIN_DIR, filename) })),
+    { key: 'autobiography/stories.json', path: join(DIGITAL_TWIN_DIR, 'autobiography', 'stories.json') }
+  ];
+  await Promise.all(jsonTargets.map(async ({ key, path }) => {
+    if (!existsSync(path)) return;
+    const content = await readFile(path, 'utf-8');
+    files[key] = JSON.parse(content);
+  }));
 
-  // Collect autobiography stories
-  const storiesPath = join(DIGITAL_TWIN_DIR, 'autobiography', 'stories.json');
-  if (existsSync(storiesPath)) {
-    const content = await readFile(storiesPath, 'utf-8');
-    files['autobiography/stories.json'] = JSON.parse(content);
-  }
-
-  // Collect all markdown documents
-  const mdFiles = {};
+  // Collect all markdown documents in parallel as well.
   const entries = await readdir(DIGITAL_TWIN_DIR).catch(() => []);
-  for (const entry of entries) {
-    if (entry.endsWith('.md')) {
-      const filePath = join(DIGITAL_TWIN_DIR, entry);
-      const info = await stat(filePath);
-      if (info.isFile()) {
-        mdFiles[entry] = await readFile(filePath, 'utf-8');
-      }
-    }
+  const mdEntries = await Promise.all(
+    entries
+      .filter(entry => entry.endsWith('.md'))
+      .map(async entry => {
+        const filePath = join(DIGITAL_TWIN_DIR, entry);
+        const info = await stat(filePath);
+        if (!info.isFile()) return null;
+        return { entry, content: await readFile(filePath, 'utf-8') };
+      })
+  );
+  const mdFiles = {};
+  for (const md of mdEntries) {
+    if (md) mdFiles[md.entry] = md.content;
   }
   if (Object.keys(mdFiles).length > 0) {
     files.documents = mdFiles;

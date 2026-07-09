@@ -16,8 +16,10 @@
  * extractor against the corresponding text stage and replace the list.
  */
 
-import { useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles, Shirt, Layers, Pencil } from 'lucide-react';
+import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { SHOT_TYPES, SCREEN_DIRECTIONS, SHOT_TYPE_LABELS, SCREEN_DIRECTION_LABELS } from '../../../lib/shotGrammar';
@@ -30,6 +32,7 @@ import {
   generatePipelineSceneImagePrompts,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
+  createBlankSketch,
 } from '../../../services/api';
 import useUniverse from '../../../hooks/useUniverse';
 import { matchCharactersInText } from '../../../lib/scenePrompt';
@@ -38,8 +41,29 @@ import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidate
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
 
 export default function StoryboardsStage({ issue, series, onStageUpdate, actionsGated = false }) {
+  const navigate = useNavigate();
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
+  // Scene index currently minting a blank sketch (so its button shows a spinner
+  // and can't be double-clicked while the POST is in flight).
+  const [sketchingIdx, setSketchingIdx] = useState(null);
+  // Cache-bust token per sketch key so the inline `/png` thumbnail refreshes
+  // after an edit. Seeded once at mount (so a return from the annotate page
+  // re-fetches) and bumped live when the server broadcasts `media:sketch:updated`.
+  const [sketchNonces, setSketchNonces] = useState({});
+  const mountNonceRef = useRef(0);
+  if (mountNonceRef.current === 0) mountNonceRef.current = Date.now();
+
+  useEffect(() => {
+    const onSketchUpdated = ({ key }) => {
+      if (!key) return;
+      setSketchNonces((prev) => ({ ...prev, [key]: (prev[key] || mountNonceRef.current) + 1 }));
+    };
+    socket.on('media:sketch:updated', onSketchUpdated);
+    return () => socket.off('media:sketch:updated', onSketchUpdated);
+  }, []);
+  const sketchSrc = (key) =>
+    `/api/media/sketches/${encodeURIComponent(key)}/png?v=${sketchNonces[key] || mountNonceRef.current}`;
   // Per-stage gen config — edited from the page-level settings modal.
   const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
@@ -385,6 +409,42 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     toast.success(`Queued scene video (${result.jobId.slice(0, 8)})`);
   };
 
+  // Attach a blank-canvas storyboard sketch to this scene (issue #2036 phase 3).
+  // The scene stores a `sketchKey` ("sketch:<uuid>") — a namespace the media
+  // sketch service owns, minted server-side (crypto.randomUUID is unavailable on
+  // PortOS's plain-HTTP origin). An existing key just reopens the same canvas.
+  // The sketch page returns here (?returnTo=) at the same stage.
+  const openSceneSketch = async (i) => {
+    let key = scenesRef.current[i]?.sketchKey;
+    if (!key) {
+      // Capture the reindex generation before minting. removeScene / runExtract
+      // bump candidateGenRef whenever the scene list is reindexed or replaced,
+      // so if that happens while the POST is in flight, index `i` no longer
+      // names the same scene and we must NOT stamp the new key onto the wrong row.
+      const gen = candidateGenRef.current;
+      setSketchingIdx(i);
+      const res = await createBlankSketch({ silent: true }).catch((err) => {
+        toast.error(err.message || 'Failed to create sketch');
+        return null;
+      });
+      setSketchingIdx(null);
+      if (!res?.key) return;
+      // Scene list reindexed/replaced (or this scene removed) mid-flight — drop
+      // the freshly-minted key rather than attach it to a now-different scene.
+      if (gen !== candidateGenRef.current || !scenesRef.current[i]) return;
+      key = res.key;
+      // Persist the key on the scene BEFORE navigating so a reload/return lands
+      // on the same canvas. Merge against scenesRef.current (not the render-scope
+      // `scenes` captured before the await) so a same-index edit made while the
+      // key was minting isn't clobbered under last-write-wins. persist() resolves
+      // once the PATCH settles.
+      const ok = await persist(scenesRef.current.map((s, j) => j === i ? { ...s, sketchKey: key } : s));
+      if (!ok) return;
+    }
+    const returnTo = `/pipeline/issues/${issue.id}/storyboards`;
+    navigate(`/media/annotate/${encodeURIComponent(key)}?returnTo=${encodeURIComponent(returnTo)}`);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -515,6 +575,16 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                     {renderingVideoIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Film size={12} />}
                     Scene video
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openSceneSketch(i)}
+                    disabled={sketchingIdx !== null}
+                    title={scene.sketchKey ? 'Open this scene’s storyboard sketch' : 'Draw a blank-canvas storyboard sketch for this scene'}
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {sketchingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Pencil size={12} />}
+                    {scene.sketchKey ? 'Edit sketch' : 'Sketch'}
+                  </button>
                   {scene.imageJobId ? (
                     <>
                       <MediaJobThumb jobId={scene.imageJobId} label={`Scene ${i + 1}`} size="md" />
@@ -526,6 +596,28 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
                       <MediaJobThumb jobId={scene.sceneVideoJobId} label={`Scene ${i + 1} video`} size="md" kind="video" />
                       <span className="text-[10px] text-gray-500 font-mono break-all">vid {scene.sceneVideoJobId.slice(0, 8)}</span>
                     </>
+                  ) : null}
+                  {scene.sketchKey ? (
+                    <button
+                      type="button"
+                      onClick={() => openSceneSketch(i)}
+                      title="Open this scene’s storyboard sketch"
+                      className="block rounded border border-port-border overflow-hidden hover:border-port-accent/50"
+                    >
+                      {/* The flattened PNG sidecar is served at /png; the ?v
+                          nonce (seeded at mount, bumped on media:sketch:updated)
+                          busts the browser cache after each save. */}
+                      <img
+                        src={sketchSrc(scene.sketchKey)}
+                        alt={`Scene ${i + 1} sketch`}
+                        className="w-full h-auto"
+                        // Hide until the PNG exists (a freshly-minted, not-yet-saved
+                        // sketch 404s); restore on a later successful load so a
+                        // nonce-bump src swap after the first save shows it again.
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        onLoad={(e) => { e.currentTarget.style.display = ''; }}
+                      />
+                    </button>
                   ) : null}
                 </div>
               </div>

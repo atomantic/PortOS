@@ -755,6 +755,31 @@ describe('agentLifecycle — instance provenance stamping (#1563)', () => {
   });
 });
 
+describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => {
+  it('source: imports buildOpencodeEnvVars from opencodeConfig', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(
+      /import\s*\{\s*buildOpencodeEnvVars\s*\}\s*from\s*'\.\.\/lib\/opencodeConfig\.js';/
+    );
+  });
+
+  it('source: spawnViaRunner merges buildOpencodeEnvVars into the runner envVars so --model ollama/<id> is accepted', () => {
+    // The direct-spawn path and the "Run Prompt" path already inject the dynamic
+    // OPENCODE_CONFIG_CONTENT (models map); the runner path omitted it, so an
+    // OpenCode Ollama CoS task on the runner rejected the model even after the
+    // spawn succeeded. Assert the merge exists inside spawnViaRunner and that the
+    // env passed to the runner unions it.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnViaRunner');
+    expect(fnStart, 'spawnViaRunner must exist').toBeGreaterThan(-1);
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
+    const buildIdx = fnBody.indexOf('buildOpencodeEnvVars(provider, model)');
+    expect(buildIdx, 'must build the opencode env from provider+model').toBeGreaterThan(-1);
+    // The spread must reach the envVars handed to spawnAgentViaRunner.
+    expect(fnBody).toMatch(/envVars:\s*\{[^}]*\.\.\.opencodeEnv[^}]*\}/);
+    expect(fnBody.indexOf('...opencodeEnv'), 'opencodeEnv must be spread AFTER provider.envVars so it overrides the static config')
+      .toBeGreaterThan(fnBody.indexOf('...provider.envVars'));
+  });
+});
+
 // ─── handleAgentCompletion error recovery ──────────────────────────────────
 //
 // `handleAgentCompletion` (agentLifecycle.js:841) does:

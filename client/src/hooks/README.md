@@ -23,6 +23,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useErrorNotifications` | Subscribes to server error events and shows toasts. | Wire once high in the tree to surface server errors. |
 | `useAIStatusNotifications` | Subscribes to AI operation status events. | Wire once to surface AI run lifecycle as toasts. |
 | `useAgentFeedbackToast` | Agent completion toast with thumbs-up/down UI. | Show actionable agent-run completion feedback. |
+| `useOnDemandTaskToast` | Toasts when a user-triggered on-demand task run found no work (parked). | Wire once high in the tree so an explicit "Run" that parks isn't a silent no-op. |
 | `useSharingNotifications` | Subscriber for share-bucket notifications. | Wire once to surface federation/sync events. |
 
 ## Pipeline / Story Builder wiring
@@ -47,6 +48,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
+| `useReaderPanel` | Reader-panel snapshot (four personas + mined disagreements) + convene lifecycle (load, re-attach, per-persona SSE, run/cancel, reload). | The Reader Map page's Reader Panel tab (#2170). |
 
 ## Media (annotations, completion, attachments)
 
@@ -149,3 +151,4 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMoltworldWs` | Moltworld WebSocket feed. | Moltworld surfaces only. |
 | `useYoutubeTrackImport` | One YouTube-audio-import job slot (#1945): start/cancel + SSE progress + terminal-frame handling via `POST /api/tracks/import/youtube`. Returns `{ active, percent, start(url, context), cancel }`; `onComplete(track, context)` fires with the finished Track. Call once per UI surface that can independently kick off an import — a shared slot would let one surface's kickoff orphan another's in-flight job. | Any picker that lets a user paste a YouTube URL to create a Track (Music Video's create form and track-change row). |
 | `useVideoDownload` | One full-video-download job slot (#1946): start/cancel + SSE progress + terminal-frame handling via `POST /api/devtools/video-download`. Returns `{ active, percent, stage, start(url), cancel }`; `onComplete(video)` fires with the finished video-history entry. | The Dev Tools Video Downloader page. |
+| `useReferenceAudioImport` | One round reference-audio-import job slot (#2120): start/cancel + SSE progress + terminal-frame handling via `POST /api/rounds/reference-audio/import`. Returns `{ active, percent, stage, start(url, context), cancel }`; `onComplete(filename, context)` fires with the uploads-dir filename to persist on the reference. Call once per surface that can independently kick off a download. | The reference-audio attach controls (`ReferenceAudioAttach`) — the "Download from URL" convenience. |

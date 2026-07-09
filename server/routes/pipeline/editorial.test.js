@@ -28,6 +28,16 @@ vi.mock('../../services/pipeline/issues.js', async (importOriginal) => ({
   getIssue: vi.fn(async (id) => ({ id })),
 }));
 
+// Voice-fingerprint service (#2194) — stub the read so the route test exercises
+// the series-resolve + param-validation wiring without the manuscript store.
+const getVoiceFingerprint = vi.fn(async (seriesId) => {
+  if (seriesId === 'missing') throw Object.assign(new Error('nope'), { code: 'PIPELINE_SERIES_NOT_FOUND' });
+  return { seriesId, gatedOff: false, issueCount: 5, threshold: 1.5, columns: [], wells: [], matrix: { issues: [] }, series: {}, outliers: [] };
+});
+vi.mock('../../services/pipeline/voiceFingerprint.js', () => ({
+  getVoiceFingerprint: (...a) => getVoiceFingerprint(...a),
+}));
+
 const startEditorialChecksRun = vi.fn(() => ({ runId: 'run-1', alreadyRunning: false }));
 const previewCustomCheck = vi.fn(async () => ({ findings: [{ severity: 'medium', problem: 'x' }], skipped: false, invalid: false }));
 vi.mock('../../services/pipeline/editorial/checkRunner.js', () => ({
@@ -58,6 +68,22 @@ beforeEach(() => {
   startEditorialChecksRun.mockClear();
   previewCustomCheck.mockClear();
   getSeriesHealth.mockClear();
+  getVoiceFingerprint.mockClear();
+});
+
+describe('GET /api/pipeline/series/:id/voice-fingerprint (#2194)', () => {
+  it('returns the fingerprint matrix payload for a known series', async () => {
+    const res = await request(app).get('/api/pipeline/series/ser-1/voice-fingerprint');
+    expect(res.status).toBe(200);
+    expect(res.body.seriesId).toBe('ser-1');
+    expect(res.body.gatedOff).toBe(false);
+    expect(getVoiceFingerprint).toHaveBeenCalledWith('ser-1');
+  });
+
+  it('404s for a missing series (mapped from the service NOT_FOUND code)', async () => {
+    const res = await request(app).get('/api/pipeline/series/missing/voice-fingerprint');
+    expect(res.status).toBe(404);
+  });
 });
 
 describe('GET /api/pipeline/editorial/checks', () => {

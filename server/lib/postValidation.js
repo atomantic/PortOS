@@ -59,8 +59,20 @@ const llmResponseSchema = z.object({
 const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'];
 const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
-// Memory drills supported by the POST runner (client-side scoring with string comparison)
-const POST_SUPPORTED_MEMORY_TYPES = ['memory-sequence', 'memory-element-flash'];
+// Memory drills supported by the POST runner (client-side scoring with string
+// comparison) — trusted for score + schedule/mastery advancement on session
+// submit (issue #2099). Currently identical to MEMORY_DRILL_TYPES; kept as a
+// separate list (rather than aliasing MEMORY_DRILL_TYPES directly) so a FUTURE
+// memory drill type can ship generation-only, ahead of its scoring support,
+// without silently trusting a client-supplied score for it.
+const POST_SUPPORTED_MEMORY_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
+// Canonical set of coarse "module" tags a scored POST task/session can carry
+// (mental-math / llm-drills / cognitive drills / memory drills). Shared by the
+// session-submit schema (below) and sessionModules config so a typo'd module
+// string is rejected at validation instead of silently creating a phantom
+// `byModule` stats bucket (issue #2099). Morse is deliberately excluded — it
+// only ever posts through the separate, unrestricted `trainingEntrySchema`.
+const POST_MODULES = ['mental-math', 'llm-drills', 'cognitive', 'memory'];
 // Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
 // Sourced from meatspacePostCognitive.js so the type list has one owner.
 const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
@@ -88,6 +100,20 @@ const drillTypeConfigSchema = z.object({
   timeLimitSec: z.number().int().min(10).max(600).optional(),
   count: z.number().int().min(1).max(50).optional(),
   maxDigits: z.number().int().min(1).max(4).optional(),
+  // Progressive multiplication ladder (server/lib/postMultiplicationLadder.js).
+  // `progressive` is the config toggle; `level`/`factors` are server-computed
+  // effective config stamped into the generated drill (and stored per-task on
+  // session submit), so they must survive validation on the round-trip.
+  progressive: z.boolean().optional(),
+  level: z.number().int().min(0).max(50).optional(),
+  factors: z.array(z.number().int().min(1).max(4)).min(2).max(6).optional(),
+  // Maintenance-review rep (issue #2096): `review` bypasses the progression
+  // override so a specific mastered-but-inactive rung is re-verified at its own
+  // level; `reviewSkillId` ties the scored task back to the review scheduler so
+  // session-submit records the pass/fail. Both survive validation on the drill
+  // request AND the session-submit round-trip.
+  review: z.boolean().optional(),
+  reviewSkillId: z.string().max(200).optional(),
   bases: z.array(z.number().int().min(2).max(20)).min(1).optional(),
   maxExponent: z.number().int().min(2).max(20).optional(),
   tolerancePct: z.number().min(1).max(50).optional(),
@@ -99,10 +125,14 @@ const drillTypeConfigSchema = z.object({
   // keeps a conservative fixed floor of 6 and lets the generator clamp up.
   // (timeLimitSec above is validated but NOT enforced for these drill types —
   // they're self-paced/stimulus-driven; see PostCognitiveDrillRunner.jsx.)
-  // No stimulusMs/showMs here — no UI ever set them (issue #2008), so they were
-  // dead validated-but-unreachable knobs; the generators (meatspacePostCognitive.js)
-  // keep their own internal defaults regardless.
+  // stimulusMs (n-back) / showMs (digit-span) are the presentation-speed knobs.
+  // The progressive ladder (default ON) drives them per rung; manual mode
+  // (progressive off) exposes them in the config UI (issue #2095), so they must
+  // survive validation. Bounds mirror the generator clamps in
+  // meatspacePostCognitive.js (generateNBack / generateDigitSpan).
   n: z.number().int().min(1).max(3).optional(),
+  stimulusMs: z.number().int().min(1000).max(5000).optional(),
+  showMs: z.number().int().min(400).max(4000).optional(),
   length: z.number().int().min(6).max(60).optional(),
   direction: z.enum(['forward', 'backward']).optional(),
   startLength: z.number().int().min(3).max(9).optional(),
@@ -118,7 +148,7 @@ const drillTypeConfigSchema = z.object({
 // Task result within a session
 // score is optional — the server recomputes it via scoreDrill
 const taskResultSchema = z.object({
-  module: z.string(),
+  module: z.enum(POST_MODULES),
   type: z.enum(DRILL_TYPES),
   config: drillTypeConfigSchema.optional().default({}),
   questions: z.array(questionResultSchema).optional().default([]),
@@ -130,6 +160,25 @@ const taskResultSchema = z.object({
   // every other drill type.
   memoryItemId: z.string().optional(),
   score: z.number().min(0).max(100).optional(),
+  // Separated performance metrics stored alongside the blended `score` (issue
+  // #2094). The server always recomputes these from the drill answer key on
+  // submit, so an incoming client value is advisory — accepted (optional,
+  // nullable where a metric can be genuinely absent) rather than rejected, to
+  // keep the request/stored shapes in parity. `accuracy`/`completion` are 0-1
+  // fractions; `avgResponseMs`/`medianMs`/`bestMs` are milliseconds. The n-back
+  // signal-detection counts and reaction-time latency extremes ride along too.
+  accuracy: z.number().min(0).max(1).nullable().optional(),
+  completion: z.number().min(0).max(1).nullable().optional(),
+  avgResponseMs: z.number().min(0).nullable().optional(),
+  answeredCount: z.number().int().min(0).optional(),
+  totalCount: z.number().int().min(0).optional(),
+  medianMs: z.number().min(0).nullable().optional(),
+  bestMs: z.number().min(0).nullable().optional(),
+  span: z.number().int().min(0).optional(),
+  hits: z.number().int().min(0).optional(),
+  misses: z.number().int().min(0).optional(),
+  falseAlarms: z.number().int().min(0).optional(),
+  correctRejections: z.number().int().min(0).optional(),
   evaluation: z.object({
     score: z.number().min(0).max(100).optional(),
     breakdown: z.array(z.object({
@@ -143,8 +192,13 @@ const taskResultSchema = z.object({
 
 // Full session submission
 export const postSessionSubmitSchema = z.object({
+  // Client-generated session id (uuid) — keys the idempotent upsert in
+  // submitPostSession so a retry after a dropped response can't double-record.
+  // Optional for back-compat: legacy clients and direct service callers that
+  // omit it get a server-assigned uuid.
+  id: z.string().uuid().optional(),
   cadence: z.enum(['daily', 'weekly', 'monthly']).optional().default('daily'),
-  modules: z.array(z.string()).min(1),
+  modules: z.array(z.enum(POST_MODULES)).min(1),
   tasks: z.array(taskResultSchema).min(1),
   tags: postTagsSchema.optional().default({})
 });
@@ -157,6 +211,17 @@ const llmDrillTypeConfigSchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional()
 });
+
+// Optional practice goals (issue #2100). Every field is optional so a config
+// with no goals — or a legacy config that predates this block entirely — stays
+// valid; bounds keep a hand-edited config from persisting a nonsensical target.
+// Exported so the settings route / tests can validate a `goals` slice directly.
+export const postGoalsSchema = z.object({
+  dailyMinutes: z.number().int().min(1).max(1440).optional(),
+  weeklySessions: z.number().int().min(1).max(100).optional(),
+  streakTarget: z.number().int().min(1).max(3650).optional(),
+  morseWpmTarget: z.number().min(1).max(100).optional(),
+}).partial();
 
 // Config update (partial)
 export const postConfigUpdateSchema = z.object({
@@ -175,7 +240,9 @@ export const postConfigUpdateSchema = z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
-  sessionModules: z.array(z.string()).optional(),
+  sessionModules: z.array(z.enum(POST_MODULES)).optional(),
+  // Optional practice goals (issue #2100) — see postGoalsSchema above.
+  goals: postGoalsSchema.optional(),
   scoring: z.object({
     weights: z.record(z.number().min(0).max(1)).optional()
   }).optional(),
@@ -299,6 +366,89 @@ export const memoryDrillRequestSchema = z.object({
   count: z.number().int().min(1).max(30).optional().default(5),
 });
 
+// =============================================================================
+// MORSE TRAINER PROGRESS VALIDATION
+// =============================================================================
+
+// Server-side ceiling for a Koch level — KOCH_ORDER in MorseTrainer.jsx has 41
+// entries. Mirrors MAX_KOCH_LEVEL in meatspacePostMorse.js.
+const MORSE_MAX_KOCH_LEVEL = 41;
+
+// One recorded prompt→guess character within a Morse round. `guessed` is
+// nullable ('' or null = a miss, distinct from a wrong character); `sent` may be
+// '' for an insertion (an extra typed character with no transmitted counterpart)
+// — the server drops empty-sent items from the confusion matrix but still counts
+// them against round accuracy. The `sent` key must still be present (a missing
+// key is rejected); the server recomputes `correct` from the pair, so it's
+// advisory here.
+const morseRoundItemSchema = z.object({
+  sent: z.string().max(8),
+  guessed: z.string().max(16).nullable().optional(),
+  correct: z.boolean().optional(),
+  responseMs: z.number().min(0).optional().default(0),
+});
+
+// A completed copy/head-copy/send round the client submits on finish.
+export const morseRoundSchema = z.object({
+  mode: z.enum(['copy', 'head-copy', 'send']),
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL).optional(),
+  wpm: z.number().min(1).max(100).optional(),
+  farnsworthWpm: z.number().min(1).max(100).optional(),
+  // Bounded so a malformed client can't write (and then re-aggregate on every
+  // progress read) an unbounded array. A legit round tops out well under this:
+  // copy is 10 questions × ≤5-char groups (≈50, doubled by insertions), send is
+  // one short prompt — 200 leaves generous headroom.
+  items: z.array(morseRoundItemSchema).min(1).max(200),
+  durationMs: z.number().min(0).optional().default(0),
+});
+
+// Explicit Koch level change (advance/reset) or a one-time localStorage adoption
+// (`adopt: true` — server only applies it when it has never had a level).
+export const morseLevelUpdateSchema = z.object({
+  kochLevel: z.number().int().min(1).max(MORSE_MAX_KOCH_LEVEL),
+  adopt: z.boolean().optional().default(false),
+  settings: z.object({
+    wpm: z.number().min(1).max(100).optional(),
+    farnsworthWpm: z.number().min(1).max(100).optional(),
+    toneHz: z.number().min(100).max(2000).optional(),
+  }).optional(),
+});
+
+// =============================================================================
+// PROGRESS DASHBOARD QUERY (issue #2091)
+// =============================================================================
+
+// GET /post/progress query params. `days` clamps like /post/stats: a NaN /
+// missing value falls back to the 90-day default, a value >365 is clamped, and
+// <=0 means all-time (0). `bucket` is forward-compat (only day buckets today).
+export const postProgressQuerySchema = z.object({
+  days: z.preprocess((v) => {
+    if (v == null || v === '') return 90;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return 90;
+    if (n <= 0) return 0;
+    return Math.min(n, 365);
+  }, z.number().int()),
+  bucket: z.enum(['day']).optional().default('day'),
+});
+
+// Per-question breakdown for a training-log entry (issue #2114 — follow-up to
+// #2097, which only persisted round-level aggregates). Optional and additive:
+// entries without it (legacy rows, and non-wordplay training modules that
+// never populate it) must stay valid. Field names mirror llmResponseSchema
+// above (the shape scored POST sessions store per LLM-drill question) so a
+// future progress dashboard can render training-log and scored-session
+// breakdowns with the same renderer rather than inventing a training-only shape.
+const trainingQuestionSchema = z.object({
+  prompt: z.string().optional(),
+  response: z.string().optional(),
+  items: z.array(z.string()).optional(),
+  responseMs: z.number().min(0).optional(),
+  score: z.number().min(0).max(100).optional(),
+  feedback: z.string().optional(),
+  correct: z.boolean().optional(),
+});
+
 // Training log entry submission
 export const trainingEntrySchema = z.object({
   module: z.string(),
@@ -310,6 +460,7 @@ export const trainingEntrySchema = z.object({
   questionCount: z.number().int().min(0),
   correctCount: z.number().int().min(0),
   totalMs: z.number().min(0),
+  questions: z.array(trainingQuestionSchema).optional(),
 });
 
-export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };
+export { LLM_DRILL_TYPES, MATH_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES, POST_MODULES, COGNITIVE_DRILL_TYPES, MORSE_DRILL_TYPES };
