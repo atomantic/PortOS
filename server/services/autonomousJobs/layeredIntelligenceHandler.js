@@ -1,19 +1,26 @@
 /**
- * Layered Intelligence Loop — the Engine-B sweep handler.
+ * Layered Intelligence Loop — the per-app deterministic handler.
  *
- * Registered in SCRIPT_HANDLERS as `layered-intelligence`. On each fire it sweeps
- * getActiveApps() and processes every app whose `layeredIntelligence.enabled ===
- * true`, honoring a per-app `intervalMs`. For each due app it runs the four
- * layers: GATHER → REASON → DECIDE → ACT. The reasoning model only returns
- * structured JSON; all side effects (dedup, scope-gate, pause, filing) are the
- * deterministic helpers in ../layeredIntelligence.js.
+ * Driven by the `layered-intelligence` HANDLER-BACKED scheduled task (issue
+ * #2322): the CoS scheduler tick + on-demand drain call
+ * `runLayeredIntelligenceForApp(app)` for ONE app whose per-app override is due,
+ * instead of spawning a coding agent. For that app it runs the four layers:
+ * GATHER → REASON → DECIDE → ACT. The reasoning model only returns structured
+ * JSON; all side effects (dedup, scope-gate, pause, filing) are the deterministic
+ * helpers in ../layeredIntelligence.js.
+ *
+ * The scheduler now owns gating (per-app enabled) and cadence (interval / due-ness
+ * via the task schedule), so this handler does NOT re-check enabled/due — it just
+ * runs the layers and records `lastRunAt` bookkeeping. Scheduling provider/model
+ * come from the per-app `taskTypeOverrides['layered-intelligence']` (option A);
+ * behavior (sources/scopes/rules/handoff) stays in `app.layeredIntelligence`.
  *
  * Runs OUTSIDE the request lifecycle, so — per the CLAUDE.md no-try/catch rule —
- * a per-app failure is wrapped, logged emoji-style, and the sweep continues; one
- * bad app never aborts the whole sweep. Off by default (AI-provider policy).
+ * the scheduler's fire-and-forget wrapper is the async boundary; this stays
+ * defensive so a partial failure degrades to a no-op outcome. Off by default.
  */
 
-import { PORTOS_APP_ID, getActiveApps, updateAppLayeredIntelligence } from '../apps.js'
+import { PORTOS_APP_ID, updateAppLayeredIntelligence } from '../apps.js'
 import {
   getEffectiveConfig,
   buildPrompt,
@@ -57,14 +64,24 @@ export function isAppDue(config, lastRunAt, now = Date.now()) {
 }
 
 /**
- * Process ONE app end-to-end (the four layers). Returns a structured outcome for
- * logging/telemetry: { app, action, ... }. Never throws — the caller's sweep
- * wrap is the async boundary, but this stays defensive so a partial failure of
- * one layer degrades to a no-op outcome rather than aborting.
+ * Run the Layered Intelligence loop for ONE app end-to-end (the four layers).
+ * Returns a structured outcome for logging/telemetry: { app, action, ... }.
+ * Never throws — the scheduler's fire-and-forget wrapper is the async boundary,
+ * but this stays defensive so a partial failure of one layer degrades to a no-op
+ * outcome rather than aborting.
+ *
+ * Does NOT gate on enabled/due — the scheduler owns per-app enablement + cadence
+ * now (this only runs when the schedule says the app's task is due). It still
+ * records `lastRunAt` bookkeeping via updateAppLayeredIntelligence.
+ *
+ * Behavior (sources/scopes/rules/handoff) reads from `app.layeredIntelligence`;
+ * the scheduling provider/model come from the per-app task override
+ * (taskTypeOverrides['layered-intelligence'], option A) and are overlaid onto the
+ * effective config here so the LLM step resolves the app-chosen provider.
  *
  * `deps` is injectable for tests (callLLM, forge listers/filers, plan append).
  */
-export async function processApp(app, deps = {}) {
+export async function runLayeredIntelligenceForApp(app, deps = {}) {
   const {
     callLLM,
     enqueueHandoff = defaultEnqueueHandoff,
@@ -74,10 +91,13 @@ export async function processApp(app, deps = {}) {
   const isPortos = app.id === PORTOS_APP_ID
   const config = getEffectiveConfig({ ...app, isPortos })
 
-  if (!config.enabled) return { app: app.id, action: 'skipped', reason: 'disabled' }
-  if (!isAppDue(config, app.layeredIntelligence?.lastRunAt, now)) {
-    return { app: app.id, action: 'skipped', reason: 'not-due' }
-  }
+  // Option A: provider/model live in the per-app scheduled-task override, not in
+  // app.layeredIntelligence. Overlay them so resolveLLM picks the app's choice.
+  const override = (app.taskTypeOverrides && typeof app.taskTypeOverrides === 'object')
+    ? (app.taskTypeOverrides['layered-intelligence'] || {})
+    : {}
+  if (override.providerId != null) config.providerId = override.providerId
+  if (override.model != null) config.model = override.model
 
   // Resolve where this app files work — branch up front so a `plan` app never
   // hits the forge-only label/issue paths.
@@ -340,24 +360,8 @@ async function recordRun(app, config, now) {
   })
 }
 
-/**
- * The SCRIPT_HANDLERS entry. Sweeps active apps and processes each enabled+due
- * one. Per-app failures are caught and logged so the sweep continues.
- */
-export async function runLayeredIntelligence() {
-  const apps = await getActiveApps()
-  const results = []
-  let processed = 0
-  for (const app of apps) {
-    const config = getEffectiveConfig({ ...app, isPortos: app.id === PORTOS_APP_ID })
-    if (!config.enabled) continue
-    const outcome = await processApp(app).catch((err) => {
-      console.error(`❌ Layered Intelligence: ${app.name} sweep error: ${err.message}`)
-      return { app: app.id, action: 'error', error: err.message }
-    })
-    if (outcome.action !== 'skipped') processed++
-    results.push(outcome)
-  }
-  console.log(`🧠 Layered Intelligence sweep complete: ${processed} app(s) processed of ${apps.length} active`)
-  return { processed, total: apps.length, results }
-}
+// Back-compat alias for the per-app entry point. The global cross-app sweep
+// (`runLayeredIntelligence`) was removed with the migration to a per-app
+// handler-backed scheduled task (#2322) — the scheduler now calls
+// runLayeredIntelligenceForApp for one due app at a time.
+export const processApp = runLayeredIntelligenceForApp

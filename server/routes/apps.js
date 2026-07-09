@@ -20,10 +20,10 @@ import { checkViteHost, findViteConfig, rewriteAllowedHosts } from '../lib/viteA
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
-import { SELF_IMPROVEMENT_TASK_TYPES } from '../services/taskSchedule.js';
-import { summarizeLoopStatus, summarizeFiledProposals, LI_JOB_ID } from '../services/layeredIntelligence.js';
+import { SELF_IMPROVEMENT_TASK_TYPES, loadSchedule } from '../services/taskSchedule.js';
+import { loadState, isImprovementEnabled } from '../services/cosState.js';
+import { summarizeLoopStatus, summarizeFiledProposals } from '../services/layeredIntelligence.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
-import * as autonomousJobs from '../services/autonomousJobs.js';
 import { certPaths } from '../../lib/certPaths.js';
 
 const router = Router();
@@ -746,23 +746,30 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
 // collide with `/:id` (one segment) or `/:id/layered-intelligence` (literal
 // second segment), so ordering is safe.
 router.get('/layered-intelligence/overview', asyncHandler(async (req, res) => {
-  const [apps, job] = await Promise.all([
+  const [apps, schedule, state] = await Promise.all([
     appsService.getActiveApps(),
-    autonomousJobs.getJob(LI_JOB_ID).catch(() => null)
+    loadSchedule().catch(() => null),
+    loadState().catch(() => null)
   ]);
   const now = Date.now();
-  const summaries = apps
-    .map(app => summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID, now }))
+  // Scheduling (enabled/interval/provider/model) lives in each app's per-app task
+  // override now (#2322), not app.layeredIntelligence — pass it to the summarizer.
+  const summaries = (await Promise.all(apps.map(async (app) => {
+    const overrides = await appsService.getAppTaskTypeOverrides(app.id).catch(() => ({}));
+    return summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID, override: overrides?.['layered-intelligence'], now });
+  })))
     .sort((a, b) => {
       // Enabled apps first, then the PortOS baseline, then alphabetical by name.
       if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
       if (a.isPortos !== b.isPortos) return a.isPortos ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+  // The loop is driven by the per-app `layered-intelligence` scheduled task, so
+  // "nothing will run" now depends on (a) the task type being enabled globally in
+  // CoS → Schedule and (b) CoS improvement being on — NOT a bespoke global job.
   res.json({
-    jobId: LI_JOB_ID,
-    jobEnabled: !!job?.enabled,
-    jobExists: !!job,
+    taskEnabled: !!schedule?.tasks?.['layered-intelligence']?.enabled,
+    improvementEnabled: state ? isImprovementEnabled(state) : false,
     enabledCount: summaries.filter(s => s.enabled).length,
     apps: summaries
   });
@@ -783,8 +790,15 @@ router.get('/layered-intelligence/proposals', asyncHandler(async (req, res) => {
   const apps = await appsService.getActiveApps();
   // Bound the I/O fan-out to apps whose loop is actually enabled — a disabled
   // app has filed nothing this config cares about, and sweeping every managed
-  // app would shell out `gh`/`glab` needlessly.
-  const enabled = apps.filter(app => summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID }).enabled);
+  // app would shell out `gh`/`glab` needlessly. Enablement lives in the per-app
+  // task override now (#2322).
+  const withOverrides = await Promise.all(apps.map(async (app) => ({
+    app,
+    override: (await appsService.getAppTaskTypeOverrides(app.id).catch(() => ({})))?.['layered-intelligence']
+  })));
+  const enabled = withOverrides
+    .filter(({ app, override }) => summarizeLoopStatus({ app, isPortos: app.id === PORTOS_APP_ID, override }).enabled)
+    .map(({ app }) => app);
   const results = await Promise.all(enabled.map(async (app) => {
     const tracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan', forge: null }));
     const summary = await summarizeFiledProposals({ app, tracker })
@@ -823,15 +837,31 @@ router.put('/:id/task-types/all', loadApp, asyncHandler(async (req, res) => {
 
 // PUT /api/apps/:id/task-types/:taskType - Update a task type override for an app
 router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
-  const { enabled, interval, taskMetadata } = req.body;
+  const { enabled, interval, intervalMs, providerId, model, taskMetadata } = req.body;
   if (!SELF_IMPROVEMENT_TASK_TYPES.includes(req.params.taskType)) {
     throw new ServerError(`Unknown task type '${req.params.taskType}'`, { status: 400, code: 'INVALID_TASK_TYPE' });
   }
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (typeof enabled !== 'boolean' && interval === undefined && taskMetadata === undefined) {
-    throw new ServerError('enabled (boolean), interval (string|null), or taskMetadata (object|null) required', { status: 400, code: 'VALIDATION_ERROR' });
+  if (typeof enabled !== 'boolean' && interval === undefined && intervalMs === undefined &&
+      providerId === undefined && model === undefined && taskMetadata === undefined) {
+    throw new ServerError('enabled (boolean), interval (string|null), intervalMs (number|null), providerId (string|null), model (string|null), or taskMetadata (object|null) required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  // Per-app scheduling fields for handler-backed tasks (layered-intelligence).
+  // `null`/'' clears back to inherit; a numeric intervalMs must be a positive
+  // finite number (a sub-daily cadence the string interval enum can't express).
+  if (intervalMs !== undefined && intervalMs !== null) {
+    if (typeof intervalMs !== 'number' || !Number.isFinite(intervalMs) || intervalMs <= 0) {
+      throw new ServerError('intervalMs must be a positive number or null', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+  if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
+    throw new ServerError('providerId must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (model !== undefined && model !== null && typeof model !== 'string') {
+    throw new ServerError('model must be a string or null', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   // Validate and sanitize taskMetadata to allowed agent-option keys only
@@ -852,11 +882,13 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
 
   // Validate interval against allowed values (also accepts 5-field cron expressions)
   if (interval !== undefined) {
-    const allowedIntervals = ['rotation', 'daily', 'weekly', 'once', 'on-demand'];
+    // 'custom' pairs with a numeric intervalMs (handler-backed tasks with a
+    // sub-daily per-app cadence); the scheduler's CUSTOM branch reads intervalMs.
+    const allowedIntervals = ['rotation', 'daily', 'weekly', 'once', 'on-demand', 'custom'];
     if (interval !== null && typeof interval === 'string') {
       const isCron = interval.trim().split(/\s+/).length === 5;
       if (!isCron && !allowedIntervals.includes(interval)) {
-        throw new ServerError('interval must be one of rotation|daily|weekly|once|on-demand, a cron expression, or null', { status: 400, code: 'VALIDATION_ERROR' });
+        throw new ServerError('interval must be one of rotation|daily|weekly|once|on-demand|custom, a cron expression, or null', { status: 400, code: 'VALIDATION_ERROR' });
       }
       if (isCron) {
         // Validate syntax and field ranges (parseCronToNextRun throws on invalid expressions)
@@ -868,7 +900,7 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
   }
 
-  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, taskMetadata: sanitizedTaskMetadata });
+  const result = await appsService.updateAppTaskTypeOverride(req.params.id, req.params.taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata: sanitizedTaskMetadata });
   if (!result) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }

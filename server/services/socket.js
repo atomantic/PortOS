@@ -734,6 +734,7 @@ function setupCosEventForwarding() {
   // this so an explicit trigger that finds no actionable work (parked) isn't a
   // silent no-op.
   cosEvents.on('schedule:on-demand-empty', (data) => broadcastToCos('cos:schedule:on-demand-empty', data));
+  cosEvents.on('schedule:on-demand-ran', (data) => broadcastToCos('cos:schedule:on-demand-ran', data));
 }
 
 // Set up error event forwarding

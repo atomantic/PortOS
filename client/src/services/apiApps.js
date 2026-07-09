@@ -92,9 +92,12 @@ export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/ap
   body: JSON.stringify({ enabled }),
   ...options
 });
-export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}, options = {}) => request(`/apps/${id}/task-types/${taskType}`, {
+// `intervalMs` / `providerId` / `model` are the per-app scheduling fields for
+// handler-backed task types (layered-intelligence). Sent only when defined so
+// existing callers (enabled/interval-only toggles) are unaffected.
+export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}, options = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled, interval, taskMetadata }),
+  body: JSON.stringify({ enabled, interval, intervalMs, providerId, model, taskMetadata }),
   ...options
 });
 export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }, options = {}) => request(`/apps/bulk-task-type/${taskType}`, {

@@ -236,11 +236,17 @@ export default function LayeredIntelligence() {
         </div>
       ) : (
         <>
-          {!data.jobEnabled && (
+          {!data.taskEnabled && (
             <Banner tone="warning" size="md">
-              The global <strong>Layered Intelligence Loop</strong> job is off, so no app&apos;s loop will run even when
-              enabled below. Turn it on under{' '}
-              <Link to="/cos/jobs" className="underline hover:text-white">Chief of Staff → System Tasks</Link>.
+              The <strong>Layered Intelligence</strong> scheduled task is off globally, so no app&apos;s loop will run even
+              when enabled below. Turn the task on under{' '}
+              <Link to="/cos/schedule" className="underline hover:text-white">Chief of Staff → Schedule</Link>.
+            </Banner>
+          )}
+          {data.taskEnabled && !data.improvementEnabled && (
+            <Banner tone="warning" size="md">
+              CoS <strong>improvement</strong> is disabled, so scheduled loops (including this one) won&apos;t run. Enable
+              it under <Link to="/cos" className="underline hover:text-white">Chief of Staff</Link>.
             </Banner>
           )}
 

@@ -10,7 +10,6 @@
  */
 
 import { DAY, WEEK, JOB_STRUCTURAL_FIELDS, JOB_ADDITIVE_FIELDS } from './constants.js'
-import { LI_JOB_ID } from '../layeredIntelligence.js'
 
 /**
  * Default job definitions
@@ -256,22 +255,10 @@ Phase 4 — Report:
     createdAt: null,
     updatedAt: null
   },
-  {
-    id: LI_JOB_ID,
-    name: 'Layered Intelligence Loop',
-    description: 'Per-managed-app self-improvement loop. Reads each enabled app\'s goals + telemetry, asks a reasoning model (default: local LLM) for the single most-valuable improvement, and files ONE deduplicated tracker issue (GitHub/GitLab/Jira/PLAN.md) for a coding agent. The model never writes code — every side effect is deterministic. Off by default; enable per app under its config.',
-    category: 'layered-intelligence',
-    interval: 'daily',
-    intervalMs: DAY,
-    enabled: false,
-    priority: 'MEDIUM',
-    type: 'script',
-    scriptHandler: 'layered-intelligence',
-    lastRun: null,
-    runCount: 0,
-    createdAt: null,
-    updatedAt: null
-  },
+  // 'job-layered-intelligence' removed (#2322): Layered Intelligence is now a
+  // per-app HANDLER-BACKED scheduled task (CoS → Schedule) rather than a global
+  // autonomous-job sweep. Migration 184 tombstones the persisted job record and
+  // moves each app's scheduling into taskTypeOverrides['layered-intelligence'].
   {
     id: 'job-wiki-maintenance',
     name: 'Wiki Maintenance',
@@ -399,9 +386,13 @@ function applyAdditiveFields(existing, defaultJob) {
  * was made that requires the caller to persist the result.
  */
 function mergeWithDefaults(loaded) {
-  // Migration: remove jobs moved to Schedule system
+  // Migration: remove jobs moved to the Schedule system. `job-layered-intelligence`
+  // is retired to a per-app handler-backed scheduled task (#2322) — migration 184
+  // captures its enabled state + tombstones it (and runs at boot BEFORE this), so
+  // this filter is defense-in-depth against a lingering orphan (which, lacking a
+  // SCRIPT_HANDLERS entry, would otherwise error on every scheduler fire).
   const countBefore = loaded.jobs.length
-  loaded.jobs = loaded.jobs.filter(j => j.id !== 'job-pr-reviewer' && j.id !== 'job-jira-sprint-manager')
+  loaded.jobs = loaded.jobs.filter(j => j.id !== 'job-pr-reviewer' && j.id !== 'job-jira-sprint-manager' && j.id !== 'job-layered-intelligence')
   let dirty = loaded.jobs.length !== countBefore
 
   const existingById = new Map(loaded.jobs.map(j => [j.id, j]))

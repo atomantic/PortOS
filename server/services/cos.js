@@ -93,7 +93,9 @@ import {
   countRunningAgentsByProject,
   isWithinProjectLimit,
   checkStagePrecondition,
-  applyAppWorktreeDefault
+  applyAppWorktreeDefault,
+  runHandlerBackedTaskForApp,
+  emitHandlerBackedOnDemand
 } from './cosTaskGenerator.js';
 export { evaluateTasks, checkStagePrecondition, applyAppWorktreeDefault };
 
@@ -763,6 +765,14 @@ async function dequeueNextTask() {
 
     await taskScheduleMod.clearOnDemandRequest(request.id);
 
+    // Handler-backed tasks (layered-intelligence) are inherently per-app — a
+    // global (no-app) request can't dispatch one, and must NEVER fall through to
+    // the self-improvement agent path below.
+    if (taskScheduleMod.HANDLER_BACKED_TASK_TYPES.has(request.taskType) && !targetApp) {
+      emitLog('info', `On-demand ${request.taskType} skipped — handler-backed tasks require an app`, { requestId: request.id });
+      continue;
+    }
+
     if (targetApp) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
       // A user-initiated "Run" must re-check live state, never honor a stale
@@ -778,6 +788,15 @@ async function dequeueNextTask() {
         reviewStartedApps.add(targetApp.id);
       }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
+      // HANDLER-BACKED types (layered-intelligence) run a deterministic handler
+      // for this app instead of generating an agent task. Emit the same ran/
+      // no-work feedback and move on — no agent enqueue.
+      if (taskScheduleMod.HANDLER_BACKED_TASK_TYPES.has(request.taskType)) {
+        const outcome = await runHandlerBackedTaskForApp(request.taskType, targetApp)
+          .catch((err) => { emitLog('warn', `Handler-backed ${request.taskType} failed for ${targetApp.name}: ${err.message}`, { appId: targetApp.id }); return { action: 'error', error: err.message }; });
+        await emitHandlerBackedOnDemand({ outcome, request, targetApp });
+        continue;
+      }
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);

@@ -90,23 +90,21 @@ function sameCustom(a, b) {
 }
 
 /**
- * Build the minimal Layered Intelligence PATCH: only the top-level keys whose
- * value differs from the effective baseline the drawer loaded. Sending the full
- * effective config would persist every default to disk and freeze this install
- * against future default changes — the server's merge-over-stored contract
+ * Build the minimal Layered Intelligence BEHAVIOR PATCH: only the top-level
+ * behavior keys (rules / sources / allowedScopes / handoff) whose value differs
+ * from the effective baseline the drawer loaded. Sending the full effective config
+ * would persist every default to disk and freeze this install against future
+ * default changes — the server's merge-over-stored contract
  * (updateAppLayeredIntelligence) depends on untouched fields staying absent.
  * Returns null when nothing changed (caller then omits `layeredIntelligence`).
- * providerId/model normalize '' → null (the "use default" sentinel).
+ *
+ * SCHEDULING fields (enabled / intervalMs / providerId / model) are NOT included
+ * here — they live in the per-app task override now (#2322) and are diffed by
+ * `buildLayeredIntelligenceScheduleUpdate` below.
  */
 export function buildLayeredIntelligenceUpdate(baseline, current) {
   if (!baseline || !current) return null;
   const update = {};
-  if (!!current.enabled !== !!baseline.enabled) update.enabled = !!current.enabled;
-  if (current.intervalMs !== baseline.intervalMs) update.intervalMs = current.intervalMs;
-  const curProvider = current.providerId || null;
-  if (curProvider !== (baseline.providerId || null)) update.providerId = curProvider;
-  const curModel = current.model || null;
-  if (curModel !== (baseline.model || null)) update.model = curModel;
   if ((current.rules || '') !== (baseline.rules || '')) update.rules = current.rules || '';
 
   const curSources = current.sources || {};
@@ -129,6 +127,44 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
     update.handoff = { enabled: !!current.handoff?.enabled };
   }
 
+  return Object.keys(update).length > 0 ? update : null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+// Map a chosen intervalMs to the per-app override's { interval, intervalMs } pair
+// the scheduler understands: 'daily'/'weekly' for the standard cadences, else
+// 'custom' (the scheduler's CUSTOM branch reads the numeric intervalMs). Mirrors
+// the server migration's intervalFieldsFromMs.
+export function intervalFieldsFromMs(intervalMs) {
+  const ms = typeof intervalMs === 'number' && intervalMs > 0 ? intervalMs : DAY_MS;
+  if (ms === DAY_MS) return { interval: 'daily', intervalMs: ms };
+  if (ms === WEEK_MS) return { interval: 'weekly', intervalMs: ms };
+  return { interval: 'custom', intervalMs: ms };
+}
+
+/**
+ * Build the minimal per-app SCHEDULING override PATCH for the layered-intelligence
+ * task type (enabled / interval+intervalMs / providerId / model) — only the fields
+ * the user changed vs the baseline. Returns null when nothing changed (caller then
+ * skips the task-override PUT). providerId/model normalize '' → null (the "use
+ * default" sentinel). When the interval changes, both `interval` and `intervalMs`
+ * are sent so the scheduler resolves the cadence correctly.
+ */
+export function buildLayeredIntelligenceScheduleUpdate(baseline, current) {
+  if (!baseline || !current) return null;
+  const update = {};
+  if (!!current.enabled !== !!baseline.enabled) update.enabled = !!current.enabled;
+  if (current.intervalMs !== baseline.intervalMs) {
+    const { interval, intervalMs } = intervalFieldsFromMs(current.intervalMs);
+    update.interval = interval;
+    update.intervalMs = intervalMs;
+  }
+  const curProvider = current.providerId || null;
+  if (curProvider !== (baseline.providerId || null)) update.providerId = curProvider;
+  const curModel = current.model || null;
+  if (curModel !== (baseline.model || null)) update.model = curModel;
   return Object.keys(update).length > 0 ? update : null;
 }
 

@@ -74,8 +74,7 @@ vi.mock('../providers.js', () => ({
   getActiveProvider: (...args) => getActiveProviderMock(...args)
 }));
 
-import { isAppDue, processApp, runLayeredIntelligence } from './layeredIntelligenceHandler.js';
-import { getActiveApps } from '../apps.js';
+import { isAppDue, processApp, runLayeredIntelligenceForApp } from './layeredIntelligenceHandler.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -136,19 +135,34 @@ describe('processApp', () => {
     ...extra
   });
 
-  it('skips a disabled app', async () => {
-    const out = await processApp({ id: 'x', name: 'X', layeredIntelligence: { enabled: false } });
-    expect(out.action).toBe('skipped');
-    expect(out.reason).toBe('disabled');
+  // The scheduler now owns enabled/due gating (#2322) — the handler no longer
+  // self-gates on config.enabled or interval, so a disabled/not-due app is simply
+  // never dispatched to it. `runLayeredIntelligenceForApp` (aliased as processApp)
+  // always runs the layers and records the run.
+  it('runs the layers even for a config marked disabled (scheduler owns gating)', async () => {
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X', body: 'do it' } });
+    const out = await runLayeredIntelligenceForApp({ id: 'app-1', name: 'App One', repoPath: '/repo', layeredIntelligence: { enabled: false, allowedScopes: ['app-improvement'] } }, { callLLM });
+    expect(out.action).toBe('filed');
+    expect(updateAppMock).toHaveBeenCalled(); // still records the run
   });
 
-  it('skips an app that is not due', async () => {
+  it('runs regardless of lastRunAt (cadence is the scheduler\'s job now)', async () => {
     const now = Date.parse('2026-07-07T00:00:00Z');
     const app = enabledApp();
-    app.layeredIntelligence.lastRunAt = new Date(now - DAY / 2).toISOString();
-    const out = await processApp(app, { now });
-    expect(out.action).toBe('skipped');
-    expect(out.reason).toBe('not-due');
+    app.layeredIntelligence.lastRunAt = new Date(now - DAY / 2).toISOString(); // "not due" by old logic
+    const callLLM = reasoner({ proposal: { scope: 'app-improvement', slug: 'add-x', title: 'Add X', body: 'do it' } });
+    const out = await processApp(app, { now, callLLM });
+    expect(out.action).toBe('filed');
+  });
+
+  it('overlays provider/model from the per-app task override onto the effective config', async () => {
+    // No callLLM injected → resolveLLM resolves via getProviderById using the
+    // override's providerId. Assert the override provider is the one looked up.
+    getProviderByIdMock.mockResolvedValue({ id: 'ov-provider', type: 'api', defaultModel: 'ov-default' });
+    const app = enabledApp({ taskTypeOverrides: { 'layered-intelligence': { providerId: 'ov-provider', model: 'ov-model' } } });
+    await runLayeredIntelligenceForApp(app, {});
+    expect(getProviderByIdMock).toHaveBeenCalledWith('ov-provider');
+    expect(runPromptMock).toHaveBeenCalledWith(expect.objectContaining({ model: 'ov-model' }));
   });
 
   it('parks (skips reasoning) when a blocking issue is open', async () => {
@@ -451,19 +465,11 @@ describe('processApp — jira tracker', () => {
   });
 });
 
-describe('runLayeredIntelligence sweep', () => {
-  it('processes only enabled apps and continues past a per-app error', async () => {
-    getActiveApps.mockResolvedValue([
-      { id: 'off', name: 'Off', layeredIntelligence: { enabled: false } },
-      { id: 'app-1', name: 'On', repoPath: '/r', layeredIntelligence: { enabled: true, intervalMs: DAY, allowedScopes: ['app-improvement'] } }
-    ]);
-    // No callLLM injected → resolveLLM will try to import providers; make the
-    // tracker resolve so processApp reaches the provider step and no-ops on no provider.
-    resolveTrackerMock.mockResolvedValue({ resolved: 'plan', forge: null });
-    const res = await runLayeredIntelligence();
-    expect(res.total).toBe(2);
-    // The enabled app is attempted (processed >= 0); the disabled one is skipped before processApp.
-    expect(res.results.some(r => r.app === 'off')).toBe(false);
-    expect(res.results.some(r => r.app === 'app-1')).toBe(true);
+describe('runLayeredIntelligenceForApp (removed global sweep)', () => {
+  it('no longer exports a cross-app sweep — the scheduler drives one app at a time', async () => {
+    const mod = await import('./layeredIntelligenceHandler.js');
+    expect(mod.runLayeredIntelligence).toBeUndefined();
+    expect(typeof mod.runLayeredIntelligenceForApp).toBe('function');
+    expect(mod.processApp).toBe(mod.runLayeredIntelligenceForApp); // back-compat alias
   });
 });

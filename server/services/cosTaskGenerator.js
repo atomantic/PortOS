@@ -533,6 +533,7 @@ async function spawnPriority0OnDemand(ctx) {
   const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
   const taskSchedule = await import('./taskSchedule.js');
+  const { HANDLER_BACKED_TASK_TYPES } = taskSchedule;
   const liveSchedule = await taskSchedule.loadSchedule();
   const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
 
@@ -572,6 +573,14 @@ async function spawnPriority0OnDemand(ctx) {
 
       await taskSchedule.clearOnDemandRequest(request.id);
 
+      // Handler-backed tasks (layered-intelligence) are inherently per-app — a
+      // global (no-app) request can't dispatch one, and must NEVER fall through
+      // to the self-improvement agent path below.
+      if (HANDLER_BACKED_TASK_TYPES.has(request.taskType) && !targetApp) {
+        emitLog('info', `On-demand ${request.taskType} skipped — handler-backed tasks require an app`, { requestId: request.id });
+        continue;
+      }
+
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
         // A user-initiated "Run" must re-check live state — reset any park + the
@@ -586,6 +595,15 @@ async function spawnPriority0OnDemand(ctx) {
           reviewStartedApps.add(targetApp.id);
         }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
+        // HANDLER-BACKED types run the deterministic handler for this app instead
+        // of generating an agent task. Emit the same ran/no-work feedback, then
+        // move to the next request (never enqueue an agent task).
+        if (HANDLER_BACKED_TASK_TYPES.has(request.taskType)) {
+          const outcome = await runHandlerBackedTaskForApp(request.taskType, targetApp)
+            .catch((err) => { console.error(`❌ Handler-backed ${request.taskType} failed for ${targetApp.name}: ${err.message}`); return { action: 'error', error: err.message }; });
+          await emitHandlerBackedOnDemand({ outcome, request, targetApp });
+          continue;
+        }
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -1092,7 +1110,7 @@ export async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null } = {}) {
-  const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
+  const { getNextTaskType, recordExecution, HANDLER_BACKED_TASK_TYPES } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1192,6 +1210,16 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     const nextTypeResult = await getNextTaskType(app.id, lastType, { perpetualOnly: onCooldown }).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
+
+    // HANDLER-BACKED types (e.g. layered-intelligence) run a deterministic
+    // in-process handler for this app instead of spawning a coding agent. Fire
+    // it and-forget (guarded per-app so the next tick can't double-run it),
+    // record the execution on completion, and move on — NEVER touch the
+    // agent-spawn path below. A bug here can only fail to run the handler.
+    if (HANDLER_BACKED_TASK_TYPES.has(nextType)) {
+      dispatchHandlerBackedTask(nextType, app, recordExecution);
+      continue;
+    }
 
     const taskKey = `app:${app.id}:${nextType}`;
     if (existingTaskTypes.has(taskKey)) {
@@ -1519,6 +1547,92 @@ async function generateManagedAppImprovementTask(app, state) {
  * user-initiated on-demand path, so the client can toast it without
  * background-park noise.
  */
+// Per-app in-flight guard for handler-backed tasks so a fire-and-forget run
+// started by one scheduler tick (or an on-demand drain) can't be double-started
+// by the next tick for the same app before it settles. Keyed by app id.
+const handlerBackedInFlight = new Set();
+
+/** True when a handler-backed task is currently running for this app. */
+export function isHandlerBackedInFlight(appId) {
+  return handlerBackedInFlight.has(appId);
+}
+
+/**
+ * Run a HANDLER-BACKED (deterministic, no-agent) scheduled task for ONE app,
+ * dispatching to the in-process handler for its type instead of spawning a coding
+ * agent (see taskSchedule.HANDLER_BACKED_TASK_TYPES). Guarded by a module-level
+ * per-app in-flight Set. Returns the handler's outcome, `{ action: 'in-flight' }`
+ * when a prior run for this app is still active, or `{ action: 'no-handler' }`
+ * for an unrecognized type. The handler is lazily imported to avoid a static
+ * import cycle (the handler pulls in apps.js / providers). Callers that run this
+ * outside the request lifecycle MUST wrap it (the `finally` clears the guard even
+ * if the handler throws, but the throw still propagates to the caller's boundary).
+ */
+export async function runHandlerBackedTaskForApp(taskType, app) {
+  if (handlerBackedInFlight.has(app.id)) return { app: app.id, action: 'in-flight' };
+  handlerBackedInFlight.add(app.id);
+  try {
+    if (taskType === 'layered-intelligence') {
+      const { runLayeredIntelligenceForApp } = await import('./autonomousJobs/layeredIntelligenceHandler.js');
+      return await runLayeredIntelligenceForApp(app);
+    }
+    return { app: app.id, action: 'no-handler' };
+  } finally {
+    handlerBackedInFlight.delete(app.id);
+  }
+}
+
+/**
+ * Fire-and-forget a handler-backed task from the scheduler tick: run it, record
+ * the execution (so cadence advances), and log — never throwing into the tick
+ * loop. Skips the recordExecution when the run was a no-op because another run
+ * for this app was already in flight. Boundary-wrapped (runs outside the request
+ * lifecycle). `recordExecution` is passed in (already imported by the caller).
+ */
+function dispatchHandlerBackedTask(taskType, app, recordExecution) {
+  runHandlerBackedTaskForApp(taskType, app)
+    .then(async (outcome) => {
+      if (outcome?.action === 'in-flight') return; // a prior tick is still running
+      await recordExecution(`task:${taskType}`, app.id);
+      emitLog('info', `Ran handler-backed ${taskType} for ${app.name} (${outcome?.action || 'done'})`, { appId: app.id, action: outcome?.action });
+    })
+    .catch((err) => {
+      console.error(`❌ Handler-backed ${taskType} failed for ${app.name}: ${err.message}`);
+    });
+}
+
+/**
+ * On-demand (user "Run now") feedback for a handler-backed task: it produces no
+ * agent task, so mirror the agent path's "ran / no work" signal. When the run
+ * filed an issue we toast a success; otherwise we reuse the on-demand-empty
+ * channel with outcome 'idle' (nothing to do right now). Boundary-safe.
+ */
+export async function emitHandlerBackedOnDemand({ outcome, request, targetApp }) {
+  const appName = targetApp?.name || null;
+  const appId = targetApp?.id || null;
+  const filed = outcome?.action === 'filed';
+  if (filed) {
+    cosEvents.emit('schedule:on-demand-ran', {
+      requestId: request.id,
+      taskType: request.taskType,
+      appId,
+      appName,
+      action: outcome.action,
+      filedNumber: outcome.filedNumber ?? null,
+      filedKey: outcome.filedKey ?? null
+    });
+    return;
+  }
+  cosEvents.emit('schedule:on-demand-empty', {
+    requestId: request.id,
+    taskType: request.taskType,
+    appId,
+    appName,
+    outcome: 'idle',
+    handlerAction: outcome?.action || 'no-op'
+  });
+}
+
 export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
