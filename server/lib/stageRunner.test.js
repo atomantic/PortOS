@@ -111,6 +111,19 @@ describe('stageRunner — context windows', () => {
     expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
   });
 
+  it('normalizes command paths to the basename for vendor windows (#2337)', () => {
+    // Absolute path to the binary (common when the service PATH can't resolve the CLI).
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/grok' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'tui', command: '/usr/local/bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/agy' })).toBe(GEMINI_CONTEXT_WINDOW);
+    // Relative path.
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: './bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    // Windows .exe suffix + backslash separators.
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: 'C:\\tools\\grok.exe' })).toBe(GROK_CONTEXT_WINDOW);
+    // Unrelated custom command still falls through to null.
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/mycli' })).toBeNull();
+  });
+
   it('keeps an explicit provider contextWindow above model defaults', () => {
     expect(effectiveContextWindow(
       { type: 'tui', contextWindow: 64_000 },

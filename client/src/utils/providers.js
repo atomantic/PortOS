@@ -34,10 +34,19 @@ export const knownModelContextWindow = (model) => {
   return found ? found[1] : null;
 };
 
+// Inline mirror of server/lib/providerModels.js#commandBasename — the client can't
+// import server-side modules. Strip the directory + a Windows `.exe` suffix so a
+// path-configured command (/opt/homebrew/bin/grok) matches the bare vendor name.
+// Keep in lockstep with the server helper (only `.exe` is stripped, not `.cmd`).
+const commandBasename = (command) =>
+  typeof command === 'string' && command !== ''
+    ? command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
+    : '';
+
 export const knownProviderContextWindow = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const id = String(provider?.id || '').toLowerCase();
-  const command = String(provider?.command || '').toLowerCase();
+  const command = commandBasename(provider?.command);
   if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
   if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
