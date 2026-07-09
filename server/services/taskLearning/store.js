@@ -55,6 +55,12 @@ const DEFAULT_LEARNING_DATA = {
   // Metrics by error category
   errorPatterns: {},
 
+  // Structured failure signatures by error category (issue #2329): each entry
+  // aggregates enriched telemetry — recent messageSnippet/failurePosition plus
+  // the execution context (provider/model/tier) and latency of failures in that
+  // category. Additive: older learning.json files predate this key and load fine.
+  failureSignatures: {},
+
   // Routing accuracy: taskType → modelTier → { succeeded, failed }
   // Records which model tiers work/fail for each task type
   routingAccuracy: {},

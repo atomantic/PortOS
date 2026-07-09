@@ -22,6 +22,8 @@ export { clearLearningCache } from './store.js';
 
 export {
   recordTaskCompletion,
+  buildTaskTelemetryContext,
+  recordFailureSignature,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
   recalculateDurationStats
