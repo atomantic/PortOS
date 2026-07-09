@@ -17,9 +17,8 @@ const renderPage = () => render(
 );
 
 const overview = (extra = {}) => ({
-  jobId: 'job-layered-intelligence',
-  jobEnabled: true,
-  jobExists: true,
+  taskEnabled: true,
+  improvementEnabled: true,
   enabledCount: 1,
   apps: [
     {
@@ -56,12 +55,19 @@ describe('LayeredIntelligence page', () => {
     expect(screen.getByText('1 of 2 apps have the loop enabled.')).toBeInTheDocument();
   });
 
-  it('warns when the global job is disabled', async () => {
-    api.getLayeredIntelligenceOverview.mockResolvedValue(overview({ jobEnabled: false }));
+  it('warns when the scheduled task is disabled globally', async () => {
+    api.getLayeredIntelligenceOverview.mockResolvedValue(overview({ taskEnabled: false }));
     renderPage();
 
-    await waitFor(() => expect(screen.getByText(/global/i)).toBeInTheDocument());
-    expect(screen.getByText(/System Tasks/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/scheduled task is off globally/i)).toBeInTheDocument());
+    expect(screen.getByText(/Schedule/)).toBeInTheDocument();
+  });
+
+  it('warns when CoS improvement is disabled (task on)', async () => {
+    api.getLayeredIntelligenceOverview.mockResolvedValue(overview({ taskEnabled: true, improvementEnabled: false }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/improvement/i)).toBeInTheDocument());
   });
 
   it('shows an error banner + retry when the overview fails to load', async () => {

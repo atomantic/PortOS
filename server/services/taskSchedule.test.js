@@ -52,6 +52,7 @@ vi.mock('./taskLearning.js', () => ({
 vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
+  getAppTaskTypeIntervalMs: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
   getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
   clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false })
@@ -110,7 +111,8 @@ import {
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
   TASK_TYPE_DESCRIPTIONS,
-  REFERENCE_WATCH_AUDITED_VERSION
+  REFERENCE_WATCH_AUDITED_VERSION,
+  HANDLER_BACKED_TASK_TYPES
 } from './taskSchedule.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
@@ -213,6 +215,33 @@ describe('taskSchedule', () => {
       }
     })
   })
+
+  describe('layered-intelligence (handler-backed task type)', () => {
+    it('is registered as a self-improvement task with a description and a daily default', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('layered-intelligence');
+      expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toBeTruthy();
+      expect(DEFAULT_TASK_INTERVALS['layered-intelligence']).toMatchObject({ type: 'daily', enabled: false });
+    });
+
+    it('is in HANDLER_BACKED_TASK_TYPES and has NO default prompt (deterministic)', () => {
+      expect(HANDLER_BACKED_TASK_TYPES.has('layered-intelligence')).toBe(true);
+      expect(DEFAULT_TASK_PROMPTS['layered-intelligence']).toBeUndefined();
+    });
+
+    it('honors a per-app numeric intervalMs override via the CUSTOM branch', async () => {
+      const { getAppTaskTypeInterval, getAppTaskTypeIntervalMs } = await import('./apps.js');
+      mockSchedule({
+        tasks: { 'layered-intelligence': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        executions: { 'task:layered-intelligence': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1, perApp: { 'app-1': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1 } } } }
+      });
+      getAppTaskTypeInterval.mockResolvedValue('custom');
+      getAppTaskTypeIntervalMs.mockResolvedValue(60 * 60 * 1000); // hourly → 2h since last run ⇒ due
+      const res = await shouldRunTask('layered-intelligence', 'app-1');
+      expect(res.shouldRun).toBe(true);
+      getAppTaskTypeInterval.mockResolvedValue(null);
+      getAppTaskTypeIntervalMs.mockResolvedValue(null);
+    });
+  });
 
   describe('do-replan task type', () => {
     it('should default to weekly, disabled, with worktree+PR metadata', async () => {

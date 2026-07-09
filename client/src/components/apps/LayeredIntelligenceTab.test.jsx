@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate } from './LayeredIntelligenceTab';
+import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs } from './LayeredIntelligenceTab';
 
 const baseline = {
   enabled: false,
@@ -22,14 +22,12 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(buildLayeredIntelligenceUpdate(baseline, null)).toBeNull();
   });
 
-  it('emits only the changed enabled flag', () => {
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, enabled: true });
-    expect(update).toEqual({ enabled: true });
-  });
-
-  it('emits intervalMs when it changes', () => {
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, intervalMs: 3600000 });
-    expect(update).toEqual({ intervalMs: 3600000 });
+  it('does NOT emit scheduling fields (they go to the task override, #2322)', () => {
+    // enabled / intervalMs / providerId / model are handled by
+    // buildLayeredIntelligenceScheduleUpdate, so the behavior PATCH ignores them.
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, enabled: true })).toBeNull();
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, intervalMs: 3600000 })).toBeNull();
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' })).toBeNull();
   });
 
   it('emits the hand-off toggle only when it changes', () => {
@@ -37,13 +35,6 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff })).toBeNull();
     const update = buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff, handoff: { enabled: true } });
     expect(update).toEqual({ handoff: { enabled: true } });
-  });
-
-  it('normalizes empty provider/model to null and only emits when changed', () => {
-    // '' provider equals the null baseline → no change
-    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: '', model: '' })).toBeNull();
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' });
-    expect(update).toEqual({ providerId: 'claude-code', model: 'sonnet' });
   });
 
   it('emits the full source object (toggles + sanitized custom) when a toggle flips', () => {
@@ -118,6 +109,37 @@ describe('buildLayeredIntelligenceUpdate', () => {
     const withRules = { ...baseline, rules: 'be careful' };
     const update = buildLayeredIntelligenceUpdate(withRules, { ...withRules, rules: '' });
     expect(update).toEqual({ rules: '' });
+  });
+});
+
+describe('buildLayeredIntelligenceScheduleUpdate (per-app task override, #2322)', () => {
+  it('returns null when no scheduling field changed', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline })).toBeNull();
+    expect(buildLayeredIntelligenceScheduleUpdate(null, baseline)).toBeNull();
+  });
+
+  it('emits the enabled flag when it changes', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, enabled: true })).toEqual({ enabled: true });
+  });
+
+  it('emits interval + intervalMs together, mapping to daily/weekly/custom', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, intervalMs: 3600000 }))
+      .toEqual({ interval: 'custom', intervalMs: 3600000 });
+    expect(buildLayeredIntelligenceScheduleUpdate({ ...baseline, intervalMs: 3600000 }, { ...baseline, intervalMs: 7 * 86400000 }))
+      .toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
+  });
+
+  it('normalizes empty provider/model to null and only emits when changed', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, providerId: '', model: '' })).toBeNull();
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' }))
+      .toEqual({ providerId: 'claude-code', model: 'sonnet' });
+  });
+
+  it('intervalFieldsFromMs maps standard cadences + falls back to daily', () => {
+    expect(intervalFieldsFromMs(86400000)).toEqual({ interval: 'daily', intervalMs: 86400000 });
+    expect(intervalFieldsFromMs(7 * 86400000)).toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
+    expect(intervalFieldsFromMs(6 * 3600000)).toEqual({ interval: 'custom', intervalMs: 6 * 3600000 });
+    expect(intervalFieldsFromMs(0)).toEqual({ interval: 'daily', intervalMs: 86400000 });
   });
 });
 

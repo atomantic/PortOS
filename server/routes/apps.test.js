@@ -36,10 +36,17 @@ vi.mock('../services/history.js', () => ({
   logAction: vi.fn()
 }));
 
-// Mock the autonomous-jobs barrel so the layered-intelligence overview route can
-// read the global job's enabled state without pulling in the whole CoS graph.
-vi.mock('../services/autonomousJobs.js', () => ({
-  getJob: vi.fn()
+// The layered-intelligence overview route now reads the per-app task schedule +
+// CoS improvement state (the global autonomous-job is retired, #2322). Stub
+// loadSchedule (keeping the real SELF_IMPROVEMENT_TASK_TYPES the route imports)
+// and cosState so the route tests stay deterministic + I/O-free.
+vi.mock('../services/taskSchedule.js', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, loadSchedule: vi.fn().mockResolvedValue({ tasks: {} }) };
+});
+vi.mock('../services/cosState.js', () => ({
+  loadState: vi.fn().mockResolvedValue({}),
+  isImprovementEnabled: vi.fn().mockReturnValue(true)
 }));
 
 // Partial-mock layeredIntelligence: keep the real pure helpers (summarizeLoopStatus,
@@ -108,7 +115,7 @@ import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
 import * as cos from '../services/cos.js';
-import * as autonomousJobs from '../services/autonomousJobs.js';
+import { loadSchedule } from '../services/taskSchedule.js';
 import { summarizeFiledProposals } from '../services/layeredIntelligence.js';
 import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
@@ -336,19 +343,25 @@ describe('Apps Routes', () => {
       expect(response.status).toBe(404);
     });
 
-    it('GET /layered-intelligence/overview summarizes every active app + global job state', async () => {
+    it('GET /layered-intelligence/overview summarizes every active app + scheduled-task state', async () => {
       appsService.getActiveApps.mockResolvedValue([
-        { id: 'off-app', name: 'Zeta Off', layeredIntelligence: { enabled: false } },
-        { id: 'on-app', name: 'Alpha On', layeredIntelligence: { enabled: true, intervalMs: 86400000 } },
-        { id: 'portos-default', name: 'PortOS', layeredIntelligence: { enabled: true } }
+        { id: 'off-app', name: 'Zeta Off' },
+        { id: 'on-app', name: 'Alpha On' },
+        { id: 'portos-default', name: 'PortOS' }
       ]);
-      autonomousJobs.getJob.mockResolvedValue({ id: 'job-layered-intelligence', enabled: true });
+      // Scheduling/enablement now comes from each app's task override (#2322).
+      appsService.getAppTaskTypeOverrides.mockImplementation(async (id) => ({
+        'off-app': {},
+        'on-app': { 'layered-intelligence': { enabled: true, intervalMs: 86400000 } },
+        'portos-default': { 'layered-intelligence': { enabled: true } }
+      }[id] || {}));
+      loadSchedule.mockResolvedValue({ tasks: { 'layered-intelligence': { enabled: true } } });
 
       const response = await request(app).get('/api/apps/layered-intelligence/overview');
 
       expect(response.status).toBe(200);
-      expect(response.body.jobEnabled).toBe(true);
-      expect(response.body.jobExists).toBe(true);
+      expect(response.body.taskEnabled).toBe(true);
+      expect(response.body.improvementEnabled).toBe(true);
       expect(response.body.enabledCount).toBe(2);
       // Enabled first, PortOS ahead of other enabled, disabled last.
       expect(response.body.apps.map(a => a.id)).toEqual(['portos-default', 'on-app', 'off-app']);
@@ -360,23 +373,26 @@ describe('Apps Routes', () => {
       expect(appsService.getActiveApps).toHaveBeenCalled();
     });
 
-    it('GET /layered-intelligence/overview reports jobEnabled:false when the job is missing', async () => {
+    it('GET /layered-intelligence/overview reports taskEnabled:false when the scheduled task is off', async () => {
       appsService.getActiveApps.mockResolvedValue([]);
-      autonomousJobs.getJob.mockResolvedValue(null);
+      appsService.getAppTaskTypeOverrides.mockResolvedValue({});
+      loadSchedule.mockResolvedValue({ tasks: {} });
 
       const response = await request(app).get('/api/apps/layered-intelligence/overview');
 
       expect(response.status).toBe(200);
-      expect(response.body.jobEnabled).toBe(false);
-      expect(response.body.jobExists).toBe(false);
+      expect(response.body.taskEnabled).toBe(false);
       expect(response.body.enabledCount).toBe(0);
     });
 
     it('GET /layered-intelligence/proposals sweeps only enabled apps and returns counts + links', async () => {
       appsService.getActiveApps.mockResolvedValue([
-        { id: 'off-app', name: 'Off', layeredIntelligence: { enabled: false }, repoPath: '/off' },
-        { id: 'on-app', name: 'On', layeredIntelligence: { enabled: true }, repoPath: '/on' }
+        { id: 'off-app', name: 'Off', repoPath: '/off' },
+        { id: 'on-app', name: 'On', repoPath: '/on' }
       ]);
+      // Enablement is per-app-override driven now (#2322).
+      appsService.getAppTaskTypeOverrides.mockImplementation(async (id) =>
+        id === 'on-app' ? { 'layered-intelligence': { enabled: true } } : {});
       resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
       summarizeFiledProposals.mockResolvedValue({
         ok: true, tracker: 'github', open: 2, closed: 1, total: 3,
@@ -395,9 +411,10 @@ describe('Apps Routes', () => {
 
     it('GET /layered-intelligence/proposals degrades one failing app without aborting the batch', async () => {
       appsService.getActiveApps.mockResolvedValue([
-        { id: 'a', name: 'A', layeredIntelligence: { enabled: true }, repoPath: '/a' },
-        { id: 'b', name: 'B', layeredIntelligence: { enabled: true }, repoPath: '/b' }
+        { id: 'a', name: 'A', repoPath: '/a' },
+        { id: 'b', name: 'B', repoPath: '/b' }
       ]);
+      appsService.getAppTaskTypeOverrides.mockResolvedValue({ 'layered-intelligence': { enabled: true } });
       resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
       summarizeFiledProposals
         .mockResolvedValueOnce({ ok: true, tracker: 'github', open: 1, closed: 0, total: 1, issues: [] })

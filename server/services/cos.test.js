@@ -846,6 +846,37 @@ describe('cos.js source — priority + capacity invariants', () => {
     }
   });
 
+  it('queueEligibleImprovementTasks runs HANDLER-BACKED types via the handler, never the agent path', () => {
+    // #2322: layered-intelligence is a deterministic handler-backed task. When
+    // getNextTaskType picks a handler-backed type for an app, the queue path MUST
+    // dispatch the in-process handler and `continue` — BEFORE (and instead of)
+    // calling generateManagedAppImprovementTaskForType. A bug here can only fail
+    // to run the handler; it can never spawn a runaway coding agent.
+    const fnStart = GEN_SRC.indexOf('async function queueEligibleImprovementTasks');
+    const fnBody = extractFnBody(GEN_SRC, fnStart);
+
+    // Imports HANDLER_BACKED_TASK_TYPES from the schedule and branches on it.
+    expect(fnBody).toMatch(/HANDLER_BACKED_TASK_TYPES/);
+    expect(fnBody).toMatch(/HANDLER_BACKED_TASK_TYPES\.has\(nextType\)/);
+
+    // The handler-backed branch dispatches + continues BEFORE the agent-spawn call.
+    const handlerIdx = fnBody.indexOf('HANDLER_BACKED_TASK_TYPES.has(nextType)');
+    const dispatchIdx = fnBody.indexOf('dispatchHandlerBackedTask(');
+    const generatorIdx = fnBody.indexOf('generateManagedAppImprovementTaskForType(');
+    expect(handlerIdx).toBeGreaterThan(-1);
+    expect(dispatchIdx).toBeGreaterThan(handlerIdx);
+    expect(dispatchIdx).toBeLessThan(generatorIdx); // handler dispatched before the agent path
+
+    // The shared runner lazily imports the LI handler (no static import cycle).
+    expect(GEN_SRC).toMatch(/export async function runHandlerBackedTaskForApp/);
+    expect(GEN_SRC).toMatch(/import\(['"]\.\/autonomousJobs\/layeredIntelligenceHandler\.js['"]\)/);
+    // And it never routes a handler-backed type through the agent generator.
+    const runnerStart = GEN_SRC.indexOf('export async function runHandlerBackedTaskForApp');
+    const runnerBody = extractFnBody(GEN_SRC, runnerStart);
+    expect(runnerBody).not.toMatch(/generateManagedAppImprovementTaskForType/);
+    expect(runnerBody).toMatch(/runLayeredIntelligenceForApp/);
+  });
+
   it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {
     // Regression guard: a 2026-05-21 incident saw two `plan-task` agents both
     // open PRs for the same PLAN.md slug because the queue path was writing

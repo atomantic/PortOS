@@ -54,10 +54,11 @@ export const SEMANTIC_DEDUP_THRESHOLD = 0.9;
 // issues should be few (the loop files ≤1/run), so this is a generous ceiling.
 export const SEMANTIC_DEDUP_MAX_CANDIDATES = 50;
 
-// The autonomous-job id that drives the whole loop (the global sweep). Single
-// source of truth — the DEFAULT_JOBS catalog entry and the cross-app overview
-// route both key on this so per-app enablement and the global on/off stay in
-// sync in the UI (a per-app config does nothing while this job is disabled).
+// The id of the RETIRED global autonomous-job that used to drive the whole loop
+// (the cross-app sweep). Layered Intelligence is now a per-app handler-backed
+// scheduled task (#2322), so this constant is kept ONLY so migration 184 can find
+// and tombstone the legacy `data/cos/autonomous-jobs.json` record on installs that
+// still carry it. Nothing dispatches on it anymore.
 export const LI_JOB_ID = 'job-layered-intelligence';
 
 // Every proposal scope the reasoner may return. The handler enforces WHERE each
@@ -140,34 +141,44 @@ export function getEffectiveConfig(app) {
 /**
  * Summarize one app's loop status for the cross-app overview page. Pure and
  * side-effect-free (no LLM, no forge I/O): derives the display shape from the
- * app's stored config + scheduler bookkeeping only. `lastRunAt` rides along on
- * the effective config (a passthrough stored key, absent on a never-run app);
- * `nextDueAt` is `lastRunAt + intervalMs` (null when never run), and `due` is a
- * display flag (only meaningful when enabled) mirroring the sweep's cadence
- * check. `rules` is reduced to a boolean so the free-text guidance never leaks
- * into a list payload.
+ * app's stored config + the per-app scheduled-task override.
+ *
+ * Under option A (#2322) the SCHEDULING fields — enabled / intervalMs /
+ * providerId / model — live in the per-app `taskTypeOverrides['layered-intelligence']`
+ * (passed in as `override`), NOT in `app.layeredIntelligence`. BEHAVIOR fields
+ * (sources / scopes / rules / handoff) plus `lastRunAt` bookkeeping still come
+ * from the effective config. `nextDueAt` is `lastRunAt + intervalMs` (null when
+ * never run), and `due` is a display flag (only meaningful when enabled) mirroring
+ * the scheduler's cadence check. `rules` is reduced to a boolean so the free-text
+ * guidance never leaks into a list payload.
  */
-export function summarizeLoopStatus({ app, isPortos = false, now = Date.now() } = {}) {
+export function summarizeLoopStatus({ app, isPortos = false, override = null, now = Date.now() } = {}) {
   const config = getEffectiveConfig({ ...app, isPortos });
   const sources = config.sources || {};
+  const ov = (override && typeof override === 'object' && !Array.isArray(override)) ? override : {};
+  const enabled = ov.enabled === true;
+  const intervalMs = (typeof ov.intervalMs === 'number' && Number.isFinite(ov.intervalMs) && ov.intervalMs > 0)
+    ? ov.intervalMs
+    : (config.intervalMs || 0);
+  const providerId = ov.providerId || null;
+  const model = ov.model || null;
   const lastRunAt = typeof config.lastRunAt === 'string' ? config.lastRunAt : null;
   const last = lastRunAt ? Date.parse(lastRunAt) : NaN;
-  const interval = config.intervalMs || 0;
-  const nextDueAt = Number.isFinite(last) ? new Date(last + interval).toISOString() : null;
-  const due = !Number.isFinite(last) || (now - last) >= interval;
+  const nextDueAt = Number.isFinite(last) ? new Date(last + intervalMs).toISOString() : null;
+  const due = !Number.isFinite(last) || (now - last) >= intervalMs;
   return {
     id: app.id,
     name: app.name || app.id,
     isPortos,
-    enabled: !!config.enabled,
-    intervalMs: config.intervalMs,
-    providerId: config.providerId || null,
-    model: config.model || null,
+    enabled,
+    intervalMs,
+    providerId,
+    model,
     handoffEnabled: !!config.handoff?.enabled,
     hasRules: !!(typeof config.rules === 'string' && config.rules.trim()),
     lastRunAt,
     nextDueAt,
-    due: !!config.enabled && due,
+    due: enabled && due,
     allowedScopes: Array.isArray(config.allowedScopes) ? config.allowedScopes : [],
     sources: {
       goals: !!sources.goals,

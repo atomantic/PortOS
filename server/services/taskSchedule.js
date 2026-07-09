@@ -26,7 +26,7 @@ import { atomicWrite, DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from
 import { isPlainObject } from '../lib/objects.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
@@ -167,8 +167,25 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // + the editorial family ranking (server/lib/localModelHeuristics.js), opening a
   // PR. No-ops on any repo lacking that catalog file, so enabling it on a
   // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
-  'refresh-local-llm-catalog'
+  'refresh-local-llm-catalog',
+  // layered-intelligence is HANDLER-BACKED (deterministic, no coding agent): on
+  // each per-app fire it reads that app's goals + telemetry, asks a reasoning
+  // model for the single most-valuable improvement, and files ONE deduplicated
+  // tracker issue — the model never writes code. Unlike every other type here it
+  // does NOT spawn an agent (see HANDLER_BACKED_TASK_TYPES + the seam in
+  // cosTaskGenerator.queueEligibleImprovementTasks). Scheduling (enabled/interval/
+  // provider/model) lives in the per-app taskTypeOverrides; behavior (sources/
+  // scopes/rules/handoff) stays in app.layeredIntelligence. Has NO DEFAULT_TASK_PROMPTS
+  // entry — the prompt is built deterministically by the handler.
+  'layered-intelligence'
 ];
+
+// Task types whose scheduled fire runs a deterministic in-process handler instead
+// of spawning a coding agent. The scheduler tick + on-demand drain detect these
+// and dispatch the handler directly (never generateManagedAppImprovementTaskForType).
+// A bug in this path can only fail to run the handler — it can never spawn a
+// runaway agent. See server/services/cosTaskGenerator.js#runHandlerBackedTaskForApp.
+export const HANDLER_BACKED_TASK_TYPES = new Set(['layered-intelligence']);
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
 const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
@@ -290,7 +307,13 @@ export const DEFAULT_TASK_INTERVALS = {
   // agent only edits the catalog file. Weekly is generous; the prompt only opens
   // a PR when the catalog is actually stale, so most runs are no-ops. Off by
   // default; the user enables it on the PortOS app.
-  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } }
+  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  // layered-intelligence is handler-backed (deterministic, no agent). Daily by
+  // default; per-app scheduling (enabled/interval/provider/model) is set in the
+  // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
+  // No `prompt` field — the handler builds its prompt itself (no DEFAULT_TASK_PROMPTS
+  // entry, so the prompt-version machinery in loadSchedule skips it).
+  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -954,6 +977,12 @@ export async function shouldRunTask(taskType, appId = null) {
 
   // Determine effective interval type: per-app override takes precedence
   const perAppInterval = appId ? await getAppTaskTypeInterval(appId, taskType) : null;
+  // A per-app numeric intervalMs override (used by handler-backed tasks like
+  // layered-intelligence, whose Intelligence-tab UI offers sub-daily cadences the
+  // string enum can't express). When set alongside interval:'custom', the CUSTOM
+  // branch below uses THIS value as the base interval instead of the global one.
+  const perAppIntervalMs = appId ? await getAppTaskTypeIntervalMs(appId, taskType) : null;
+  const hasCustomIntervalMs = Number.isFinite(perAppIntervalMs) && perAppIntervalMs > 0;
   // Cron expressions (contain spaces) are stored directly as the interval value
   const isCronOverride = perAppInterval && perAppInterval.includes(' ');
   const effectiveType = isCronOverride ? INTERVAL_TYPES.CRON : (perAppInterval || interval.type);
@@ -1029,7 +1058,9 @@ export async function shouldRunTask(taskType, appId = null) {
       break;
 
     case INTERVAL_TYPES.CUSTOM: {
-      const baseInterval = interval.intervalMs || DAY;
+      // A per-app numeric intervalMs override wins over the global custom interval
+      // (handler-backed tasks store their per-app cadence there).
+      const baseInterval = (hasCustomIntervalMs ? perAppIntervalMs : interval.intervalMs) || DAY;
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseInterval);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
       if (timeSinceLastRun >= adjustedInterval) {
@@ -1595,7 +1626,8 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
   'jira-status-report': 'Generate JIRA weekly status report',
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
+  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)",
+  'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent"
 };
 
 function getTaskTypeDescription(taskType) {

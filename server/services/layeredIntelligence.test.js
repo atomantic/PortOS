@@ -125,9 +125,12 @@ describe('summarizeLoopStatus (overview page shape)', () => {
   const DAY = 24 * 60 * 60 * 1000;
   const NOW = Date.parse('2026-07-07T12:00:00Z');
 
+  // Scheduling (enabled/intervalMs) now lives in the per-app task override (#2322);
+  // behavior + lastRunAt still come from app.layeredIntelligence.
   it('summarizes a never-run enabled app as due with no lastRun/nextDue', () => {
     const s = summarizeLoopStatus({
-      app: { id: 'a1', name: 'App One', layeredIntelligence: { enabled: true, intervalMs: DAY } },
+      app: { id: 'a1', name: 'App One' },
+      override: { enabled: true, intervalMs: DAY },
       now: NOW
     });
     expect(s).toMatchObject({ id: 'a1', name: 'App One', enabled: true, due: true, lastRunAt: null, nextDueAt: null });
@@ -138,7 +141,8 @@ describe('summarizeLoopStatus (overview page shape)', () => {
   it('computes nextDueAt = lastRunAt + intervalMs and due=false before the interval elapses', () => {
     const lastRunAt = new Date(NOW - DAY / 2).toISOString();
     const s = summarizeLoopStatus({
-      app: { id: 'a2', name: 'App Two', layeredIntelligence: { enabled: true, intervalMs: DAY, lastRunAt } },
+      app: { id: 'a2', name: 'App Two', layeredIntelligence: { lastRunAt } },
+      override: { enabled: true, intervalMs: DAY },
       now: NOW
     });
     expect(s.lastRunAt).toBe(lastRunAt);
@@ -149,7 +153,8 @@ describe('summarizeLoopStatus (overview page shape)', () => {
   it('due is always false when the app is disabled, even past the interval', () => {
     const lastRunAt = new Date(NOW - 2 * DAY).toISOString();
     const s = summarizeLoopStatus({
-      app: { id: 'a3', name: 'Off', layeredIntelligence: { enabled: false, intervalMs: DAY, lastRunAt } },
+      app: { id: 'a3', name: 'Off', layeredIntelligence: { lastRunAt } },
+      override: { enabled: false, intervalMs: DAY },
       now: NOW
     });
     expect(s.enabled).toBe(false);
@@ -158,26 +163,39 @@ describe('summarizeLoopStatus (overview page shape)', () => {
 
   it('reduces rules to a boolean and never leaks the free text', () => {
     const s = summarizeLoopStatus({
-      app: { id: 'a4', name: 'Ruled', layeredIntelligence: { enabled: true, rules: 'never add deps' } },
+      app: { id: 'a4', name: 'Ruled', layeredIntelligence: { rules: 'never add deps' } },
+      override: { enabled: true },
       now: NOW
     });
     expect(s.hasRules).toBe(true);
     expect(JSON.stringify(s)).not.toContain('never add deps');
   });
 
-  it('surfaces the hand-off enabled flag', () => {
+  it('surfaces the hand-off enabled flag (behavior, from layeredIntelligence)', () => {
     const off = summarizeLoopStatus({ app: { id: 'h0', name: 'Off' }, now: NOW });
     expect(off.handoffEnabled).toBe(false);
     const on = summarizeLoopStatus({
-      app: { id: 'h1', name: 'On', layeredIntelligence: { enabled: true, handoff: { enabled: true } } },
+      app: { id: 'h1', name: 'On', layeredIntelligence: { handoff: { enabled: true } } },
+      override: { enabled: true },
       now: NOW
     });
     expect(on.handoffEnabled).toBe(true);
   });
 
+  it('reads provider/model from the override, not layeredIntelligence', () => {
+    const s = summarizeLoopStatus({
+      app: { id: 'p1', name: 'Prov' },
+      override: { enabled: true, providerId: 'ov-prov', model: 'ov-model' },
+      now: NOW
+    });
+    expect(s.providerId).toBe('ov-prov');
+    expect(s.model).toBe('ov-model');
+  });
+
   it('surfaces PortOS scopes + custom source count', () => {
     const s = summarizeLoopStatus({
-      app: { id: 'portos-default', name: 'PortOS', layeredIntelligence: { enabled: true, sources: { custom: [{ type: 'file', ref: 'x.md' }] } } },
+      app: { id: 'portos-default', name: 'PortOS', layeredIntelligence: { sources: { custom: [{ type: 'file', ref: 'x.md' }] } } },
+      override: { enabled: true },
       isPortos: true,
       now: NOW
     });

@@ -1,5 +1,9 @@
 # Unreleased
 
+## Layered Intelligence
+
+- **[issue-2322] Layered Intelligence is now a per-app scheduled task, not a global sweep.** The self-improvement loop used to run as a single global "Layered Intelligence Loop" job that swept every enabled app on one daily fire, with a confusing split between a global on/off (CoS → System Tasks) and per-app config (Edit App → Intelligence) — a per-app card could read "Enabled · Due now" while nothing ran. It now runs like every other self-improvement automation: a per-app, deterministic, handler-backed task in CoS → Schedule with its own per-app enable, interval, provider/model, and "Run now". Enabling the `layered-intelligence` task in the Schedule (plus per app on the Intelligence tab) drives it; the reasoning model still only returns JSON and files one deduplicated tracker issue — no code, no agent. Per-app behavior (telemetry sources, allowed scopes, guidance rules, hand-off) still lives on the app's Intelligence tab. An install upgrade migrates each app's scheduling into its per-app task override and tombstones the old global job, preserving effective on/off state. Note: because it's now a self-improvement task, the loop runs only while CoS improvement is enabled.
+
 ## Fixed
 
 - **Layered Intelligence loop now supports every provider type.** The per-app AI-provider picker previously listed only `cli` providers, while the reasoning call went through the api-only `callProviderAISimple` — so a selected CLI provider failed at runtime with "requires an API-based provider," and API/TUI providers (Ollama, LM Studio, Claude/Codex/OpenCode TUI, etc.) never appeared at all. The reasoning call now routes through the unified `runPromptThroughProvider`, which dispatches on `provider.type`, and the picker lists all enabled `cli`/`api`/`tui` providers. CLI/TUI spawns run in the app's repo (`cwd`).

@@ -16,7 +16,6 @@ import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agentState.js'
-import { runLayeredIntelligence } from './layeredIntelligenceHandler.js'
 
 /**
  * Run the moltworld-explore.mjs script as a child process (no AI agent needed).
@@ -140,8 +139,10 @@ const SCRIPT_HANDLERS = {
   'autobiography-prompt': autobiographyCheckAndPrompt,
   'moltworld-exploration': runMoltworldExploration,
   'agent-data-cleanup': agentDataCleanup,
-  'goal-check-in': runGoalCheckIn,
-  'layered-intelligence': runLayeredIntelligence
+  'goal-check-in': runGoalCheckIn
+  // 'layered-intelligence' retired (#2322): LI is now a per-app HANDLER-BACKED
+  // scheduled task, not a global autonomous-job sweep. See taskSchedule.js
+  // HANDLER_BACKED_TASK_TYPES + cosTaskGenerator.runHandlerBackedTaskForApp.
 }
 
 export { runMoltworldExploration, agentDataCleanup, SCRIPT_HANDLERS }

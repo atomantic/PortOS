@@ -81,9 +81,24 @@ export function useOnDemandTaskToast() {
       });
     };
 
+    // A handler-backed task (e.g. Layered Intelligence) that DID work on an
+    // explicit "Run" — it files a tracker issue rather than spawning an agent, so
+    // there's no task card to see; a success toast is the only user feedback.
+    const handleRan = (data) => {
+      const task = data?.taskType || 'task';
+      const scope = data?.appName ? ` for ${data.appName}` : '';
+      const ref = data?.filedKey || (data?.filedNumber != null ? `#${data.filedNumber}` : '');
+      toast(`${task}${scope}: ran now — filed an improvement issue${ref ? ` (${ref})` : ''}.`, {
+        duration: 6000,
+        icon: '🧠'
+      });
+    };
+
     socket.on('cos:schedule:on-demand-empty', handleEmpty);
+    socket.on('cos:schedule:on-demand-ran', handleRan);
     return () => {
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
+      socket.off('cos:schedule:on-demand-ran', handleRan);
       // Don't unsubscribe from cos — other components share the room.
     };
   }, []);
