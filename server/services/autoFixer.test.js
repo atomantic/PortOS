@@ -336,3 +336,103 @@ describe('autoFixer — generic critical-error auto-fix path', () => {
     expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('autoFixer — circuit breaker (guardrail #3)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    cos.addTask.mockClear();
+    cos.isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetAutoFixerForTests();
+  });
+
+  // Distinct same-resource failures must be spaced past the 60s dedupe window,
+  // otherwise isDuplicateError swallows them before the circuit ever counts.
+  const DEDUPE_GAP_MS = 61000;
+
+  it('AI-provider path: suppresses the task once the same resource fails >3 times within the hour', async () => {
+    // First 3 distinct failures each raise an investigation task.
+    for (let i = 0; i < 3; i++) {
+      emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: `r-${i}` });
+      await vi.advanceTimersByTimeAsync(5500); // let the deferred task fire
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500); // clear the dedupe window
+    }
+    expect(cos.addTask).toHaveBeenCalledTimes(3);
+
+    // 4th failure within the same hour trips the circuit — no task scheduled.
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'r-4' });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(cos.addTask).toHaveBeenCalledTimes(3);
+  });
+
+  it('AI-provider path: the circuit auto-closes once failures age out of the 1h window', async () => {
+    for (let i = 0; i < 4; i++) {
+      emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: `r-${i}` });
+      await vi.advanceTimersByTimeAsync(5500);
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500);
+    }
+    // 3 tasks (4th suppressed by the open circuit).
+    expect(cos.addTask).toHaveBeenCalledTimes(3);
+
+    // Let the whole failure burst age past the rolling 1h window.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 1000);
+
+    // A fresh failure now raises a task again — the circuit auto-closed.
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'r-late' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(4);
+  });
+
+  it('AI-provider path: the circuit is per-resource — a different provider is unaffected', async () => {
+    for (let i = 0; i < 4; i++) {
+      emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: `a-${i}` });
+      await vi.advanceTimersByTimeAsync(5500);
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS - 5500);
+    }
+    expect(cos.addTask).toHaveBeenCalledTimes(3); // Ollama circuit open
+
+    // A distinct provider/model still gets its investigation task.
+    emitProviderFailure({ provider: 'LM Studio', model: 'qwen', runId: 'b-0' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(4);
+  });
+
+  it('AI-provider path: fallback-recovered failures do NOT count toward the circuit', async () => {
+    // A failure that a fallback recovers never produces an investigation task,
+    // so it must not push the resource toward the circuit threshold. Otherwise
+    // a provider that always recovers via fallback would eventually suppress a
+    // GENUINE unrecovered failure's investigation task.
+    const { noteFallbackStarted, noteFallbackHandled } = await import('./autoFixer.js');
+    for (let i = 0; i < 4; i++) {
+      emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: `f-${i}` });
+      await vi.advanceTimersByTimeAsync(0);
+      noteFallbackStarted({ provider: 'Ollama', model: 'command-r' }); // cancels the deferred timer
+      noteFallbackHandled({ provider: 'Ollama', model: 'command-r' }); // success — clears dedupe/in-flight
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS);
+    }
+    expect(cos.addTask).not.toHaveBeenCalled();
+
+    // A genuine unrecovered failure now STILL raises a task — the circuit never
+    // opened because recovered failures were never counted.
+    emitProviderFailure({ provider: 'Ollama', model: 'command-r', runId: 'real' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('generic critical-error path: suppresses the fix task once the same error fires >3 times within the hour', async () => {
+    for (let i = 0; i < 3; i++) {
+      emitCriticalError({ message: 'recurring boom' });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(DEDUPE_GAP_MS);
+    }
+    expect(cos.addTask).toHaveBeenCalledTimes(3);
+
+    emitCriticalError({ message: 'recurring boom' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cos.addTask).toHaveBeenCalledTimes(3); // circuit open — suppressed
+  });
+});

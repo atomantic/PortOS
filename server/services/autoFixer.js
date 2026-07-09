@@ -33,6 +33,41 @@ const deferredTasks = new Map(); // errorKey -> { timer }
 // and noteFallbackFailed (failure → the fallback's own task already covers it).
 const inFlightFallbacks = new Set(); // errorKey
 
+// Circuit breaker: if the SAME resource (errorKey) trips auto-fix more than
+// CIRCUIT_MAX_FAILURES times within CIRCUIT_WINDOW_MS, stop creating
+// investigation/fix tasks for it. A resource failing this persistently won't be
+// healed by yet another identical task — repeating only exhausts the plan queue
+// and can drive an unbounded retry loop. The window is rolling: timestamps older
+// than CIRCUIT_WINDOW_MS are pruned on every check, so the circuit auto-closes
+// once the failure rate ages out (no manual reset needed).
+const CIRCUIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const CIRCUIT_MAX_FAILURES = 3;
+const failureTimestamps = new Map(); // errorKey -> number[] (ms timestamps, newest-last)
+
+// Record a task-worthy failure for `errorKey` and report whether the circuit is
+// now OPEN — i.e. this failure is the (CIRCUIT_MAX_FAILURES + 1)th within the
+// rolling window and the caller should SUPPRESS task creation. Only genuinely
+// new failures (past the dedupe + in-flight-fallback guards) should reach here,
+// so the count reflects distinct recovery attempts, not log spam.
+function tripCircuit(errorKey) {
+  const now = Date.now();
+
+  // Sweep fully-aged keys so the map can't grow unbounded — `error.message`
+  // (part of the generic errorKey) can carry dynamic text, so distinct keys
+  // accumulate over the process lifetime otherwise. Mirrors isDuplicateError's
+  // global cleanup of recentErrors.
+  for (const [key, stamps] of failureTimestamps.entries()) {
+    if (stamps.every((t) => now - t >= CIRCUIT_WINDOW_MS)) {
+      failureTimestamps.delete(key);
+    }
+  }
+
+  const recent = (failureTimestamps.get(errorKey) || []).filter((t) => now - t < CIRCUIT_WINDOW_MS);
+  recent.push(now);
+  failureTimestamps.set(errorKey, recent);
+  return recent.length > CIRCUIT_MAX_FAILURES;
+}
+
 // Store pending tasks when CoS is not running (for later pickup)
 const pendingAutoFixTasks = [];
 
@@ -185,6 +220,7 @@ export function _resetAutoFixerForTests() {
   deferredTasks.clear();
   inFlightFallbacks.clear();
   recentErrors.clear();
+  failureTimestamps.clear();
   pendingAutoFixTasks.length = 0;
 }
 
@@ -236,6 +272,15 @@ async function handleAIProviderError(error) {
 
   const timer = setTimeout(() => {
     deferredTasks.delete(errorKey);
+    // Circuit breaker: only count a failure that actually survives the defer
+    // window (a fallback that recovered the failure has already cancelled this
+    // timer, so it never reaches here). A provider/model that keeps producing
+    // real investigation tasks this often won't be fixed by yet another — trip
+    // the circuit and suppress. Auto-closes once failures age out of the window.
+    if (tripCircuit(errorKey)) {
+      console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — >${CIRCUIT_MAX_FAILURES} failures within the last hour; suppressing investigation task`);
+      return;
+    }
     createAIProviderInvestigationTask(error).catch(err => {
       console.error(`❌ Deferred AI provider task creation failed: ${err.message}`);
       // Clear the dedupe entry so the next identical failure isn't
@@ -302,6 +347,14 @@ function shouldAutoFix(error) {
 
   if (isDuplicateError(errorKey)) {
     console.log(`⏭️ Skipping duplicate error: ${error.code}`);
+    return false;
+  }
+
+  // Circuit breaker: the same critical error recurring past the threshold won't
+  // be resolved by spawning another identical fix task — suppress to prevent a
+  // runaway loop. Auto-closes once the failure rate ages out of the window.
+  if (tripCircuit(errorKey)) {
+    console.log(`🔌 Auto-fix circuit OPEN for ${error.code} — >${CIRCUIT_MAX_FAILURES} failures within the last hour; suppressing auto-fix task`);
     return false;
   }
 
