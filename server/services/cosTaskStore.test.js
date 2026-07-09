@@ -183,11 +183,13 @@ describe('cosTaskStore.addTask', () => {
     expect(reloaded.metadata.diagnostics).toEqual(diagnostics);
   });
 
-  it('omits diagnostics metadata when none is supplied and ignores a non-object value', async () => {
+  it('omits diagnostics metadata when none is supplied and ignores a non-object / array value', async () => {
     const created = await addTask({ description: 'no diagnostics here' }, 'user');
     expect(created.metadata.diagnostics).toBeUndefined();
     const bad = await addTask({ description: 'bad diagnostics', diagnostics: 'not-an-object' }, 'user');
     expect(bad.metadata.diagnostics).toBeUndefined();
+    const arr = await addTask({ description: 'array diagnostics', diagnostics: ['nope'] }, 'user');
+    expect(arr.metadata.diagnostics).toBeUndefined();
   });
 
   it('rejects a duplicate with the same first-line description and app scope', async () => {

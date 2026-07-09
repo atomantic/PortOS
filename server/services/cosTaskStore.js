@@ -277,8 +277,8 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // was silently dropped. Persist it as first-class metadata so downstream
     // telemetry can aggregate auto-fix outcomes by tier / category / failure reason.
     // It round-trips through the markdown store via the JSON sentinel (see
-    // taskParser.js escapeNewlines). A non-object (defensive) is ignored.
-    if (taskData.diagnostics && typeof taskData.diagnostics === 'object') {
+    // taskParser.js escapeNewlines). A non-object / array (defensive) is ignored.
+    if (taskData.diagnostics && typeof taskData.diagnostics === 'object' && !Array.isArray(taskData.diagnostics)) {
       metadata.diagnostics = taskData.diagnostics;
     }
     // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
