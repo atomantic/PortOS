@@ -310,6 +310,8 @@ describe('effectiveModelContextWindow', () => {
   it('uses canonical provider windows for configured-default process providers', () => {
     expect(effectiveModelContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' }, CODEX_CONFIGURED_DEFAULT)).toBe(1_000_000);
     expect(effectiveModelContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' }, ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(1_048_576);
+    expect(effectiveModelContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' }, 'grok-build')).toBe(256_000);
+    expect(effectiveModelContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' }, 'grok-build')).toBe(256_000);
   });
 
   it('matches the server planner for local and cloud api defaults', () => {

@@ -26,6 +26,7 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
+import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
 import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -303,6 +304,21 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     };
   }
 
+  // Grok Build CLI (`grok`): headless one-shot agent. Reads the combined
+  // contract+task prompt from `--prompt-file /dev/stdin` (rewritten to a temp
+  // file on Windows at the spawn site — prepareGrokPromptFile), bypasses approval
+  // prompts, and emits plain text (the live-output handler falls through to its
+  // default text path, like OpenCode). grok is a non-Claude command, so
+  // agentLifecycle keeps the operating contract in the stdin prompt (no
+  // system-prompt-file split) — matching codex/antigravity/opencode.
+  if (isGrokCommand(provider?.command)) {
+    return {
+      command: provider?.command || 'grok',
+      args: ensureGrokHeadlessArgs(provider?.args || [], effectiveModel),
+      stdinMode: 'prompt',
+    };
+  }
+
   // Default: Claude Code CLI. applyLeanClaudeArgs adds `--bare
   // --strict-mcp-config` for Ollama-backed claude sessions (no-op otherwise,
   // idempotent against user-baked flags); the system-prompt contract file
@@ -434,7 +450,10 @@ export async function spawnDirectly({
   // bare name → spawn ENOENT (errno -4058) → startup-failure. Mirrors the
   // working "Run Prompt" path (server/services/runner.js); resolved against
   // childEnv so a provider PATH override is honored. See issue #2243.
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, cliConfig.args, childEnv);
+  // Grok's `--prompt-file /dev/stdin` is fed via stdin on POSIX; on Windows it's
+  // rewritten to a temp file (useStdin=false). No-op for every other provider.
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(cliConfig.args, prompt);
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
     cwd,
@@ -453,7 +472,7 @@ export async function spawnDirectly({
     prompt: (task.description || '').substring(0, 500)
   });
 
-  claudeProcess.stdin.write(prompt);
+  if (writePromptToStdin) claudeProcess.stdin.write(prompt);
   claudeProcess.stdin.end();
 
   activeAgents.set(agentId, {
@@ -581,6 +600,7 @@ export async function spawnDirectly({
     // completeAgent/completeAgentRun would crash the process, so wrap the body.
     try {
       clearTimeout(initializationTimeout);
+      cleanupPromptFile();
       console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
       // Release execution lane
@@ -622,6 +642,7 @@ export async function spawnDirectly({
     let laneReleased = false;
     try {
     clearTimeout(initializationTimeout);
+    cleanupPromptFile();
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());

@@ -9,6 +9,7 @@ import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
+import { prepareGrokPromptFile } from '../lib/grok.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
@@ -200,8 +201,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   };
 
   // Build provider-specific args for stdin-based prompt delivery
-  const args = buildCliArgs(provider);
-  console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via stdin)`);
+  const builtArgs = buildCliArgs(provider);
+  // Grok reads its prompt from `--prompt-file`; on POSIX that's /dev/stdin (fed
+  // by the stdin write below), on Windows a real temp file (no /dev/stdin). This
+  // rewrites the argv + tells us whether to still write stdin. No-op for every
+  // other provider. cleanupPromptFile removes any temp file after the run.
+  const { args, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(builtArgs, prompt);
+  console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'prompt-file'})`);
 
   // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
   // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
@@ -224,8 +230,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     windowsHide: true
   });
 
-  // Pass prompt via stdin to avoid OS argv limits
-  childProcess.stdin.write(prompt);
+  // Pass prompt via stdin to avoid OS argv limits. When grok is delivered via a
+  // Windows temp file (useStdin === false) the prompt is already on disk, so
+  // just close stdin.
+  if (useStdin) childProcess.stdin.write(prompt);
   childProcess.stdin.end();
 
   // Track active run via the toolkit's declared external-run registry so its
@@ -261,6 +269,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   childProcess.on('error', async (err) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     toolkit.services.runner.unregisterExternalRun(runId);
+    cleanupPromptFile();
     console.error(`❌ Run ${runId} spawn error: ${err.message}`);
 
     const metadata = {
@@ -289,6 +298,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     try {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       toolkit.services.runner.unregisterExternalRun(runId);
+      cleanupPromptFile();
 
       await writeFile(outputPath, output);
 

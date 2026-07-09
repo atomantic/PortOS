@@ -16,10 +16,27 @@ import {
   isClaudeCommand,
   isOllamaClaudeProvider,
   applyLeanClaudeArgs,
-  LEAN_CLAUDE_ARGS
+  LEAN_CLAUDE_ARGS,
+  commandBasename
 } from './providerModels.js';
 
 describe('providerModels', () => {
+  describe('commandBasename', () => {
+    it('strips directory prefixes, lowercases, and drops a .exe suffix', () => {
+      expect(commandBasename('grok')).toBe('grok');
+      expect(commandBasename('/opt/homebrew/bin/Grok')).toBe('grok');
+      expect(commandBasename('C:\\tools\\GROK.exe')).toBe('grok');
+      expect(commandBasename('./bin/opencode')).toBe('opencode');
+    });
+
+    it('returns empty string for empty/non-string input', () => {
+      expect(commandBasename('')).toBe('');
+      expect(commandBasename(null)).toBe('');
+      expect(commandBasename(undefined)).toBe('');
+      expect(commandBasename(42)).toBe('');
+    });
+  });
+
   describe('isCodexConfiguredDefault', () => {
     it('matches the sentinel exactly', () => {
       expect(isCodexConfiguredDefault(CODEX_CONFIGURED_DEFAULT)).toBe(true);
