@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitHandlerBackedOnDemand } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -469,54 +469,9 @@ describe('selectDryRunAutoApproved', () => {
   });
 });
 
-// emitHandlerBackedOnDemand is the on-demand feedback bridge for a handler-backed
-// task (Layered Intelligence): it files a tracker issue rather than spawning a
-// visible agent, so the emitted event is the user's only clue. Before the fix it
-// collapsed every non-filed outcome to a bland `outcome:'idle'` and dropped the
-// reason; these pin that the real action + reason now reach the client.
-describe('emitHandlerBackedOnDemand', () => {
-  const capture = (event) => {
-    const seen = [];
-    const handler = (d) => seen.push(d);
-    cosEvents.on(event, handler);
-    return { seen, done: () => cosEvents.off(event, handler) };
-  };
-  const request = { id: 'req-1', taskType: 'layered-intelligence' };
-  const targetApp = { id: 'app-1', name: 'App One' };
-
-  it('emits on-demand-ran with the filed ref on a filed outcome', async () => {
-    const cap = capture('schedule:on-demand-ran');
-    await emitHandlerBackedOnDemand({ outcome: { action: 'filed', filedNumber: 42 }, request, targetApp });
-    cap.done();
-    expect(cap.seen).toHaveLength(1);
-    expect(cap.seen[0]).toMatchObject({ action: 'filed', filedNumber: 42, appName: 'App One' });
-  });
-
-  it('classifies a genuine no-proposal run as idle', async () => {
-    const cap = capture('schedule:on-demand-empty');
-    await emitHandlerBackedOnDemand({ outcome: { action: 'no-op', reason: 'no-proposal' }, request, targetApp });
-    cap.done();
-    expect(cap.seen[0]).toMatchObject({ outcome: 'idle', handlerAction: 'no-op', handlerReason: 'no-proposal' });
-  });
-
-  it('forwards the reason for an unparseable-response run as a handler-issue', async () => {
-    const cap = capture('schedule:on-demand-empty');
-    await emitHandlerBackedOnDemand({ outcome: { action: 'no-op', reason: 'unparseable-response' }, request, targetApp });
-    cap.done();
-    expect(cap.seen[0]).toMatchObject({ outcome: 'handler-issue', handlerAction: 'no-op', handlerReason: 'unparseable-response' });
-  });
-
-  it('surfaces a park with its blocking count', async () => {
-    const cap = capture('schedule:on-demand-empty');
-    await emitHandlerBackedOnDemand({ outcome: { action: 'parked', reason: 'blocking-open', blocking: 3 }, request, targetApp });
-    cap.done();
-    expect(cap.seen[0]).toMatchObject({ outcome: 'handler-issue', handlerAction: 'parked', blocking: 3 });
-  });
-
-  it('maps a thrown-run { error } into a handler-issue reason', async () => {
-    const cap = capture('schedule:on-demand-empty');
-    await emitHandlerBackedOnDemand({ outcome: { action: 'error', error: 'store down' }, request, targetApp });
-    cap.done();
-    expect(cap.seen[0]).toMatchObject({ outcome: 'handler-issue', handlerAction: 'error', handlerReason: 'store down' });
-  });
-});
+// Layered Intelligence's on-demand feedback bridge (emitHandlerBackedOnDemand) was
+// removed when LI migrated off the handler-backed path onto a normal agent task
+// (see taskTypeHooks.js + layeredIntelligenceHooks.js). A "Run now" now generates a
+// visible agent task (or the shared emitOnDemandEmpty no-dispatch feedback when the
+// buildTaskInput hook skips), and the filing outcome surfaces via the agent + the
+// app's lastRun bookkeeping — so the bespoke bridge is no longer needed.

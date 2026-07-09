@@ -846,35 +846,19 @@ describe('cos.js source — priority + capacity invariants', () => {
     }
   });
 
-  it('queueEligibleImprovementTasks runs HANDLER-BACKED types via the handler, never the agent path', () => {
-    // #2322: layered-intelligence is a deterministic handler-backed task. When
-    // getNextTaskType picks a handler-backed type for an app, the queue path MUST
-    // dispatch the in-process handler and `continue` — BEFORE (and instead of)
-    // calling generateManagedAppImprovementTaskForType. A bug here can only fail
-    // to run the handler; it can never spawn a runaway coding agent.
-    const fnStart = GEN_SRC.indexOf('async function queueEligibleImprovementTasks');
-    const fnBody = extractFnBody(GEN_SRC, fnStart);
+  it('has NO handler-backed dispatch — every task type routes through the agent path', () => {
+    // #2322 follow-up: layered-intelligence migrated OFF the handler-backed path
+    // onto a normal agent task with programmatic-I/O hooks (taskTypeHooks.js). The
+    // queue path no longer special-cases any type: there is no in-process handler
+    // dispatch that bypasses the agent-spawn path, so a scheduled reasoning task is
+    // a visible, TUI-capable agent like everything else.
+    expect(GEN_SRC).not.toMatch(/dispatchHandlerBackedTask/);
+    expect(GEN_SRC).not.toMatch(/runHandlerBackedTaskForApp/);
+    expect(GEN_SRC).not.toMatch(/layeredIntelligenceHandler\.js/);
 
-    // Imports HANDLER_BACKED_TASK_TYPES from the schedule and branches on it.
-    expect(fnBody).toMatch(/HANDLER_BACKED_TASK_TYPES/);
-    expect(fnBody).toMatch(/HANDLER_BACKED_TASK_TYPES\.has\(nextType\)/);
-
-    // The handler-backed branch dispatches + continues BEFORE the agent-spawn call.
-    const handlerIdx = fnBody.indexOf('HANDLER_BACKED_TASK_TYPES.has(nextType)');
-    const dispatchIdx = fnBody.indexOf('dispatchHandlerBackedTask(');
-    const generatorIdx = fnBody.indexOf('generateManagedAppImprovementTaskForType(');
-    expect(handlerIdx).toBeGreaterThan(-1);
-    expect(dispatchIdx).toBeGreaterThan(handlerIdx);
-    expect(dispatchIdx).toBeLessThan(generatorIdx); // handler dispatched before the agent path
-
-    // The shared runner lazily imports the LI handler (no static import cycle).
-    expect(GEN_SRC).toMatch(/export async function runHandlerBackedTaskForApp/);
-    expect(GEN_SRC).toMatch(/import\(['"]\.\/autonomousJobs\/layeredIntelligenceHandler\.js['"]\)/);
-    // And it never routes a handler-backed type through the agent generator.
-    const runnerStart = GEN_SRC.indexOf('export async function runHandlerBackedTaskForApp');
-    const runnerBody = extractFnBody(GEN_SRC, runnerStart);
-    expect(runnerBody).not.toMatch(/generateManagedAppImprovementTaskForType/);
-    expect(runnerBody).toMatch(/runLayeredIntelligenceForApp/);
+    // The generator runs a task type's optional buildTaskInput hook before dispatch
+    // (the pre-agent programmatic slot LI's gather layer fills).
+    expect(GEN_SRC).toMatch(/getTaskInputHook/);
   });
 
   it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {

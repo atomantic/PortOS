@@ -140,9 +140,10 @@ const SCRIPT_HANDLERS = {
   'moltworld-exploration': runMoltworldExploration,
   'agent-data-cleanup': agentDataCleanup,
   'goal-check-in': runGoalCheckIn
-  // 'layered-intelligence' retired (#2322): LI is now a per-app HANDLER-BACKED
-  // scheduled task, not a global autonomous-job sweep. See taskSchedule.js
-  // HANDLER_BACKED_TASK_TYPES + cosTaskGenerator.runHandlerBackedTaskForApp.
+  // 'layered-intelligence' retired here (#2322): LI is now a per-app scheduled
+  // task, not a global autonomous-job sweep. It runs as a normal reasoning agent
+  // with programmatic-I/O hooks — see taskTypeHooks.js +
+  // autonomousJobs/layeredIntelligenceHooks.js.
 }
 
 export { runMoltworldExploration, agentDataCleanup, SCRIPT_HANDLERS }

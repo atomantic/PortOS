@@ -1,7 +1,7 @@
 // Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens.
 //
 // The reason vocabulary is authored server-side (server/services/autonomousJobs/
-// layeredIntelligenceHandler.js — `no-provider`, `unparseable-response`,
+// layeredIntelligenceHooks.js — `no-provider`, `unparseable-response`,
 // `no-proposal`, `scope-suppressed`, `file-failed`, `duplicate`,
 // `semantic-duplicate`, `tracker-read-failed`, `blocking-read-failed`,
 // `jira-not-configured`, `blocking-open`, plus the synthesized `llm-error:<msg>`

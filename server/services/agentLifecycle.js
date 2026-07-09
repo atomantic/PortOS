@@ -759,6 +759,7 @@ export async function finalizeAgent({
   isTruthyMetaFn,
   error,
   completionReason,
+  workspacePath = null,
 }) {
   if (success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
@@ -824,7 +825,55 @@ export async function finalizeAgent({
     }
   }
 
+  // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
+  // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
+  // payload — rather than only handling the completion sentinel. Read + dispatch
+  // it mode-agnostically here (the single finalize chokepoint for TUI/CLI/runner
+  // agents), gated on the task type actually registering an output hook so a
+  // normal agent pays no extra I/O. Its side effects (filing an issue, etc.) are
+  // isolated from the agent's discarded worktree — the payload is the only
+  // durable channel out. Errors are caught: a hook failure must not strand the
+  // rest of finalize. See taskTypeHooks.js + the design plan.
+  await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
+    emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+  });
+
   await processAgentCompletion(agentId, task, success, outputBuffer);
+}
+
+/**
+ * Read the finished agent's `.agent-done` payload and run the task type's
+ * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
+ * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
+ * loads its own app/config — finalizeAgent stays domain-agnostic.
+ */
+async function dispatchTaskOutputHook({ agentId, task, success, workspacePath }) {
+  // The scheduled task type lives in metadata.analysisType (the top-level
+  // task.taskType is the CoS queue category, e.g. 'internal'). A programmatic-I/O
+  // hook is keyed on the scheduled type.
+  const taskType = task?.metadata?.analysisType || task?.taskType;
+  if (!taskType) return;
+  const { getTaskOutputHook } = await import('./taskTypeHooks.js');
+  const hook = await getTaskOutputHook(taskType);
+  if (!hook) return;
+
+  const cwd = workspacePath || task?.metadata?.repoPath || null;
+  let payload = null;
+  if (cwd) {
+    const { DONE_SENTINEL_NAME, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+    const { tryReadFile } = await import('../lib/fileUtils.js');
+    const contents = await tryReadFile(join(cwd, DONE_SENTINEL_NAME));
+    payload = parseSentinelPayload(contents).payload;
+  }
+
+  await hook({
+    appId: task?.metadata?.app || null,
+    success,
+    payload,
+    workspacePath: cwd,
+    agentId,
+    task,
+  });
 }
 
 /**
@@ -1019,6 +1068,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         outputBuffer,
         errorAnalysis,
         isTruthyMetaFn: isTruthyMeta,
+        workspacePath: agent.workspacePath || null,
       });
     } catch (err) {
       finalizeError = err;

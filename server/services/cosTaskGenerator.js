@@ -533,7 +533,6 @@ async function spawnPriority0OnDemand(ctx) {
   const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
   const taskSchedule = await import('./taskSchedule.js');
-  const { HANDLER_BACKED_TASK_TYPES } = taskSchedule;
   const liveSchedule = await taskSchedule.loadSchedule();
   const onDemandRequests = Array.isArray(liveSchedule?.onDemandRequests) ? liveSchedule.onDemandRequests : [];
 
@@ -573,14 +572,6 @@ async function spawnPriority0OnDemand(ctx) {
 
       await taskSchedule.clearOnDemandRequest(request.id);
 
-      // Handler-backed tasks (layered-intelligence) are inherently per-app — a
-      // global (no-app) request can't dispatch one, and must NEVER fall through
-      // to the self-improvement agent path below.
-      if (HANDLER_BACKED_TASK_TYPES.has(request.taskType) && !targetApp) {
-        emitLog('info', `On-demand ${request.taskType} skipped — handler-backed tasks require an app`, { requestId: request.id });
-        continue;
-      }
-
       if (targetApp) {
         emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}`, { requestId: request.id, appId: targetApp.id });
         // A user-initiated "Run" must re-check live state — reset any park + the
@@ -595,15 +586,6 @@ async function spawnPriority0OnDemand(ctx) {
           reviewStartedApps.add(targetApp.id);
         }
         await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
-        // HANDLER-BACKED types run the deterministic handler for this app instead
-        // of generating an agent task. Emit the same ran/no-work feedback, then
-        // move to the next request (never enqueue an agent task).
-        if (HANDLER_BACKED_TASK_TYPES.has(request.taskType)) {
-          const outcome = await runHandlerBackedTaskForApp(request.taskType, targetApp)
-            .catch((err) => { console.error(`❌ Handler-backed ${request.taskType} failed for ${targetApp.name}: ${err.message}`); return { action: 'error', error: err.message }; });
-          await emitHandlerBackedOnDemand({ outcome, request, targetApp });
-          continue;
-        }
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, { skipPreconditions: true });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -1110,7 +1092,7 @@ export async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null } = {}) {
-  const { getNextTaskType, recordExecution, HANDLER_BACKED_TASK_TYPES } = await import('./taskSchedule.js');
+  const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1210,16 +1192,6 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     const nextTypeResult = await getNextTaskType(app.id, lastType, { perpetualOnly: onCooldown }).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
-
-    // HANDLER-BACKED types (e.g. layered-intelligence) run a deterministic
-    // in-process handler for this app instead of spawning a coding agent. Fire
-    // it and-forget (guarded per-app so the next tick can't double-run it),
-    // record the execution on completion, and move on — NEVER touch the
-    // agent-spawn path below. A bug here can only fail to run the handler.
-    if (HANDLER_BACKED_TASK_TYPES.has(nextType)) {
-      dispatchHandlerBackedTask(nextType, app, recordExecution);
-      continue;
-    }
 
     const taskKey = `app:${app.id}:${nextType}`;
     if (existingTaskTypes.has(taskKey)) {
@@ -1547,103 +1519,6 @@ async function generateManagedAppImprovementTask(app, state) {
  * user-initiated on-demand path, so the client can toast it without
  * background-park noise.
  */
-// Per-app in-flight guard for handler-backed tasks so a fire-and-forget run
-// started by one scheduler tick (or an on-demand drain) can't be double-started
-// by the next tick for the same app before it settles. Keyed by app id.
-const handlerBackedInFlight = new Set();
-
-/** True when a handler-backed task is currently running for this app. */
-export function isHandlerBackedInFlight(appId) {
-  return handlerBackedInFlight.has(appId);
-}
-
-/**
- * Run a HANDLER-BACKED (deterministic, no-agent) scheduled task for ONE app,
- * dispatching to the in-process handler for its type instead of spawning a coding
- * agent (see taskSchedule.HANDLER_BACKED_TASK_TYPES). Guarded by a module-level
- * per-app in-flight Set. Returns the handler's outcome, `{ action: 'in-flight' }`
- * when a prior run for this app is still active, or `{ action: 'no-handler' }`
- * for an unrecognized type. The handler is lazily imported to avoid a static
- * import cycle (the handler pulls in apps.js / providers). Callers that run this
- * outside the request lifecycle MUST wrap it (the `finally` clears the guard even
- * if the handler throws, but the throw still propagates to the caller's boundary).
- */
-export async function runHandlerBackedTaskForApp(taskType, app) {
-  if (handlerBackedInFlight.has(app.id)) return { app: app.id, action: 'in-flight' };
-  handlerBackedInFlight.add(app.id);
-  try {
-    if (taskType === 'layered-intelligence') {
-      const { runLayeredIntelligenceForApp } = await import('./autonomousJobs/layeredIntelligenceHandler.js');
-      return await runLayeredIntelligenceForApp(app);
-    }
-    return { app: app.id, action: 'no-handler' };
-  } finally {
-    handlerBackedInFlight.delete(app.id);
-  }
-}
-
-/**
- * Fire-and-forget a handler-backed task from the scheduler tick: run it, record
- * the execution (so cadence advances), and log — never throwing into the tick
- * loop. Skips the recordExecution when the run was a no-op because another run
- * for this app was already in flight. Boundary-wrapped (runs outside the request
- * lifecycle). `recordExecution` is passed in (already imported by the caller).
- */
-function dispatchHandlerBackedTask(taskType, app, recordExecution) {
-  runHandlerBackedTaskForApp(taskType, app)
-    .then(async (outcome) => {
-      if (outcome?.action === 'in-flight') return; // a prior tick is still running
-      await recordExecution(`task:${taskType}`, app.id);
-      emitLog('info', `Ran handler-backed ${taskType} for ${app.name} (${outcome?.action || 'done'})`, { appId: app.id, action: outcome?.action });
-    })
-    .catch((err) => {
-      console.error(`❌ Handler-backed ${taskType} failed for ${app.name}: ${err.message}`);
-    });
-}
-
-/**
- * On-demand (user "Run now") feedback for a handler-backed task: it produces no
- * agent task, so mirror the agent path's "ran / no work" signal. When the run
- * filed an issue we toast a success; otherwise we reuse the on-demand-empty
- * channel with outcome 'idle' (nothing to do right now). Boundary-safe.
- */
-export async function emitHandlerBackedOnDemand({ outcome, request, targetApp }) {
-  const appName = targetApp?.name || null;
-  const appId = targetApp?.id || null;
-  const filed = outcome?.action === 'filed';
-  if (filed) {
-    cosEvents.emit('schedule:on-demand-ran', {
-      requestId: request.id,
-      taskType: request.taskType,
-      appId,
-      appName,
-      action: outcome.action,
-      filedNumber: outcome.filedNumber ?? null,
-      filedKey: outcome.filedKey ?? null
-    });
-    return;
-  }
-  // Non-filed: forward the handler's ACTUAL action + reason so the client can
-  // explain WHY nothing was filed (llm-error, unparseable-response, duplicate,
-  // parked, jira-not-configured, …) instead of a blanket "nothing to do". A
-  // plain `no-op`/`no-proposal` is genuinely idle; everything else is a
-  // handler-issue the user should see. `error` is the thrown-run shape the
-  // caller synthesizes when the handler itself rejects.
-  const action = outcome?.action || 'no-op';
-  const reason = outcome?.reason ?? outcome?.error ?? null;
-  const isIdle = action === 'no-op' && (reason == null || reason === 'no-proposal');
-  cosEvents.emit('schedule:on-demand-empty', {
-    requestId: request.id,
-    taskType: request.taskType,
-    appId,
-    appName,
-    outcome: isIdle ? 'idle' : 'handler-issue',
-    handlerAction: action,
-    handlerReason: reason,
-    blocking: outcome?.blocking ?? null
-  });
-}
-
 export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
@@ -1714,6 +1589,41 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
 
   initializePipelineMetadata(metadata);
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
+
+  // Programmatic-I/O input hook. A task type may register a buildTaskInput hook
+  // (taskTypeHooks.js) that does deterministic pre-agent data collection — the
+  // same shape as the inline pre-steps reference-watch/pr-watcher/branch-reconcile
+  // run below (gather → maybe skip → contribute prompt), but as a reusable seam.
+  // The hook OWNS its full prompt (it replaces the template) and has one `skip`
+  // outcome; the inline steps that instead INJECT a token block into a template
+  // they still own, or need perpetual park/convergence semantics, stay inline for
+  // now (future candidates if the hook grows a block-injection return). When it
+  // skips we record execution so cadence advances (mirrors pr-watcher's no-
+  // dispatch recordPoll), then return null — no agent is spawned.
+  let hookPrompt = null;
+  // The hook may pin the app's chosen provider/model (LI option A: they live in
+  // the per-app taskTypeOverrides, not the global schedule interval). Captured
+  // here but APPLIED AFTER the global-interval provider/model block below, so the
+  // per-app choice wins over a global schedule provider rather than being clobbered
+  // by it.
+  let hookOverride = {};
+  {
+    const { getTaskInputHook } = await import('./taskTypeHooks.js');
+    const inputHook = await getTaskInputHook(taskType);
+    if (inputHook) {
+      const input = await inputHook({ app, taskType }).catch((err) => {
+        emitLog('warn', `buildTaskInput hook failed for ${taskType}/${app.name}: ${err.message}`, { appId: app.id, analysisType: taskType });
+        return { skip: { reason: 'input-hook-error' } };
+      });
+      if (input?.skip) {
+        emitLog('info', `Skipping ${taskType} for ${app.name}: ${input.skip.reason}`, { appId: app.id, analysisType: taskType });
+        await taskSchedule.recordExecution(taskType, app.id);
+        return null;
+      }
+      hookPrompt = input?.prompt || null;
+      hookOverride = { providerId: input?.providerId || null, model: input?.model || null };
+    }
+  }
 
   // claim-work is the single-source router: one toggle that ships the next
   // work item from whatever tracker the app is configured for. Resolve
@@ -1944,9 +1854,14 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // default.)
   const promptKeyForBody = (taskType === 'claim-work' && !interval.prompt) ? promptTaskType : taskType;
 
-  const promptTemplate = metadata.pipeline?.stages
-    ? await getStagePrompt(taskType, 0)
-    : await getTaskPrompt(promptKeyForBody);
+  // A buildTaskInput hook that returned a fully-rendered prompt wins over the
+  // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
+  // entry). The token-replacement chain below is a no-op on it (no {tokens}).
+  const promptTemplate = hookPrompt
+    ? hookPrompt
+    : (metadata.pipeline?.stages
+      ? await getStagePrompt(taskType, 0)
+      : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
@@ -2117,6 +2032,12 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   if (interval.model) {
     metadata.model = interval.model;
   }
+
+  // A buildTaskInput hook's per-app provider/model wins over the global interval
+  // pin above (per-app is the more specific choice). Applied last so a global
+  // schedule provider can't clobber the app's selection.
+  if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
+  if (hookOverride.model) { metadata.model = hookOverride.model; }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
 

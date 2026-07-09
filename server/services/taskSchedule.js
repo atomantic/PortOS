@@ -168,24 +168,20 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // PR. No-ops on any repo lacking that catalog file, so enabling it on a
   // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
   'refresh-local-llm-catalog',
-  // layered-intelligence is HANDLER-BACKED (deterministic, no coding agent): on
-  // each per-app fire it reads that app's goals + telemetry, asks a reasoning
-  // model for the single most-valuable improvement, and files ONE deduplicated
-  // tracker issue — the model never writes code. Unlike every other type here it
-  // does NOT spawn an agent (see HANDLER_BACKED_TASK_TYPES + the seam in
-  // cosTaskGenerator.queueEligibleImprovementTasks). Scheduling (enabled/interval/
-  // provider/model) lives in the per-app taskTypeOverrides; behavior (sources/
-  // scopes/rules/handoff) stays in app.layeredIntelligence. Has NO DEFAULT_TASK_PROMPTS
-  // entry — the prompt is built deterministically by the handler.
+  // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
+  // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
+  // deterministic hooks around it — buildTaskInput gathers the app's goals +
+  // telemetry + open issues and builds the reasoning prompt; processTaskOutput
+  // validates the agent's `.agent-done` payload, dedups, and files ONE tracker
+  // issue. The agent runs in a THROWAWAY worktree (discardWorktree) that is never
+  // committed/merged, so the reasoner still can't write code — the structured
+  // payload is its only channel out. Scheduling (enabled/interval/provider/model)
+  // lives in the per-app taskTypeOverrides; behavior (sources/scopes/rules/handoff)
+  // stays in app.layeredIntelligence. Has NO DEFAULT_TASK_PROMPTS entry — the
+  // buildTaskInput hook renders the prompt. See taskTypeHooks.js +
+  // autonomousJobs/layeredIntelligenceHooks.js.
   'layered-intelligence'
 ];
-
-// Task types whose scheduled fire runs a deterministic in-process handler instead
-// of spawning a coding agent. The scheduler tick + on-demand drain detect these
-// and dispatch the handler directly (never generateManagedAppImprovementTaskForType).
-// A bug in this path can only fail to run the handler — it can never spawn a
-// runaway agent. See server/services/cosTaskGenerator.js#runHandlerBackedTaskForApp.
-export const HANDLER_BACKED_TASK_TYPES = new Set(['layered-intelligence']);
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
 const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
@@ -308,12 +304,16 @@ export const DEFAULT_TASK_INTERVALS = {
   // a PR when the catalog is actually stale, so most runs are no-ops. Off by
   // default; the user enables it on the PortOS app.
   'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
-  // layered-intelligence is handler-backed (deterministic, no agent). Daily by
-  // default; per-app scheduling (enabled/interval/provider/model) is set in the
+  // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). Daily
+  // by default; per-app scheduling (enabled/interval/provider/model) is set in the
   // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
-  // No `prompt` field — the handler builds its prompt itself (no DEFAULT_TASK_PROMPTS
-  // entry, so the prompt-version machinery in loadSchedule skips it).
-  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null }
+  // No `prompt` field — the buildTaskInput hook renders the prompt (no
+  // DEFAULT_TASK_PROMPTS entry, so the prompt-version machinery in loadSchedule
+  // skips it). taskMetadata pins the throwaway-worktree posture: the reasoning
+  // agent runs in a worktree that is discarded without a commit/merge/PR
+  // (discardWorktree), so it can't land code — its `.agent-done` payload is the
+  // only sanctioned output (consumed by the processTaskOutput hook).
+  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and

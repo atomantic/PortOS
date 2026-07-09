@@ -111,8 +111,7 @@ import {
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
   TASK_TYPE_DESCRIPTIONS,
-  REFERENCE_WATCH_AUDITED_VERSION,
-  HANDLER_BACKED_TASK_TYPES
+  REFERENCE_WATCH_AUDITED_VERSION
 } from './taskSchedule.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
@@ -216,16 +215,25 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('layered-intelligence (handler-backed task type)', () => {
+  describe('layered-intelligence (programmatic-I/O agent task)', () => {
     it('is registered as a self-improvement task with a description and a daily default', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('layered-intelligence');
       expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toBeTruthy();
       expect(DEFAULT_TASK_INTERVALS['layered-intelligence']).toMatchObject({ type: 'daily', enabled: false });
     });
 
-    it('is in HANDLER_BACKED_TASK_TYPES and has NO default prompt (deterministic)', () => {
-      expect(HANDLER_BACKED_TASK_TYPES.has('layered-intelligence')).toBe(true);
+    it('has NO default prompt — the buildTaskInput hook renders it', () => {
+      // LI runs as a normal reasoning agent with buildTaskInput/processTaskOutput
+      // hooks (taskTypeHooks.js); the handler-backed dispatch was removed entirely.
+      // The buildTaskInput hook renders the prompt, so there is no
+      // DEFAULT_TASK_PROMPTS entry.
       expect(DEFAULT_TASK_PROMPTS['layered-intelligence']).toBeUndefined();
+    });
+
+    it('pins the throwaway-worktree posture so the reasoning agent can not land code', () => {
+      expect(DEFAULT_TASK_INTERVALS['layered-intelligence'].taskMetadata).toMatchObject({
+        useWorktree: true, openPR: false, discardWorktree: true
+      });
     });
 
     it('honors a per-app numeric intervalMs override via the CUSTOM branch', async () => {
