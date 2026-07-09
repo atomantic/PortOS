@@ -128,6 +128,7 @@ export * from './zipWriter.js';
 
 // === Process execution ===
 export * from './agentGuard/index.js';
+export * from './agentSentinel.js';
 export * from './bashResolver.js';
 export * from './bufferedSpawn.js';
 export * from './commandSecurity.js';

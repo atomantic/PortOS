@@ -24,6 +24,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `validation.js` | Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing, document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`, `isSafeRecordId`, `parsePagination`). Re-exports the per-domain validation files below so existing deep imports keep working. |
+| `agentSentinel.js` | The `.agent-done` completion sentinel: `DONE_SENTINEL_NAME` + pure `parseSentinelPayload(contents)` → `{ summary, payload }`. Back-compat — a plain-markdown sentinel yields `payload: null`; a JSON object yields its structured `payload` for a programmatic-I/O task type's `processTaskOutput` hook. |
 | `agentValidation.js` | Social-bot agent schemas (personality, Moltbook/Moltworld accounts, automation schedules, agent tools + Moltworld payloads) and CoS Feature Agent definitions. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |

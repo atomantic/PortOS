@@ -100,8 +100,11 @@ vi.mock('fs/promises', () => ({
   }),
 }));
 
-vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  // Keep the real pure helpers (safeJSONParse — used transitively by
+  // agentSentinel.parseSentinelPayload, etc.); only stub the I/O + PATHS.
+  ...(await importOriginal()),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { root: '/tmp/portos-root' }
 }));
 

@@ -744,6 +744,7 @@ export async function spawnDirectly({
         isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
+        workspacePath,
       });
     } finally {
       // Clean up worktree if agent was using one. Claude Code CLI agents run

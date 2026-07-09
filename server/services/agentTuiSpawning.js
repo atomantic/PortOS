@@ -17,6 +17,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
@@ -166,7 +167,7 @@ const OUTPUT_FLUSH_INTERVAL_MS = 250;
 // when they've finished /simplify + /do:pr (or /do:push) — we poll for it
 // here so the agent gets cleanly finalized as soon as the work is done,
 // without waiting on the much longer idle timeout fallback.
-const DONE_SENTINEL_NAME = '.agent-done';
+// DONE_SENTINEL_NAME is shared from ../lib/agentSentinel.js.
 const DONE_POLL_INTERVAL_MS = 2000;
 
 /**
@@ -539,10 +540,15 @@ export async function spawnTuiAgent({
       console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
       return '';
     });
-    const trimmed = contents.trim();
-    if (!trimmed) return;
+    // A programmatic-I/O task type writes a JSON `{ summary, payload }` sentinel;
+    // append only the human `summary` to the agent output (the structured
+    // `payload` is consumed separately by the task type's processTaskOutput hook,
+    // read mode-agnostically in finalizeAgent). A legacy plain-markdown sentinel
+    // parses back as its own text, so this is a no-op change for existing types.
+    const { summary } = parseSentinelPayload(contents);
+    if (!summary) return;
     appendLine(`✅ Agent signaled completion`);
-    const truncated = trimmed.length > 4096 ? `${trimmed.slice(0, 4096)}\n…[truncated]` : trimmed;
+    const truncated = summary.length > 4096 ? `${summary.slice(0, 4096)}\n…[truncated]` : summary;
     for (const line of truncated.split('\n')) appendLine(line);
   };
 
@@ -652,6 +658,7 @@ export async function spawnTuiAgent({
         isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: reason,
+        workspacePath,
       });
     } finally {
       if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});

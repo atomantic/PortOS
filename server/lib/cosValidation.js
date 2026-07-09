@@ -291,7 +291,11 @@ export const MAX_TOTAL_SPAWNS = 5;
 // sanitizeTaskMetadata.
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly',
-  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'autoClose'
+  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'autoClose',
+  // Throwaway-worktree posture for programmatic-I/O reasoning tasks (layered-
+  // intelligence): the worktree is discarded without a merge or PR so a reasoning
+  // agent can't land code. See agentWorktreeCleanup.js.
+  'discardWorktree'
 ];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
