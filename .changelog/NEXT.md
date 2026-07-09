@@ -3,6 +3,7 @@
 ## Layered Intelligence
 
 - **[issue-2322] Layered Intelligence is now a per-app scheduled task, not a global sweep.** The self-improvement loop used to run as a single global "Layered Intelligence Loop" job that swept every enabled app on one daily fire, with a confusing split between a global on/off (CoS → System Tasks) and per-app config (Edit App → Intelligence) — a per-app card could read "Enabled · Due now" while nothing ran. It now runs like every other self-improvement automation: a per-app, deterministic, handler-backed task in CoS → Schedule with its own per-app enable, interval, provider/model, and "Run now". Enabling the `layered-intelligence` task in the Schedule (plus per app on the Intelligence tab) drives it; the reasoning model still only returns JSON and files one deduplicated tracker issue — no code, no agent. Per-app behavior (telemetry sources, allowed scopes, guidance rules, hand-off) still lives on the app's Intelligence tab. An install upgrade migrates each app's scheduling into its per-app task override and tombstones the old global job, preserving effective on/off state. Note: because it's now a self-improvement task, the loop runs only while CoS improvement is enabled.
+  - The standalone `/layered-intelligence` page has been removed — with the loop now a per-app scheduled task, its status is seen and managed in CoS → Schedule like every other task, and per-app behavior stays on Edit App → Intelligence. (The dedicated cross-app overview/proposals page and its endpoints are gone; nothing else surfaced there.)
 
 ## Fixed
 
