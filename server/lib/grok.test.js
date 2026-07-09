@@ -126,7 +126,7 @@ describe('grok — prepareGrokPromptFile', () => {
     expect(res.args).toEqual(['-p', '-']);
   });
 
-  it('writes a temp file and rewrites the sentinel on Windows', () => {
+  it('writes a temp file and rewrites the separated sentinel on Windows', () => {
     setPlatform('win32');
     const args = ['--output-format', 'plain', '--prompt-file', '/dev/stdin'];
     const res = prepareGrokPromptFile(args, 'my prompt body');
@@ -138,5 +138,29 @@ describe('grok — prepareGrokPromptFile', () => {
     expect(readFileSync(file, 'utf8')).toBe('my prompt body');
     res.cleanup();
     expect(existsSync(file)).toBe(false);
+  });
+
+  it('rewrites the joined --prompt-file=/dev/stdin form on Windows too', () => {
+    setPlatform('win32');
+    const args = ['--output-format', 'plain', '--prompt-file=/dev/stdin'];
+    const res = prepareGrokPromptFile(args, 'joined body');
+    expect(res.useStdin).toBe(false);
+    const rewritten = res.args.find((a) => a.startsWith('--prompt-file='));
+    const file = rewritten.slice('--prompt-file='.length);
+    expect(file).not.toBe('/dev/stdin');
+    expect(res.args).not.toContain('--prompt-file=/dev/stdin');
+    expect(readFileSync(file, 'utf8')).toBe('joined body');
+    res.cleanup();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it('uses a unique temp filename per call (no collision under concurrency)', () => {
+    setPlatform('win32');
+    const mk = () => prepareGrokPromptFile(['--prompt-file', '/dev/stdin'], 'x');
+    const a = mk(); const b = mk();
+    const fileA = a.args[a.args.indexOf('--prompt-file') + 1];
+    const fileB = b.args[b.args.indexOf('--prompt-file') + 1];
+    expect(fileA).not.toBe(fileB);
+    a.cleanup(); b.cleanup();
   });
 });

@@ -144,8 +144,15 @@ export function ensureGrokTuiArgs(args = []) {
  */
 export function prepareGrokPromptFile(args, prompt) {
   if (process.platform !== 'win32') return { args, useStdin: true, cleanup: NOOP_CLEANUP };
-  const idx = args.indexOf(GROK_STDIN_PROMPT_PATH);
-  if (idx <= 0 || args[idx - 1] !== '--prompt-file') return { args, useStdin: true, cleanup: NOOP_CLEANUP };
+  // Locate the /dev/stdin sentinel in either form: separated
+  // (`--prompt-file /dev/stdin`, what buildCliArgs emits) or joined
+  // (`--prompt-file=/dev/stdin`, which a user could bake into provider.args and
+  // which ensureGrokHeadlessArgs then leaves in place as an existing prompt
+  // source). Both are a POSIX-only path grok can't open on Windows.
+  const joined = `--prompt-file=${GROK_STDIN_PROMPT_PATH}`;
+  const sepIdx = args.findIndex((a, i) => a === GROK_STDIN_PROMPT_PATH && args[i - 1] === '--prompt-file');
+  const joinIdx = sepIdx === -1 ? args.indexOf(joined) : -1;
+  if (sepIdx === -1 && joinIdx === -1) return { args, useStdin: true, cleanup: NOOP_CLEANUP };
   // A collision-resistant name — concurrent grok runs in the same process (e.g.
   // parallel CoS agents / pipeline stages) can reach here in the same millisecond,
   // so a pid+timestamp name would clobber each other's prompt or delete a file a
@@ -153,7 +160,8 @@ export function prepareGrokPromptFile(args, prompt) {
   const file = join(os.tmpdir(), `grok-prompt-${process.pid}-${randomUUID()}.txt`);
   writeFileSync(file, typeof prompt === 'string' ? prompt : '', 'utf8');
   const rewritten = [...args];
-  rewritten[idx] = file;
+  if (sepIdx !== -1) rewritten[sepIdx] = file;
+  else rewritten[joinIdx] = `--prompt-file=${file}`;
   return {
     args: rewritten,
     useStdin: false,
