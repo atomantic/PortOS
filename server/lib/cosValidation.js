@@ -199,8 +199,11 @@ export const createCosJobSchema = z.object({
   type: z.enum(['agent', 'shell', 'script']).optional(),
   interval: z.string().optional(),
   intervalMs: z.number().positive().int().optional(),
-  scheduledTime: z.string().optional(),
-  cronExpression: z.string().optional(),
+  // Null actively clears a pinned time/cron mode on update. The jobs UI has
+  // always emitted null for the inactive mode; accepting it here lets updateJob
+  // distinguish "clear this field" from an omitted field it should preserve.
+  scheduledTime: z.string().nullable().optional(),
+  cronExpression: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
   priority: z.string().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),

@@ -269,7 +269,7 @@ export const triggerCosJob = (id, options = {}) => request(`/cos/jobs/${id}/trig
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
-export const getCosWorkflow = () => request('/cos/workflow');
+export const getCosWorkflow = (hours = 24) => request(`/cos/workflow?hours=${hours}`);
 
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');

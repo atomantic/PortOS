@@ -295,6 +295,20 @@ describe('CoS Job Routes', () => {
         expect.objectContaining({ appId: null })
       );
     });
+
+    it('clears cron timing when switching a job back to interval mode', async () => {
+      autonomousJobs.updateJob.mockResolvedValue({ id: 'j1', cronExpression: null });
+
+      const response = await request(app)
+        .put('/api/cos/jobs/j1')
+        .send({ interval: 'daily', cronExpression: null, scheduledTime: '09:00' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.updateJob).toHaveBeenCalledWith(
+        'j1',
+        expect.objectContaining({ interval: 'daily', cronExpression: null, scheduledTime: '09:00' })
+      );
+    });
   });
 
   describe('POST /api/cos/jobs/:id/toggle', () => {

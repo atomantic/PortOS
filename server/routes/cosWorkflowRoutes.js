@@ -10,7 +10,9 @@ import { asyncHandler } from '../lib/errorHandler.js';
 const router = Router();
 
 router.get('/workflow', asyncHandler(async (req, res) => {
-  const graph = await getWorkflowGraph();
+  const requestedHours = Number.parseInt(req.query.hours, 10);
+  const horizonHours = [24, 168].includes(requestedHours) ? requestedHours : 24;
+  const graph = await getWorkflowGraph({ horizonHours });
   res.json(graph);
 }));
 

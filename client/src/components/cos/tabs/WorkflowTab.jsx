@@ -1,301 +1,308 @@
-import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
-import { RefreshCw, Clock, AlertTriangle, CheckCircle2, Circle, GitBranch, Bot, ArrowRight, Info } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowRight, Bot, CalendarDays, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
 import * as api from '../../../services/api';
-import { timeAgo } from '../../../utils/formatters';
 import { describeCron } from '../../../utils/cronHelpers';
+import ScheduleEditor from './workflow/ScheduleEditor';
 
-// Intentional category-color enum (#1909/#1924 caution), left as raw Tailwind
-// hues on purpose: 7 mutually-exclusive workflow stages need to stay visually
-// distinct in the graph view, and the app's ~4-5 semantic tokens
-// (accent/accent-2/success/warning/error) aren't enough to differentiate all 7
-// without at least two stages rendering identically.
-// Keys are stage ids from the server's WORKFLOW_STAGES; ordering is server-driven (graph.stages).
-const STAGE_COLORS = {
-  hygiene:  { ring: 'border-cyan-500/40',    bg: 'bg-cyan-500/5',    text: 'text-cyan-300',     dot: 'bg-cyan-500' },
-  review:   { ring: 'border-purple-500/40',  bg: 'bg-purple-500/5',  text: 'text-purple-300',   dot: 'bg-purple-500' },
-  plan:     { ring: 'border-blue-500/40',    bg: 'bg-blue-500/5',    text: 'text-blue-300',     dot: 'bg-blue-500' },
-  audit:    { ring: 'border-amber-500/40',   bg: 'bg-amber-500/5',   text: 'text-amber-300',    dot: 'bg-amber-500' },
-  build:    { ring: 'border-emerald-500/40', bg: 'bg-emerald-500/5', text: 'text-emerald-300',  dot: 'bg-emerald-500' },
-  report:   { ring: 'border-pink-500/40',    bg: 'bg-pink-500/5',    text: 'text-pink-300',     dot: 'bg-pink-500' },
-  ambient:  { ring: 'border-gray-600/40',    bg: 'bg-gray-600/5',    text: 'text-gray-400',     dot: 'bg-gray-500' }
+const TRACK_COLORS = {
+  cron: { marker: 'bg-purple-400', text: 'text-purple-300', wash: 'bg-purple-500/10' },
+  perpetual: { marker: 'bg-amber-400', text: 'text-amber-300', wash: 'bg-amber-500/10' },
+  job: { marker: 'bg-cyan-400', text: 'text-cyan-300', wash: 'bg-cyan-500/10' },
+  task: { marker: 'bg-emerald-400', text: 'text-emerald-300', wash: 'bg-emerald-500/10' }
 };
 
+function trackPalette(node) {
+  if (node.schedule?.type === 'perpetual') return TRACK_COLORS.perpetual;
+  if (node.schedule?.cronExpression) return TRACK_COLORS.cron;
+  return TRACK_COLORS[node.kind] || TRACK_COLORS.task;
+}
+
 function describeSchedule(node) {
-  const s = node.schedule || {};
-  if (s.type === 'cron' && s.cronExpression) {
-    return describeCron(s.cronExpression) || s.cronExpression;
+  const schedule = node.schedule || {};
+  if (schedule.type === 'perpetual') {
+    const reset = schedule.recheckCron ? describeCron(schedule.recheckCron) : 'daily reset';
+    return `perpetual · ${reset}`;
   }
-  if (s.type === 'custom' && s.intervalMs) {
-    const hours = s.intervalMs / 3_600_000;
-    if (hours >= 24) return `every ${Math.round(hours / 24)}d`;
-    if (hours >= 1) return `every ${Math.round(hours)}h`;
-    return `every ${Math.round(s.intervalMs / 60_000)}m`;
-  }
-  if (s.type === 'on-demand') return 'on demand';
-  return s.type || 'unscheduled';
+  if (schedule.cronExpression) return describeCron(schedule.cronExpression) || schedule.cronExpression;
+  if (node.kind === 'job' && schedule.scheduledTime) return `${schedule.type} at ${schedule.scheduledTime}`;
+  if (schedule.type === 'custom' && schedule.intervalMs) return `every ${Math.round(schedule.intervalMs / 3_600_000)}h`;
+  return schedule.type?.replaceAll('-', ' ') || 'flexible';
 }
 
-function statusBadge(node) {
-  if (!node.enabled) {
-    return { label: 'disabled', className: 'bg-gray-700/40 text-gray-500 border-gray-600/40' };
-  }
-  if (node.blocked) {
-    return { label: node.blocked, className: 'bg-port-warning/15 text-port-warning border-port-warning/30' };
-  }
-  if (node.shouldRun) {
-    return { label: 'due', className: 'bg-port-success/15 text-port-success border-port-success/30' };
-  }
-  return { label: 'waiting', className: 'bg-port-border/30 text-gray-400 border-port-border/50' };
+function formatPoint(iso, hours, timezone) {
+  const date = new Date(iso);
+  const options = { hour: 'numeric', minute: '2-digit', timeZone: timezone };
+  return hours === 168
+    ? date.toLocaleString([], { ...options, weekday: 'short' })
+    : date.toLocaleTimeString([], options);
 }
 
-function NodeCard({ node, allNodes, onHover, isHighlighted }) {
-  const palette = STAGE_COLORS[node.stage] || STAGE_COLORS.ambient;
-  const badge = statusBadge(node);
-  const Icon = node.kind === 'job' ? Bot : GitBranch;
+function relativeTime(iso) {
+  const deltaMinutes = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 60_000));
+  if (deltaMinutes < 60) return deltaMinutes === 0 ? 'now' : `in ${deltaMinutes}m`;
+  if (deltaMinutes < 1440) return `in ${Math.round(deltaMinutes / 60)}h`;
+  return `in ${Math.round(deltaMinutes / 1440)}d`;
+}
 
-  // Map runAfter task IDs to nodes for richer hover hints. When the node is blocked on
-  // unmet dependencies, mark which prereqs are still outstanding so the user can see at
-  // a glance which gate hasn't cleared yet.
-  const pendingSet = new Set(Array.isArray(node.pendingDeps) ? node.pendingDeps : []);
-  const deps = node.runAfter
-    .map(t => {
-      const dep = allNodes.find(n => n.id === `task:${t}`);
-      return dep ? { ...dep, pending: pendingSet.has(t) } : null;
-    })
-    .filter(Boolean);
-  const isWaitingOnDeps = node.blocked === 'waiting-on-dependencies';
+function timelinePercent(iso, timeline) {
+  const start = new Date(timeline.startAt).getTime();
+  const end = new Date(timeline.endAt).getTime();
+  return Math.max(0, Math.min(100, ((new Date(iso).getTime() - start) / (end - start)) * 100));
+}
 
+function Axis({ timeline, hours, timezone }) {
+  const divisions = hours === 168 ? 7 : 8;
+  const start = new Date(timeline.startAt).getTime();
+  const end = new Date(timeline.endAt).getTime();
   return (
-    <div
-      className={`relative rounded-md border ${palette.ring} ${palette.bg} p-2.5 transition-all ${
-        isHighlighted ? 'ring-2 ring-port-accent shadow-lg' : ''
-      } ${node.enabled ? '' : 'opacity-60'}`}
-      onMouseEnter={() => onHover(node.id)}
-      onMouseLeave={() => onHover(null)}
-    >
-      <div className="flex items-start justify-between gap-1.5 mb-1">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          <Icon className={`w-3.5 h-3.5 shrink-0 ${palette.text}`} />
-          <span className="text-sm text-white font-medium truncate" title={node.label}>{node.label}</span>
-        </div>
-        {node.enabled
-          ? <CheckCircle2 className="w-3.5 h-3.5 text-port-success shrink-0" />
-          : <Circle className="w-3.5 h-3.5 text-gray-600 shrink-0" />}
-      </div>
-
-      <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-1.5">
-        <Clock className="w-3 h-3" />
-        <span>{describeSchedule(node)}</span>
-      </div>
-
-      <span className={`inline-block text-[10px] font-medium px-1.5 py-0.5 rounded border ${badge.className}`}>
-        {badge.label}
-      </span>
-
-      {node.runAfter.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {deps.map(dep => {
-            const highlightPending = isWaitingOnDeps && dep.pending;
-            return (
-              <span
-                key={dep.id}
-                className={`inline-flex items-center gap-1 text-[10px] ${
-                  highlightPending ? 'text-port-warning font-medium' : 'text-gray-500'
-                }`}
-                title={highlightPending
-                  ? `Pending — ${dep.label} hasn't run since this task last ran`
-                  : `Runs after ${dep.label}`}
-              >
-                <ArrowRight className="w-2.5 h-2.5" />
-                {dep.label}{highlightPending ? ' ⏳' : ''}
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      {(node.lastRun || node.runCount > 0) && (
-        <div className="mt-1 text-[10px] text-gray-500">
-          last {timeAgo(node.lastRun)} · {node.runCount} run{node.runCount === 1 ? '' : 's'}
-        </div>
-      )}
+    <div className="relative h-9 border-b border-port-border/60 text-[10px] text-gray-500">
+      {Array.from({ length: divisions + 1 }, (_, index) => {
+        const at = new Date(start + ((end - start) * index) / divisions);
+        return (
+          <div key={index} className="absolute bottom-1 -translate-x-1/2 whitespace-nowrap" style={{ left: `${(index / divisions) * 100}%` }}>
+            {index === 0 ? 'Now' : hours === 168 ? at.toLocaleDateString([], { weekday: 'short', timeZone: timezone }) : `+${index * 3}h`}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
-  const palette = STAGE_COLORS[stage.id] || STAGE_COLORS.ambient;
-  if (nodes.length === 0) return null;
+function TrackGrid({ divisions }) {
+  return Array.from({ length: divisions + 1 }, (_, index) => (
+    <span key={index} className="pointer-events-none absolute inset-y-0 border-l border-port-border/25" style={{ left: `${(index / divisions) * 100}%` }} />
+  ));
+}
 
-  const hoveredNode = hoveredId ? allNodes.find(n => n.id === hoveredId) : null;
+function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, selected, onSelect }) {
+  const palette = trackPalette(node);
+  const Icon = node.kind === 'job' ? Bot : GitBranch;
+  const divisions = hours === 168 ? 7 : 8;
+  const dependencyWarning = node.pendingDeps?.length > 0;
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2 2xl:flex-1 2xl:basis-0 2xl:min-w-[11rem] 2xl:max-w-[15rem]">
-      <div className={`rounded-md border ${palette.ring} ${palette.bg} px-3 py-2`}>
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${palette.dot}`} />
-          <span className={`text-sm font-semibold ${palette.text}`}>{stage.label}</span>
-          <span className="text-xs text-gray-500">
-            {stage.enabledCount}/{stage.nodeCount}
-          </span>
-        </div>
-        <p className="text-[11px] text-gray-400 mt-1 leading-snug">{stage.description}</p>
+    <button type="button" onClick={() => onSelect(node.id)} className={`grid w-full grid-cols-[14rem_minmax(42rem,1fr)] border-b border-port-border/40 text-left transition-colors last:border-b-0 ${selected ? 'bg-port-accent/8' : 'hover:bg-white/[0.025]'}`}>
+      <div className="flex min-w-0 items-center gap-2 border-r border-port-border/50 px-3 py-2.5">
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon className="h-3.5 w-3.5" /></span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-gray-200" title={node.label}>{node.label}</span>
+          <span className="mt-0.5 block truncate text-[10px] text-gray-500">{describeSchedule(node)}</span>
+        </span>
+        {dependencyWarning && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-port-warning" />}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-1 gap-1.5">
-        {nodes.map(node => (
-          <NodeCard
-            key={node.id}
-            node={node}
-            allNodes={allNodes}
-            onHover={setHoveredId}
-            isHighlighted={hoveredId === node.id || nodeReferences(node, hoveredId, hoveredNode)}
+      <div className="relative min-h-12 overflow-hidden">
+        <TrackGrid divisions={divisions} />
+        <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
+        {windows.map(window => (
+          <span
+            key={window.id}
+            className="absolute inset-y-2 rounded border border-amber-400/40 bg-gradient-to-r from-amber-500/30 via-amber-400/15 to-amber-500/5"
+            style={{ left: `${timelinePercent(window.startAt, timeline)}%`, right: `${100 - timelinePercent(window.endAt, timeline)}%` }}
+            title="Actively draining work; duration depends on the backlog"
+          >
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-amber-200"><InfinityIcon className="mr-1 inline h-3 w-3" />draining</span>
+          </span>
+        ))}
+        {occurrences.map(occurrence => (
+          <span
+            key={occurrence.id}
+            className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : palette.marker} ${occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : ''}`}
+            style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
+            title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
           />
         ))}
       </div>
-    </div>
+    </button>
   );
 }
 
-// Highlight nodes that participate in a runAfter relationship with the hovered node — both
-// directions. `node` is highlighted when:
-//   - `node` declares `hoveredId` as one of its `runAfter` prerequisites (downstream), OR
-//   - `node` is itself one of the hovered node's `runAfter` prerequisites (upstream).
-// `node` is the candidate being styled; `hoveredNode` is the full node currently under the
-// pointer (so we can read its `runAfter` list).
-function nodeReferences(node, hoveredId, hoveredNode) {
-  if (!hoveredId) return false;
-  if (node.runAfter.some(t => `task:${t}` === hoveredId)) return true;
-  if (hoveredNode && hoveredNode.runAfter.some(t => `task:${t}` === node.id)) return true;
-  return false;
-}
-
-function StageArrow() {
+function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
+  const next = occurrences.slice(0, 8);
+  if (next.length === 0) return null;
   return (
-    <div className="hidden 2xl:flex items-center px-2 text-gray-600 shrink-0" aria-hidden="true">
-      <ArrowRight className="w-5 h-5" />
-    </div>
+    <section className="rounded-lg border border-port-border/60 bg-port-card/40 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-gray-500">
+        <Clock3 className="h-3.5 w-3.5" /> Scheduled order
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {next.map((occurrence, index) => {
+          const node = nodeMap.get(occurrence.nodeId);
+          if (!node) return null;
+          return (
+            <div key={occurrence.id} className="flex shrink-0 items-center gap-2">
+              <button type="button" onClick={() => onSelect(node.id)} className={`min-w-36 rounded border px-3 py-2 text-left hover:border-port-accent/50 ${occurrence.collision ? 'border-port-warning/50 bg-port-warning/5' : 'border-port-border bg-port-bg/50'}`}>
+                <span className="block text-[10px] font-medium uppercase tracking-wide text-gray-500">{formatPoint(occurrence.at, hours, timezone)} · {relativeTime(occurrence.at)}</span>
+                <span className="mt-0.5 block max-w-44 truncate text-xs text-gray-200">{occurrence.kind === 'recheck' ? '↻ ' : ''}{node.label}</span>
+              </button>
+              {index < next.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-gray-700" />}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
 export default function WorkflowTab() {
+  const [hours, setHours] = useState(24);
   const [graph, setGraph] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [hoveredId, setHoveredId] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const fetchGeneration = useRef(0);
 
   const fetchGraph = useCallback(async () => {
+    const generation = ++fetchGeneration.current;
     setLoading(true);
-    const data = await api.getCosWorkflow().catch(err => {
-      setError(err?.message || 'Failed to load workflow');
+    const data = await api.getCosWorkflow(hours).catch(err => {
+      if (generation === fetchGeneration.current) setError(err?.message || 'Failed to load schedule');
       return null;
     });
-    if (data) {
+    if (data && generation === fetchGeneration.current) {
       setGraph(data);
       setError(null);
     }
-    setLoading(false);
-  }, []);
+    if (generation === fetchGeneration.current) setLoading(false);
+  }, [hours]);
 
-  useEffect(() => { fetchGraph(); }, [fetchGraph]);
+  useEffect(() => {
+    fetchGraph();
+    return () => { fetchGeneration.current += 1; };
+  }, [fetchGraph]);
 
-  // Stages enriched with their nodes, in canonical order from the server, only including those
-  // that have content. Keeps node ordering stable: enabled first, then alphabetical.
-  const populatedStages = useMemo(() => {
-    if (!graph) return [];
-    const byStage = new Map();
-    for (const node of graph.nodes) {
-      if (!byStage.has(node.stage)) byStage.set(node.stage, []);
-      byStage.get(node.stage).push(node);
+  const model = useMemo(() => {
+    if (!graph?.timeline) return null;
+    const nodeMap = new Map(graph.nodes.map(node => [node.id, node]));
+    const occurrencesByNode = new Map();
+    const windowsByNode = new Map();
+    for (const occurrence of graph.timeline.occurrences) {
+      if (!occurrencesByNode.has(occurrence.nodeId)) occurrencesByNode.set(occurrence.nodeId, []);
+      occurrencesByNode.get(occurrence.nodeId).push(occurrence);
     }
-    for (const list of byStage.values()) {
-      list.sort((a, b) => (a.enabled === b.enabled ? a.label.localeCompare(b.label) : a.enabled ? -1 : 1));
+    for (const window of graph.timeline.windows) {
+      if (!windowsByNode.has(window.nodeId)) windowsByNode.set(window.nodeId, []);
+      windowsByNode.get(window.nodeId).push(window);
     }
-    // graph.stages is already returned in canonical order; sort defensively by `order` in case
-    // a future server change emits them unordered.
-    const orderedStages = [...graph.stages].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    return orderedStages
-      .map(stage => {
-        const nodes = byStage.get(stage.id) || [];
-        return nodes.length > 0 ? { ...stage, nodes } : null;
-      })
-      .filter(Boolean);
+    const isFlexible = node => node.kind === 'task' && ['rotation', 'on-demand'].includes(node.schedule?.type);
+    const scheduled = graph.nodes
+      .filter(node => node.enabled && !isFlexible(node))
+      .sort((a, b) => {
+        const aAt = occurrencesByNode.get(a.id)?.[0]?.at || graph.timeline.startAt;
+        const bAt = occurrencesByNode.get(b.id)?.[0]?.at || graph.timeline.startAt;
+        return new Date(aAt) - new Date(bAt) || a.label.localeCompare(b.label);
+      });
+    const flexible = graph.nodes.filter(node => node.enabled && isFlexible(node));
+    return { nodeMap, occurrencesByNode, windowsByNode, scheduled, flexible };
   }, [graph]);
 
-  // Total enabled across the whole pipeline
-  const totalEnabled = graph ? graph.nodes.filter(n => n.enabled).length : 0;
-  const totalNodes = graph ? graph.nodes.length : 0;
+  const selectedNode = selectedId && graph ? graph.nodes.find(node => node.id === selectedId) : null;
+  const collisionCount = graph?.timeline?.occurrences.filter(item => item.collision).length || 0;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-white">Workflow</h2>
-          <p className="text-sm text-gray-400 mt-1 max-w-2xl">
-            Recommended project-maintenance pipeline. Stages are a visualization of how scheduled
-            tasks fit together — each task still runs on its own schedule. Hard execution gates
-            are enforced only by per-task <span className="font-mono text-gray-300">runAfter</span> dependencies (and per-job gates),
-            not by stage ordering.
+          <div className="flex items-center gap-2">
+            <Workflow className="h-5 w-5 text-port-accent" />
+            <h2 className="text-xl font-semibold text-white">Schedule Timeline</h2>
+          </div>
+          <p className="mt-1 max-w-3xl text-sm text-gray-400">
+            See the real launch order across active task types and system jobs. Select any track to change its timing, frequency, or dependencies without leaving this page.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">
-            {totalEnabled}/{totalNodes} enabled
-          </span>
-          <button
-            onClick={fetchGraph}
-            disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent/20 hover:bg-port-accent/30 text-port-accent disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-md border border-port-border/50 bg-port-card/30 px-3 py-2 flex items-start gap-2 text-xs text-gray-400">
-        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-port-accent" />
-        <span>
-          Hard dependencies (<span className="font-mono text-gray-300">runAfter</span>) are enforced — a task
-          shows <span className="text-port-warning">waiting-on-dependencies</span> until its prerequisites have
-          run since its last execution. Stage ordering left-to-right is the recommended workflow; you can still
-          schedule tasks independently from the Schedule and System Tasks tabs.
-        </span>
-      </div>
-
-      {error && (
-        <div className="rounded-md border border-port-error/40 bg-port-error/10 p-3 flex items-center gap-2 text-sm text-port-error">
-          <AlertTriangle className="w-4 h-4" />
-          {error}
-        </div>
-      )}
-
-      {loading && !graph && (
-        <div className="text-center py-8 text-gray-500">Loading workflow…</div>
-      )}
-
-      {graph && (
-        <div className="2xl:overflow-x-auto pb-2">
-          <div className="flex flex-col 2xl:flex-row 2xl:items-stretch gap-4 2xl:gap-0 2xl:min-w-min">
-            {populatedStages.map((stage, i) => (
-              <Fragment key={stage.id}>
-                <StageColumn
-                  stage={stage}
-                  nodes={stage.nodes}
-                  allNodes={graph.nodes}
-                  hoveredId={hoveredId}
-                  setHoveredId={setHoveredId}
-                />
-                {i < populatedStages.length - 1 && <StageArrow />}
-              </Fragment>
+          <div className="flex rounded border border-port-border bg-port-card p-1">
+            {[[24, '24 hours'], [168, '7 days']].map(([value, label]) => (
+              <button key={value} type="button" onClick={() => setHours(value)} className={`rounded px-2.5 py-1 text-xs ${hours === value ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'}`}>{label}</button>
             ))}
           </div>
+          <button type="button" onClick={fetchGraph} disabled={loading} className="flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-gray-500 disabled:opacity-50">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
         </div>
-      )}
+      </header>
 
-      {graph && (
-        <div className="text-xs text-gray-500">
-          Generated {timeAgo(graph.generatedAt)}
-        </div>
+      {error && <div className="flex items-center gap-2 rounded border border-port-error/40 bg-port-error/10 p-3 text-sm text-port-error"><AlertTriangle className="h-4 w-4" />{error}</div>}
+      {loading && !graph && <div className="py-12 text-center text-sm text-gray-500">Building schedule timeline…</div>}
+
+      {graph && model && (
+        <>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div className="rounded border border-port-border/60 bg-port-card/30 px-3 py-2">
+              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Active schedules</span>
+              <span className="mt-0.5 block text-lg font-semibold text-white">{model.scheduled.length}</span>
+            </div>
+            <div className="rounded border border-port-border/60 bg-port-card/30 px-3 py-2">
+              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Launches in view</span>
+              <span className="mt-0.5 block text-lg font-semibold text-white">{graph.timeline.occurrences.length}</span>
+            </div>
+            <div className={`rounded border px-3 py-2 ${collisionCount ? 'border-port-warning/40 bg-port-warning/5' : 'border-port-border/60 bg-port-card/30'}`}>
+              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Tight handoffs</span>
+              <span className={`mt-0.5 block text-lg font-semibold ${collisionCount ? 'text-port-warning' : 'text-white'}`}>{collisionCount}</span>
+              <span className="text-[10px] text-gray-600">launches within 15 min</span>
+            </div>
+          </div>
+
+          <NextUp occurrences={graph.timeline.occurrences} nodeMap={model.nodeMap} hours={hours} timezone={graph.timezone} onSelect={setSelectedId} />
+
+          <div className={`grid items-start gap-4 ${selectedNode ? '2xl:grid-cols-[minmax(0,1fr)_20rem]' : ''}`}>
+            <div className="min-w-0 space-y-3">
+              <section className="overflow-hidden rounded-lg border border-port-border/60 bg-port-card/30">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-port-border/60 px-3 py-2 text-[10px] text-gray-500">
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
+                  </div>
+                  <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <div className="min-w-[56rem]">
+                    <div className="grid grid-cols-[14rem_minmax(42rem,1fr)] bg-port-bg/30">
+                      <div className="flex items-end border-r border-port-border/50 px-3 pb-1 text-[10px] uppercase tracking-wider text-gray-600">Active tracks</div>
+                      <Axis timeline={graph.timeline} hours={hours} timezone={graph.timezone} />
+                    </div>
+                    {model.scheduled.map(node => (
+                      <TimelineRow
+                        key={node.id}
+                        node={node}
+                        occurrences={model.occurrencesByNode.get(node.id) || []}
+                        windows={model.windowsByNode.get(node.id) || []}
+                        timeline={graph.timeline}
+                        hours={hours}
+                        timezone={graph.timezone}
+                        selected={selectedId === node.id}
+                        onSelect={setSelectedId}
+                      />
+                    ))}
+                    {model.scheduled.length === 0 && <div className="py-10 text-center text-sm text-gray-500">No active timed schedules in this range.</div>}
+                  </div>
+                </div>
+              </section>
+
+              {model.flexible.length > 0 && (
+                <section className="rounded-lg border border-dashed border-port-border/60 bg-port-card/20 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-gray-400"><RotateCcw className="h-3.5 w-3.5" /> Unpinned runner queue</div>
+                  <p className="mt-1 text-[11px] text-gray-600">These are active, but rotation and on-demand schedules do not promise a clock time.</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {model.flexible.map(node => (
+                      <button key={node.id} type="button" onClick={() => setSelectedId(node.id)} className={`rounded border px-2.5 py-1.5 text-xs ${selectedId === node.id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border bg-port-bg/40 text-gray-400 hover:text-white'}`}>
+                        {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
+                <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
+                <span><TimerReset className="mr-1 inline h-3 w-3" />Perpetual bands have no fixed end while backlog remains.</span>
+              </div>
+            </div>
+
+            {selectedNode && <ScheduleEditor node={selectedNode} allNodes={graph.nodes} timezone={graph.timezone} onClose={() => setSelectedId(null)} onSaved={fetchGraph} />}
+          </div>
+        </>
       )}
     </div>
   );
