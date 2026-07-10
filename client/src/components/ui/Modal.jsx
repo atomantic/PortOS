@@ -47,6 +47,7 @@
 
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 
 const SIZE_CLASSES = {
   sm: 'max-w-md',
@@ -176,6 +177,11 @@ export default function Modal({
   ariaLabel,
 }) {
   const backdropRef = useRef(null);
+  const dialogRef = useRef(null);
+  // Trap keyboard focus inside the dialog while open, then restore it to the
+  // element that opened the modal (WCAG 2.4.3 / 2.1.2). Runs for every Modal
+  // regardless of the Esc/backdrop opt-outs.
+  useFocusTrap(open, dialogRef);
   // `useId()` is React's render-safe stable id source — survives StrictMode's
   // double-invoke without allocating extra ids the way a `modalIdSeq++`
   // module-scope counter would.
@@ -252,6 +258,7 @@ export default function Modal({
       role="presentation"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}

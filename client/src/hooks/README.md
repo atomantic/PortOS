@@ -87,6 +87,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useClickOutside` | Fire `onOutside` on mousedown outside a ref. | Popovers, menus, drawers. |
 | `useConfirmDelete` | Single-at-a-time `{ confirmingId, isConfirming, requestDelete, cancelDelete, confirmDelete }` for arming one list/card row at a time. | New destructive list action — pair with `<InlineConfirmRow>` / `<ConfirmButtonPair>` instead of deleting on the raw trash click. |
 | `useEscapeKey` | `useEscapeKey(active, handler)` — call `handler` on Escape while `active`. | Non-modal dismissables (in-context popovers/cards); Modal owns Esc for true modals. |
+| `useFocusTrap` | `useFocusTrap(active, containerRef, { initialFocusRef? })` — moves focus into the container on open, traps Tab/Shift+Tab so it can't escape to the page behind, and restores focus to the opener on close (WCAG 2.4.3 / 2.1.2). | Modal surfaces (dialogs, drawers, lightboxes). Already wired into `Modal` and `Drawer` — reach for it when hand-rolling a new overlay. |
 | `useCmdKSearch` | `⌘K` open/close state. | Anywhere that needs to toggle the palette. |
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |
 | `useCooldownTick` | 1-second ticker over a `{ id: epochMs }` cooldown map; fires `onAllExpired` once when every deadline passes. | Rate-limit countdown labels that need to refetch when the last cooldown clears (agents tabs pattern). |

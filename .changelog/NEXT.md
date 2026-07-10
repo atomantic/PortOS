@@ -1,5 +1,9 @@
 # Unreleased
 
+## Accessibility
+
+- **Modals and drawers now trap and restore keyboard focus, and toasts are announced to screen readers.** Opening any shared `Modal` or `Drawer` (which back the great majority of the app's dialogs, config drawers, and lightboxes) now moves focus into the dialog, keeps Tab/Shift+Tab cycling inside it instead of leaking to the page behind, and returns focus to the control that opened it on close (WCAG 2.4.3 / 2.1.2) — implemented once in a reusable `useFocusTrap` hook. The toast stack is now a labelled ARIA notification region: default toasts announce politely (`role="status"`) and error toasts assertively (`role="alert"`), with the decorative status glyphs hidden from assistive tech, so screen-reader users hear notifications (including error toasts) as they arrive.
+
 ## AI Providers
 
 - **Creative Director LLM stages are now independently configurable.** AI Assignments has separate provider/model rows for treatment generation, production planning, and scene evaluation. Point **Scene evaluation vision model** at a local Ollama or LM Studio vision model to judge rendered scenes without using the system-default agent; treatment and planning can likewise be pinned to any agent-capable CLI/TUI provider.

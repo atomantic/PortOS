@@ -19,6 +19,7 @@ export { default as useColorMatch } from './useColorMatch.js';
 export { default as useContainerWidth } from './useContainerWidth.js';
 export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
+export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
