@@ -245,6 +245,57 @@ describe('projectWorkflowTimeline', () => {
     expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:due', at: range.start.toISOString(), kind: 'launch' });
   });
 
+  it('omits weekend occurrences for weekday-only interval tasks', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:weekdays', kind: 'task', enabled: true, shouldRun: false,
+      lastRun: '2026-07-10T09:00:00.000Z',
+      nextRunAt: '2026-07-11T09:00:00.000Z',
+      schedule: { type: 'daily', effectiveIntervalMs: 86_400_000, weekdaysOnly: true }
+    }], {
+      start: new Date('2026-07-10T10:00:00.000Z'),
+      end: new Date('2026-07-13T10:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    // Sat 7/11 and Sun 7/12 slots are skipped — shouldRunTask refuses
+    // weekday-only tasks on weekends regardless of schedule type.
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:weekdays', at: '2026-07-13T09:00:00.000Z' })
+    ]);
+  });
+
+  it('omits weekend slots for weekday-only cron tasks', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:cron-weekdays', kind: 'task', enabled: true, shouldRun: false,
+      schedule: { type: 'cron', cronExpression: '0 9 * * *', weekdaysOnly: true }
+    }], {
+      start: new Date('2026-07-10T10:00:00.000Z'),
+      end: new Date('2026-07-13T10:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:cron-weekdays', at: '2026-07-13T09:00:00.000Z', kind: 'launch' })
+    ]);
+  });
+
+  it('does not duplicate the due-now marker when a cron slot lands exactly on the window start', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:now', kind: 'task', enabled: true, shouldRun: true,
+      schedule: { type: 'cron', cronExpression: '0 0 * * *' }
+    }], {
+      start: new Date('2026-07-09T00:00:00.000Z'),
+      end: new Date('2026-07-10T00:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:now', at: '2026-07-09T00:00:00.000Z', kind: 'launch' })
+    ]);
+    const ids = timeline.occurrences.map(item => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('omits weekend occurrences for weekday-only interval jobs', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'job:weekdays', kind: 'job', enabled: true,

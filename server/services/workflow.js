@@ -285,10 +285,14 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
     }
 
     if (schedule.cronExpression) {
-      if (isCronDueNow(node, schedule.cronExpression, startMs, timezone)) {
+      const dueNow = isCronDueNow(node, schedule.cronExpression, startMs, timezone);
+      if (dueNow) {
         occurrences.push(makeOccurrence(node, startMs, 'launch'));
       }
-      appendCronOccurrences(node, schedule.cronExpression, startMs, endMs, timezone, occurrences, 'launch');
+      // When a due-now marker was emitted, start the projection strictly after
+      // startMs so a cron slot landing exactly on the current minute doesn't
+      // produce a duplicate occurrence id at the same instant.
+      appendCronOccurrences(node, schedule.cronExpression, startMs, endMs, timezone, occurrences, 'launch', { skipStart: dueNow });
       continue;
     }
 
@@ -297,7 +301,7 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
       continue;
     }
 
-    projectIntervalTask(node, startMs, endMs, occurrences);
+    projectIntervalTask(node, startMs, endMs, timezone, occurrences);
   }
 
   occurrences.sort((a, b) => new Date(a.at) - new Date(b.at) || a.nodeId.localeCompare(b.nodeId));
@@ -312,17 +316,28 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
   };
 }
 
-function appendCronOccurrences(node, expression, startMs, endMs, timezone, target, kind) {
-  let cursor = new Date(startMs - 60_000);
+function appendCronOccurrences(node, expression, startMs, endMs, timezone, target, kind, { skipStart = false } = {}) {
+  // parseCronToNextRun searches strictly after its cursor, so startMs - 60s
+  // makes a slot exactly at startMs eligible (unless the caller already
+  // emitted a due-now marker there — skipStart).
+  let cursor = new Date(skipStart ? startMs : startMs - 60_000);
+  // Bound the parser's minute-stepping search at the window end so a sparse
+  // cron (monthly/yearly) with no in-window slot returns null quickly instead
+  // of scanning up to its 2-year cap on every timeline request.
+  const searchBound = new Date(endMs);
   for (let i = 0; i < MAX_OCCURRENCES_PER_NODE; i++) {
     let next;
     try {
-      next = parseCronToNextRun(expression, cursor, timezone);
+      next = parseCronToNextRun(expression, cursor, timezone, searchBound);
     } catch {
       return;
     }
     if (!next || next.getTime() >= endMs) return;
-    if (next.getTime() >= startMs) target.push(makeOccurrence(node, next.getTime(), kind));
+    // shouldRunTask refuses weekday-only tasks on weekends regardless of the
+    // schedule type, so weekend cron slots would never actually dispatch.
+    if (next.getTime() >= startMs && isAllowedWeekday(node, next.getTime(), timezone)) {
+      target.push(makeOccurrence(node, next.getTime(), kind));
+    }
     cursor = next;
   }
 }
@@ -351,11 +366,11 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
   const nextRecheckMs = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
   const cadence = node.schedule?.recheckIntervalMs || DAY;
   if (Number.isFinite(nextRecheckMs)) {
-    appendIntervalOccurrences(node, nextRecheckMs, cadence, startMs, endMs, occurrences, 'recheck');
+    appendIntervalOccurrences(node, nextRecheckMs, cadence, startMs, endMs, timezone, occurrences, 'recheck');
   }
 }
 
-function projectIntervalTask(node, startMs, endMs, occurrences) {
+function projectIntervalTask(node, startMs, endMs, timezone, occurrences) {
   const type = node.schedule?.type;
   if (type === 'rotation' || type === 'on-demand') return;
   if (type === 'once') {
@@ -372,7 +387,7 @@ function projectIntervalTask(node, startMs, endMs, occurrences) {
     const lastRunMs = node.lastRun ? new Date(node.lastRun).getTime() : NaN;
     nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
   }
-  appendIntervalOccurrences(node, nextMs, cadence, startMs, endMs, occurrences, 'launch');
+  appendIntervalOccurrences(node, nextMs, cadence, startMs, endMs, timezone, occurrences, 'launch');
 }
 
 function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
@@ -384,6 +399,13 @@ function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
   if (isIntervalJobDueNow(node, startMs, timezone)) {
     occurrences.push(makeOccurrence(node, startMs, 'launch'));
     nextMs = startMs + cadence;
+  }
+  // Fast-forward a stale anchor (lastRun many cadences ago but not due right
+  // now, e.g. a weekday-only job viewed on a weekend) — stepping one cadence
+  // per capped iteration could otherwise exhaust the budget before reaching
+  // the window and render an active job with zero markers.
+  if (nextMs < startMs) {
+    nextMs += Math.ceil((startMs - nextMs) / cadence) * cadence;
   }
 
   for (let i = 0; i < MAX_OCCURRENCES_PER_NODE && nextMs < endMs; i++) {
@@ -401,7 +423,9 @@ function isCronDueNow(node, expression, startMs, timezone) {
   if (node.kind === 'task') return node.shouldRun === true;
   if (!node.lastRun) return false;
   try {
-    const next = parseCronToNextRun(expression, new Date(node.lastRun), timezone);
+    // Only "is there a slot at or before startMs" matters — bound the search
+    // there so a sparse cron doesn't scan far past the answer.
+    const next = parseCronToNextRun(expression, new Date(node.lastRun), timezone, new Date(startMs + 60_000));
     return !!next && next.getTime() <= startMs;
   } catch {
     return false;
@@ -431,12 +455,16 @@ function isAllowedWeekday(node, atMs, timezone) {
   return day >= 1 && day <= 5;
 }
 
-function appendIntervalOccurrences(node, firstMs, cadence, startMs, endMs, target, kind) {
+function appendIntervalOccurrences(node, firstMs, cadence, startMs, endMs, timezone, target, kind) {
   if (!Number.isFinite(firstMs) || !Number.isFinite(cadence) || cadence <= 0) return;
   let nextMs = firstMs;
   if (nextMs < startMs) nextMs += Math.ceil((startMs - nextMs) / cadence) * cadence;
   for (let i = 0; i < MAX_OCCURRENCES_PER_NODE && nextMs < endMs; i++, nextMs += cadence) {
-    target.push(makeOccurrence(node, nextMs, kind));
+    // Skip (not shift) weekend slots for weekday-only tasks — mirrors
+    // shouldRunTask's weekend refusal, which applies to every schedule type.
+    if (isAllowedWeekday(node, nextMs, timezone)) {
+      target.push(makeOccurrence(node, nextMs, kind));
+    }
   }
 }
 
