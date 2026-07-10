@@ -296,6 +296,7 @@ export default function BrowserPage() {
             <h3 className="text-sm font-semibold text-white">Recent Logs</h3>
             <button
               onClick={fetchLogs}
+              aria-label="Reload page"
               className="text-xs text-gray-400 hover:text-white transition-colors"
             >
               <RefreshCw size={14} />

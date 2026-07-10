@@ -284,6 +284,7 @@ export default function AiAssignmentsTab() {
                           const nextDefault = data.providers.find((p) => p.id === nextProviderId)?.defaultModel || '';
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
+                        aria-label={`Provider for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Default / unset</option>
@@ -298,6 +299,7 @@ export default function AiAssignmentsTab() {
                       <select
                         value={draft.model}
                         onChange={(e) => setDraft(entry.id, { model: e.target.value })}
+                        aria-label={`Model for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Default / auto</option>
@@ -308,6 +310,7 @@ export default function AiAssignmentsTab() {
                         value={draft.model}
                         onChange={(e) => setDraft(entry.id, { model: e.target.value })}
                         placeholder="Default / auto"
+                        aria-label={`Model for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
                       />
                     )}

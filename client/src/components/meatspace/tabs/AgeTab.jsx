@@ -51,6 +51,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
             className="bg-port-bg border border-port-border rounded px-3 py-2 text-white font-mono text-lg focus:border-port-accent focus:outline-none"
           />
           <button
+            aria-label="Save"
             onClick={handleSave}
             disabled={saving || !input}
             className="p-2 rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
@@ -58,6 +59,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
             <Check size={16} />
           </button>
           <button
+            aria-label="Cancel"
             onClick={handleCancel}
             className="p-2 rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
           >
@@ -80,6 +82,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
             )}
           </div>
           <button
+            aria-label="Edit"
             onClick={() => setEditing(true)}
             className="p-2 rounded text-gray-500 hover:text-gray-300 hover:bg-port-border/50"
           >

@@ -310,6 +310,7 @@ export default function AutobiographyTab({ onRefresh }) {
             </div>
             <button
               onClick={() => setFollowUps(null)}
+              aria-label="Close"
               className="p-1 text-gray-500 hover:text-white"
             >
               <X size={14} />
@@ -372,6 +373,7 @@ export default function AutobiographyTab({ onRefresh }) {
             </div>
             <button
               onClick={() => { setWriting(false); setCurrentPrompt(null); setStoryContent(''); setParentStoryId(null); }}
+              aria-label="Close"
               className="p-1 text-gray-500 hover:text-white"
             >
               <X size={16} />

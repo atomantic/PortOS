@@ -968,7 +968,7 @@ function DeriveFromManuscriptPreview({ preview, committing, onCancel, onConfirm 
           <BookText size={14} className="text-port-accent" />
           Derived from manuscript — review before applying
         </h3>
-        <button type="button" onClick={onCancel} disabled={committing} className="text-gray-500 hover:text-white disabled:opacity-40">
+        <button type="button" onClick={onCancel} disabled={committing} aria-label="Close" className="text-gray-500 hover:text-white disabled:opacity-40">
           <X size={16} />
         </button>
       </div>
@@ -1085,7 +1085,7 @@ function CompletenessResults({ issues, onDismiss, seriesId }) {
               <FileText size={12} /> Open editor
             </Link>
           ) : null}
-          <button type="button" onClick={onDismiss} className="text-gray-500 hover:text-white"><X size={16} /></button>
+          <button type="button" onClick={onDismiss} aria-label="Close" className="text-gray-500 hover:text-white"><X size={16} /></button>
         </div>
       </div>
       {issues.length === 0 ? (

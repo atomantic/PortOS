@@ -52,6 +52,7 @@ export default function HealthTab({ health, onCheck }) {
             </div>
             <button
               onClick={loadTodayActivity}
+              aria-label="Refresh activity"
               className="text-gray-500 hover:text-white transition-colors"
             >
               <RefreshCw size={12} className={loadingActivity ? 'animate-spin' : ''} />

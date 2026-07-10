@@ -15,6 +15,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatBytes, formatDateShort } from '../../../utils/formatters';
+import { clickableProps } from '../../../lib/a11yKeyboard.js';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -397,6 +398,7 @@ function StepUpload({ uploading, fileMeta, onPick, onFile, fileInputRef, onBack 
 
       <div
         onClick={onPick}
+        {...clickableProps(onPick)}
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
         className="border-2 border-dashed border-port-border rounded-lg p-8 text-center cursor-pointer hover:border-port-accent hover:bg-port-card/40 transition-colors"

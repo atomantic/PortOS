@@ -7,6 +7,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
 import ProcessLogModal from '../components/ui/ProcessLogModal';
 import { writeClipboardSilently } from '../lib/clipboard';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 // Map an AI run's source to the PM2 process whose system log holds the full
 // context for that run. CoS-agent runs are driven by the `portos-cos` process;
@@ -228,6 +229,7 @@ export function RunsHistoryPage() {
                 <div
                   className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(run.id)}
+                  {...clickableProps(() => toggleExpand(run.id))}
                   data-testid={`run-row-${run.id}`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">

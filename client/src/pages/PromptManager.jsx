@@ -561,6 +561,7 @@ export default function PromptManager() {
               <h3 className="text-sm font-medium text-gray-400">Variables</h3>
               <button
                 onClick={newVariable}
+                aria-label="Add prompt"
                 className="p-1 text-port-accent hover:text-port-accent/80"
               >
                 <Plus size={16} />
@@ -585,6 +586,7 @@ export default function PromptManager() {
                   </button>
                   <button
                     onClick={() => deleteVariable(key)}
+                    aria-label="Delete prompt"
                     className="p-1 text-gray-500 hover:text-port-error"
                   >
                     <Trash2 size={14} />

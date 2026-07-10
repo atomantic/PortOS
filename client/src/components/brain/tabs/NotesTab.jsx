@@ -24,6 +24,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { clickableProps } from '../../../lib/a11yKeyboard.js';
 
 export default function NotesTab() {
   // Vault state
@@ -301,6 +302,7 @@ export default function NotesTab() {
             {searchQuery && (
               <button
                 onClick={clearSearch}
+                aria-label="Close"
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
               >
                 <X size={14} />
@@ -328,6 +330,7 @@ export default function NotesTab() {
               </button>
               <button
                 onClick={() => setShowCreateForm(false)}
+                aria-label="Close"
                 className="p-1 rounded hover:bg-port-card text-gray-400"
               >
                 <X size={14} />
@@ -375,6 +378,7 @@ export default function NotesTab() {
                 key={t.tag}
                 className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent cursor-pointer hover:bg-port-accent/30"
                 onClick={() => { setSearchQuery(`#${t.tag}`); handleSearch(); }}
+                {...clickableProps(() => { setSearchQuery(`#${t.tag}`); handleSearch(); })}
               >
                 #{t.tag} <span className="text-gray-500">{t.count}</span>
               </span>
@@ -444,6 +448,7 @@ export default function NotesTab() {
             <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
               <button
                 onClick={() => setSelectedNote(null)}
+                aria-label="Back"
                 className="p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
               >
                 <ArrowLeft size={16} />
@@ -474,6 +479,7 @@ export default function NotesTab() {
                     </button>
                     <button
                       onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
+                      aria-label="Close editor"
                       className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
                     >
                       <X size={16} />
@@ -641,7 +647,7 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
           </p>
         </div>
         {vaults.length > 0 && (
-          <button onClick={onClose} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <X size={16} />
           </button>
         )}

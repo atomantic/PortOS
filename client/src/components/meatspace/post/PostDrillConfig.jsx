@@ -753,7 +753,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ArrowLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Drill Configuration</h2>

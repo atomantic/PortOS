@@ -11,6 +11,7 @@ import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
 import { formatDurationMs } from '../utils/formatters';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 20;
@@ -968,6 +969,7 @@ export default function Shell() {
                       : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
+                {...clickableProps(() => !isActive && switchToSession(s.sessionId))}
                 title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatDurationMs(Date.now() - s.createdAt)} old`}
               >
                 <TabIcon size={12} className="shrink-0" />

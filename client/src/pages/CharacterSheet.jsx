@@ -8,6 +8,7 @@ import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 const charGet = () => api.get('/character');
 const charPost = (path, body) => api.post(`/character${path}`, body);
@@ -357,6 +358,7 @@ export default function CharacterSheet() {
                 ) : (
                   <span
                     onClick={() => setEditingClass(true)}
+                    {...clickableProps(() => setEditingClass(true))}
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
                     title="Click to edit class"
                   >
@@ -491,7 +493,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-error/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-error">Roll Damage</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -525,7 +527,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-warning/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-warning">Add Experience</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -557,7 +559,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-accent-2/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-accent-2">Log Event</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>

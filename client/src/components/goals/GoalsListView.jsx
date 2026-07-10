@@ -11,6 +11,7 @@ import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
+import { clickableProps } from '../../lib/a11yKeyboard.js';
 
 function urgencyIndicator(urgency) {
   if (urgency == null) return null;
@@ -71,6 +72,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         }`}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => onSelect(goal)}
+        {...clickableProps(() => onSelect(goal))}
       >
         <div
           className="shrink-0 cursor-grab active:cursor-grabbing touch-none hidden sm:block"

@@ -736,6 +736,7 @@ export default function JobsTab() {
           </button>
           <button
             onClick={fetchJobs}
+            aria-label="Refresh jobs"
             className="text-gray-500 hover:text-white transition-colors"
           >
             <RefreshCw size={16} />

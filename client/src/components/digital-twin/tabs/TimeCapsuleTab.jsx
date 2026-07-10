@@ -224,7 +224,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
               <GitCompare size={16} />
               Comparison: {compareResult.snapshot1.label} vs {compareResult.snapshot2.label}
             </h3>
-            <button onClick={() => setCompareResult(null)} className="p-1 text-gray-400 hover:text-white">
+            <button onClick={() => setCompareResult(null)} aria-label="Close" className="p-1 text-gray-400 hover:text-white">
               <X size={16} />
             </button>
           </div>

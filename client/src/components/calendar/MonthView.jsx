@@ -91,10 +91,10 @@ export default function MonthView({ accounts }) {
       {/* Nav header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <button onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
+          <button aria-label="Previous month" onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
             <ChevronLeft size={18} />
           </button>
-          <button onClick={() => navigate(1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
+          <button aria-label="Next month" onClick={() => navigate(1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
             <ChevronRight size={18} />
           </button>
           <h2 className="text-lg font-semibold text-white ml-2">{monthLabel}</h2>
