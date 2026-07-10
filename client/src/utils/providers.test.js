@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
   providerDisplayName,
   assignmentProviderOptions,
   assignmentModelOptions,
@@ -53,7 +54,13 @@ describe('PROVIDER_TYPES', () => {
 
 describe('filterSelectableModels', () => {
   it('drops configured-default sentinels', () => {
-    expect(filterSelectableModels(['gpt-4', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'gpt-5'])).toEqual(['gpt-4', 'gpt-5']);
+    expect(filterSelectableModels([
+      'gpt-4',
+      CODEX_CONFIGURED_DEFAULT,
+      ANTIGRAVITY_CONFIGURED_DEFAULT,
+      GROK_CONFIGURED_DEFAULT,
+      'gpt-5',
+    ])).toEqual(['gpt-4', 'gpt-5']);
   });
 
   it('returns an empty array for null/undefined input', () => {
@@ -339,8 +346,8 @@ describe('effectiveModelContextWindow', () => {
   it('uses canonical provider windows for configured-default process providers', () => {
     expect(effectiveModelContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' }, CODEX_CONFIGURED_DEFAULT)).toBe(1_000_000);
     expect(effectiveModelContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' }, ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(1_048_576);
-    expect(effectiveModelContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' }, 'grok-build')).toBe(256_000);
-    expect(effectiveModelContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' }, 'grok-build')).toBe(256_000);
+    expect(effectiveModelContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' }, GROK_CONFIGURED_DEFAULT)).toBe(256_000);
+    expect(effectiveModelContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' }, GROK_CONFIGURED_DEFAULT)).toBe(256_000);
   });
 
   it('matches the server planner for local and cloud api defaults', () => {

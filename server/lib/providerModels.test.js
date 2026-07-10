@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
   isCodexConfiguredDefault,
+  isConfiguredDefaultModel,
   resolveCliModel,
   filterSelectableModels,
   hasModelFlag,
@@ -111,8 +113,10 @@ describe('providerModels', () => {
   });
 
   describe('resolveCliModel', () => {
-    it('returns null for the codex sentinel so --model is omitted', () => {
+    it('returns null for configured-default sentinels so --model is omitted', () => {
       expect(resolveCliModel(CODEX_CONFIGURED_DEFAULT)).toBeNull();
+      expect(resolveCliModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBeNull();
+      expect(resolveCliModel(GROK_CONFIGURED_DEFAULT)).toBeNull();
     });
 
     it('returns null for empty / nullish values', () => {
@@ -127,9 +131,24 @@ describe('providerModels', () => {
     });
   });
 
+  describe('isConfiguredDefaultModel', () => {
+    it('matches every configured-default sentinel', () => {
+      expect(isConfiguredDefaultModel(CODEX_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel(GROK_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel('gpt-5')).toBe(false);
+    });
+  });
+
   describe('filterSelectableModels', () => {
     it('strips configured-default sentinels from the list', () => {
-      expect(filterSelectableModels(['a', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'b'])).toEqual(['a', 'b']);
+      expect(filterSelectableModels([
+        'a',
+        CODEX_CONFIGURED_DEFAULT,
+        ANTIGRAVITY_CONFIGURED_DEFAULT,
+        GROK_CONFIGURED_DEFAULT,
+        'b',
+      ])).toEqual(['a', 'b']);
     });
 
     it('returns an empty list for nullish input', () => {

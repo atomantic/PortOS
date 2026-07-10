@@ -352,14 +352,14 @@ describe('runAsk', () => {
     expect(args[modelIdx + 1]).toBe('o4-mini');
   });
 
-  it('runs `grok` headless with plain output, permission bypass, model, and stdin prompt file', async () => {
+  it('runs `grok` headless with plain output, permission bypass, and stdin prompt file (no --model for configured-default)', async () => {
     providers.getActiveProvider.mockResolvedValue({
       id: 'grok-cli',
       type: 'cli',
       enabled: true,
       command: 'grok',
       args: [],
-      defaultModel: 'grok-build',
+      defaultModel: 'grok-configured-default',
       timeout: 5000,
     });
 
@@ -383,9 +383,9 @@ describe('runAsk', () => {
     expect(args).toEqual([
       '--output-format', 'plain',
       '--permission-mode', 'bypassPermissions',
-      '--model', 'grok-build',
       '--prompt-file', '/dev/stdin',
     ]);
+    expect(args).not.toContain('--model');
     // POSIX delivery: the prompt is piped in via stdin.
     expect(child.stdin.end).toHaveBeenCalled();
   });

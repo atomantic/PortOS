@@ -27,7 +27,7 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
@@ -246,7 +246,9 @@ export function createStreamJsonParser() {
  */
 export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null } = {}) {
   const providerId = provider?.id || 'claude-code';
-  const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
+  // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
+  // the CLI uses its own default without a --model flag.
+  const effectiveModel = resolveCliModel(model);
 
   // Codex CLI uses different invocation pattern.
   // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of

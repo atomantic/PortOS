@@ -6,7 +6,6 @@ import {
   GROK_CLI_ID,
   GROK_TUI_ID,
   GROK_API_ENDPOINT,
-  GROK_DEFAULT_MODEL,
   GROK_STDIN_PROMPT_PATH,
   isGrokCommand,
   isGrokCliProvider,
@@ -17,12 +16,11 @@ import {
 } from './grok.js';
 
 describe('grok — constants', () => {
-  it('exposes the expected ids, endpoint, and default model', () => {
+  it('exposes the expected ids, endpoint, and stdin prompt path', () => {
     expect(GROK_API_ID).toBe('grok');
     expect(GROK_CLI_ID).toBe('grok-cli');
     expect(GROK_TUI_ID).toBe('grok-tui');
     expect(GROK_API_ENDPOINT).toBe('https://api.x.ai/v1');
-    expect(GROK_DEFAULT_MODEL).toBe('grok-build');
     expect(GROK_STDIN_PROMPT_PATH).toBe('/dev/stdin');
   });
 });
@@ -57,16 +55,16 @@ describe('grok — provider predicates', () => {
 });
 
 describe('grok — ensureGrokHeadlessArgs', () => {
-  it('injects plain output, permission bypass, model, and the stdin prompt file', () => {
-    expect(ensureGrokHeadlessArgs([], 'grok-build')).toEqual([
+  it('injects plain output, permission bypass, model, and the stdin prompt file when a concrete model is given', () => {
+    expect(ensureGrokHeadlessArgs([], 'grok-code-fast-1')).toEqual([
       '--output-format', 'plain',
       '--permission-mode', 'bypassPermissions',
-      '--model', 'grok-build',
+      '--model', 'grok-code-fast-1',
       '--prompt-file', '/dev/stdin',
     ]);
   });
 
-  it('omits --model when no model is given', () => {
+  it('omits --model when no model is given (configured-default / latest)', () => {
     expect(ensureGrokHeadlessArgs([], null)).toEqual([
       '--output-format', 'plain',
       '--permission-mode', 'bypassPermissions',
@@ -77,19 +75,19 @@ describe('grok — ensureGrokHeadlessArgs', () => {
   it('does not override a user-pinned output format, permission mode, model, or prompt source', () => {
     const out = ensureGrokHeadlessArgs(
       ['--output-format', 'json', '--permission-mode', 'default', '--model', 'grok-4', '--prompt-file', '/my/prompt.txt'],
-      'grok-build',
+      'grok-code-fast-1',
     );
     expect(out.filter((a) => a === '--output-format')).toHaveLength(1);
     expect(out.filter((a) => a === '--permission-mode')).toHaveLength(1);
     expect(out.filter((a) => a === '--model')).toHaveLength(1);
     expect(out.filter((a) => a === '--prompt-file')).toHaveLength(1);
     expect(out).toContain('grok-4');
-    expect(out).not.toContain('grok-build');
+    expect(out).not.toContain('grok-code-fast-1');
     expect(out).not.toContain('/dev/stdin');
   });
 
   it('treats --always-approve as an existing permission posture', () => {
-    const out = ensureGrokHeadlessArgs(['--always-approve'], 'grok-build');
+    const out = ensureGrokHeadlessArgs(['--always-approve'], null);
     expect(out).not.toContain('--permission-mode');
     expect(out).toContain('--always-approve');
   });

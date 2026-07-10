@@ -39,9 +39,9 @@ export function buildCliArgs(provider) {
   // injection path fires — but if we kept the bogus token in baseArgs the
   // CLI would still see two `--model` occurrences and reject the argv.
   const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
-  const effectiveDefaultModel = providerId === 'codex'
-    ? resolveCliModel(provider.defaultModel)
-    : provider.defaultModel;
+  // Configured-default sentinels (Codex / Antigravity / Grok Build) resolve to
+  // null so the CLI uses its own latest/default model without a --model flag.
+  const effectiveDefaultModel = resolveCliModel(provider.defaultModel);
 
   // Codex CLI: `codex exec -` reads prompt from stdin, --model for model.
   // Detect an existing leading `exec` in user/legacy args so we don't end up
