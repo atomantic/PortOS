@@ -9,9 +9,13 @@ import useClickOutside from '../../hooks/useClickOutside';
 // users can never reach.
 //
 // ARIA: the panel carries `role="tooltip"` and is linked to the trigger via
-// `aria-describedby` while visible, so screen readers announce it; the button's
-// `aria-expanded` reflects the click-latched open state. Pass `children` as the
-// help text and `label` as the button's accessible name.
+// `aria-describedby` while visible, so screen readers announce it. There is no
+// `aria-expanded` — this follows the ARIA tooltip pattern (not a disclosure), so
+// exposing an expanded state would misdescribe the widget and could drift out of
+// sync with the hover/focus reveal. `visible` is the single source of truth for
+// whether the panel shows; `pinned` only records that a click latched it open so
+// it survives blur. Pass `children` as the help text and `label` as the button's
+// accessible name.
 export default function InfoTooltip({
   children,
   label = 'More information',
@@ -20,33 +24,35 @@ export default function InfoTooltip({
   iconSize = 14,
   align = 'center',
 }) {
-  // `open` is click/tap-latched (survives blur until Escape or outside click);
-  // `hovered` is the transient hover/focus reveal. Either makes the panel visible.
-  const [open, setOpen] = useState(false);
-  const [hovered, setHovered] = useState(false);
+  // `pinned` = a click/tap latched it open (survives blur until Escape / outside
+  // click / another click). `hovering` = the transient hover-or-focus reveal.
+  // The panel is visible when either is true — one derived `visible` flag.
+  const [pinned, setPinned] = useState(false);
+  const [hovering, setHovering] = useState(false);
   const wrapRef = useRef(null);
   const panelId = useId();
+  const visible = pinned || hovering;
+
   const close = useCallback(() => {
-    setOpen(false);
-    setHovered(false);
+    setPinned(false);
+    setHovering(false);
   }, []);
 
-  // Clear BOTH states on outside click: on touch, a tap synthesizes mouseenter
-  // (setting `hovered`) alongside the click that latches `open`, and some mobile
-  // browsers hold sticky-hover without a matching mouseleave — so clearing only
-  // `open` could strand the panel open on the very touch path this targets.
-  useClickOutside(wrapRef, open, close);
+  // Drive outside-click dismissal off `visible`, not just `pinned`: on touch a
+  // tap can synthesize a sticky hover (setting `hovering`) that some mobile
+  // browsers never clear with a matching mouseleave, so gating on `pinned` alone
+  // could strand the panel open on the very touch path this component targets.
+  useClickOutside(wrapRef, visible, close);
 
   useEffect(() => {
-    if (!open && !hovered) return undefined;
+    if (!visible) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') close();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, hovered, close]);
+  }, [visible, close]);
 
-  const visible = open || hovered;
   const alignClass = align === 'start'
     ? 'left-0'
     : align === 'end'
@@ -57,17 +63,16 @@ export default function InfoTooltip({
     <div
       ref={wrapRef}
       className={`relative inline-flex ${className}`}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
     >
       <button
         type="button"
         aria-label={label}
-        aria-expanded={open}
         aria-describedby={visible ? panelId : undefined}
-        onClick={() => setOpen((v) => !v)}
-        onFocus={() => setHovered(true)}
-        onBlur={() => setHovered(false)}
+        onClick={() => setPinned((v) => !v)}
+        onFocus={() => setHovering(true)}
+        onBlur={() => setHovering(false)}
         className="inline-flex items-center rounded text-gray-500 transition-colors hover:text-gray-300 focus:text-gray-300 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
       >
         <Info size={iconSize} aria-hidden="true" />
