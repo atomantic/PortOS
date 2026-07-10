@@ -65,6 +65,54 @@ describe('useFocusTrap', () => {
     opener.remove();
   });
 
+  it('respects a child autoFocus instead of moving to the first focusable', () => {
+    function AutoFocusDialog({ active }) {
+      const ref = useRef(null);
+      useFocusTrap(active, ref);
+      return (
+        <div ref={ref} data-testid="dialog">
+          <button>close</button>
+          <input data-testid="field" autoFocus />
+        </div>
+      );
+    }
+    render(<AutoFocusDialog active />);
+    // React applies the input's autoFocus during commit; the trap must not
+    // yank focus to the leading close button.
+    expect(document.activeElement).toBe(screen.getByTestId('field'));
+  });
+
+  it('restores focus to the opener even when a child auto-focuses', () => {
+    function AutoFocusDialog() {
+      const ref = useRef(null);
+      useFocusTrap(true, ref);
+      return (
+        <div ref={ref}>
+          <input data-testid="field" autoFocus />
+        </div>
+      );
+    }
+    function AutoHarness({ active }) {
+      return (
+        <>
+          <button data-testid="opener">opener</button>
+          {active && <AutoFocusDialog />}
+        </>
+      );
+    }
+    const { rerender } = render(<AutoHarness active={false} />);
+    screen.getByTestId('opener').focus();
+    expect(document.activeElement).toBe(screen.getByTestId('opener'));
+
+    rerender(<AutoHarness active />);
+    expect(document.activeElement).toBe(screen.getByTestId('field'));
+
+    rerender(<AutoHarness active={false} />);
+    // The pre-open element was captured at render time (before the child's
+    // autoFocus fired), so focus returns to the opener, not the input.
+    expect(document.activeElement).toBe(screen.getByTestId('opener'));
+  });
+
   it('focuses the container itself when there is nothing focusable inside', () => {
     function Empty() {
       const ref = useRef(null);

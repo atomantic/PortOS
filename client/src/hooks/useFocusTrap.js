@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 // Keyboard focus management for modal surfaces (dialogs, drawers, lightboxes).
 // When `active` flips true it:
@@ -36,15 +36,38 @@ function getFocusable(container) {
 }
 
 export default function useFocusTrap(active, containerRef, { initialFocusRef } = {}) {
+  // Capture the element to return focus to at the RENDER where `active` flips
+  // true — before the dialog commits to the DOM and any child `autoFocus`
+  // fires. Capturing in the effect below (which runs after commit) would grab
+  // the modal's own auto-focused input instead of the control that opened it,
+  // breaking restoration for autoFocus modals like ResumeAgentModal.
+  const restoreRef = useRef(null);
+  const wasActive = useRef(false);
+  if (active && !wasActive.current) {
+    restoreRef.current = typeof document !== 'undefined' ? document.activeElement : null;
+  }
+  wasActive.current = active;
+
   useEffect(() => {
     if (!active) return;
     const container = containerRef.current;
     if (!container) return;
 
-    const previouslyFocused = document.activeElement;
+    const previouslyFocused = restoreRef.current;
 
     const focusInitial = () => {
-      const target = initialFocusRef?.current || getFocusable(container)[0];
+      if (initialFocusRef?.current) {
+        initialFocusRef.current.focus();
+        return;
+      }
+      // Respect focus a child already claimed — React applies a child's
+      // `autoFocus` during commit, before this passive effect runs, so if
+      // focus is already inside the dialog leave it there rather than yanking
+      // it to the first focusable (which would defeat the author's autoFocus).
+      if (container.contains(document.activeElement) && document.activeElement !== container) {
+        return;
+      }
+      const target = getFocusable(container)[0];
       if (target) {
         target.focus();
       } else {
@@ -57,7 +80,7 @@ export default function useFocusTrap(active, containerRef, { initialFocusRef } =
     focusInitial();
 
     const onKeyDown = (e) => {
-      if (e.key !== 'Tab') return;
+      if (e.key !== 'Tab' || e.defaultPrevented) return;
       const focusable = getFocusable(container);
       if (focusable.length === 0) {
         e.preventDefault();
@@ -81,6 +104,11 @@ export default function useFocusTrap(active, containerRef, { initialFocusRef } =
     container.addEventListener('keydown', onKeyDown);
     return () => {
       container.removeEventListener('keydown', onKeyDown);
+      // Drop the fallback tabindex we may have added so the container doesn't
+      // linger as a programmatic focus target after close.
+      if (container.getAttribute('tabindex') === '-1') {
+        container.removeAttribute('tabindex');
+      }
       // Restore focus to the pre-open element so keyboard users return to where
       // they were. Guard: it may have been removed from the DOM while open.
       if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
