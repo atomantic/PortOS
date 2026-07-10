@@ -353,7 +353,14 @@ export async function escalateProviderFailure(error) {
     console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — suppressing escalated investigation task`);
     return null;
   }
-  return createAIProviderInvestigationTask(error);
+  // Clear the dedupe marker if task creation fails so an identical escalation
+  // isn't suppressed for the window (mirrors the deferred path's catch arm) —
+  // otherwise an addTask rejection would silently swallow every retry for 60s.
+  return createAIProviderInvestigationTask(error).catch((err) => {
+    escalatedKeys.delete(errorKey);
+    console.error(`❌ Escalated AI provider task creation failed: ${err.message}`);
+    return null;
+  });
 }
 
 /**
