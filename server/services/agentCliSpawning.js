@@ -524,7 +524,33 @@ export async function spawnDirectly({
   // stdout/stderr could land after the terminal record. (The close handler
   // still drains too; flush() is idempotent.)
   const cliAgentEntry = activeAgents.get(agentId);
-  if (cliAgentEntry) cliAgentEntry.flushOutput = () => outputBatcher.flush();
+  // Drain the serialized write chain (defined just below) before flushing the
+  // batcher so any enqueued-but-unrun stdout/stderr push lands first.
+  if (cliAgentEntry) cliAgentEntry.flushOutput = async () => {
+    await drainTranscriptWrites();
+    await outputBatcher.flush();
+  };
+
+  // Serialize the transcript-mutating body of every stdout/stderr `data` event
+  // onto a single per-agent tail promise. Both handlers mutate the same shared
+  // `outputBuffer`/`rawStreamBuffer` and write the same `output.txt`, so their
+  // interleaved awaits (e.g. one chunk's `writeFile` yielding while the next
+  // chunk appends) would otherwise reorder the transcript (#2384). Fallback
+  // detection stays OUTSIDE this chain — it runs synchronously in the raw
+  // listener before the enqueue, so a blocked earlier write can never delay
+  // killing the provider on a usage-limit signal. The close/error handlers
+  // `await drainTranscriptWrites()` before finalize so the tail lands first.
+  // Mirrors shell.js `hookQueue` and pipeline/issues.js `issueWriteTail`.
+  let transcriptWriteTail = Promise.resolve();
+  const enqueueTranscriptWrite = (fn) => {
+    transcriptWriteTail = transcriptWriteTail.then(fn).catch((err) => {
+      // Runs in a child-process callback — a rejection here would escape as an
+      // unhandled rejection and crash Node. output.txt is best-effort; log+swallow.
+      console.error(`❌ agentCli transcript write failed for ${agentId}: ${err.message}`);
+    });
+    return transcriptWriteTail;
+  };
+  const drainTranscriptWrites = () => transcriptWriteTail;
 
   const stopForImmediateFallbackSignal = (text) => {
     if (immediateFallbackAnalysis || claudeProcess.killed) return;
@@ -554,53 +580,62 @@ export async function spawnDirectly({
     }
   }, 3000);
 
-  claudeProcess.stdout.on('data', async (data) => {
+  claudeProcess.stdout.on('data', (data) => {
     try {
       const text = data.toString();
+      // Detect fallback signals SYNCHRONOUSLY, before enqueuing any transcript
+      // mutation — a blocked earlier write must never delay killing the provider
+      // on a usage-limit signal (#2384).
       stopForImmediateFallbackSignal(text);
-
-      if (!hasStartedWorking) {
-        hasStartedWorking = true;
-        await updateAgent(agentId, { metadata: { phase: 'working' } });
-        emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
-      }
-
-      if (streamParser) {
-        // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
-        rawStreamBuffer += text;
-        if (rawStreamBuffer.length > 512 * 1024) {
-          rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+      // Serialize the transcript body so two `data` events can't interleave their
+      // awaits and reorder output.txt / the batched live tail.
+      enqueueTranscriptWrite(async () => {
+        if (!hasStartedWorking) {
+          hasStartedWorking = true;
+          await updateAgent(agentId, { metadata: { phase: 'working' } });
+          emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
         }
-        const lines = streamParser.processChunk(text);
-        for (const line of lines) outputBuffer += line + '\n';
-        outputBatcher.push(lines);
-        await writeFile(outputFile, outputBuffer).catch(() => {});
-      } else {
-        // Non-stream providers: emit raw stdout as before
-        outputBuffer += text;
-        await writeFile(outputFile, outputBuffer).catch(() => {});
-        outputBatcher.push(text);
-      }
+
+        if (streamParser) {
+          // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+          rawStreamBuffer += text;
+          if (rawStreamBuffer.length > 512 * 1024) {
+            rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+          }
+          const lines = streamParser.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+        } else {
+          // Non-stream providers: emit raw stdout as before
+          outputBuffer += text;
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+          outputBatcher.push(text);
+        }
+      });
     } catch (err) {
       console.error(`❌ agentCli stdout handler failed: ${err.message}`);
     }
   });
 
-  claudeProcess.stderr.on('data', async (data) => {
+  claudeProcess.stderr.on('data', (data) => {
     try {
       const text = data.toString();
+      // Synchronous fallback detection before the serialized write (see stdout).
       stopForImmediateFallbackSignal(`[stderr] ${text}`);
-      // Codex stderr: show thinking + tool names, skip config dump and command output
-      if (codexStderrFormatter) {
-        const lines = codexStderrFormatter.processChunk(text);
-        for (const line of lines) outputBuffer += line + '\n';
-        outputBatcher.push(lines);
+      enqueueTranscriptWrite(async () => {
+        // Codex stderr: show thinking + tool names, skip config dump and command output
+        if (codexStderrFormatter) {
+          const lines = codexStderrFormatter.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+          return;
+        }
+        outputBuffer += `[stderr] ${text}`;
         await writeFile(outputFile, outputBuffer).catch(() => {});
-        return;
-      }
-      outputBuffer += `[stderr] ${text}`;
-      await writeFile(outputFile, outputBuffer).catch(() => {});
-      outputBatcher.push(`[stderr] ${text}`);
+        outputBatcher.push(`[stderr] ${text}`);
+      });
     } catch (err) {
       console.error(`❌ agentCli stderr handler failed: ${err.message}`);
     }
@@ -632,6 +667,9 @@ export async function spawnDirectly({
       }
 
       cosEvents.emit('agent:error', { agentId, error: err.message });
+      // Drain queued transcript writes before flushing the batcher + recording
+      // the run so outputBuffer reflects everything that streamed (#2384).
+      await drainTranscriptWrites();
       await outputBatcher.flush();
       await completeAgent(agentId, { success: false, error: err.message });
       await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
@@ -677,6 +715,12 @@ export async function spawnDirectly({
     // Mirrors the runner path (`runner.js`) and the TUI finish() handling.
     const finalSuccess = terminatedByUser ? false : (success && !immediateFallbackAnalysis);
     const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+
+    // Drain any queued transcript writes before reading/appending outputBuffer
+    // for finalization — a still-pending stdout/stderr write would otherwise
+    // land after the terminal record or clobber the final output.txt (#2384).
+    // No new `data` events fire after 'close', so a single drain is sufficient.
+    await drainTranscriptWrites();
 
     // Flush remaining stream parser data (persists the tail of the transcript
     // before any early-return, so a paused agent's output.txt is complete for

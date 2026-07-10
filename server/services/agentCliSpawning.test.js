@@ -76,6 +76,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 // spawn wiring uses whatever prepareCliSpawn returns.
 vi.mock('../lib/bufferedSpawn.js', () => ({
   prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
+  killProcessTree: vi.fn(),
 }));
 
 // Mock child_process.spawn to return a controllable fake process
@@ -90,7 +91,7 @@ vi.mock('child_process', () => ({
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
 import { spawn } from 'child_process';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
 // Helper: feed the parser a sequence of stream-json lines
 function runStream(parser, events) {
@@ -449,6 +450,58 @@ describe('stream error containment', () => {
       (args) => typeof args[0] === 'string' && args[0].startsWith('❌ agent agent-test output batch flush failed:')
     );
     expect(logged).toBe(true);
+  });
+
+  it('detects a fallback signal and terminates immediately even while an earlier transcript write is blocked, keeping output ordered (#2384)', async () => {
+    killProcessTree.mockClear();
+
+    // Block the FIRST chunk's serialized transcript body at its phase-working
+    // updateAgent await (the pid updateAgent at spawn time carries no
+    // metadata.phase, so it resolves normally and lets spawn finish).
+    let releaseFirstWrite;
+    const firstWriteGate = new Promise((r) => { releaseFirstWrite = r; });
+    cosAgentsMocks.updateAgent.mockImplementation((id, patch) => {
+      if (patch?.metadata?.phase === 'working') return firstWriteGate;
+      return Promise.resolve(undefined);
+    });
+
+    // Non-stream provider so outputBuffer is raw text and ordering is trivial to assert.
+    const args = {
+      ...minimalArgs,
+      cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' },
+    };
+
+    const spawnPromise = spawnDirectly(args);
+    // Yield so spawnDirectly's awaits resolve and the stdout listener registers.
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Chunk 1: ordinary output → its serialized write body blocks on the gate.
+    fakeProcess.stdout.emit('data', Buffer.from('first output line\n'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Chunk 2: a usage-limit fallback signal arrives WHILE chunk 1 is blocked.
+    // The synchronous detector must fire the kill without waiting for the gate.
+    fakeProcess.stdout.emit('data', Buffer.from('Now using extra usage\n'));
+
+    // Assert: termination was immediate — killProcessTree fired synchronously in
+    // the data listener, before the blocked first write could settle.
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(killProcessTree.mock.calls[0][1]).toBe('SIGTERM');
+    fakeProcess.killed = true;
+
+    // Release the gate, let the serialized chain drain, then close.
+    releaseFirstWrite();
+    await new Promise((r) => setTimeout(r, 20));
+    fakeProcess.emit('close', 143);
+    await spawnPromise.catch(() => {});
+
+    // Assert: the two chunks landed in emission order (serialized, not reordered
+    // by the blocked first write racing the second).
+    const allLines = cosAgentsMocks.appendAgentOutputLines.mock.calls.flatMap((c) => c[1]);
+    const firstIdx = allLines.findIndex((l) => l.includes('first output line'));
+    const usageIdx = allLines.findIndex((l) => l.includes('Now using extra usage'));
+    expect(firstIdx).toBeGreaterThanOrEqual(0);
+    expect(usageIdx).toBeGreaterThan(firstIdx);
   });
 
   it('routes the CLI command through prepareCliSpawn and spawns its resolved+wrapped result (#2243)', async () => {
