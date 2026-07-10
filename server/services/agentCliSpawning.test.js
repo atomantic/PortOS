@@ -45,6 +45,10 @@ vi.mock('./toolStateMachine.js', () => ({
 }));
 vi.mock('./agentErrorAnalysis.js', () => ({ analyzeAgentFailure: vi.fn().mockResolvedValue(null) }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolvedValue(undefined) }));
+// Mock git.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
+// pulling in the real worktreeManager → instances module graph. Default: no
+// owner-matched account → empty overlay (ambient gh auth untouched).
+vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentLifecycle.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
@@ -474,6 +478,45 @@ describe('stream error containment', () => {
       expect.objectContaining({ shell: false }),
     );
 
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  it('injects the repo-owner-pinned GH_TOKEN into the spawn env so the agent\'s own `gh` uses the right account', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_pinned_owner_token' });
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10)); // let the resolveForgeTokenEnv await settle
+
+    // Resolved against the workspace dir (the worktree the agent will PR from).
+    expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/tmp');
+    expect(spawn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_pinned_owner_token' }) }),
+    );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  it('leaves the spawn env\'s ambient GH_TOKEN untouched when there is no owner match', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({});
+    const prev = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = 'ghp_ambient';
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(spawn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_ambient' }) }),
+    );
+
+    if (prev === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = prev;
     fakeProcess.emit('close', 0);
     await spawnPromise.catch(() => {});
   });

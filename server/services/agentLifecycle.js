@@ -32,6 +32,7 @@ import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
+import { resolveForgeTokenEnv } from './git.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -628,10 +629,14 @@ export async function spawnViaRunner(agentId, task, opts) {
     }
   }, 3000);
 
-  // For Claude CLI providers, merge ~/.claude/settings.json env vars so Bedrock config is present
-  const claudeSettingsEnv = isClaudeCliProvider(provider)
-    ? await getClaudeSettingsEnv()
-    : {};
+  // Two independent async env lookups, resolved together: Claude's
+  // ~/.claude/settings.json Bedrock config, and the repo-owner-pinned GH_TOKEN
+  // (so the runner-spawned agent's own `gh pr create` auths as the right
+  // account — see resolveForgeTokenEnv; `{}` when there's no owner match).
+  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+    resolveForgeTokenEnv(workspacePath),
+  ]);
 
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with the
   // models map so the injected `--model ollama/<id>` is accepted (empty/no-op
@@ -647,7 +652,8 @@ export async function spawnViaRunner(agentId, task, opts) {
     prompt,
     workspacePath,
     model,
-    envVars: { ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
+    // forgeTokenEnv before provider.envVars so an explicit provider override wins.
+    envVars: { ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });

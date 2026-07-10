@@ -180,7 +180,7 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, forgeTokenEnv = {}, onData, onExit, onInitialCommandSent }) {
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
   const opencodeEnv = buildOpencodeEnvVars(provider, model);
@@ -204,7 +204,9 @@ export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
     // opencodeEnv comes after provider.envVars to override the static config.
-    env: { ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
+    // forgeTokenEnv is threaded in explicitly because buildSafeEnv strips
+    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv).
+    env: { ...(provider.envVars || {}), ...opencodeEnv, ...forgeTokenEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -798,12 +800,17 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Repo-owner-pinned GH_TOKEN for the agent's own `gh pr create` (see
+  // resolveForgeTokenEnv). Resolved here since createAgentTuiSession is sync.
+  const forgeTokenEnv = await git.resolveForgeTokenEnv(cwd);
+
   const session = createAgentTuiSession({
     agentId,
     provider,
     model,
     tuiConfig,
     cwd,
+    forgeTokenEnv,
     onData: handleData,
     onExit: handleExit,
     onInitialCommandSent: () => { commandInjected = true; },

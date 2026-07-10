@@ -354,6 +354,32 @@ export async function resolveForgeForRepo(dir) {
 }
 
 /**
+ * Resolve just the GitHub-token env overlay for a repo directory, so a spawned
+ * child that runs its own `gh pr create` — a CoS agent, most notably codex,
+ * which is otherwise blind to PortOS's account-pinning — authenticates as the
+ * gh account whose login matches the repo owner (the same pinning
+ * `resolveForgeForRepo` gives PortOS's own `createPR`). Two reasons a plain
+ * env inherit isn't enough: (1) TUI agents run under `buildSafeEnv`, which
+ * strips `GH_TOKEN` entirely, so the child would fall back to gh's mutable
+ * `hosts.yml` active user; (2) even when inherited, the ambient token can be
+ * the wrong account in a multi-login setup ("must be a collaborator").
+ *
+ * Returns `{ GH_TOKEN }` only when a repo-owner-matched account and token were
+ * found; otherwise `{}` so the child keeps whatever gh auth it would have used.
+ * Best-effort: never throws, so a spawn is never blocked by remote/auth probes.
+ * @param {string} dir - Repo (or worktree) root
+ * @returns {Promise<{ GH_TOKEN?: string }>}
+ */
+export async function resolveForgeTokenEnv(dir) {
+  const resolved = await resolveForgeForRepo(dir).catch(() => null);
+  // Only overlay when an owner-matched account was actually picked — the
+  // no-match branches of resolveForgeForRepo return the ambient env verbatim,
+  // and re-setting the ambient GH_TOKEN would be a meaningless no-op.
+  const token = resolved?.account ? resolved.env?.GH_TOKEN : null;
+  return token ? { GH_TOKEN: token } : {};
+}
+
+/**
  * Create a pull request (GitHub) or merge request (GitLab) using `gh` / `glab`.
  * Forge is auto-detected from the repo's `origin` URL; gh identity is auto-pinned
  * to the matching account when multiple gh accounts are logged in.
