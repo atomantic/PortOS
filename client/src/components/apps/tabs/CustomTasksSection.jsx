@@ -94,6 +94,11 @@ function scheduleSummary(job) {
 
 function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  // Switching to cron seeds the expression with the default the picker displays
+  // (07:00 daily) so an untouched picker is actually saveable — otherwise the
+  // form shows a schedule while cronExpression stays empty and Save is blocked.
+  const setScheduleMode = (mode) =>
+    setForm(f => ({ ...f, scheduleMode: mode, cronExpression: mode === 'cron' && !f.cronExpression ? DEFAULT_CRON : f.cronExpression }));
   // Toggle a git-workflow flag while preserving the system-wide invariant that
   // openPR implies useWorktree (matches toggleAppMetadataOverride used elsewhere):
   // turning openPR on forces useWorktree on; turning useWorktree off forces openPR off.
@@ -136,7 +141,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
             <button
               key={mode}
               type="button"
-              onClick={() => update('scheduleMode', mode)}
+              onClick={() => setScheduleMode(mode)}
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 form.scheduleMode === mode ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-500 hover:text-gray-300'
               }`}
