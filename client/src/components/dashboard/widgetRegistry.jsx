@@ -26,6 +26,7 @@ const ActivityStreakWidget  = lazyWithReload(() => import('./builtins/ActivitySt
 const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActivityWidget'));
 const FeedsWidget           = lazyWithReload(() => import('./builtins/FeedsWidget'));
 const MeatSpaceStreakWidget = lazyWithReload(() => import('./builtins/MeatSpaceStreakWidget'));
+const AutoFixMetricsWidget  = lazyWithReload(() => import('./builtins/AutoFixMetricsWidget'));
 
 // Each entry: { id, label, Component, width, defaultH?, gate?, module? }.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.
@@ -66,6 +67,7 @@ export const WIDGETS = [
   { id: 'hourly-activity',   label: 'Activity by Hour',      Component: HourlyActivityWidget,   width: 'full',    defaultH: 4, gate: (s) => !!s.usage?.hourlyActivity && s.usage.hourlyActivity.some((v) => v > 0) },
   { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
   { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
+  { id: 'autofix-metrics',   label: 'Auto-Fix Telemetry',    Component: AutoFixMetricsWidget,   width: 'quarter', defaultH: 5, module: { id: '09', status: 'AUTOFIX', glyph: 'warning-tri' } },
 ];
 
 export const WIDGETS_BY_ID = Object.fromEntries(WIDGETS.map((w) => [w.id, w]));
