@@ -372,12 +372,27 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
-    it('suppresses the completion block and warns when readOnly is set', () => {
+    it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { readOnly: true } }),
         '/r', null, isTruthyMeta, { isTui: true });
       expect(prompt).toMatch(/Read-Only Task/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
+      // A read-only TUI agent must still be told to write .agent-done — the 2s
+      // sentinel poll is its only clean finalize/summary path (regression: the
+      // read-only branch used to emit the bare notice with no sentinel, so
+      // reference-watch runs never signaled completion).
+      expect(prompt).toMatch(/\.agent-done/);
+      expect(prompt).toMatch(/polls this sentinel/);
+    });
+
+    it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { readOnly: true } }),
+        '/r', null, isTruthyMeta, { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/Read-Only Task/);
+      // CLI/API agents complete on process exit and never poll a sentinel.
+      expect(prompt).not.toMatch(/\.agent-done/);
     });
 
     it('renders the review-loop follow-up block when reviewLoopFollowUp is set', () => {
