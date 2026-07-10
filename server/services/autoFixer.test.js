@@ -18,6 +18,7 @@ const {
   _resetAutoFixerForTests,
   classifyFixTier,
   buildFixDiagnostics,
+  escalateProviderFailure,
   FIX_TIERS,
 } = await import('./autoFixer.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
@@ -608,5 +609,104 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
       target: 'UNCAUGHT_EXCEPTION',
       tier: FIX_TIERS.ESCALATE,
     });
+  });
+});
+
+describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)', () => {
+  beforeEach(() => {
+    cos.addTask.mockClear();
+    cos.isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+  afterEach(() => {
+    _resetAutoFixerForTests();
+  });
+
+  const providerError = (provider = 'Primary API', model = 'primary-model') => ({
+    code: 'AI_PROVIDER_EXECUTION_FAILED',
+    message: `AI provider ${provider} execution failed: model gone`,
+    timestamp: Date.now(),
+    context: {
+      provider, providerId: provider.toLowerCase().replace(/\s+/g, '-'), model,
+      errorDetails: 'model gone', errorAnalysis: { category: 'model-not-found' },
+    },
+  });
+
+  it('creates an investigation task immediately (no defer window)', async () => {
+    const task = await escalateProviderFailure(providerError());
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(cos.addTask.mock.calls[0][0]).toMatchObject({
+      description: 'Investigate AI provider failure: Primary API (primary-model)',
+    });
+    // Diagnostics still ride on the escalated task (tier-classified from category).
+    expect(cos.addTask.mock.calls[0][0].diagnostics).toMatchObject({
+      category: 'model-not-found',
+      tier: FIX_TIERS.CONFIG_ENV,
+    });
+    expect(task).toBeTruthy();
+  });
+
+  it('dedupes concurrent identical escalations to a single task (no-fallback failure storm)', async () => {
+    const results = await Promise.all([
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+    ]);
+    // Only the first escalation creates a task; the rest are deduped within the
+    // window (returns null).
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('honors the per-resource circuit breaker (suppresses after >3 escalations in the window)', async () => {
+    vi.useFakeTimers();
+    try {
+      // Space escalations past the 60s dedupe window so each counts as a
+      // distinct task-worthy failure toward the circuit threshold.
+      for (let i = 0; i < 3; i++) {
+        await escalateProviderFailure(providerError('Ollama', 'command-r'));
+        await vi.advanceTimersByTimeAsync(61000);
+      }
+      expect(cos.addTask).toHaveBeenCalledTimes(3);
+      // 4th distinct escalation (still within the 1h circuit window) trips it.
+      const suppressed = await escalateProviderFailure(providerError('Ollama', 'command-r'));
+      expect(suppressed).toBeNull();
+      expect(cos.addTask).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('autoFixer — escalateProviderFailure dedupe clears on task-creation failure (#2342)', () => {
+  beforeEach(() => {
+    cos.addTask.mockReset();
+    cos.isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+  afterEach(() => {
+    cos.addTask.mockReset();
+    cos.addTask.mockResolvedValue({ id: 'task-1' });
+    _resetAutoFixerForTests();
+  });
+
+  it('does not suppress a retry when the escalated task creation fails', async () => {
+    const err = {
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      message: 'AI provider Ollama execution failed: model gone',
+      timestamp: Date.now(),
+      context: { provider: 'Ollama', providerId: 'ollama', model: 'command-r', errorDetails: 'model gone', errorAnalysis: { category: 'model-not-found' } },
+    };
+    // First escalation: addTask rejects → dedupe marker must be cleared.
+    cos.addTask.mockRejectedValueOnce(new Error('plan write failed'));
+    const first = await (await import('./autoFixer.js')).escalateProviderFailure(err);
+    expect(first).toBeNull();
+
+    // Second identical escalation within the window must NOT be deduped — it
+    // creates the task the failed first attempt never did.
+    cos.addTask.mockResolvedValueOnce({ id: 'task-ok' });
+    const second = await (await import('./autoFixer.js')).escalateProviderFailure(err);
+    expect(second).toBeTruthy();
+    expect(cos.addTask).toHaveBeenCalledTimes(2);
   });
 });

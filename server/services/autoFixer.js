@@ -32,6 +32,12 @@ const deferredTasks = new Map(); // errorKey -> { timer }
 // fallback's real outcome). Cleared by noteFallbackHandled (success → no task)
 // and noteFallbackFailed (failure → the fallback's own task already covers it).
 const inFlightFallbacks = new Set(); // errorKey
+// Error keys explicitly escalated via escalateProviderFailure, with the ms
+// timestamp of the escalation. Deduped on its own window (NOT recentErrors,
+// which the primary failure may already have populated) so a concurrent
+// no-fallback failure storm collapses to ONE escalated investigation task
+// instead of one per call. Pruned + reset alongside the other maps.
+const escalatedKeys = new Map(); // errorKey -> number (ms timestamp)
 
 // Circuit breaker: if the SAME resource (errorKey) trips auto-fix more than
 // CIRCUIT_MAX_FAILURES times within CIRCUIT_WINDOW_MS, stop creating
@@ -293,6 +299,71 @@ export function noteFallbackFailed({ provider, model }) {
 }
 
 /**
+ * Explicitly escalate a provider failure to a Tier-4 investigation task
+ * (issue #2342). Called by promptRunner's fallback cascade ONLY when the
+ * deterministic tiers all declined/failed AND no other queued task will
+ * survive to represent the failure — specifically when a Tier-1 corrected
+ * retry was pre-suppressed but threw BEFORE execution (so its onRunFailed
+ * never queued a task) and no fallback provider exists.
+ *
+ * Bypasses the defer window (we already KNOW recovery failed) but still honors
+ * the per-resource circuit breaker, and first clears any lingering
+ * timer/in-flight/dedupe state for the key so the escalation isn't itself
+ * suppressed and a future failure isn't wrongly blocked.
+ *
+ * `error` is a synthetic `AI_PROVIDER_EXECUTION_FAILED`-shaped object built by
+ * the caller from the failure it holds (it lacks the server hook's full run
+ * metadata, so `runId`/`exitCode` may be absent — the investigation task
+ * tolerates that). Returns the created task, or null when the circuit is open.
+ */
+export async function escalateProviderFailure(error) {
+  const ctx = error?.context || {};
+  const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
+  const now = Date.now();
+
+  // Cancel any pending backstop timer + drop the in-flight suppression for this
+  // key (the cascade already cancelled the timer; make sure it's gone).
+  inFlightFallbacks.delete(errorKey);
+  const pending = deferredTasks.get(errorKey);
+  if (pending) {
+    clearTimeout(pending.timer);
+    deferredTasks.delete(errorKey);
+  }
+
+  // Dedupe on the escalation window, checked+set synchronously (single-threaded)
+  // BEFORE the first await so a concurrent no-fallback failure storm collapses
+  // to ONE task. We can't use isDuplicateError/recentErrors here — the primary
+  // failure's handleAIProviderError may already hold a recentErrors entry for
+  // this key, which would make our FIRST escalation look like a duplicate and
+  // silently swallow it.
+  const lastEscalated = escalatedKeys.get(errorKey);
+  if (lastEscalated && now - lastEscalated < ERROR_DEDUPE_WINDOW) {
+    console.log(`⏭️ Skipping duplicate escalated AI provider failure: ${ctx.provider} (${ctx.model})`);
+    return null;
+  }
+  escalatedKeys.set(errorKey, now);
+  for (const [key, ts] of escalatedKeys.entries()) {
+    if (now - ts >= ERROR_DEDUPE_WINDOW) escalatedKeys.delete(key);
+  }
+  // Clear the primary's dedupe entry so a genuinely NEW failure after this
+  // window can still raise a task through the normal deferred path.
+  recentErrors.delete(errorKey);
+
+  if (tripCircuit(errorKey)) {
+    console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — suppressing escalated investigation task`);
+    return null;
+  }
+  // Clear the dedupe marker if task creation fails so an identical escalation
+  // isn't suppressed for the window (mirrors the deferred path's catch arm) —
+  // otherwise an addTask rejection would silently swallow every retry for 60s.
+  return createAIProviderInvestigationTask(error).catch((err) => {
+    escalatedKeys.delete(errorKey);
+    console.error(`❌ Escalated AI provider task creation failed: ${err.message}`);
+    return null;
+  });
+}
+
+/**
  * Check if an error is a duplicate within the dedupe window
  * Also cleans up expired entries
  * @returns {boolean} true if this is a duplicate error
@@ -366,6 +437,7 @@ export function _resetAutoFixerForTests() {
   inFlightFallbacks.clear();
   recentErrors.clear();
   failureTimestamps.clear();
+  escalatedKeys.clear();
   pendingAutoFixTasks.length = 0;
 }
 
