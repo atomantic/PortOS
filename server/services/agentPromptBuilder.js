@@ -400,8 +400,11 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
  */
 export function buildCompletionGuidelineBullet({
   isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
-  worktreeInfo, willOpenPR, willReviewLoop,
+  worktreeInfo, willOpenPR, willReviewLoop, discardWorktree = false,
 }) {
+  if (discardWorktree) {
+    return '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
+  }
   if (isReadOnly) {
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
   }
@@ -426,6 +429,32 @@ export function buildCompletionGuidelineBullet({
     return 'Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.';
   }
   return null;
+}
+
+// One-line worktree note for a discard (reasoning-only) task, replacing the
+// "commit / push / auto-merge" guidance the normal worktree section emits. The
+// worktree exists only so the reasoner can make scratch edits without touching
+// the real tree — cleanup discards it with no commit/merge/PR (see
+// `discardWorktree` in agentWorktreeCleanup.js).
+const DISCARD_WORKTREE_NOTE = 'Do NOT commit, push, or open a PR — this worktree is discarded on exit. Make any scratch edits that help you reason; only the completion sentinel is kept.';
+
+/**
+ * Completion block for a **programmatic-output** (throwaway-worktree) task: the
+ * agent reasons in a worktree that is discarded on exit, so it must NOT commit,
+ * push, merge, or open a PR. Its only channel out is the `.agent-done` sentinel,
+ * whose exact payload shape is specified by the task instructions (a task-type
+ * output hook — see `taskTypeHooks.js` / `layeredIntelligenceHooks.js`). This
+ * replaces the normal `/do:push`+markdown-sentinel completion workflow, which
+ * would tell the agent to push code (defeating the discard guarantee) and write
+ * a markdown summary (breaking the hook's structured-JSON sentinel contract).
+ */
+export function buildProgrammaticOutputCompletionSection(sentinelPath) {
+  return [
+    '## Completion (Reasoning-Only Task)',
+    'This is a reasoning task, not a code change. The worktree you are in is **discarded on exit** — any commits, pushes, or PRs are thrown away and have no effect. Do NOT run `/do:push`, `/do:pr`, `git commit`, `git push`, or open a pull request.',
+    '',
+    `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+  ].join('\n');
 }
 
 /**
@@ -498,6 +527,10 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Build worktree context section if applicable
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
+  // A discard (reasoning-only) worktree: the agent reasons in it but it's thrown
+  // away on exit with no commit/merge/PR (see agentWorktreeCleanup.js). Suppresses
+  // all commit/push/PR completion guidance in favor of the sentinel-only contract.
+  const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
@@ -506,11 +539,13 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: ${isTui
-    ? 'Commit your changes to this branch — see the **Completion Workflow** section below for the full push/PR/exit sequence.'
-    : isWorktreeOnExistingBranch
-      ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
-      : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
+**Important**: ${discardWorktree
+    ? DISCARD_WORKTREE_NOTE
+    : isTui
+      ? 'Commit your changes to this branch — see the **Completion Workflow** section below for the full push/PR/exit sequence.'
+      : isWorktreeOnExistingBranch
+        ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
+        : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
   // Build pipeline context section if this is a pipeline stage
@@ -539,7 +574,8 @@ Use the findings from the previous stage to inform your work. If the previous st
   const simplifyInstruction = canRunSlashCommands
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
-  const simplifySection = simplifyEnabled && !isTui ? `
+  // Discard tasks don't commit, so the simplify-before-commit step is moot.
+  const simplifySection = simplifyEnabled && !isTui && !discardWorktree ? `
 ## Simplify Step
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
@@ -558,15 +594,21 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // the session, so the prompt does NOT ask the agent to `/quit` (it's a UI
   // command the agent can't invoke). See `buildTuiCompletionSection` below.)
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
-  const tuiCompletionSection = isTui
-    ? buildTuiCompletionSection({
-        willOpenPR, willReviewLoop, simplifyEnabled, providerId,
-        sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
-        reviewers: taskReviewers,
-        reviewStopMode: taskReviewStopMode,
-        reviewerApplies: taskReviewerApplies
-      })
-    : '';
+  const sentinelPath = `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`;
+  // A discard task's completion is the sentinel-only contract (no push/PR/merge),
+  // and this applies to every provider type — so it wins over the isTui fork and
+  // over the fallback template's commit/push instructions below.
+  const tuiCompletionSection = discardWorktree
+    ? buildProgrammaticOutputCompletionSection(sentinelPath)
+    : isTui
+      ? buildTuiCompletionSection({
+          willOpenPR, willReviewLoop, simplifyEnabled, providerId,
+          sentinelPath,
+          reviewers: taskReviewers,
+          reviewStopMode: taskReviewStopMode,
+          reviewerApplies: taskReviewerApplies
+        })
+      : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
   // or run /do:rpr — by the time the PR exists, the agent has already exited.
@@ -700,11 +742,13 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
 3. Test your changes when possible
-4. ${isTui
-  ? `Commit, push, and ${willOpenPR ? 'open the PR (see Completion Workflow above)' : 'push the branch (see Completion Workflow above)'}`
-  : worktreeInfo && willOpenPR
-    ? 'Commit your changes (see Git Hygiene below) — do NOT push, the system handles that on exit'
-    : 'Commit and push your changes (see Git Hygiene below)'}
+4. ${discardWorktree
+  ? 'Write your result to the completion sentinel (see the Completion section above) — do NOT commit, push, or open a PR; this worktree is discarded on exit'
+  : isTui
+    ? `Commit, push, and ${willOpenPR ? 'open the PR (see Completion Workflow above)' : 'push the branch (see Completion Workflow above)'}`
+    : worktreeInfo && willOpenPR
+      ? 'Commit your changes (see Git Hygiene below) — do NOT push, the system handles that on exit'
+      : 'Commit and push your changes (see Git Hygiene below)'}
 5. Provide a summary of what was done
 
 ## Guidelines
@@ -718,7 +762,7 @@ ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
     isTui, tuiCompletionCommand, slashdoFree: isTui && isOpencodeCommand(providerCommand),
-    worktreeInfo, willOpenPR, willReviewLoop,
+    worktreeInfo, willOpenPR, willReviewLoop, discardWorktree,
   });
   return bullet ? `- ${bullet}` : '';
 })()}
@@ -727,12 +771,14 @@ ${(() => {
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
-${isTui
-  ? `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`
-  : worktreeInfo && willOpenPR
-    ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
-    : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
-${worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
+${discardWorktree
+  ? `- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).`
+  : isTui
+    ? `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`
+    : worktreeInfo && willOpenPR
+      ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
+      : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
+${discardWorktree ? '' : worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
 
 ## Working Directory
 ${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.
@@ -788,6 +834,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
+  const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   // Ordered reviewer list + flags for the Review Loop (default `[copilot]`).
@@ -847,7 +894,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR }),
+      worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR, discardWorktree }),
       'Do NOT manually switch branches or modify the worktree configuration.'
     ].filter(Boolean).join('\n'));
   }
@@ -877,7 +924,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   }
 
   // --- Completion / review-loop ------------------------------------------
-  if (isReadOnly) {
+  if (discardWorktree) {
+    // Reasoning-only task: the sentinel payload (shape set by the task-type
+    // output hook) is the sole output; the worktree is discarded on exit. Wins
+    // over the isTui / CLI push-and-PR completion workflows below.
+    sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
+  } else if (isReadOnly) {
     sections.push('## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.');
   } else if (isReviewLoopFollowUp) {
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
@@ -902,7 +954,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
  * branch (review fixes), or hand off to PortOS's post-exit push.
  */
-function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR }) {
+function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR, discardWorktree }) {
+  if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (isTui) return 'Commit your changes to this branch — see **Completion Workflow** below.';
   if (isWorktreeOnExistingBranch) {
     return 'Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.';
