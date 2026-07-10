@@ -245,6 +245,46 @@ describe('projectWorkflowTimeline', () => {
     expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:due', at: range.start.toISOString(), kind: 'launch' });
   });
 
+  it('tags an overdue interval task launch as due-now and carries its reason', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:weekly', kind: 'task', enabled: true, shouldRun: true,
+      runReason: 'weekly-due', lastRun: null,
+      schedule: { type: 'weekly', effectiveIntervalMs: 7 * 86_400_000 }
+    }], range);
+
+    // The NOW marker is flagged; subsequent cadence slots (out of the 24h
+    // window) are not, so only the tagged launch is present.
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:weekly', at: range.start.toISOString(), dueNow: true, reason: 'weekly-due' })
+    ]);
+  });
+
+  it('does not tag a future on-cadence interval slot as due-now', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:soon', kind: 'task', enabled: true, shouldRun: false,
+      lastRun: '2026-07-08T18:00:00.000Z', nextRunAt: '2026-07-09T18:00:00.000Z',
+      schedule: { type: 'daily', effectiveIntervalMs: 86_400_000 }
+    }], range);
+
+    expect(timeline.occurrences).toHaveLength(1);
+    expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:soon', at: '2026-07-09T18:00:00.000Z' });
+    expect(timeline.occurrences[0].dueNow).toBeUndefined();
+  });
+
+  it('tags a cron catch-up launch as due-now with the missed slot', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:sunday', kind: 'task', enabled: true, shouldRun: true,
+      runReason: 'cron-catch-up', missedSlot: '2026-07-05T14:00:00.000Z',
+      lastRun: '2026-07-05T00:57:50.000Z',
+      schedule: { type: 'cron', cronExpression: '0 7 * * 0' }
+    }], range);
+
+    expect(timeline.occurrences[0]).toMatchObject({
+      nodeId: 'task:sunday', at: range.start.toISOString(), dueNow: true,
+      reason: 'cron-catch-up', missedSlot: '2026-07-05T14:00:00.000Z'
+    });
+  });
+
   it('omits weekend occurrences for weekday-only interval tasks', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'task:weekdays', kind: 'task', enabled: true, shouldRun: false,
