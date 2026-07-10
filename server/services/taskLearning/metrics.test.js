@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTaskTelemetryContext, recordFailureSignature } from './metrics.js';
+import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature } from './metrics.js';
 
 // buildTaskTelemetryContext + recordFailureSignature are the pure telemetry
 // enrichment core added for issue #2329. They take no I/O, so every branch is
@@ -44,7 +44,9 @@ describe('buildTaskTelemetryContext', () => {
     expect(ctx.latency).toEqual({
       wallMs: 300000, // 5 min
       queueMs: 30000, // 30s
-      executionMs: 250000
+      executionMs: 250000,
+      // All three legs measured from real timestamps/duration.
+      source: { wall: 'measured', queue: 'measured', execution: 'measured' }
     });
   });
 
@@ -95,7 +97,10 @@ describe('buildTaskTelemetryContext', () => {
       inputChars: null, // null, not 0 — description absent, not empty
       routingReason: null
     });
-    expect(ctx.latency).toEqual({ wallMs: null, queueMs: null, executionMs: null });
+    expect(ctx.latency).toEqual({
+      wallMs: null, queueMs: null, executionMs: null,
+      source: { wall: null, queue: null, execution: null }
+    });
     expect(ctx.failureSignature).toEqual({
       category: null,
       messageSnippet: null,
@@ -111,10 +116,14 @@ describe('buildTaskTelemetryContext', () => {
     expect(buildTaskTelemetryContext(noDescAgent, {}).executionContext.inputChars).toBeNull();
   });
 
-  it('leaves queueMs null when the task carries no createdAt', () => {
+  it('derives the queue leg from wall − compute when the task carries no createdAt (#2329)', () => {
+    // baseAgent: wall 300000, compute (duration) 250000, and NO createdAt.
+    // Rather than leaving queue null, the split falls back to wall − compute
+    // and marks it derived so it is never confused with a measured value.
     const ctx = buildTaskTelemetryContext(baseAgent, { description: 'no createdAt', taskType: 'user' });
-    expect(ctx.latency.queueMs).toBeNull();
     expect(ctx.latency.wallMs).toBe(300000); // wall still derivable from agent timestamps
+    expect(ctx.latency.queueMs).toBe(50000); // 300000 − 250000
+    expect(ctx.latency.source).toEqual({ wall: 'measured', queue: 'derived', execution: 'measured' });
   });
 
   it('harvests a failure signature for a previously-untyped task via the classification hook (#2333)', () => {
@@ -213,5 +222,56 @@ describe('recordFailureSignature', () => {
     recordFailureSignature(data, { success: true, failureSignature: null });
     recordFailureSignature(data, { failureSignature: { category: null, messageSnippet: 'x' } });
     expect(data.failureSignatures).toEqual({});
+  });
+});
+
+describe('computeLatencySplit (#2329)', () => {
+  const S = '2026-07-09T10:00:00.000Z'; // startedAt
+  const C = '2026-07-09T10:05:00.000Z'; // completedAt (+5min)
+  const CREATED = '2026-07-09T09:59:30.000Z'; // 30s before start
+
+  it('reports all three legs as measured when every source is present', () => {
+    expect(computeLatencySplit({ startedAt: S, completedAt: C, createdAt: CREATED, durationMs: 250000 }))
+      .toEqual({
+        wallMs: 300000, queueMs: 30000, executionMs: 250000,
+        source: { wall: 'measured', queue: 'measured', execution: 'measured' }
+      });
+  });
+
+  it('derives the queue leg from wall − compute when createdAt is missing', () => {
+    const out = computeLatencySplit({ startedAt: S, completedAt: C, durationMs: 250000 });
+    expect(out.queueMs).toBe(50000);
+    expect(out.source.queue).toBe('derived');
+    expect(out.source.execution).toBe('measured');
+  });
+
+  it('derives the compute leg from wall − queue when the runner duration is missing', () => {
+    const out = computeLatencySplit({ startedAt: S, completedAt: C, createdAt: CREATED, durationMs: undefined });
+    expect(out.executionMs).toBe(270000); // 300000 − 30000
+    expect(out.source.execution).toBe('derived');
+    expect(out.source.queue).toBe('measured');
+  });
+
+  it('leaves a leg null (not fabricated) when wall itself is unmeasurable', () => {
+    // No completedAt → no wall → nothing to split from.
+    const out = computeLatencySplit({ startedAt: S, createdAt: CREATED, durationMs: 250000 });
+    expect(out.wallMs).toBeNull();
+    expect(out.executionMs).toBe(250000); // still measured directly
+    expect(out.queueMs).toBe(30000); // measured directly
+    expect(out.source).toEqual({ wall: null, queue: 'measured', execution: 'measured' });
+  });
+
+  it('does not derive a negative leg when compute exceeds wall', () => {
+    // duration (400000) > wall (300000): can't derive a sane queue leg.
+    const out = computeLatencySplit({ startedAt: S, completedAt: C, durationMs: 400000 });
+    expect(out.queueMs).toBeNull();
+    expect(out.source.queue).toBeNull();
+  });
+
+  it('keeps a measured 0 distinct from an absent leg', () => {
+    // createdAt === startedAt → genuine 0ms queue, measured (not null, not derived).
+    const out = computeLatencySplit({ startedAt: S, completedAt: C, createdAt: S, durationMs: 250000 });
+    expect(out.queueMs).toBe(0);
+    expect(out.source.queue).toBe('measured');
   });
 });

@@ -112,7 +112,13 @@ export async function selectModelForTask(task, provider, agent = {}) {
   const learningSuggestion = await suggestModelTier(taskTypeKey).catch(() => null);
 
   if (learningSuggestion) {
-    const { suggested, avoidTiers = [], reason: learningReason } = learningSuggestion;
+    const { suggested, avoidTiers = [], reason: learningReason, failureSignal } = learningSuggestion;
+    // Provider/model attribution from the enriched failure signatures (#2329):
+    // names WHICH provider/model recently failed for this task type so the
+    // routing decision is legible, not just "avoid tier X".
+    const failureNote = failureSignal
+      ? ` [recent failures: ${failureSignal.failures}× ${failureSignal.tier}${failureSignal.provider ? ` via ${failureSignal.provider}${failureSignal.model ? `/${failureSignal.model}` : ''}` : ''}]`
+      : '';
 
     // Map tier names to provider model keys
     const tierToModel = {
@@ -144,7 +150,7 @@ export async function selectModelForTask(task, provider, agent = {}) {
     // If we have a specific tier suggestion, use it
     const suggestedModel = suggested ? resolveTierModel(suggested) : null;
     if (suggestedModel) {
-      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})`);
+      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})${failureNote}`);
       return {
         model: suggestedModel,
         tier: suggested,
@@ -161,7 +167,7 @@ export async function selectModelForTask(task, provider, agent = {}) {
       const tierPreference = ['heavy', 'medium', 'default', 'light'];
       for (const tier of tierPreference) {
         if (!avoidTiers.includes(tier) && tierToModel[tier]) {
-          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})`);
+          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})${failureNote}`);
           return {
             model: tierToModel[tier],
             tier,

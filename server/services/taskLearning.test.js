@@ -586,6 +586,153 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
     expect(result).toBeNull();
   });
 
+  it('steers off a freshly-failing tier even below the completions threshold (#2329)', async () => {
+    // Only 4 completions — too few for a routingAccuracy-based tier suggestion —
+    // but 3 recent failures on 'heavy' meet the failure-signal bar, so routing
+    // still emits an avoidance-only suggestion instead of null.
+    const data = makeLearningData({
+      byTaskType: {
+        'fresh-task': {
+          completed: 4, succeeded: 1, failed: 3,
+          totalDurationMs: 400000, avgDurationMs: 100000, successRate: 25
+        }
+      },
+      routingAccuracy: {},
+      failureSignatures: {
+        'test-failure': {
+          count: 3,
+          recent: [
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'fresh-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'fresh-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'fresh-task' }
+          ]
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('fresh-task');
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBeNull();
+    expect(result.avoidTiers).toContain('heavy');
+    expect(result.failureSignal).toMatchObject({ tier: 'heavy', failures: 3 });
+  });
+
+  it('still returns null below the completions threshold when there is no failure signal (#2329)', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({
+      byTaskType: {
+        'quiet-task': { completed: 3, succeeded: 2, failed: 1, successRate: 66 }
+      },
+      routingAccuracy: {},
+      failureSignatures: {}
+    })));
+    expect(await suggestModelTier('quiet-task')).toBeNull();
+  });
+
+  it('folds enriched failure signatures into avoidTiers even when routingAccuracy is quiet (#2329)', async () => {
+    // Overall success is healthy (75%) and routingAccuracy carries no failing
+    // tier — pre-#2329 this returned null. The failure signatures show three
+    // recent 'heavy'-tier failures for this task type, so routing now emits an
+    // avoidance-only suggestion that steers selection off 'heavy'.
+    const data = makeLearningData({
+      byTaskType: {
+        'sig-task': {
+          completed: 12, succeeded: 9, failed: 3,
+          totalDurationMs: 1200000, avgDurationMs: 100000, successRate: 75
+        }
+      },
+      routingAccuracy: {},
+      failureSignatures: {
+        'test-failure': {
+          count: 3,
+          recent: [
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'sig-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'sig-task' },
+            { modelTier: 'heavy', provider: 'codex', model: 'gpt', taskType: 'sig-task' }
+          ]
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('sig-task');
+    expect(result).not.toBeNull();
+    expect(result.suggested).toBeNull();
+    expect(result.avoidTiers).toContain('heavy');
+    expect(result.failureSignal).toMatchObject({ tier: 'heavy', failures: 3, provider: 'claude' });
+  });
+
+  it('drops to avoidance-only when the tier it would pick is itself failure-flagged (#2329)', async () => {
+    // routingAccuracy: heavy is failing (<40%) and 'medium' is the only 60-79%
+    // "successful" alternative — but the failure signatures show 3 recent medium
+    // failures too. Routing must NOT then suggest medium; it drops to avoidance-
+    // only (suggested: null) so selection steers off both heavy and medium.
+    const data = makeLearningData({
+      byTaskType: {
+        'flap-task': {
+          completed: 20, succeeded: 9, failed: 11,
+          totalDurationMs: 2000000, avgDurationMs: 100000, successRate: 45
+        }
+      },
+      routingAccuracy: {
+        'flap-task': {
+          heavy: { succeeded: 1, failed: 9, lastAttempt: '2026-01-26T00:00:00.000Z' }, // 10%
+          medium: { succeeded: 7, failed: 3, lastAttempt: '2026-01-26T00:00:00.000Z' } // 70% (unproven)
+        }
+      },
+      failureSignatures: {
+        'test-failure': {
+          count: 3,
+          recent: [
+            { modelTier: 'medium', provider: 'claude', model: 'sonnet', taskType: 'flap-task' },
+            { modelTier: 'medium', provider: 'claude', model: 'sonnet', taskType: 'flap-task' },
+            { modelTier: 'medium', provider: 'claude', model: 'sonnet', taskType: 'flap-task' }
+          ]
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('flap-task');
+    expect(result.suggested).toBeNull();
+    expect(result.avoidTiers).toEqual(expect.arrayContaining(['heavy', 'medium']));
+    expect(result.failureSignal).toMatchObject({ tier: 'medium', provider: 'claude', model: 'sonnet' });
+  });
+
+  it('does not let failure signatures condemn a proven tier (#2329)', async () => {
+    // 'heavy' clears the high-success threshold in routingAccuracy, so the
+    // proven-tier suggestion stands and its absolute failures never add it to
+    // avoidTiers.
+    const data = makeLearningData({
+      byTaskType: {
+        'proven-task': {
+          completed: 20, succeeded: 18, failed: 2,
+          totalDurationMs: 2000000, avgDurationMs: 100000, successRate: 90
+        }
+      },
+      routingAccuracy: {
+        'proven-task': {
+          heavy: { succeeded: 18, failed: 2, lastAttempt: '2026-01-26T00:00:00.000Z' } // 90%
+        }
+      },
+      failureSignatures: {
+        'test-failure': {
+          count: 3,
+          recent: [
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'proven-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'proven-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'proven-task' }
+          ]
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await suggestModelTier('proven-task');
+    expect(result.suggested).toBe('heavy');
+    expect(result.avoidTiers).not.toContain('heavy');
+  });
+
   it('should prefer the lightest tier when several clear the high-success threshold', async () => {
     // heavy has the marginally-higher success rate, but light also clears 80% —
     // we should route to light to avoid spending a heavier model for the same outcome.
