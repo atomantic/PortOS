@@ -190,7 +190,7 @@ describe('musicVideo routes', () => {
       // audio's MIDI must not be re-attached (applyProjectPatch cleared it).
       svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't2' });
       const extra = await onComplete({ filename: 'stale.mid', model: 'medium' });
-      expect(extra).toEqual({});
+      expect(extra.discarded).toBe(true);
       expect(svc.setProjectMidiTranscription).not.toHaveBeenCalled();
     });
 

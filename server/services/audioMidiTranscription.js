@@ -74,12 +74,19 @@ const transcriptionJobs = new Map();
 
 export const attachMidiTranscriptionSseClient = (jobId, res) => attachSse(transcriptionJobs, jobId, res);
 
-/** Cancel an in-flight transcription. Returns false if the job is unknown or already finished. */
+/**
+ * Cancel an in-flight transcription. Returns false if the job is unknown or
+ * already finished. The flag (not just the SIGTERM) is what makes cancel
+ * reliable in the windows where no child exists yet/anymore — before the
+ * spawn (env still resolving) and between the child's exit and the result
+ * landing — the run body checks it at both points.
+ */
 export function cancelMidiTranscription(jobId) {
   const job = transcriptionJobs.get(jobId);
-  if (!job || !job.process) return false;
+  if (!job || job.settled) return false;
+  job.cancelRequested = true;
   const proc = job.process;
-  killWithEscalation(proc, { label: 'muscriptor transcription', stillRunning: () => job.process === proc });
+  if (proc) killWithEscalation(proc, { label: 'muscriptor transcription', stillRunning: () => job.process === proc });
   return true;
 }
 
@@ -112,7 +119,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
   const resolvedModel = resolveMuscriptorModel(model);
   const jobId = randomUUID();
   const tempOut = join(tmpdir(), `portos-midi-${jobId}.mid`);
-  const job = { id: jobId, status: 'running', clients: [], process: null };
+  const job = { id: jobId, status: 'running', clients: [], process: null, cancelRequested: false, settled: false };
   transcriptionJobs.set(jobId, job);
   console.log(`🎹 MIDI transcription ${shortId(jobId)} [${resolvedModel}] — ${audioPath}`);
 
@@ -123,6 +130,13 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // Weights are ungated, but pass the HF token through when the user has
       // one so the first download doesn't hit anonymous rate limits.
       const env = safeChildProcessEnv(await hfTokenEnv());
+      // A cancel can land while the env was resolving (no child to SIGTERM yet)
+      // — honor the flag before spawning anything.
+      if (job.cancelRequested) {
+        console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled before spawn`);
+        broadcastSse(job, { type: 'canceled' });
+        return;
+      }
       // STAGE: lines become SSE progress frames (and pm2 log lines, so a stuck
       // first-run weight download is visible); onProcess tracks the live child
       // for cancelMidiTranscription's killWithEscalation.
@@ -135,7 +149,9 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
         },
       });
 
-      if (result.canceled) {
+      // `job.cancelRequested` covers a cancel that arrived after the child
+      // exited cleanly but before the result landed — don't persist it.
+      if (result.canceled || job.cancelRequested) {
         console.log(`🛑 MIDI transcription ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
         return;
@@ -153,12 +169,24 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       const { filename } = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
       const extra = (await onComplete?.({ filename, model: resolvedModel })) || {};
 
+      // `onComplete` may decline the result (`discarded: true` — e.g. the music
+      // video's audio source changed mid-run, so this .mid is of the OLD
+      // track). Don't advertise a filename nothing points at: delete the
+      // orphaned file and tell the client it was discarded, not "ready".
+      if (extra.discarded) {
+        console.log(`🗑️ MIDI transcription ${shortId(jobId)} discarded — ${extra.reason || 'stale result'}`);
+        await unlink(join(destDir, filename)).catch(() => {});
+        broadcastSse(job, { type: 'complete', discarded: true, model: resolvedModel });
+        return;
+      }
+
       console.log(`🎹 MIDI transcription ${shortId(jobId)} complete — ${filename}`);
       broadcastSse(job, { type: 'complete', filename, model: resolvedModel, ...extra });
     } catch (err) {
       console.error(`❌ MIDI transcription ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });
     } finally {
+      job.settled = true;
       await unlink(tempOut).catch(() => {});
       closeJobAfterDelay(transcriptionJobs, jobId);
     }

@@ -156,8 +156,9 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
       const current = await getProject(projectId);
       if (!current) throw new Error('Project was deleted during transcription');
       if ((current.trackId ?? null) !== sourceTrackId || (current.uploadedAudioFilename ?? null) !== sourceUpload) {
-        console.log(`🎹 Audio source of ${projectId} changed mid-transcription — dropping the stale MIDI result`);
-        return {};
+        // The service deletes the orphaned .mid and reports a discarded (not
+        // "ready") completion to the client.
+        return { discarded: true, reason: `audio source of ${projectId} changed mid-transcription` };
       }
       const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
       await setProjectMidiTranscription(projectId, midiTranscription);

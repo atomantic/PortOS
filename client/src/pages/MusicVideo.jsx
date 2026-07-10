@@ -270,6 +270,10 @@ export default function MusicVideo() {
     eventsUrl: musicVideoMidiEventsUrl,
     cancelRequest: cancelMusicVideoMidiTranscription,
     onComplete: (frame, projectId) => {
+      if (frame.discarded) {
+        toast.info('The track changed during transcription — MIDI result discarded');
+        return;
+      }
       if (frame.midiTranscription) {
         setProjects((prev) => prev.map((p) => (p.id === projectId
           ? { ...p, midiTranscription: frame.midiTranscription } : p)));
