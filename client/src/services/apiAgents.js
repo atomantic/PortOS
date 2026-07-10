@@ -202,6 +202,9 @@ export const getCosActionableInsights = (options) => request('/cos/actionable-in
 export const getCosGoalProgress = () => request('/cos/goal-progress');
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
+// Auto-Fix Telemetry (issue #2328) — aggregated from persisted metadata.diagnostics
+export const getAutoFixMetrics = (options) => request('/autofix/metrics', options);
+
 // Decision Log
 export const getCosDecisions = (limit = 20, type = null) => {
   const params = new URLSearchParams({ limit: limit.toString() });

@@ -163,14 +163,28 @@ export function classifyFixTier(category) {
 }
 
 /**
+ * Look up the human-facing metadata for a fallback tier NUMBER (issue #2328).
+ * The persisted diagnostics record already carries the tier number, so the
+ * telemetry aggregator resolves labels from the number rather than re-running
+ * the category classifier. Unknown tiers degrade to an explicit 'unknown'
+ * rather than throwing. Pure — no I/O.
+ * @param {number} tier
+ * @returns {{ strategy: string, label: string }}
+ */
+export function fixTierMeta(tier) {
+  return FIX_TIER_META[tier] || { strategy: 'unknown', label: 'unknown' };
+}
+
+/**
  * Build a structured, per-attempt auto-fix diagnostics record (issue #2328).
  * Beyond the single-line log, this object rides on the task/return shape so
  * downstream telemetry can break failures out by tier / category / reason /
  * time-to-recovery. Pure — no I/O.
  * @returns {{ triggerEvent: string, target: string, errorType: string,
- *   category: string, tier: number, fixStrategy: string, failureReason: string }}
+ *   category: string, tier: number, fixStrategy: string, failureReason: string,
+ *   observedAt: string }}
  */
-export function buildFixDiagnostics({ triggerEvent, target, category, failureReason } = {}) {
+export function buildFixDiagnostics({ triggerEvent, target, category, failureReason, observedAt } = {}) {
   const cat = category || 'unknown';
   const { tier, strategy } = classifyFixTier(cat);
   return {
@@ -181,6 +195,12 @@ export function buildFixDiagnostics({ triggerEvent, target, category, failureRea
     tier,
     fixStrategy: strategy,
     failureReason: oneLine(failureReason) || 'no error text captured',
+    // ISO timestamp of when the failure was observed (issue #2328). Rides on the
+    // persisted diagnostics so the telemetry aggregator can compute
+    // time-to-recovery (task completion time − this) without a second timestamp
+    // source. Injectable so callers pass the failure's real timestamp (and tests
+    // stay deterministic); defaults to now when the caller has none.
+    observedAt: observedAt || new Date().toISOString(),
   };
 }
 
@@ -196,6 +216,11 @@ function providerFixDiagnostics(error) {
     target: `${ctx.provider || 'Unknown'} (${ctx.model || 'N/A'})`,
     category: ctx.errorAnalysis?.category,
     failureReason: ctx.errorDetails || ctx.errorAnalysis?.message,
+    // Pin observedAt to the failure's own timestamp so the log-line record and
+    // the persisted task record (both built from this helper) agree, and so
+    // time-to-recovery measures from the actual failure, not from whenever the
+    // deferred handler ran.
+    observedAt: error.timestamp ? new Date(error.timestamp).toISOString() : undefined,
   });
 }
 
@@ -579,6 +604,7 @@ async function createAutoFixTask(error) {
     target: error.code,
     category: error.context?.errorAnalysis?.category,
     failureReason: error.message,
+    observedAt: error.timestamp ? new Date(error.timestamp).toISOString() : undefined,
   });
   console.log(`🤖 Creating auto-fix task for error: ${error.code} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
 

@@ -513,6 +513,16 @@ describe('autoFixer — structured per-attempt diagnostics (issue #2328)', () =>
   it("reports 'no error text captured' when no reason is supplied", () => {
     expect(buildFixDiagnostics({ category: 'auth-error' }).failureReason).toBe('no error text captured');
   });
+
+  it('stamps observedAt — the injected value when given, else a valid ISO now (#2328)', () => {
+    const at = '2026-07-09T10:00:00.000Z';
+    expect(buildFixDiagnostics({ category: 'auth-error', observedAt: at }).observedAt).toBe(at);
+    // Default: a parseable ISO timestamp so the telemetry aggregator can derive
+    // time-to-recovery from it.
+    const defaulted = buildFixDiagnostics({ category: 'auth-error' }).observedAt;
+    expect(typeof defaulted).toBe('string');
+    expect(Number.isFinite(Date.parse(defaulted))).toBe(true);
+  });
 });
 
 describe('autoFixer — diagnostics ride on the created task record (issue #2328)', () => {
