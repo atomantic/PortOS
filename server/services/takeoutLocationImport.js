@@ -26,9 +26,8 @@
  * newer one — is a no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. No
  * AI-provider calls; parsing is deterministic and LLM-free.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -270,11 +269,6 @@ export function parseTakeoutJsonText(text) {
 // File ingestion (ZIP or single JSON) → visit intermediates.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // A semantic-location-history JSON member inside the Takeout ZIP. Google names
 // per-month files `2021_JANUARY.json` under a `Semantic Location History/YYYY/`
 // folder; the on-device export ships a single `location-history.json` /
@@ -291,49 +285,21 @@ const isLocationJsonEntry = (entryPath) => {
   );
 };
 
-// Extract and concatenate the visit intermediates from every location-history
-// JSON member of the Takeout ZIP. Non-matching entries are drained and ignored.
-async function readVisitsFromZip(filePath) {
-  const visits = [];
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure, tear down the read + parse pipeline so a large upload with an
-      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        if (isLocationJsonEntry(entry.path)) {
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => {
-                for (const v of extractVisits(parseTakeoutJsonText(buf.toString('utf-8')))) visits.push(v);
-              })
-              .catch(settle(reject)),
-          );
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
-  });
-  return visits;
-}
-
 // Read visit intermediates from an uploaded file (ZIP export or single JSON).
+// The ZIP path delegates the whole streaming lifecycle (teardown, autodrain,
+// per-entry await) to `collectZipEntries`, leaving only the match/parse callbacks.
 export async function readTakeoutVisits(file) {
   if (!file?.path) return [];
-  if (isZip(file)) return readVisitsFromZip(file.path);
+  if (isZipUpload(file)) {
+    const visits = [];
+    await collectZipEntries(file.path, {
+      match: isLocationJsonEntry,
+      onMatch: (buf) => {
+        for (const v of extractVisits(parseTakeoutJsonText(buf.toString('utf-8')))) visits.push(v);
+      },
+    });
+    return visits;
+  }
   const text = await readFile(file.path, 'utf-8');
   return extractVisits(parseTakeoutJsonText(text));
 }

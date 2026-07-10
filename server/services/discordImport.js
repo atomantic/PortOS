@@ -19,9 +19,8 @@
  * overlapping one) is a no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. No
  * AI-provider calls; parsing is deterministic and LLM-free.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents, normalizeParticipants } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -199,11 +198,6 @@ export function summarizeDiscordCandidates(candidates = []) {
 // File ingestion (ZIP data package or single messages JSON/CSV) → intermediates.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // The directory token identifying a channel within the package (`messages/c123/…`
 // or the newer `messages/123/…`) — the grouping key that joins a channel's
 // `channel.json` to its `messages.(json|csv)`.
@@ -217,51 +211,27 @@ const isChannelJsonEntry = (entryPath) => /(?:^|\/)messages\/[^/]+\/channel\.jso
 // Extract { record, channel } intermediates from the Discord data-package ZIP.
 // Both the per-channel `channel.json` and `messages.*` files are collected into
 // per-directory maps (either may stream first), then joined after close so every
-// message carries its channel's context.
+// message carries its channel's context. `collectZipEntries` owns the streaming
+// lifecycle (teardown, autodrain, per-entry await); the onMatch dispatches on the
+// entry path since two member kinds (messages + channel metadata) are collected.
 async function readItemsFromZip(filePath) {
   const channels = new Map(); // dir → parsed channel.json
   const messagesByDir = new Map(); // dir → raw message records[]
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure, tear down the read + parse pipeline so a large upload with an
-      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        const dir = channelDirOf(entry.path);
-        if (dir && isMessagesEntry(entry.path)) {
-          const entryPath = entry.path;
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => {
-                const recs = parseDiscordMessagesText(buf.toString('utf-8'), entryPath);
-                const existing = messagesByDir.get(dir) || [];
-                messagesByDir.set(dir, existing.concat(recs));
-              })
-              .catch(settle(reject)),
-          );
-        } else if (dir && isChannelJsonEntry(entry.path)) {
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => { channels.set(dir, JSON.parse(buf.toString('utf-8'))); })
-              .catch(settle(reject)),
-          );
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
+  await collectZipEntries(filePath, {
+    match: (entryPath) => {
+      const dir = channelDirOf(entryPath);
+      return Boolean(dir) && (isMessagesEntry(entryPath) || isChannelJsonEntry(entryPath));
+    },
+    onMatch: (buf, entryPath) => {
+      const dir = channelDirOf(entryPath);
+      if (isMessagesEntry(entryPath)) {
+        const recs = parseDiscordMessagesText(buf.toString('utf-8'), entryPath);
+        const existing = messagesByDir.get(dir) || [];
+        messagesByDir.set(dir, existing.concat(recs));
+      } else {
+        channels.set(dir, JSON.parse(buf.toString('utf-8')));
+      }
+    },
   });
   const items = [];
   for (const [dir, recs] of messagesByDir) {
@@ -276,7 +246,7 @@ async function readItemsFromZip(filePath) {
 // context).
 export async function readDiscordItems(file) {
   if (!file?.path) return [];
-  if (isZip(file)) return readItemsFromZip(file.path);
+  if (isZipUpload(file)) return readItemsFromZip(file.path);
   const text = await readFile(file.path, 'utf-8');
   return parseDiscordMessagesText(text, file.originalname || '').map((record) => ({ record, channel: null }));
 }

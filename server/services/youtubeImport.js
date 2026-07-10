@@ -28,9 +28,8 @@
  * `recordEvents`'s `ON CONFLICT DO NOTHING` makes re-imports (and overlap with the
  * scrape) no-ops. No AI-provider calls; parsing is deterministic and LLM-free.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents, localDayKey } from './humanActivity.js';
 import { getUserTimezone } from '../lib/timezone.js';
 
@@ -163,11 +162,6 @@ export function parseYoutubeJsonText(text) {
 // File ingestion (ZIP or single JSON) → records.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // The watch-history JSON member inside a Takeout ZIP. Google nests it at
 // `Takeout/YouTube and YouTube Music/history/watch-history.json`; match the
 // filename anywhere so folder-naming/vintage differences don't miss it. The HTML
@@ -176,49 +170,21 @@ const isZip = (file) =>
 const isWatchHistoryJsonEntry = (entryPath) =>
   /(?:^|\/)watch-history[^/]*\.json$/i.test(String(entryPath || ''));
 
-// Extract and concatenate the watch records from every watch-history JSON member
-// of the Takeout ZIP. Non-matching entries are drained and ignored.
-async function readRecordsFromZip(filePath) {
-  const records = [];
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure, tear down the read + parse pipeline so a large upload with an
-      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        if (isWatchHistoryJsonEntry(entry.path)) {
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => {
-                for (const r of parseYoutubeJsonText(buf.toString('utf-8'))) records.push(r);
-              })
-              .catch(settle(reject)),
-          );
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
-  });
-  return records;
-}
-
 // Read raw watch records from an uploaded file (ZIP export or single JSON array).
+// The ZIP path delegates the whole streaming lifecycle (teardown, autodrain,
+// per-entry await) to `collectZipEntries`, leaving only the match/parse callbacks.
 export async function readYoutubeRecords(file) {
   if (!file?.path) return [];
-  if (isZip(file)) return readRecordsFromZip(file.path);
+  if (isZipUpload(file)) {
+    const records = [];
+    await collectZipEntries(file.path, {
+      match: isWatchHistoryJsonEntry,
+      onMatch: (buf) => {
+        for (const r of parseYoutubeJsonText(buf.toString('utf-8'))) records.push(r);
+      },
+    });
+    return records;
+  }
   const text = await readFile(file.path, 'utf-8');
   return parseYoutubeJsonText(text);
 }
