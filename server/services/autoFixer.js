@@ -293,6 +293,45 @@ export function noteFallbackFailed({ provider, model }) {
 }
 
 /**
+ * Explicitly escalate a provider failure to a Tier-4 investigation task
+ * (issue #2342). Called by promptRunner's fallback cascade ONLY when the
+ * deterministic tiers all declined/failed AND no other queued task will
+ * survive to represent the failure — specifically when a Tier-1 corrected
+ * retry was pre-suppressed but threw BEFORE execution (so its onRunFailed
+ * never queued a task) and no fallback provider exists.
+ *
+ * Bypasses the defer window (we already KNOW recovery failed) but still honors
+ * the per-resource circuit breaker, and first clears any lingering
+ * timer/in-flight/dedupe state for the key so the escalation isn't itself
+ * suppressed and a future failure isn't wrongly blocked.
+ *
+ * `error` is a synthetic `AI_PROVIDER_EXECUTION_FAILED`-shaped object built by
+ * the caller from the failure it holds (it lacks the server hook's full run
+ * metadata, so `runId`/`exitCode` may be absent — the investigation task
+ * tolerates that). Returns the created task, or null when the circuit is open.
+ */
+export async function escalateProviderFailure(error) {
+  const ctx = error?.context || {};
+  const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
+
+  // Clear any lingering suppression/dedupe/timer for this key so the explicit
+  // escalation isn't swallowed and a later failure isn't blocked.
+  inFlightFallbacks.delete(errorKey);
+  const pending = deferredTasks.get(errorKey);
+  if (pending) {
+    clearTimeout(pending.timer);
+    deferredTasks.delete(errorKey);
+  }
+  recentErrors.delete(errorKey);
+
+  if (tripCircuit(errorKey)) {
+    console.log(`🔌 Auto-fix circuit OPEN for ${ctx.provider} (${ctx.model}) — suppressing escalated investigation task`);
+    return null;
+  }
+  return createAIProviderInvestigationTask(error);
+}
+
+/**
  * Check if an error is a duplicate within the dedupe window
  * Also cleans up expired entries
  * @returns {boolean} true if this is a duplicate error

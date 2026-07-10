@@ -46,6 +46,7 @@ vi.mock('../services/autoFixer.js', () => ({
   noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
   noteFallbackFailed: vi.fn(),
+  escalateProviderFailure: vi.fn().mockResolvedValue(undefined),
 }));
 
 // aiToolkitState lookups gate the retry path on a real providerStatus
@@ -1324,6 +1325,62 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(primaryCalls).toBe(1);
     expect(out.fixTier).toBe(3);
     expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+  });
+
+  it('escalates explicitly when a Tier-1 pre-execution throw leaves no survivor and no fallback exists', async () => {
+    // The corrected retry throws BEFORE execution (createRun rejects), so its
+    // onRunFailed never queues a task. With no fallback either, the primary's
+    // pre-suppressed backstop task would be swallowed — so the cascade must
+    // escalate exactly one investigation task explicitly.
+    mockToolkitWithFallback(null); // no fallback
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })       // primary run
+      .mockRejectedValueOnce(new Error('provider disabled')); // corrected retry: pre-execution throw
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
+      .rejects.toThrow(/model gone/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+  });
+
+  it('keys the Tier-1 corrected-retry task on the run that actually ran when createRun proactively swaps', async () => {
+    // The corrected retry's createRun proactively swaps to a different provider,
+    // which then fails — its queued task is keyed on the SWAPPED provider/model,
+    // so the recovery must cancel THAT key (not the pre-run guess).
+    const swapped = apiProvider({ id: 'swapped-api', name: 'Swapped API', defaultModel: 'swapped-model' });
+    mockToolkitWithFallback(); // fallback available for the Tier-3 recovery
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })                      // primary
+      .mockResolvedValueOnce({ runId: 'run-corrected', provider: swapped }) // corrected retry swaps
+      .mockResolvedValue({ runId: 'run-fb' });                             // fallback run
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else if (p.id === 'swapped-api') {
+        onComplete({ success: false, error: 'swapped also failed', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.fixTier).toBe(3);
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Swapped API', model: 'swapped-model' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
   });
 
   it('does NOT engage Tier 1 for a category-less failure even when the provider lists alternatives', async () => {

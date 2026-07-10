@@ -468,122 +468,191 @@ export async function runPromptThroughProvider(args) {
       }
     };
 
-    // ── Tier 1 — config/env correction (issue #2342) ─────────────────────────
-    // A model-not-found/model-not-supported failure is request-specific: the
-    // provider is reachable but doesn't serve the requested model id. Before
-    // escalating to a whole-provider fallback (Tier 3), attempt the cheapest
-    // deterministic fix — retry the SAME provider with a valid model it lists.
-    // No config is persisted; on success the user's own provider keeps serving.
-    let tier1CorrectedKey = null;
-    // Only a wrong-model failure is config-correctable here. Compare against
-    // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
-    // does NOT exist (it would be `undefined`, matching a category-less failure
-    // and wrongly engaging Tier 1). 'model-not-supported' is autoFixer's own
-    // Tier-1 category (from CoS agent analysis), matched here for parity.
-    if (category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported') {
-      const correctedModel = pickConfigCorrectedModel(failed, failedModel);
-      if (correctedModel) {
-        console.log(`🔧 Tier 1 (config/env) retry: ${args.source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
-        // Suppress the primary's investigation task while the corrected retry
-        // runs; released in the give-up branch below if the cascade fails out.
-        await noteStarted(primaryKey);
-        tier1CorrectedKey = { provider: failed.name || failed.id, model: correctedModel };
-        let tier1Result;
-        try {
-          tier1Result = await executeProviderRunOnce({
-            ...args,
-            provider: failed,
-            model: correctedModel,
-            runId: undefined, // fresh run so the failed primary's record stays intact
-          });
-        } catch (tier1Error) {
-          // The corrected retry ALSO failed — its own onRunFailed queued a task
-          // keyed on tier1CorrectedKey. Fall through to Tier 3: that task
-          // survives as the escalation if nothing recovers, and is cancelled
-          // below if a later tier does.
-          console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
-        }
-        if (tier1Result) {
-          await noteHandled(primaryKey);
-          return {
-            ...tier1Result,
-            usedFallback: true,
-            fixTier: 1, // FIX_TIERS.CONFIG_ENV (mirrored; kept decoupled from the lazy autoFixer import)
-            fixStrategy: 'config/env',
-            fallbackFrom: { id: failed.id, name: failed.name },
-            fallbackProvider: failed,
-          };
+    // Track the primary key's suppression so a `finally` can guarantee release:
+    // once `noteStarted(primaryKey)` cancels the backstop timer, ANY unexpected
+    // throw before we resolve it (e.g. coalesceFallbackMarkAndPick throwing)
+    // would otherwise leave the key in autoFixer's in-flight set for the process
+    // lifetime — permanently suppressing every future identical failure.
+    let primarySuppressed = false;
+    let primaryResolved = false;
+    const suppressPrimary = async () => {
+      if (primarySuppressed) return; // idempotent across tiers
+      primarySuppressed = true;
+      await noteStarted(primaryKey);
+    };
+    const resolvePrimaryHandled = async () => { primaryResolved = true; await noteHandled(primaryKey); };
+    const resolvePrimaryFailed = async () => { primaryResolved = true; await noteFailed(primaryKey); };
+
+    // Explicitly escalate the primary failure to a Tier-4 investigation task —
+    // used only when Tier 1 pre-suppressed the primary (cancelling its backstop
+    // task) and its corrected retry left no surviving queued task (a
+    // pre-execution throw) AND no fallback exists, so nothing else would surface
+    // the unrecovered failure. Best-effort — a failure here must not mask the
+    // rethrow.
+    const escalatePrimaryFailure = async () => {
+      const a = await getAutoFixer();
+      try {
+        await a?.escalateProviderFailure?.({
+          code: 'AI_PROVIDER_EXECUTION_FAILED',
+          message: firstError.message,
+          timestamp: Date.now(),
+          context: {
+            provider: failed.name || failed.id,
+            providerId: failed.id,
+            model: failedModel,
+            errorDetails: firstError.message,
+            errorAnalysis: firstError.errorAnalysis,
+          },
+        });
+      } catch (escalateErr) {
+        console.error(`❌ escalateProviderFailure failed (unrecovered failure not escalated): ${escalateErr.message}`);
+      }
+    };
+
+    try {
+      // ── Tier 1 — config/env correction (issue #2342) ───────────────────────
+      // A model-not-found/model-not-supported failure is request-specific: the
+      // provider is reachable but doesn't serve the requested model id. Before
+      // escalating to a whole-provider fallback (Tier 3), attempt the cheapest
+      // deterministic fix — retry the SAME provider with a valid model it lists.
+      // No config is persisted; on success the user's own provider keeps serving.
+      //
+      // `tier1CorrectedKey` is set only when the corrected retry reaches the
+      // EXECUTION layer and fails — in which case its own onRunFailed queued a
+      // task we must cancel on a later recovery. It's derived from the retry's
+      // EFFECTIVE provider/model (createRun may have proactively swapped), not
+      // the pre-run guess, so the cancel matches the key the hook published.
+      let tier1CorrectedKey = null;
+      // Only a wrong-model failure is config-correctable here. Compare against
+      // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
+      // does NOT exist (it would be `undefined`, matching a category-less failure
+      // and wrongly engaging Tier 1). 'model-not-supported' is autoFixer's own
+      // Tier-1 category (from CoS agent analysis), matched here for parity.
+      if (category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported') {
+        const correctedModel = pickConfigCorrectedModel(failed, failedModel);
+        if (correctedModel) {
+          console.log(`🔧 Tier 1 (config/env) retry: ${args.source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
+          // Suppress the primary's investigation task while the corrected retry
+          // runs so a slow (>TASK_DEFER_MS) but SUCCESSFUL retry can't leave a
+          // task behind for a recovered failure.
+          await suppressPrimary();
+          let tier1Result;
+          try {
+            tier1Result = await executeProviderRunOnce({
+              ...args,
+              provider: failed,
+              model: correctedModel,
+              runId: undefined, // fresh run so the failed primary's record stays intact
+            });
+          } catch (tier1Error) {
+            // The corrected retry failed. If it reached the execution layer, its
+            // onRunFailed queued a task keyed on the EFFECTIVE provider/model —
+            // record that key so a later recovery cancels it. A pre-execution
+            // throw (no effectiveProvider) queued NO task, so leave the key null
+            // and let the give-up branch escalate explicitly.
+            if (tier1Error?.effectiveProvider) {
+              tier1CorrectedKey = {
+                provider: tier1Error.effectiveProvider.name || tier1Error.effectiveProvider.id,
+                model: tier1Error.effectiveModel || correctedModel,
+              };
+            }
+            console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
+          }
+          if (tier1Result) {
+            await resolvePrimaryHandled();
+            return {
+              ...tier1Result,
+              usedFallback: true,
+              fixTier: 1, // FIX_TIERS.CONFIG_ENV (mirrored; kept decoupled from the lazy autoFixer import)
+              fixStrategy: 'config/env',
+              fallbackFrom: { id: failed.id, name: failed.name },
+              fallbackProvider: failed,
+            };
+          }
         }
       }
+
+      // ── Tier 3 — constrained-agent-retry via a fallback provider ───────────
+      // Coalesce the per-provider mark-and-pick during an N-way failure storm:
+      // the 2nd…Nth simultaneous failure for the same provider awaits the first's
+      // result instead of independently re-reading providers.json
+      // (pickFallbackProvider) and re-writing provider-status.json
+      // (markUnavailable). The fallback *run* below is NOT coalesced — each failed
+      // call still executes its own fallback to get its own result.
+      const picked = await coalesceFallbackMarkAndPick(failed, firstError);
+      if (!picked) {
+        // ── Tier 4 — escalate ──: no recovery path left.
+        if (primarySuppressed && !tier1CorrectedKey) {
+          // Tier 1 cancelled the primary's backstop task but its corrected retry
+          // queued NO replacement (pre-execution throw) — so nothing would
+          // surface this unrecovered failure. Escalate one investigation task
+          // explicitly (honors the circuit breaker), which also clears the key.
+          await escalatePrimaryFailure();
+          primaryResolved = true;
+        } else if (primarySuppressed) {
+          // A Tier-1 corrected-retry task already surfaces the failure; just
+          // release the primary key so the in-flight set doesn't leak.
+          await resolvePrimaryFailed();
+        }
+        throw stripFallbackContext(firstError);
+      }
+      const fallback = picked.provider;
+
+      console.log(`⚡ Tier 3 (constrained-agent-retry): ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
+
+      // Suppress the primary key (idempotent across tiers) for the fallback run.
+      await suppressPrimary();
+
+      // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
+      // when one is set (so the user's chosen fallback provider+model pair is
+      // honored); otherwise `undefined` lets the fallback pick its own default.
+      // Either way we never inherit the primary's model id, which usually
+      // doesn't exist on the fallback.
+      let fallbackResult;
+      try {
+        // The fallback is gated inside executeProviderRunOnce on its effective
+        // provider, so a fail-over that lands on a local backend still serializes
+        // against that endpoint (the failure-storm case) — with no double-gate
+        // (wrapping here too would deadlock at MAX_CONCURRENCY=1).
+        fallbackResult = await executeProviderRunOnce({
+          ...args,
+          provider: fallback,
+          model: picked.model ?? undefined,
+          runId: undefined, // fresh runId so the failed primary's record stays intact
+        });
+      } catch (fallbackError) {
+        // ── Tier 4 — escalate ──: every deterministic tier failed. Release the
+        // primary's suppression (the fallback provider's own failure already
+        // queued its investigation task) and rethrow. Any Tier-1 corrected-retry
+        // task is intentionally left in place — one investigation task per
+        // genuinely-failed attempt is the intended escalation.
+        await resolvePrimaryFailed();
+        throw stripFallbackContext(fallbackError);
+      }
+
+      // Fallback succeeded — clear the primary's suppression so the user doesn't
+      // see a noisy "investigate" entry in their plan for a failure that was
+      // auto-recovered.
+      await resolvePrimaryHandled();
+      // A Tier-1 corrected retry that failed before this recovery left its own
+      // deferred task; cancel it too so a fully-recovered action creates ZERO
+      // investigation tasks (issue #2342 acceptance: only UNRECOVERED failures
+      // escalate to Tier 4).
+      if (tier1CorrectedKey) await noteHandled(tier1CorrectedKey);
+
+      return {
+        ...fallbackResult,
+        usedFallback: true,
+        fixTier: 3, // FIX_TIERS.CONSTRAINED_RETRY
+        fixStrategy: 'constrained-agent-retry',
+        fallbackFrom: { id: failed.id, name: failed.name },
+        fallbackProvider: fallback,
+      };
+    } finally {
+      // Safety net: if an unexpected throw left the primary key suppressed but
+      // unresolved, release it so the in-flight set can't leak the key.
+      if (primarySuppressed && !primaryResolved) await noteFailed(primaryKey);
     }
-
-    // ── Tier 3 — constrained-agent-retry via a fallback provider ─────────────
-    // Coalesce the per-provider mark-and-pick during an N-way failure storm:
-    // the 2nd…Nth simultaneous failure for the same provider awaits the first's
-    // result instead of independently re-reading providers.json
-    // (pickFallbackProvider) and re-writing provider-status.json
-    // (markUnavailable). The fallback *run* below is NOT coalesced — each failed
-    // call still executes its own fallback to get its own result.
-    const picked = await coalesceFallbackMarkAndPick(failed, firstError);
-    if (!picked) {
-      // ── Tier 4 — escalate ──: no recovery path left. Release any Tier-1
-      // suppression so the primary key doesn't leak in the in-flight set (the
-      // corrected retry's own task, if any, still surfaces as the escalation).
-      if (tier1CorrectedKey) await noteFailed(primaryKey);
-      throw stripFallbackContext(firstError);
-    }
-    const fallback = picked.provider;
-
-    console.log(`⚡ Tier 3 (constrained-agent-retry): ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
-
-    // Re-suppress the primary key (idempotent) for the fallback run.
-    await noteStarted(primaryKey);
-
-    // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
-    // when one is set (so the user's chosen fallback provider+model pair is
-    // honored); otherwise `undefined` lets the fallback pick its own default.
-    // Either way we never inherit the primary's model id, which usually
-    // doesn't exist on the fallback.
-    let fallbackResult;
-    try {
-      // The fallback is gated inside executeProviderRunOnce on its effective
-      // provider, so a fail-over that lands on a local backend still serializes
-      // against that endpoint (the failure-storm case) — with no double-gate
-      // (wrapping here too would deadlock at MAX_CONCURRENCY=1).
-      fallbackResult = await executeProviderRunOnce({
-        ...args,
-        provider: fallback,
-        model: picked.model ?? undefined,
-        runId: undefined, // fresh runId so the failed primary's record stays intact
-      });
-    } catch (fallbackError) {
-      // ── Tier 4 — escalate ──: every deterministic tier failed. Release the
-      // primary's suppression (the fallback provider's own failure already
-      // queued its investigation task) and rethrow. Any Tier-1 corrected-retry
-      // task is intentionally left in place — one investigation task per
-      // genuinely-failed attempt is the intended escalation.
-      await noteFailed(primaryKey);
-      throw stripFallbackContext(fallbackError);
-    }
-
-    // Fallback succeeded — clear the primary's suppression so the user doesn't
-    // see a noisy "investigate" entry in their plan for a failure that was
-    // auto-recovered.
-    await noteHandled(primaryKey);
-    // A Tier-1 corrected retry that failed before this recovery left its own
-    // deferred task; cancel it too so a fully-recovered action creates ZERO
-    // investigation tasks (issue #2342 acceptance: only UNRECOVERED failures
-    // escalate to Tier 4).
-    if (tier1CorrectedKey) await noteHandled(tier1CorrectedKey);
-
-    return {
-      ...fallbackResult,
-      usedFallback: true,
-      fixTier: 3, // FIX_TIERS.CONSTRAINED_RETRY
-      fixStrategy: 'constrained-agent-retry',
-      fallbackFrom: { id: failed.id, name: failed.name },
-      fallbackProvider: fallback,
-    };
   }
 }
 
