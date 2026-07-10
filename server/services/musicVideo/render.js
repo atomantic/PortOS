@@ -337,6 +337,10 @@ export async function renderMusicVideo(projectId) {
 
     proc.on('error', async (err) => {
       try {
+        // Already finalized (a pre-spawn error or 'close' won the race) — a late
+        // stray 'error' (e.g. ESRCH/EPERM from a kill on the now-dead pid) must
+        // not clobber lastError on a completed job.
+        if (terminal) return;
         if (spawned) {
           // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
           // still live — do NOT release the project mutex or null job.process
@@ -346,7 +350,8 @@ export async function renderMusicVideo(projectId) {
           console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
           return;
         }
-        if (terminal) return;
+        // Pre-spawn failure: the child never started, so 'close' won't follow —
+        // finalize here.
         terminal = true;
         job.process = null;
         job.status = 'error';

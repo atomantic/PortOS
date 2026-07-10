@@ -137,4 +137,23 @@ describe('renderProject terminal handling (#2386)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('error');
     expect(getRenderJobStatus(jobId).error).toMatch(/Failed to spawn ffmpeg/);
   });
+
+  it('a late stray error after a successful close does not clobber the completed job', async () => {
+    const pid = 'tlate-1';
+    prime(pid);
+    const { jobId } = await renderProject(pid);
+    const proc = lastProc();
+
+    proc.emit('spawn');
+    proc.emit('close', 0, null); // clean success
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+
+    // A stray post-close 'error' (e.g. ESRCH from a kill on the dead pid) must
+    // be a no-op — not overwrite lastError on the completed job.
+    proc.emit('error', new Error('kill ESRCH'));
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(getRenderJobStatus(jobId).error).toBeUndefined();
+  });
 });
