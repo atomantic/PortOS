@@ -89,7 +89,8 @@ import {
   PinOff,
   Navigation,
   Music,
-  Workflow as WorkflowIcon
+  Workflow as WorkflowIcon,
+  ChartGantt
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -194,7 +195,7 @@ const navItems = [
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
       { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText },
-      { to: '/cos/workflow', label: 'Workflow', icon: WorkflowIcon },
+      { to: '/cos/workflow', label: 'Timeline', icon: ChartGantt },
     ],
   },
   {

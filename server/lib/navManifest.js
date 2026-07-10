@@ -90,10 +90,10 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
   { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff', aliases: ['social-agents'] },
-  // Note: `pipeline` is intentionally NOT an alias here — that token now
-  // resolves to the dedicated /pipeline page (nav.create.pipeline). CoS still
-  // surfaces "task pipeline" via the `pipeline` keyword in the palette.
-  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Workflow', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow'], keywords: ['pipeline', 'dependencies', 'order', 'stages', 'task pipeline'] },
+  // The page at /cos/workflow is now the Schedule Timeline (launch-order
+  // visualization + inline schedule editor). The `workflow` aliases are kept
+  // for muscle memory; the bare `timeline` alias stays with /media/timeline.
+  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Timeline', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
   { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Streaks', section: 'Chief of Staff', aliases: ['streaks', 'cos-productivity'] },
 
   { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },

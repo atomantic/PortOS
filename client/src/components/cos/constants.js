@@ -11,7 +11,7 @@ import {
   Bot,
   Flame,
   Newspaper,
-  Workflow as WorkflowIcon
+  ChartGantt
 } from 'lucide-react';
 
 export const TABS = [
@@ -20,7 +20,7 @@ export const TABS = [
   { id: 'agents', label: 'Agents', icon: Cpu },
   { id: 'jobs', label: 'System Tasks', icon: Bot },
   { id: 'schedule', label: 'Schedule', icon: Clock },
-  { id: 'workflow', label: 'Workflow', icon: WorkflowIcon },
+  { id: 'workflow', label: 'Timeline', icon: ChartGantt },
   { id: 'digest', label: 'Digest', icon: Calendar },
   { id: 'gsd', label: 'GSD', icon: Compass },
   { id: 'productivity', label: 'Streaks', icon: Flame },
