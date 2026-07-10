@@ -24,6 +24,7 @@ export {
   extractTaskType,
   classifyUntypedTask,
   isSandboxedTaskType,
+  summarizeFailureSignatures,
   EXTERNAL_UNTYPED_TASK_TYPE
 } from './store.js';
 

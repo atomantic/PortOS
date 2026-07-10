@@ -4,6 +4,7 @@ import {
   calculateDurationETA,
   classifyUntypedTask,
   isSandboxedTaskType,
+  summarizeFailureSignatures,
   EXTERNAL_UNTYPED_TASK_TYPE
 } from './store.js';
 
@@ -191,5 +192,74 @@ describe('store.calculateDurationETA', () => {
     expect(out.avgDurationMs).toBe(100000);
     // avg + 0.6*(max-avg) would be huge; the avg*3 cap wins → 300000
     expect(out.p80DurationMs).toBe(300000);
+  });
+});
+
+describe('store.summarizeFailureSignatures (issue #2333)', () => {
+  const sample = (over = {}) => ({
+    messageSnippet: 'boom', failurePosition: 'mid', provider: 'claude', model: 'opus',
+    modelTier: 'heavy', taskType: 'auto-fix', validationPassed: null, recordedAt: '2026-07-09T00:00:00Z',
+    ...over
+  });
+
+  it('returns [] for a missing / non-object map', () => {
+    expect(summarizeFailureSignatures(undefined)).toEqual([]);
+    expect(summarizeFailureSignatures(null)).toEqual([]);
+    expect(summarizeFailureSignatures('nope')).toEqual([]);
+  });
+
+  it('attributes provider/model and counts validation misses across recent samples', () => {
+    const out = summarizeFailureSignatures({
+      'tool-error': {
+        count: 5, lastOccurred: '2026-07-09T01:00:00Z',
+        recent: [
+          sample({ provider: 'claude', model: 'opus', validationPassed: false }),
+          sample({ provider: 'claude', model: 'opus', validationPassed: true }),
+          sample({ provider: 'codex', model: 'gpt', validationPassed: false, messageSnippet: 'latest' })
+        ]
+      }
+    });
+    expect(out).toHaveLength(1);
+    const sig = out[0];
+    expect(sig.category).toBe('tool-error');
+    expect(sig.count).toBe(5); // lifetime count preferred in the global view
+    expect(sig.samples).toBe(3);
+    expect(sig.validationMissed).toBe(2);
+    // claude/opus is the dominant attribution (2 of 3)
+    expect(sig.providers[0]).toEqual({ key: 'claude/opus', count: 2 });
+    expect(sig.sampleSnippet).toBe('latest'); // most-recent sample wins
+  });
+
+  it('filters to a task type and drops categories with no matching sample', () => {
+    const out = summarizeFailureSignatures({
+      'tool-error': {
+        count: 9,
+        recent: [sample({ taskType: 'auto-fix' }), sample({ taskType: 'idle-review' })]
+      },
+      'rate-limit': {
+        count: 4,
+        recent: [sample({ taskType: 'idle-review' })]
+      }
+    }, { taskType: 'auto-fix' });
+    expect(out).toHaveLength(1);
+    expect(out[0].category).toBe('tool-error');
+    expect(out[0].count).toBe(1);   // per-type view counts only matched samples
+    expect(out[0].samples).toBe(1);
+  });
+
+  it('falls back to modelTier attribution when provider is absent, and ranks by count desc', () => {
+    const out = summarizeFailureSignatures({
+      a: { count: 1, recent: [sample({ provider: null, model: null, modelTier: 'light' })] },
+      b: { count: 3, recent: [sample(), sample(), sample()] }
+    });
+    expect(out.map(s => s.category)).toEqual(['b', 'a']); // b (3) before a (1)
+    expect(out[1].providers[0]).toEqual({ key: 'light', count: 1 });
+  });
+
+  it('respects the limit', () => {
+    const map = Object.fromEntries(
+      Array.from({ length: 8 }, (_, i) => [`c${i}`, { count: i + 1, recent: [sample()] }])
+    );
+    expect(summarizeFailureSignatures(map, { limit: 3 })).toHaveLength(3);
   });
 });
