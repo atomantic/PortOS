@@ -972,6 +972,91 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteWrites()).toHaveLength(1);
   });
 
+  // ── 1d. Codex MCP-server boot patience (incident 2026-07-10, agent-c5a26b40) ──
+  // Codex boots the user's globally-configured MCP servers (playwright via npx,
+  // a node_repl with startup_timeout_sec=120) on every headless spawn. During
+  // that boot codex swallows pastes and renders no `[Pasted Content N chars]`
+  // marker, and its input viewport shows only the paste TAIL (never the verified
+  // prefix), so the paste-verify retry can't confirm. With the fixed 3-attempt
+  // budget the agent was killed `paste-not-rendered` at ~19s — long before a
+  // legitimately-slow boot finishes. Once the MCP-boot banner is seen, the retry
+  // budget must extend to MCP_BOOT_PASTE_DEADLINE_MS so a slow boot completes and
+  // the paste finally lands.
+  it('codex MCP boot: extends the paste-retry budget past the fixed 3-attempt cap while booting', async () => {
+    const pasteFailSpy = vi.fn();
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async (args) => {
+      if (args?.completionReason === 'paste-not-rendered') pasteFailSpy(args);
+    });
+
+    runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
+    await flushMicrotasks();
+
+    // Codex prints its MCP-boot banner during startup → latches the boot tracker.
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.144.1)\nStarting MCP servers (0/3): codex_apps, node_repl, playwright\n'));
+    await flushMicrotasks();
+    // Fire the paste (past prompt-delay floor + readiness idle threshold).
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // No marker and no echo ever arrive — every attempt is swallowed. Advance
+    // well past the ~19s that would exhaust the fixed 3-attempt budget, but under
+    // the 150s MCP-boot deadline.
+    await vi.advanceTimersByTimeAsync(45000);
+    await flushMicrotasks();
+
+    // Boot-aware budget kept retrying instead of failing paste-not-rendered…
+    expect(pasteFailSpy).not.toHaveBeenCalled();
+    // …and re-pasted more times than the 3-attempt cap would ever allow.
+    expect(pasteCount()).toBeGreaterThan(3);
+  });
+
+  it('codex MCP boot: fails paste-not-rendered only after the extended deadline if boot never completes', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn();
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Booting MCP server: node_repl(0s • esc to interrupt)\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Never becomes ready. Advance past MCP_BOOT_PASTE_DEADLINE_MS (150s).
+    await vi.advanceTimersByTimeAsync(155000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'paste-not-rendered' })
+    );
+  });
+
+  it('paste-not-rendered: without an MCP-boot banner, still fails after the fixed 3 attempts (~19s)', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn();
+    await flushMicrotasks();
+    // Ordinary banner chrome — NOT an MCP-boot signal, so the budget stays fixed.
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // No marker/echo. Advance past the 3-attempt budget (~19s) but well under the
+    // 150s MCP-boot deadline — proves the non-boot path is unchanged.
+    await vi.advanceTimersByTimeAsync(25000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(pasteCount()).toBe(3);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'paste-not-rendered' })
+    );
+  });
+
   // ── 2. Command-not-found path ────────────────────────────────────────────────
   it('command-not-found: finalizeAgent called with success:false, exitCode 127, completionReason=command-not-found', async () => {
     const spawnPromise = runSpawn();

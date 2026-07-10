@@ -642,6 +642,99 @@ export function createReviewLoopTracker() {
   };
 }
 
+// ─── Codex MCP-server boot detection ──────────────────────────────────────
+//
+// Codex (unlike Claude Code) boots any MCP servers configured in the user's
+// GLOBAL `~/.codex/config.toml` on every startup — INCLUDING for our headless
+// CoS agents, which never asked for them. A user with heavyweight interactive
+// servers (e.g. `playwright` via `npx @playwright/mcp@latest`, or a `node_repl`
+// with `startup_timeout_sec = 120`) makes codex spend tens of seconds — up to
+// two minutes — booting that stack before its input box will accept a paste.
+//
+// During that boot codex renders its input box EARLY but SWALLOWS pastes, and
+// while it waits on a silent boot subprocess (an `npx` download, a stalled
+// server) its PTY output goes IDLE — indistinguishable from "ready" to the
+// idle-detect readiness heuristic. So the spawner pastes mid-boot, codex
+// swallows it (no `[Pasted Content N chars]` marker, and its single-line input
+// viewport shows only the TAIL of the long paste, never the verifiable prefix),
+// and the paste-verify retry (issue #2192) exhausts its 3 short attempts and
+// fails `paste-not-rendered` — killing codex BEFORE its MCP boot ever finished
+// (real incident 2026-07-10: agent-c5a26b40 / agent-3f4ae3b1, both gpt-5.6-sol;
+// the same prompt succeeded on 2026-07-03..09 back when no MCP servers were
+// configured and codex was ready in <10s).
+//
+// The fix is NOT a new readiness signal (codex gives no reliable boot-complete
+// one — a slow boot looks identical to a ready box) but a boot-aware RETRY
+// BUDGET: once boot chrome is seen, keep re-pasting until codex finishes booting
+// and a paste finally lands its marker, up to MCP_BOOT_PASTE_DEADLINE_MS. The
+// spawner (agentTuiSpawning.js) consumes `createMcpBootTracker` for exactly that.
+//
+// Matched against ANSI-stripped output. Detection is deliberately conservative,
+// same rationale as MERGE_QUEUE_MARKERS: a false POSITIVE only extends the
+// (bounded) retry window, and a false NEGATIVE just preserves the pre-fix 3-retry
+// behavior. The two phrases are anchored to codex's literal boot banners rather
+// than a bare "mcp server" substring so an agent whose prompt/output merely
+// mentions MCP servers can't latch the extended window.
+const MCP_BOOT_MARKERS = ['booting mcp server', 'starting mcp servers'];
+
+// Covers a `node_repl` with the documented `startup_timeout_sec = 120` plus an
+// `npx`-fetched server's cold download and margin, while still bounding a
+// genuinely-hung boot's failure. Kept under the 180s default idle-reap window so
+// the boot-retry loop resolves (succeeds or fails cleanly) before the idle
+// reaper can race it.
+export const MCP_BOOT_PASTE_DEADLINE_MS = 150000;
+// Spacing between paste retries while codex is booting MCP servers. A swallowed
+// mid-boot paste renders nothing, so a re-paste every few seconds is a cheap
+// no-op until the box is finally live; this is additive to each attempt's own
+// marker-wait + verify window (~5.5s), so the effective cadence is ~10s.
+export const MCP_BOOT_PASTE_RETRY_DELAY_MS = 5000;
+
+// Rolling tail cap for createMcpBootTracker's cross-chunk buffer, same rationale
+// as REVIEW_LOOP_TAIL_CAP: a boot banner can split across two onData chunks
+// during streaming, so concatenate onto a short tail before testing.
+const MCP_BOOT_TAIL_CAP = 256;
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows codex booting its MCP
+ * servers. Callers MUST pass stripped output. Non-string / empty input → false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isMcpBootSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  const lower = strippedText.toLowerCase();
+  return MCP_BOOT_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * Latching tracker for "this TUI is booting its MCP servers" — the codex slow-
+ * boot failure mode above. Feed it each ANSI-stripped STARTUP chunk (before the
+ * prompt is submitted) via `observe(text)`; it latches `active` the first time a
+ * boot banner appears and STAYS active thereafter. Latching (not a sliding
+ * window) is deliberate: the boot banner prints once and then codex updates the
+ * line via cursor-positioned partial redraws that don't reprint the full phrase,
+ * and the whole point is to keep the extended paste-retry budget in force across
+ * the (often silent) boot. Keeps a small rolling tail so a marker split across a
+ * chunk boundary still matches. Lives here so the detection is unit-testable.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createMcpBootTracker() {
+  let active = false;
+  let tail = '';
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (typeof strippedText !== 'string' || !strippedText) return active;
+      tail = (tail + strippedText).slice(-MCP_BOOT_TAIL_CAP);
+      if (isMcpBootSignal(tail)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
 // ─── Buffer caps (defensive RAM bounds) ───────────────────────────────────
 //
 // RAW caps stay small — the raw PTY stream is only used for paste-marker
