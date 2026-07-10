@@ -168,6 +168,15 @@ function CreativeDirectorLegacyRedirect() {
   return <Navigate to={`/creative-director${rest}${search}${hash}`} replace />;
 }
 
+// Normalize a tab-less /creative-director/:id URL to its overview tab while
+// preserving any query string + hash. A bare `<Navigate to="overview">` would
+// drop them; building the relative target from useLocation keeps deep-link
+// state intact (the relative pathname still resolves the :id segment).
+function CreativeDirectorOverviewRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={`overview${search}${hash}`} replace />;
+}
+
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
 if (import.meta.hot) {
@@ -319,9 +328,12 @@ export default function App() {
             <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
           {/* Creative Director — a top-level Create page (moved out of the
-              Media Gen tabs). :id with no tab redirects to the overview tab. */}
+              Media Gen tabs). :id with no tab redirects to the overview tab,
+              carrying any query string + hash (relative Navigate preserves the
+              :id in the path) so a deep-link like /creative-director/abc?x#y
+              lands on /creative-director/abc/overview?x#y intact. */}
           <Route path="creative-director" element={<CreativeDirector />} />
-          <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
+          <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
