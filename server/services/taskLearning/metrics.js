@@ -328,11 +328,13 @@ export async function recordTaskCompletion(agent, task) {
 
   // Correlation-quality window (issue #2344): pair the pre-mutation prediction
   // snapshot (captured above, before any of this run's aggregates were folded in)
-  // with the actual outcome. A run that "succeeded" but MISSED its declared
-  // success criteria (validationPassed === false) counts as a bad outcome, tying
-  // the two #2344 signals together.
+  // with the actual outcome. When a success criterion WAS declared, its verdict
+  // is authoritative — a run that met it is good even on a non-zero exit
+  // (commit-found), and one that missed it is bad even on a clean exit. Only when
+  // no criterion is declared (validationPassed === null) do we fall back to the
+  // runner's `success`. This ties the two #2344 signals together.
   if (correlationPredictedRisk !== null) {
-    const bad = telemetry.validationPassed === false ? true : !success;
+    const bad = telemetry.validationPassed === null ? !success : !telemetry.validationPassed;
     recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad });
   }
 
