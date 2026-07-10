@@ -10,32 +10,9 @@ import {
   STORAGE_KEY as CITY_SETTINGS_KEY,
   TIME_OF_DAY_AUTO_EVENT as CITY_TIME_OF_DAY_AUTO_EVENT,
 } from './useCitySettings';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 
 const STORAGE_KEY = 'portos-theme';
-
-// localStorage can throw (Safari private mode, blocked storage, disabled
-// cookies) or be entirely absent. Guard every access so theme init/switching
-// stays usable when persistence is unavailable — the in-memory theme is the
-// source of truth; localStorage is best-effort. Returns null on any failure so
-// callers fall through to a valid default (normalizeThemeId handles null).
-const safeReadStorage = (key) => {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-};
-
-// Best-effort write; returns false when persistence is unavailable so callers
-// can decide (they don't — theme switching continues regardless).
-const safeWriteStorage = (key, value) => {
-  try {
-    globalThis.localStorage?.setItem(key, value);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const applyTheme = (id) => {
   const theme = getTheme(id);

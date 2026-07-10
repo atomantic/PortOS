@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { safeReadStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage.js';
 
 // Exported so useTheme can reset the city's time-of-day override without
 // re-declaring these magic strings (a typo there would silently break the reset).
@@ -46,34 +47,6 @@ const DEFAULT_SETTINGS = {
   explorationMode: false,
   cameraView: 'third', // exploration camera: 'third' follows the cyber-runner; 'first' is classic FPS (V toggles)
   ...QUALITY_PRESETS.high,
-};
-
-// localStorage can throw (Safari private mode, blocked storage, disabled cookies)
-// or be absent. These settings drive CyberCity, which also renders on the theme
-// path, so guard every access — a storage failure must never crash init or a
-// settings write. Persistence is best-effort; in-memory state is the source of truth.
-const safeReadStorage = (key) => {
-  try {
-    return globalThis.localStorage?.getItem(key) ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const safeWriteStorage = (key, value) => {
-  try {
-    globalThis.localStorage?.setItem(key, value);
-  } catch {
-    // Ignore — settings changes stay in memory when persistence is unavailable.
-  }
-};
-
-const safeRemoveStorage = (key) => {
-  try {
-    globalThis.localStorage?.removeItem(key);
-  } catch {
-    // Ignore — nothing persisted to remove when storage is unavailable.
-  }
 };
 
 const loadSettings = () => {
