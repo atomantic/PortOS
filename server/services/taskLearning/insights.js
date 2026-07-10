@@ -13,7 +13,7 @@ import {
   loadDismissedRecommendations,
   saveDismissedRecommendations
 } from './store.js';
-import { computeCorrelationQuality, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
+import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
 /**
  * Get learning insights for display
@@ -77,8 +77,8 @@ export async function getLearningInsights() {
     correlationQuality: {
       ...correlationQuality,
       threshold: CORRELATION_QUALITY_THRESHOLD,
-      proven: correlationQuality.confident && correlationQuality.score !== null
-        && correlationQuality.score > CORRELATION_QUALITY_THRESHOLD
+      // Mirrors the routing aggressiveness gate exactly (single source of truth).
+      proven: isCorrelationProven(correlationQuality)
     },
     insights: {
       bestPerforming: bestPerforming.map(t => ({
