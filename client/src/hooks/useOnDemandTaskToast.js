@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { timeUntil } from '../utils/formatters';
-import { formatLiReason } from '../utils/layeredIntelligenceReasons';
 
 // Humanize a perpetual work-detector park reason for a user-facing toast. The
 // raw reason strings are the same ones surfaced in the CoS → Schedule tab; here
@@ -16,15 +15,6 @@ const PARK_REASON_LABELS = {
   'no-actionable-plan-items': 'no unblocked PLAN items',
   'no-progress': 'already up to date',
   'no-detector': 'no work detector for this task'
-};
-
-// Icon per handler action so the toast reads right at a glance. (The reason→prose
-// gloss itself is the shared `formatLiReason`, so a new server reason lands in
-// both the toast and the durable "Last run" line without re-transcribing it.)
-const HANDLER_ICONS = {
-  parked: '⏸️',
-  duplicate: '♻️',
-  'semantic-duplicate': '♻️'
 };
 
 /**
@@ -49,19 +39,6 @@ export function useOnDemandTaskToast() {
         toast(`${task}${scope}: couldn't complete the check just now (a transient forge/network issue) — try again shortly.`, {
           duration: 7000,
           icon: '⚠️'
-        });
-        return;
-      }
-
-      // A handler-backed task (Layered Intelligence) that ran but filed nothing
-      // for an explicit reason — surface WHY, since it spawns no visible agent
-      // and the toast is the only feedback. (A genuinely-idle "no-proposal" run
-      // arrives as outcome 'idle' below, not here.)
-      if (data?.outcome === 'handler-issue') {
-        const message = formatLiReason({ action: data?.handlerAction, reason: data?.handlerReason, blocking: data?.blocking });
-        toast(`${task}${scope}: ran now — ${message}.`, {
-          duration: 8000,
-          icon: HANDLER_ICONS[data?.handlerAction] || '⚠️'
         });
         return;
       }
@@ -104,24 +81,9 @@ export function useOnDemandTaskToast() {
       });
     };
 
-    // A handler-backed task (e.g. Layered Intelligence) that DID work on an
-    // explicit "Run" — it files a tracker issue rather than spawning an agent, so
-    // there's no task card to see; a success toast is the only user feedback.
-    const handleRan = (data) => {
-      const task = data?.taskType || 'task';
-      const scope = data?.appName ? ` for ${data.appName}` : '';
-      const ref = data?.filedKey || (data?.filedNumber != null ? `#${data.filedNumber}` : '');
-      toast(`${task}${scope}: ran now — filed an improvement issue${ref ? ` (${ref})` : ''}.`, {
-        duration: 6000,
-        icon: '🧠'
-      });
-    };
-
     socket.on('cos:schedule:on-demand-empty', handleEmpty);
-    socket.on('cos:schedule:on-demand-ran', handleRan);
     return () => {
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
-      socket.off('cos:schedule:on-demand-ran', handleRan);
       // Don't unsubscribe from cos — other components share the room.
     };
   }, []);
