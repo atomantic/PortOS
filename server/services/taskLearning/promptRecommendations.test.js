@@ -84,6 +84,42 @@ describe('promptRecommendations.getPromptImprovementRecommendations', () => {
     const rec = await getPromptImprovementRecommendations('self-improve:security-audit');
     expect(rec.promptHints.some(h => h.hint === 'Add severity classification')).toBe(true);
   });
+
+  it('consumes the enriched failureSignatures map for provider-attributed suggestions (issue #2333)', async () => {
+    loadLearningData.mockResolvedValue(data({
+      byTaskType: { t: { completed: 10, failed: 6, successRate: 40, avgDurationMs: 60000 } },
+      failureSignatures: {
+        'tool-error': {
+          count: 4, lastOccurred: '2026-07-09T00:00:00Z',
+          recent: [
+            { taskType: 't', provider: 'claude', model: 'opus', validationPassed: false, messageSnippet: 'x' },
+            { taskType: 't', provider: 'claude', model: 'opus', validationPassed: true, messageSnippet: 'y' },
+            { taskType: 'other', provider: 'codex', model: 'gpt', validationPassed: false, messageSnippet: 'z' }
+          ]
+        }
+      },
+    }));
+    const rec = await getPromptImprovementRecommendations('t');
+    // Only the two 't' samples inform this task type's summary.
+    expect(rec.failureSignatures).toHaveLength(1);
+    expect(rec.failureSignatures[0].providers[0]).toEqual({ key: 'claude/opus', count: 2 });
+    const sig = rec.suggestions.find(s => s.type === 'failure-signature');
+    expect(sig).toBeTruthy();
+    expect(sig.priority).toBe('high'); // a validation miss present → high
+    expect(sig.message).toContain('claude/opus');
+  });
+
+  it('omits a failure-signature suggestion when a provider has fewer than 2 recent failures', async () => {
+    loadLearningData.mockResolvedValue(data({
+      byTaskType: { t: { completed: 10, failed: 6, successRate: 40, avgDurationMs: 60000 } },
+      failureSignatures: {
+        'tool-error': { count: 1, recent: [{ taskType: 't', provider: 'claude', model: 'opus', validationPassed: null }] }
+      },
+    }));
+    const rec = await getPromptImprovementRecommendations('t');
+    expect(rec.failureSignatures).toHaveLength(1);
+    expect(rec.suggestions.some(s => s.type === 'failure-signature')).toBe(false);
+  });
 });
 
 describe('promptRecommendations.getAllPromptRecommendations', () => {

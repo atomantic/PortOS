@@ -7,10 +7,19 @@
 
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { suggestModelTier } from './taskLearning.js';
+// Imported from the store submodule (not the mocked barrel) so the spawn-time key
+// mirrors the exact same classification the completion records under.
+import { classifyUntypedTask } from './taskLearning/store.js';
 
 /**
  * Extract task type key for learning lookup.
- * Matches the format used in taskLearning.js for consistency.
+ *
+ * Mirrors the domain `extractTaskType`/`classifyUntypedTask` record in the
+ * learning store so the spawn-time routing lookup keys off the SAME bucket the
+ * completion will later be recorded under (issue #2333). The fallback delegates
+ * to `classifyUntypedTask` — inferring a concrete domain (or the sandboxed
+ * `external/untyped` bucket) instead of the old blind `'unknown'`, which would
+ * miss the recorded domain and defeat the learning lookup on every untyped task.
  */
 export function extractTaskTypeKey(task) {
   if (task?.metadata?.analysisType) {
@@ -25,7 +34,7 @@ export function extractTaskTypeKey(task) {
     if (typeMatch) return `self-improve:${typeMatch[1]}`;
   }
   if (task?.taskType === 'user') return 'user-task';
-  return 'unknown';
+  return classifyUntypedTask(task);
 }
 
 /**

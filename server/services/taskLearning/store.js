@@ -144,9 +144,10 @@ export async function saveLearningData(data) {
 export const EXTERNAL_UNTYPED_TASK_TYPE = 'external/untyped';
 
 // The new sandboxed fallback plus the legacy `'unknown'` sink it replaces. Older
-// installs (and the not-yet-migrated spawn-time key in agentModelSelection.js)
-// still produce `'unknown'` buckets, so it gets the same wall: stale/heterogeneous
-// uncategorized data must never drive a tier suggestion or globally skip work.
+// installs still hold `'unknown'` buckets from before the classifier (and the
+// spawn-time key in agentModelSelection.js) migrated onto the sandboxed bucket, so
+// it keeps the same wall: stale/heterogeneous uncategorized data must never drive a
+// tier suggestion or globally skip work.
 const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE, 'unknown']);
 
 /**
@@ -155,6 +156,66 @@ const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE, 'unknown']);
  * influencing model-tier suggestions or skip/rehabilitation gating.
  */
 export const isSandboxedTaskType = (taskType) => SANDBOXED_TASK_TYPES.has(taskType);
+
+/**
+ * Summarize the enriched `failureSignatures` map (issues #2329/#2333) into a
+ * ranked, display-ready list. Reads each category's `recent[]` samples to add
+ * provider/model attribution and success-criteria (validation) miss counts that
+ * the coarser `errorPatterns` aggregate can't express — so the self-improvement
+ * loop (insights + prompt recommendations) can say WHICH provider/model recently
+ * failed for a task type, not just how often a category occurred.
+ *
+ * Pure / read-only. When `taskType` is given, only samples recorded for that
+ * task type count (and categories with no matching sample are dropped) so a
+ * per-type recommendation never inherits another type's failures.
+ *
+ * @param {Object} failureSignatures - `data.failureSignatures`: `{ [category]: { count, lastOccurred, recent: [] } }`
+ * @param {Object} [opts]
+ * @param {string|null} [opts.taskType] - restrict samples to this task type
+ * @param {number} [opts.limit] - max categories returned (ranked by count desc)
+ * @returns {Array<{category, count, samples, lastOccurred, providers, validationMissed, sampleSnippet}>}
+ */
+export function summarizeFailureSignatures(failureSignatures, { taskType = null, limit = 5 } = {}) {
+  const map = failureSignatures && typeof failureSignatures === 'object' ? failureSignatures : {};
+  const summaries = [];
+
+  for (const [category, bucket] of Object.entries(map)) {
+    const recent = Array.isArray(bucket?.recent) ? bucket.recent : [];
+    const matched = taskType ? recent.filter((s) => s?.taskType === taskType) : recent;
+    // Task-type-scoped view drops categories with no sample for that type.
+    if (taskType && matched.length === 0) continue;
+
+    const attribution = new Map();
+    let validationMissed = 0;
+    for (const s of matched) {
+      const key = s?.provider
+        ? `${s.provider}${s.model ? `/${s.model}` : ''}`
+        : (s?.modelTier || 'unknown');
+      attribution.set(key, (attribution.get(key) || 0) + 1);
+      // Explicit === false so an absent/undefined criterion (null) isn't a miss.
+      if (s?.validationPassed === false) validationMissed++;
+    }
+
+    const providers = [...attribution.entries()]
+      .map(([key, count]) => ({ key, count }))
+      .sort((a, b) => b.count - a.count);
+    const latest = matched.length ? matched[matched.length - 1] : null;
+
+    summaries.push({
+      category,
+      // Per-type count reflects the matched samples; the global view prefers the
+      // lifetime `count` (recent[] is capped) and falls back to the sample size.
+      count: taskType ? matched.length : (Number(bucket?.count) || matched.length),
+      samples: matched.length,
+      lastOccurred: bucket?.lastOccurred || latest?.recordedAt || null,
+      providers,
+      validationMissed,
+      sampleSnippet: latest?.messageSnippet || null
+    });
+  }
+
+  return summaries.sort((a, b) => b.count - a.count).slice(0, Math.max(0, limit));
+}
 
 /**
  * Ordered description-keyword → concrete-type rules, tried only as a last resort
