@@ -338,7 +338,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               )}
             </div>
             <Link
-              to={`/media/creative-director/${cdProjectId}`}
+              to={`/creative-director/${cdProjectId}`}
               className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
             >
               Open in Creative Director <ExternalLink size={11} />

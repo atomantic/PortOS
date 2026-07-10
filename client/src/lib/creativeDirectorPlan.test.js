@@ -116,7 +116,7 @@ describe('stepResultLink', () => {
   });
   it('links a minted cd sub-project by id', () => {
     expect(stepResultLink({ toolName: 'cd_produceVideoFromIssue', result: { id: 'cd-9' } }))
-      .toEqual({ to: '/media/creative-director/cd-9/overview', label: 'Open project' });
+      .toEqual({ to: '/creative-director/cd-9/overview', label: 'Open project' });
   });
   it('returns null with no linkable result', () => {
     expect(stepResultLink({ result: null })).toBeNull();

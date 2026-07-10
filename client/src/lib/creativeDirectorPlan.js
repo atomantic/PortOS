@@ -144,7 +144,7 @@ export function stepResultLink(step) {
   if (r.workId) return { to: `/writers-room/works/${r.workId}`, label: 'Open work' };
   // A minted CD sub-project (cd.* tools return an `id`).
   if (r.id && typeof step.toolName === 'string' && step.toolName.startsWith('cd')) {
-    return { to: `/media/creative-director/${r.id}/overview`, label: 'Open project' };
+    return { to: `/creative-director/${r.id}/overview`, label: 'Open project' };
   }
   return null;
 }

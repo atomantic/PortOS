@@ -162,14 +162,14 @@ export default function CreativeDirectorDetail() {
   if (loading) return <div className="p-6 text-port-text-muted">Loading…</div>;
   if (!project) return <div className="p-6 text-port-error">Project not found.</div>;
 
-  const goTo = (tabId) => navigate(`/media/creative-director/${id}/${tabId}`);
+  const goTo = (tabId) => navigate(`/creative-director/${id}/${tabId}`);
 
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-6 pt-6 pb-3 border-b border-port-border">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <Link to="/media/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
+            <Link to="/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
             <div className="min-w-0">
               <h1 className="text-xl font-semibold truncate">{project.name}</h1>
               <div className="text-xs text-port-text-muted truncate">
