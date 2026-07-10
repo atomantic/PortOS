@@ -9,14 +9,28 @@ import { createRequire } from 'module';
 // of hardcoding `claude -p`.
 import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
+import {
+  sanitizeChildEnv,
+  buildFixPrompt,
+  restrictedToolArgs,
+  validateProposedDiff,
+  isGitRepo,
+  createDisposableWorktree,
+  collectWorktreeDiff,
+  removeWorktree,
+  applyDiffToLive,
+  runVerifyCommand,
+} from './sandbox.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Prepend the guarded pm2 shim to this process's PATH. The fix agent spawned by
-// runCliProviderPrompt inherits process.env, so a confused agent told to "restart
-// PM2" can't `pm2 kill` the shared daemon (which would down every app + PortOS).
-// Our own execPm2 calls use an absolute PM2_BIN, so they bypass the shim.
+// Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
+// fix agent runs in an isolated worktree with a sanitized env and (for claude)
+// no Bash tool, so it should never invoke pm2 at all — but the shim keeps a
+// `pm2 kill` from a non-claude provider from downing the shared daemon. Our own
+// execPm2 calls use an absolute PM2_BIN, so they bypass the shim. sanitizeChildEnv
+// preserves this guarded PATH into the agent's env.
 Object.assign(process.env, agentGuardEnv());
 
 // Resolve PM2 binary to avoid pm2.cmd on Windows (creates visible CMD windows)
@@ -47,6 +61,10 @@ const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const AUTOFIXER_DIR = join(DATA_DIR, 'autofixer');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
 const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
+// Disposable worktrees for isolated repair runs (gitignored under data/).
+const WORKTREES_DIR = join(AUTOFIXER_DIR, 'worktrees');
+// Bound the agent-proposed patch before it can reach the live checkout.
+const MAX_DIFF_BYTES = 200 * 1024;
 
 // Track fixed processes to avoid repeated fixes
 const recentlyFixed = new Map();
@@ -128,13 +146,19 @@ async function saveIndex(index) {
   await writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
 }
 
-async function saveSession(sessionId, prompt, output, metadata) {
+async function saveSession(sessionId, prompt, output, metadata, patch) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
   await mkdir(sessionDir, { recursive: true });
 
   await writeFile(join(sessionDir, 'prompt.txt'), prompt);
   await writeFile(join(sessionDir, 'output.txt'), output);
   await writeFile(join(sessionDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
+  // The staged/applied patch is the human-reviewable artifact of the fix — keep
+  // it beside the session so a user can inspect (and, when auto-promote is off,
+  // manually apply) exactly what the agent proposed.
+  if (typeof patch === 'string' && patch.trim().length > 0) {
+    await writeFile(join(sessionDir, 'fix.patch'), patch);
+  }
 
   const index = await loadIndex();
   const indexEntry = {
@@ -143,6 +167,8 @@ async function saveSession(sessionId, prompt, output, metadata) {
     endTime: metadata.endTime,
     duration: metadata.duration,
     success: metadata.success,
+    promoted: metadata.promoted || false,
+    staged: metadata.staged || false,
     processName: metadata.processName,
     appName: metadata.appName,
     promptPreview: prompt.substring(0, 200),
@@ -190,65 +216,50 @@ function markAsFixed(processName) {
   recentlyFixed.set(processName, Date.now());
 }
 
-// Execute Claude CLI to fix the issue
+// Run an autonomous repair, ISOLATED from the live checkout.
+//
+// The crash logs handed to this agent are untrusted (a payload reflected into a
+// process's stderr can carry injected instructions), so we never let the agent
+// touch the live repository or inherit host credentials. The flow:
+//   1. Require a git checkout and cut a disposable, detached worktree at HEAD.
+//   2. Sanitize the child env down to system + AI-provider auth only.
+//   3. Run the agent against the worktree with a fenced, untrusted-log prompt
+//      and (for claude) the shell/network toolset denied.
+//   4. Collect + validate the resulting diff (size/scope/forbidden paths).
+//   5. Optionally verify it against a user-configured test command.
+//   6. Promotion gate: only when the user opted into `autoPromote` do we apply
+//      the diff to the live checkout and restart the process; otherwise the
+//      validated patch is staged beside the session for manual review.
 async function fixProcess(processName, app, errorLogs, outputLogs) {
   const sessionId = `autofixer_${processName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const startTime = new Date().toISOString();
 
-  console.log(`🔧 [Autofixer] Starting fix for ${processName}: ${sessionId}`);
-
-  const prompt = `You are an autonomous autofixer for PortOS. A PM2-managed process has crashed and needs to be fixed.
-
-**CRITICAL INSTRUCTIONS:**
-1. Analyze the error logs below to understand what caused the crash
-2. Read relevant source files to understand the issue
-3. Fix the bug by editing the necessary files
-4. After fixing, restart ONLY this process: pm2 restart ${processName}
-5. Verify the process starts successfully by checking pm2 list
-6. If it still fails, analyze the new error and try again (max 2 attempts)
-
-**🛑 PM2 SAFETY — this is a SHARED server running many apps:**
-- ONLY ever run \`pm2 restart ${processName}\` (or \`pm2 logs ${processName}\`). NEVER target a different process.
-- NEVER run \`pm2 kill\`, \`pm2 stop\`, \`pm2 delete\`, \`pm2 startup\`/\`unstartup\`, or any \`... all\` form. They take down EVERY app on this machine, including PortOS itself, and are blocked — they will fail.
-
-**App Information:**
-- App Name: ${app.name}
-- Process Name: ${processName}
-- Status: crashed/errored
-- Working Directory: ${app.repoPath}
-
-**Error Logs (last 100 lines):**
-\`\`\`
-${errorLogs || '(no error logs available)'}
-\`\`\`
-
-**Output Logs (last 50 lines):**
-\`\`\`
-${outputLogs || '(no output logs available)'}
-\`\`\`
-
-**Your Task:**
-Fix the issue and restart the process. Be systematic and thorough. Use the Bash tool to run \`pm2 restart ${processName}\` after making your fixes — never a broader pm2 command.`;
+  console.log(`🔧 [Autofixer] Starting isolated fix for ${processName}: ${sessionId}`);
 
   await ensureHistoryDir();
 
+  const prompt = buildFixPrompt({ processName, app, errorLogs, outputLogs });
   const outputBuffer = [];
 
   // Resolve the configured CLI provider/model (settings.autofixer), falling
   // back to claude-code — the historical default — when unset. The autofixer
-  // edits files and runs pm2, so it needs an agentic CLI provider; pickCliProvider
-  // restricts to type 'cli' (API chat providers can't do file edits).
+  // edits files, so it needs an agentic CLI provider; pickCliProvider restricts
+  // to type 'cli' (API chat providers can't do file edits). `autoPromote` and
+  // `verifyCommand` come from the same settings slice.
   const providers = await loadProviders();
   const settings = await loadSettings();
-  const picked = pickCliProvider(providers, settings.autofixer || {});
+  const autofixerCfg = settings.autofixer || {};
+  const picked = pickCliProvider(providers, autofixerCfg);
+  const autoPromote = autofixerCfg.autoPromote === true; // default OFF — stage only
+  const verifyCommand = typeof autofixerCfg.verifyCommand === 'string' ? autofixerCfg.verifyCommand.trim() : '';
 
   // Single completion path — write the session record + return the result.
-  const finalize = async ({ success, exitCode, error }) => {
+  const finalize = async ({ success, exitCode, error, extra = {}, patch }) => {
     const endTime = new Date().toISOString();
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
 
-    console.log(`${success ? '✅ [Autofixer] Fix successful' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${exitCode})`);
+    console.log(`${success ? '✅ [Autofixer] Fix produced' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${exitCode})`);
 
     const metadata = {
       sessionId,
@@ -262,14 +273,19 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
       appId: app.id,
       repoPath: app.repoPath,
       type: 'autofixer',
+      isolated: true,
+      autoPromote,
       provider: picked.provider?.id || null,
       model: picked.model || null,
+      ...extra,
       ...(error ? { error } : {}),
     };
 
-    await saveSession(sessionId, prompt, output, metadata);
+    await saveSession(sessionId, prompt, output, metadata, patch);
     console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
 
+    // Cool down on any usable outcome (promoted OR staged) so we don't
+    // regenerate a fix for the same crash every cycle.
     if (success) markAsFixed(processName);
     return { success, sessionId, output, ...(error ? { error } : {}) };
   };
@@ -280,14 +296,34 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
     return finalize({ success: false, exitCode: -1, error: picked.error });
   }
 
-  console.log(`🤖 [Autofixer] Fixing ${processName} via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''}`);
+  // ISOLATION REQUIREMENT: no git checkout ⇒ no rollback boundary ⇒ we refuse
+  // to run an autonomous, file-editing agent driven by untrusted logs.
+  if (!(await isGitRepo(app.repoPath))) {
+    const reason = `refusing autonomous repair: ${app.repoPath} is not a git checkout (no rollback boundary)`;
+    console.error(`🛑 [Autofixer] ${reason}`);
+    return finalize({ success: false, exitCode: -1, error: reason, extra: { isolated: false } });
+  }
+
+  const wt = await createDisposableWorktree(app.repoPath, WORKTREES_DIR, sessionId);
+  if (wt.error) {
+    console.error(`🛑 [Autofixer] Could not isolate ${processName}: ${wt.error}`);
+    return finalize({ success: false, exitCode: -1, error: `worktree isolation failed: ${wt.error}`, extra: { isolated: false } });
+  }
+  const worktreePath = wt.path;
+  // Strip host credentials the agent has no business seeing — it keeps only
+  // system + AI-provider auth. provider.envVars still overlays inside the runner.
+  const childEnv = sanitizeChildEnv(process.env);
+
+  console.log(`🤖 [Autofixer] Repairing ${processName} in isolated worktree via ${picked.provider.id}${picked.model ? ` (${picked.model})` : ''}`);
 
   const result = await runCliProviderPrompt({
     provider: picked.provider,
     model: picked.model,
     prompt,
-    cwd: app.repoPath,
-    timeoutMs: 600000, // 10 min — a fix may need several read/edit/restart cycles
+    cwd: worktreePath,
+    baseEnv: childEnv,
+    extraArgs: restrictedToolArgs(picked.provider),
+    timeoutMs: 600000, // 10 min — a fix may need several read/edit cycles
     onData: (chunk, stream) => {
       if (stream === 'stderr') {
         outputBuffer.push(`[STDERR] ${chunk}`);
@@ -299,11 +335,70 @@ Fix the issue and restart the process. Be systematic and thorough. Use the Bash 
     },
   });
 
-  if (result.error) {
-    console.error(`❌ [Autofixer] Error fixing ${processName}: ${result.error}`);
-    return finalize({ success: false, exitCode: result.exitCode ?? -1, error: result.error });
+  // Collect the agent's edits as a diff BEFORE tearing down the worktree. A
+  // spawn failure / timeout can leave a partial edit — don't promote or stage
+  // work from an agent that didn't finish cleanly.
+  const diff = await collectWorktreeDiff(worktreePath);
+  const agentOk = !result.error;
+  const validation = agentOk
+    ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES })
+    : { ok: false, reason: `agent did not complete: ${result.error}`, files: [] };
+
+  // Optional verification against the user-configured test command, run in the
+  // isolated worktree with the sanitized env — before anything reaches live.
+  let verify = null;
+  if (validation.ok && verifyCommand) {
+    console.log(`🧪 [Autofixer] Verifying ${processName} fix: ${verifyCommand}`);
+    verify = await runVerifyCommand(verifyCommand, worktreePath, childEnv);
+    outputBuffer.push(`\n[VERIFY exit ${verify.code}]\n${verify.output}`);
   }
-  return finalize({ success: result.exitCode === 0, exitCode: result.exitCode });
+  const verifyOk = !verifyCommand || (verify && verify.ok);
+
+  // Promotion gate — only a validated (and, if configured, verified) diff may
+  // touch the live checkout, and only when the user explicitly opted in.
+  let promoted = false;
+  let staged = false;
+  let promotionError = null;
+  if (validation.ok && verifyOk) {
+    if (autoPromote) {
+      const applied = await applyDiffToLive(app.repoPath, diff, AUTOFIXER_DIR);
+      if (applied.ok) {
+        const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
+        promoted = !restart.error;
+        promotionError = restart.error || null;
+        if (promoted) console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+        else console.error(`❌ [Autofixer] Applied fix but restart failed: ${restart.error}`);
+      } else {
+        promotionError = applied.error;
+        console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
+      }
+    } else {
+      staged = true;
+      console.log(`📋 [Autofixer] Fix staged for review (auto-promote off): ${sessionId}`);
+    }
+  } else {
+    console.warn(`⚠️ [Autofixer] Fix not promotable: ${validation.reason || (verify && `verify exit ${verify.code}`) || 'unknown'}`);
+  }
+
+  // Always discard the disposable worktree.
+  await removeWorktree(app.repoPath, worktreePath);
+
+  const success = validation.ok && verifyOk && (autoPromote ? promoted : true);
+  return finalize({
+    success,
+    exitCode: result.exitCode ?? -1,
+    error: result.error || promotionError || (!validation.ok ? validation.reason : null) || null,
+    patch: validation.ok ? diff : undefined,
+    extra: {
+      promoted,
+      staged,
+      diffBytes: Buffer.byteLength(diff || '', 'utf8'),
+      changedFiles: validation.files,
+      diffValid: validation.ok,
+      ...(validation.ok ? {} : { diffRejectedReason: validation.reason }),
+      ...(verify ? { verify: { ran: true, ok: verify.ok, exitCode: verify.code } } : { verify: { ran: false } }),
+    },
+  });
 }
 
 // Main check function
