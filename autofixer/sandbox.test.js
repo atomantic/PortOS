@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   sanitizeChildEnv,
+  collectSecretEnvValues,
   buildFixPrompt,
   defuseSentinel,
   restrictedToolArgs,
@@ -66,6 +67,30 @@ describe('sanitizeChildEnv — credential stripping', () => {
 
   it('drops CLAUDECODE so a nested run does not adopt the parent session', () => {
     expect(sanitizeChildEnv({ CLAUDECODE: '1', PATH: '/bin' }).CLAUDECODE).toBeUndefined();
+  });
+});
+
+describe('collectSecretEnvValues — exfil-scan value list', () => {
+  it('includes auth-key values and provider.envVars, excludes system paths', () => {
+    const childEnv = {
+      PATH: '/usr/local/bin:/usr/bin',
+      HOME: '/home/someuser',
+      ANTHROPIC_API_KEY: 'sk-ant-childkeyvalue123',
+      OPENCODE_CONFIG_CONTENT: 'config-with-embedded-secret-abc',
+    };
+    // Bedrock/custom key delivered ONLY via provider.envVars (overlaid by runner).
+    const providerEnvVars = { AWS_BEARER_TOKEN_BEDROCK: 'bedrock-opaque-token-xyz' };
+    const values = collectSecretEnvValues(childEnv, providerEnvVars);
+    expect(values).toContain('sk-ant-childkeyvalue123');
+    expect(values).toContain('config-with-embedded-secret-abc'); // non-key-named allowlisted var
+    expect(values).toContain('bedrock-opaque-token-xyz');        // provider-injected
+    // System paths are NOT scanned (would false-positive on legit path edits).
+    expect(values).not.toContain('/usr/local/bin:/usr/bin');
+    expect(values).not.toContain('/home/someuser');
+  });
+
+  it('drops short values to avoid false positives', () => {
+    expect(collectSecretEnvValues({ API_KEY: 'short' })).toEqual([]);
   });
 });
 

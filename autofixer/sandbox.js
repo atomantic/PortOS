@@ -99,6 +99,34 @@ export function sanitizeChildEnv(baseEnv = process.env) {
   return out;
 }
 
+/**
+ * Collect the credential VALUES the agent's environment exposes, for the diff
+ * secret-scan (scanDiffForSecrets) — so an agent that reads a key at runtime
+ * (e.g. `/proc/self/environ`, which stays readable even with Bash denied) can't
+ * write it into a source file and promote it. Scoped to auth-bearing keys +
+ * everything the runner injects via `provider.envVars` (Bedrock/Vertex/custom
+ * keys delivered only there), and deliberately excludes system vars (PATH/HOME)
+ * so a diff legitimately referencing a path isn't a false positive.
+ *
+ * @param {Record<string,string>} childEnv  the sanitized child env
+ * @param {Record<string,string>} [providerEnvVars]  provider.envVars overlaid by the runner
+ * @returns {string[]}
+ */
+export function collectSecretEnvValues(childEnv = {}, providerEnvVars = {}) {
+  const vals = [];
+  for (const [k, v] of Object.entries(childEnv || {})) {
+    if (
+      PROVIDER_AUTH_ALLOW.has(k) ||
+      PROVIDER_AUTH_PREFIXES.some((p) => k.startsWith(p)) ||
+      /API_KEY|TOKEN|SECRET|CREDENTIAL|_KEY$/i.test(k)
+    ) {
+      vals.push(v);
+    }
+  }
+  for (const v of Object.values(providerEnvVars || {})) vals.push(v);
+  return vals.filter((v) => typeof v === 'string' && v.length >= 8);
+}
+
 // ---------------------------------------------------------------------------
 // Prompt construction (untrusted-log fencing)
 // ---------------------------------------------------------------------------

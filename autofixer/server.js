@@ -11,6 +11,7 @@ import { pickCliProvider, runCliProviderPrompt } from '../server/lib/cliProvider
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 import {
   sanitizeChildEnv,
+  collectSecretEnvValues,
   buildFixPrompt,
   restrictedToolArgs,
   validateProposedDiff,
@@ -342,11 +343,10 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // work from an agent that didn't finish cleanly.
   const diff = await collectWorktreeDiff(worktreePath);
   const agentOk = !result.error;
-  // The live env's provider-auth values — reject any diff that tries to write
-  // one into the repo (agent read-then-promote exfil backstop).
-  const secretValues = Object.entries(childEnv)
-    .filter(([k]) => /API_KEY|TOKEN|SECRET|CREDENTIAL/i.test(k))
-    .map(([, v]) => v);
+  // The live env's provider-auth values (incl. runner-injected provider.envVars
+  // keys) — reject any diff that tries to write one into the repo (agent
+  // read-then-promote exfil backstop).
+  const secretValues = collectSecretEnvValues(childEnv, picked.provider?.envVars);
   const validation = agentOk
     ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES, secretValues })
     : { ok: false, reason: `agent did not complete: ${result.error}`, files: [] };
