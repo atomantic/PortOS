@@ -202,6 +202,31 @@ function firstGenerationModel(provider) {
 }
 
 /**
+ * Tier-1 (config/env) deterministic fix for a `model-not-found` /
+ * `model-not-supported` failure (issue #2342): the request named a model id the
+ * (reachable) provider doesn't serve, so pick a DIFFERENT valid generation
+ * model that the provider DOES list and retry the SAME provider with it —
+ * cheaper than benching the provider and switching to a fallback (Tier 3).
+ *
+ * Pure — no I/O. Returns null (⇒ Tier 1 declines, cascade falls through) when:
+ *   - the provider carries no enumerable `models` list (nothing to correct to), OR
+ *   - the only listed models are the failed one and/or embedding-only ids.
+ *
+ * The failed id is excluded so we never re-issue the same broken request, and
+ * embedding-only ids are skipped (mirrors `firstGenerationModel`) so a
+ * generation call can't get corrected onto e.g. `nomic-embed-text`.
+ *
+ * @param {object} provider
+ * @param {string} [failedModel] — the model id that just failed model-not-found
+ * @returns {string|null}
+ */
+export function pickConfigCorrectedModel(provider, failedModel) {
+  const models = provider?.models;
+  if (!Array.isArray(models)) return null;
+  return models.find((m) => m && m !== failedModel && isGenerationModel(m)) || null;
+}
+
+/**
  * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
  * `providerId` — any `getProviderById` failure (stale id, lookup
  * error, network blip) falls through to `getActiveProvider`. Returns
@@ -329,7 +354,7 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
  *   cwd and the analysis runs against the wrong files. No-op for API
  *   providers (no spawn).
- * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
+ * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
  *   — `model` is the resolved model that actually executed (null when
  *   neither override nor provider.defaultModel applies). `provider` is the
  *   provider object that actually ran, reflecting createRun's proactive swap
@@ -340,7 +365,11 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   `usedFallback` is true, `fallbackFrom` identifies the failed primary
  *   and `fallbackProvider` is the full provider object that actually ran
  *   (so callers persisting run attribution can write the correct
- *   providerId without re-picking the fallback themselves).
+ *   providerId without re-picking the fallback themselves). `fixTier` /
+ *   `fixStrategy` (issue #2342) record WHICH fallback tier recovered the
+ *   failure — `1`/`'config/env'` when a same-provider model correction
+ *   recovered it, `3`/`'constrained-agent-retry'` for a fallback-provider
+ *   retry — so callers can log/attribute the deterministic recovery path.
  */
 export async function runPromptThroughProvider(args) {
   // Validate inputs up front so an accidentally-null `provider` (or one
@@ -384,46 +413,131 @@ export async function runPromptThroughProvider(args) {
     }
 
     // The runner already wrote a failed metadata.json and the onRunFailed
-    // hook in server/index.js queued a deferred investigation task. If a
-    // fallback is configured + available, mark the failed provider
-    // unavailable so subsequent calls skip it, then retry once. No
-    // fallback ⇒ let the queued investigation task fire.
+    // hook in server/index.js queued a deferred investigation task keyed on
+    // (providerName, model). We now walk the deterministic fallback cascade
+    // (issue #2342), attempting the CHEAPEST tier that can plausibly recover
+    // the failure and escalating to the queued investigation task (Tier 4)
+    // only when every deterministic tier declines or fails:
+    //   Tier 1 config/env  — retry the SAME provider with a valid model
+    //                         (deterministic; no persisted config change)
+    //   Tier 2 schema/type  — no safe same-provider transform at this layer
+    //                         (a malformed request/response can't be rewritten
+    //                         without the caller's schema) → falls through
+    //   Tier 3 constrained-agent-retry — bounded retry via a fallback provider
+    //   Tier 4 escalate     — the deferred investigation task the hook queued
     //
     // `failed` is the provider that ACTUALLY ran — usually equals
     // args.provider, but createRun may have proactively swapped to a
     // different fallback if the requested primary was already marked
-    // unavailable. Always dedupe against what actually ran so
-    // `noteFallbackHandled` cancels the right queued task.
+    // unavailable. Always dedupe against what actually ran so the
+    // task-suppression notifiers cancel the right queued task.
     const failed = firstError.effectiveProvider;
     const failedModel = firstError.effectiveModel || resolveEffectiveModel(failed, args.model);
-    // Coalesce the per-provider mark-and-pick during an N-way failure
-    // storm: the 2nd…Nth simultaneous failure for the same provider awaits
-    // the first's result instead of independently re-reading providers.json
+    const category = firstError.errorAnalysis?.category;
+    // The primary's queued investigation task is keyed on (providerName, model).
+    // Every tier that retries suppresses this key up front so a slow retry
+    // (a CLI fallback can take 20–30s) can't outrun the backstop timer
+    // (autoFixer.TASK_DEFER_MS) and leave a task behind for a recovered failure.
+    const primaryKey = { provider: failed.name || failed.id, model: failedModel };
+
+    // Load the fallback-lifecycle notifiers lazily and once for the whole
+    // cascade. Lazy (see loadAutoFixer) so the happy path never drags in the
+    // CoS stack — and so a failure with NO recovery path (no tier applies)
+    // never loads it either, since none of the note* helpers below fire.
+    let autoFixerModule;
+    let autoFixerLoaded = false;
+    const getAutoFixer = async () => {
+      if (!autoFixerLoaded) {
+        autoFixerLoaded = true;
+        autoFixerModule = await loadAutoFixer().catch((err) => {
+          console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
+          return null;
+        });
+      }
+      return autoFixerModule;
+    };
+    // Keys must match what server/index.js's onRunFailed hook published
+    // (metadata.providerName + metadata.model). Best-effort throughout: a
+    // notifier failure must never turn a working retry into a user-visible error.
+    const noteStarted = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackStarted(key); } catch { /* best-effort */ } };
+    const noteFailed = async (key) => { const a = await getAutoFixer(); try { a?.noteFallbackFailed(key); } catch { /* best-effort */ } };
+    const noteHandled = async (key) => {
+      const a = await getAutoFixer();
+      try { a?.noteFallbackHandled(key); } catch (suppressErr) {
+        console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
+      }
+    };
+
+    // ── Tier 1 — config/env correction (issue #2342) ─────────────────────────
+    // A model-not-found/model-not-supported failure is request-specific: the
+    // provider is reachable but doesn't serve the requested model id. Before
+    // escalating to a whole-provider fallback (Tier 3), attempt the cheapest
+    // deterministic fix — retry the SAME provider with a valid model it lists.
+    // No config is persisted; on success the user's own provider keeps serving.
+    let tier1CorrectedKey = null;
+    // Only a wrong-model failure is config-correctable here. Compare against
+    // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
+    // does NOT exist (it would be `undefined`, matching a category-less failure
+    // and wrongly engaging Tier 1). 'model-not-supported' is autoFixer's own
+    // Tier-1 category (from CoS agent analysis), matched here for parity.
+    if (category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported') {
+      const correctedModel = pickConfigCorrectedModel(failed, failedModel);
+      if (correctedModel) {
+        console.log(`🔧 Tier 1 (config/env) retry: ${args.source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
+        // Suppress the primary's investigation task while the corrected retry
+        // runs; released in the give-up branch below if the cascade fails out.
+        await noteStarted(primaryKey);
+        tier1CorrectedKey = { provider: failed.name || failed.id, model: correctedModel };
+        let tier1Result;
+        try {
+          tier1Result = await executeProviderRunOnce({
+            ...args,
+            provider: failed,
+            model: correctedModel,
+            runId: undefined, // fresh run so the failed primary's record stays intact
+          });
+        } catch (tier1Error) {
+          // The corrected retry ALSO failed — its own onRunFailed queued a task
+          // keyed on tier1CorrectedKey. Fall through to Tier 3: that task
+          // survives as the escalation if nothing recovers, and is cancelled
+          // below if a later tier does.
+          console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
+        }
+        if (tier1Result) {
+          await noteHandled(primaryKey);
+          return {
+            ...tier1Result,
+            usedFallback: true,
+            fixTier: 1, // FIX_TIERS.CONFIG_ENV (mirrored; kept decoupled from the lazy autoFixer import)
+            fixStrategy: 'config/env',
+            fallbackFrom: { id: failed.id, name: failed.name },
+            fallbackProvider: failed,
+          };
+        }
+      }
+    }
+
+    // ── Tier 3 — constrained-agent-retry via a fallback provider ─────────────
+    // Coalesce the per-provider mark-and-pick during an N-way failure storm:
+    // the 2nd…Nth simultaneous failure for the same provider awaits the first's
+    // result instead of independently re-reading providers.json
     // (pickFallbackProvider) and re-writing provider-status.json
-    // (markUnavailable). The fallback *run* below is NOT coalesced — each
-    // failed call still executes its own fallback to get its own result.
+    // (markUnavailable). The fallback *run* below is NOT coalesced — each failed
+    // call still executes its own fallback to get its own result.
     const picked = await coalesceFallbackMarkAndPick(failed, firstError);
     if (!picked) {
+      // ── Tier 4 — escalate ──: no recovery path left. Release any Tier-1
+      // suppression so the primary key doesn't leak in the in-flight set (the
+      // corrected retry's own task, if any, still surfaces as the escalation).
+      if (tier1CorrectedKey) await noteFailed(primaryKey);
       throw stripFallbackContext(firstError);
     }
     const fallback = picked.provider;
 
-    console.log(`⚡ Retrying ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
+    console.log(`⚡ Tier 3 (constrained-agent-retry): ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
 
-    // Tell the autofixer a fallback is now in flight for this failure so it
-    // suppresses the deferred investigation task IMMEDIATELY — before the
-    // backstop timer (TASK_DEFER_MS) can fire. Without this, a slow CLI
-    // fallback (Claude Code can take 20–30s) outruns the timer and a
-    // successfully-recovered failure still leaves a task in the user's plan.
-    // Keys must match what server/index.js's onRunFailed hook published
-    // (metadata.providerName + metadata.model). Best-effort throughout: a
-    // failure here must never turn a working fallback into a user-visible error.
-    const fallbackKey = { provider: failed.name || failed.id, model: failedModel };
-    const autoFixer = await loadAutoFixer().catch((err) => {
-      console.error(`❌ autoFixer load failed (investigation task not suppressed): ${err.message}`);
-      return null;
-    });
-    try { autoFixer?.noteFallbackStarted(fallbackKey); } catch { /* best-effort */ }
+    // Re-suppress the primary key (idempotent) for the fallback run.
+    await noteStarted(primaryKey);
 
     // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
     // when one is set (so the user's chosen fallback provider+model pair is
@@ -443,22 +557,30 @@ export async function runPromptThroughProvider(args) {
         runId: undefined, // fresh runId so the failed primary's record stays intact
       });
     } catch (fallbackError) {
-      // Both failed — release the primary's suppression (the fallback's own
-      // failure already queued its investigation task) and rethrow.
-      try { autoFixer?.noteFallbackFailed(fallbackKey); } catch { /* best-effort */ }
+      // ── Tier 4 — escalate ──: every deterministic tier failed. Release the
+      // primary's suppression (the fallback provider's own failure already
+      // queued its investigation task) and rethrow. Any Tier-1 corrected-retry
+      // task is intentionally left in place — one investigation task per
+      // genuinely-failed attempt is the intended escalation.
+      await noteFailed(primaryKey);
       throw stripFallbackContext(fallbackError);
     }
 
     // Fallback succeeded — clear the primary's suppression so the user doesn't
     // see a noisy "investigate" entry in their plan for a failure that was
     // auto-recovered.
-    try { autoFixer?.noteFallbackHandled(fallbackKey); } catch (suppressErr) {
-      console.error(`❌ noteFallbackHandled failed (investigation task not suppressed): ${suppressErr.message}`);
-    }
+    await noteHandled(primaryKey);
+    // A Tier-1 corrected retry that failed before this recovery left its own
+    // deferred task; cancel it too so a fully-recovered action creates ZERO
+    // investigation tasks (issue #2342 acceptance: only UNRECOVERED failures
+    // escalate to Tier 4).
+    if (tier1CorrectedKey) await noteHandled(tier1CorrectedKey);
 
     return {
       ...fallbackResult,
       usedFallback: true,
+      fixTier: 3, // FIX_TIERS.CONSTRAINED_RETRY
+      fixStrategy: 'constrained-agent-retry',
       fallbackFrom: { id: failed.id, name: failed.name },
       fallbackProvider: fallback,
     };
