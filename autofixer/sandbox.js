@@ -50,15 +50,22 @@ const SAFE_ENV_PREFIXES = ['LC_'];
 // AI-provider auth the agent's CLI needs to authenticate. These are the ONLY
 // credentials it should carry — everything else (DB passwords, cloud keys,
 // GitHub tokens, other apps' secrets) is unrelated and stripped.
+// NOTE: intentionally excludes filesystem-backed cloud creds
+// (GOOGLE_APPLICATION_CREDENTIALS keyfile path, AWS_PROFILE, GOOGLE_CLOUD_PROJECT).
+// Even with Bash denied, a Read-capable agent could read the pointed-to keyfile
+// (or /proc/self/environ) and write it into an allowed source file — so we keep
+// only the API-key vars the CLI reads directly, and the diff secret-scan
+// (scanDiffForSecrets) is the backstop that blocks any surviving value from
+// being written into the repo. Bedrock/Vertex users set these via
+// provider.envVars, which still overlays inside the runner.
 const PROVIDER_AUTH_ALLOW = new Set([
   'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
   'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE',
   'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_API_KEY',
-  'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'VERTEX_PROJECT',
   'XAI_API_KEY', 'GROK_API_KEY', 'OPENROUTER_API_KEY',
   'OLLAMA_HOST', 'OLLAMA_API_BASE', 'AWS_REGION', 'AWS_DEFAULT_REGION',
-  'AWS_PROFILE', 'OPENCODE_CONFIG_CONTENT',
+  'OPENCODE_CONFIG_CONTENT',
 ]);
 
 // Prefix families for provider auth (CLAUDE_CODE_*, e.g. the OAuth token).
@@ -215,13 +222,56 @@ export function extractDiffPaths(diff) {
   return Array.from(paths);
 }
 
+// Secret markers that must never be introduced INTO a source file by the agent.
+// This is the backstop against "Read a credential file / /proc/self/environ,
+// then write it into an allowed source file and promote it." Applied to added
+// (`+`) lines only.
+const SECRET_LINE_PATTERNS = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
+  /\bAKIA[0-9A-Z]{16}\b/,                 // AWS access key id
+  /\baws_secret_access_key\b/i,
+  /\bsk-ant-[A-Za-z0-9_-]{12,}/,          // Anthropic
+  /\bsk-[A-Za-z0-9]{20,}/,                // OpenAI-style
+  /\bghp_[A-Za-z0-9]{20,}/,               // GitHub PAT
+  /\bxai-[A-Za-z0-9]{16,}/,               // xAI
+  /\bAIza[0-9A-Za-z_-]{20,}/,             // Google API key
+];
+
+/**
+ * Scan the ADDED lines of a diff for secrets. Rejects on either a known secret
+ * pattern or a literal occurrence of one of the caller-supplied `secretValues`
+ * (the live env's provider-auth values), so an agent can't smuggle a credential
+ * it read at runtime into the promoted repository.
+ *
+ * @param {string} diff
+ * @param {string[]} [secretValues] live secret values to reject verbatim
+ * @returns {string|null} a short marker of what matched, or null when clean
+ */
+export function scanDiffForSecrets(diff, secretValues = []) {
+  if (typeof diff !== 'string' || !diff) return null;
+  const values = (Array.isArray(secretValues) ? secretValues : [])
+    .filter((v) => typeof v === 'string' && v.length >= 8);
+  for (const raw of diff.split('\n')) {
+    if (!raw.startsWith('+') || raw.startsWith('+++')) continue;
+    const line = raw.slice(1);
+    for (const re of SECRET_LINE_PATTERNS) {
+      if (re.test(line)) return `secret pattern ${re}`;
+    }
+    for (const v of values) {
+      if (line.includes(v)) return 'live credential value';
+    }
+  }
+  return null;
+}
+
 /**
  * Validate an agent-proposed diff before it can be promoted to the live
  * checkout. Rejects: empty diffs, oversized diffs, absolute paths, `..`
- * traversal, and edits to forbidden files (secrets, .git, CI config).
+ * traversal, edits to forbidden files (secrets, .git, CI config), and diffs
+ * that introduce credentials (pattern or a live env secret value).
  *
  * @param {string} diff  unified diff (git diff output)
- * @param {{ maxBytes?: number }} [opts]
+ * @param {{ maxBytes?: number, secretValues?: string[] }} [opts]
  * @returns {{ ok: boolean, reason?: string, files: string[] }}
  */
 export function validateProposedDiff(diff, opts = {}) {
@@ -235,6 +285,10 @@ export function validateProposedDiff(diff, opts = {}) {
   const files = extractDiffPaths(diff);
   if (files.length === 0) {
     return { ok: false, reason: 'diff touches no files', files: [] };
+  }
+  const secret = scanDiffForSecrets(diff, opts.secretValues);
+  if (secret) {
+    return { ok: false, reason: `diff introduces a credential (${secret})`, files };
   }
   for (const file of files) {
     if (isAbsolute(file) || file.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(file)) {
@@ -355,5 +409,20 @@ export async function applyDiffToLive(repoPath, diff, tmpDir) {
   const applied = await execGit(['apply', '--whitespace=nowarn', patchFile], repoPath);
   await rm(patchFile, { force: true }).catch(() => {});
   if (applied.code !== 0) return { error: `git apply failed: ${applied.stderr.trim()}` };
+  return { ok: true };
+}
+
+/**
+ * Reverse-apply a previously-applied diff, restoring the live checkout. Used
+ * when a promoted fix applied cleanly but the process restart then failed — so
+ * we don't leave the live tree mutated (which would make the next cycle either
+ * double-apply or fail `git apply --check` forever). Best-effort.
+ */
+export async function revertDiffFromLive(repoPath, diff, tmpDir) {
+  const patchFile = join(tmpDir, `autofix-revert-${randomBytes(6).toString('hex')}.patch`);
+  await writeFile(patchFile, diff.endsWith('\n') ? diff : `${diff}\n`);
+  const reverted = await execGit(['apply', '--reverse', '--whitespace=nowarn', patchFile], repoPath);
+  await rm(patchFile, { force: true }).catch(() => {});
+  if (reverted.code !== 0) return { error: `git apply --reverse failed: ${reverted.stderr.trim()}` };
   return { ok: true };
 }

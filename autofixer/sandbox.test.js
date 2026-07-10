@@ -5,6 +5,7 @@ import {
   defuseSentinel,
   restrictedToolArgs,
   validateProposedDiff,
+  scanDiffForSecrets,
   extractDiffPaths,
 } from './sandbox.js';
 
@@ -182,6 +183,31 @@ index 111..222 100644
     expect(validateProposedDiff(diff).ok).toBe(false);
   });
 
+  it('rejects a diff that writes a live credential value into a source file (read-then-promote exfil)', () => {
+    const stolen = 'sk-ant-supersecretkeyvalue1234567890';
+    const diff = `diff --git a/src/config.js b/src/config.js
+--- a/src/config.js
++++ b/src/config.js
+@@ -1 +1,2 @@
+ const x = 1
++const leak = "${stolen}"
+`;
+    const r = validateProposedDiff(diff, { secretValues: [stolen] });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/credential/);
+  });
+
+  it('rejects a diff introducing a private key / AWS key by pattern', () => {
+    const diff = `diff --git a/src/a.js b/src/a.js
+--- a/src/a.js
++++ b/src/a.js
+@@ -1 +1,2 @@
+ x
++const k = "AKIAABCDEFGHIJKLMNOP"
+`;
+    expect(validateProposedDiff(diff).ok).toBe(false);
+  });
+
   it('rejects an absolute path', () => {
     const diff = `diff --git a//etc/passwd b//etc/passwd
 --- a//etc/passwd
@@ -191,6 +217,26 @@ index 111..222 100644
 +y
 `;
     expect(validateProposedDiff(diff).ok).toBe(false);
+  });
+});
+
+describe('scanDiffForSecrets', () => {
+  it('only inspects added lines, ignoring context/removed', () => {
+    const diff = `--- a/x
++++ b/x
+@@ -1,2 +1,1 @@
+-const old = "AKIAOLDKEY0000000000"
+ context AKIACONTEXT000000000
+`;
+    // The secret only appears on a removed/context line — not an addition.
+    expect(scanDiffForSecrets(diff)).toBeNull();
+  });
+  it('flags an added AWS key and a verbatim live value', () => {
+    expect(scanDiffForSecrets('+AKIAABCDEFGHIJKLMNOP')).toMatch(/pattern/);
+    expect(scanDiffForSecrets('+token=abcd1234efgh', ['abcd1234efgh'])).toMatch(/live credential/);
+  });
+  it('ignores short secretValues to avoid false positives', () => {
+    expect(scanDiffForSecrets('+const x = 1', ['1'])).toBeNull();
   });
 });
 

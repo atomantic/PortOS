@@ -19,6 +19,7 @@ import {
   collectWorktreeDiff,
   removeWorktree,
   applyDiffToLive,
+  revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
 
@@ -254,7 +255,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   const verifyCommand = typeof autofixerCfg.verifyCommand === 'string' ? autofixerCfg.verifyCommand.trim() : '';
 
   // Single completion path — write the session record + return the result.
-  const finalize = async ({ success, exitCode, error, extra = {}, patch }) => {
+  const finalize = async ({ success, exitCode, error, extra = {}, patch, cooldown }) => {
     const endTime = new Date().toISOString();
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
@@ -284,9 +285,10 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     await saveSession(sessionId, prompt, output, metadata, patch);
     console.log(`💾 [Autofixer] Saved session: ${sessionId}`);
 
-    // Cool down on any usable outcome (promoted OR staged) so we don't
-    // regenerate a fix for the same crash every cycle.
-    if (success) markAsFixed(processName);
+    // Cool down whenever a usable fix was produced (promoted, staged, OR
+    // applied-but-restart-failed) — not just on full success — so a crash the
+    // agent already addressed doesn't re-trigger the LLM every 15-min cycle.
+    if (cooldown ?? success) markAsFixed(processName);
     return { success, sessionId, output, ...(error ? { error } : {}) };
   };
 
@@ -340,8 +342,13 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // work from an agent that didn't finish cleanly.
   const diff = await collectWorktreeDiff(worktreePath);
   const agentOk = !result.error;
+  // The live env's provider-auth values — reject any diff that tries to write
+  // one into the repo (agent read-then-promote exfil backstop).
+  const secretValues = Object.entries(childEnv)
+    .filter(([k]) => /API_KEY|TOKEN|SECRET|CREDENTIAL/i.test(k))
+    .map(([, v]) => v);
   const validation = agentOk
-    ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES })
+    ? validateProposedDiff(diff, { maxBytes: MAX_DIFF_BYTES, secretValues })
     : { ok: false, reason: `agent did not complete: ${result.error}`, files: [] };
 
   // Optional verification against the user-configured test command, run in the
@@ -366,8 +373,15 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
         const restart = await execPm2(['restart', processName]).catch((e) => ({ error: e.message }));
         promoted = !restart.error;
         promotionError = restart.error || null;
-        if (promoted) console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
-        else console.error(`❌ [Autofixer] Applied fix but restart failed: ${restart.error}`);
+        if (promoted) {
+          console.log(`🚀 [Autofixer] Promoted + restarted ${processName}`);
+        } else {
+          // Applied cleanly but the restart failed — roll the patch back so the
+          // live tree isn't left mutated (which would make the next cycle
+          // double-apply or fail `git apply --check` forever).
+          const reverted = await revertDiffFromLive(app.repoPath, diff, AUTOFIXER_DIR);
+          console.error(`❌ [Autofixer] Restart failed, rolled back applied fix for ${processName}: ${restart.error}${reverted.error ? ` (rollback also failed: ${reverted.error})` : ''}`);
+        }
       } else {
         promotionError = applied.error;
         console.error(`❌ [Autofixer] Promotion blocked: ${applied.error}`);
@@ -383,9 +397,11 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // Always discard the disposable worktree.
   await removeWorktree(app.repoPath, worktreePath);
 
-  const success = validation.ok && verifyOk && (autoPromote ? promoted : true);
+  const producedFix = validation.ok && verifyOk; // usable fix, regardless of restart outcome
+  const success = producedFix && (autoPromote ? promoted : true);
   return finalize({
     success,
+    cooldown: producedFix,
     exitCode: result.exitCode ?? -1,
     error: result.error || promotionError || (!validation.ok ? validation.reason : null) || null,
     patch: validation.ok ? diff : undefined,
