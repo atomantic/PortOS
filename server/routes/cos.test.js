@@ -388,6 +388,21 @@ describe('CoS Routes', () => {
       expect(cos.updateTask).toHaveBeenCalledWith('task-001', expect.objectContaining({ status: 'completed' }), 'user');
     });
 
+    it('should update an internal task in the internal queue', async () => {
+      cos.updateTask.mockResolvedValue({ id: 'sys-001', model: 'gpt-5.6-terra' });
+
+      const response = await request(app)
+        .put('/api/cos/tasks/sys-001')
+        .send({ model: 'gpt-5.6-terra', type: 'internal' });
+
+      expect(response.status).toBe(200);
+      expect(cos.updateTask).toHaveBeenCalledWith(
+        'sys-001',
+        expect.objectContaining({ model: 'gpt-5.6-terra' }),
+        'internal'
+      );
+    });
+
     it('should return 404 if task not found', async () => {
       cos.updateTask.mockResolvedValue({ error: 'Task not found' });
 
