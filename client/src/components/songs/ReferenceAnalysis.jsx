@@ -115,7 +115,11 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
     startRequest: (filename) => transcribeReferenceMidi(filename, undefined, { silent: true }),
     eventsUrl: referenceMidiTranscriptionEventsUrl,
     cancelRequest: cancelReferenceMidiTranscription,
-    onComplete: ({ filename }) => {
+    onComplete: ({ filename }, sourceAudio) => {
+      // The .mid is a transcription OF the audio captured at kickoff — if the
+      // reference's audio was swapped while it ran, drop the stale result
+      // rather than attaching the old recording's MIDI to the new audio.
+      if (sourceAudio !== reference.audioFilename) return;
       onUpdate('midiFilename', filename);
       toast.success('MIDI transcribed — Save the song to keep it');
     },
@@ -220,7 +224,9 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
           onClick={() => {
             // Segments are offsets into THIS audio — and the MIDI was
             // transcribed from it — clear them with it so stale artifacts
-            // can't resurrect against a different recording.
+            // can't resurrect against a different recording. An in-flight
+            // transcription is of this audio too; cancel it (no-op when idle).
+            midiJob.cancel();
             onUpdate('segments', []);
             onUpdate('midiFilename', '');
             onUpdate('audioFilename', '');
