@@ -601,7 +601,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     await cleanupAgentWorktree('agent-1', true, {
       openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'antigravity'],
-      reviewStopMode: 'on-findings', reviewerApplies: true, description: 'Build',
+      reviewStopMode: 'on-findings', reviewerApplies: true, codexModel: 'gpt-5.6-sol', description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
@@ -611,6 +611,24 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'antigravity']);
     expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
     expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
+    // Codex model tier rides along only because `codex` is in the list.
+    expect(followUp.metadata.reviewLoopCodexModel).toBe('gpt-5.6-sol');
+  });
+
+  it('drops the Codex model tier when codex is not among the reviewers', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/59' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-nc' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'claude'],
+      codexModel: 'gpt-5.6-sol', description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopCodexModel).toBeNull();
   });
 
   it('does NOT pre-request Copilot when it trails a CLI reviewer, but keeps it in the follow-up list', async () => {

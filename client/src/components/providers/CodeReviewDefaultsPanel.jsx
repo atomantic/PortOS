@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
+import { filterSelectableModels } from '../../utils/providers';
 import ReviewerPicker from '../cos/ReviewerPicker';
 import {
   DEFAULT_REVIEWERS,
@@ -12,11 +13,14 @@ import {
 // task-type config didn't pin its own reviewers. Lives at the top of the AI
 // Providers page so adding a new provider and pointing reviews at it stay in
 // the same flow. Per-backend model dropdowns are shown only when the
-// corresponding local-LLM reviewer is in the chain; the model list comes from
-// `/api/local-llm/status` so it always reflects what's actually installed.
+// corresponding reviewer is in the chain: the local-LLM (LM Studio / Ollama)
+// lists come from `/api/local-llm/status` so they reflect what's actually
+// installed, while the Codex tier list comes from the provider catalog
+// (`/api/providers`) since Codex is a CLI reviewer, not a local backend.
 export default function CodeReviewDefaultsPanel() {
   const lmStudioSelectId = useId();
   const ollamaSelectId = useId();
+  const codexSelectId = useId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
@@ -24,14 +28,17 @@ export default function CodeReviewDefaultsPanel() {
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [lmstudioModel, setLmstudioModel] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
+  const [codexModel, setCodexModel] = useState('');
   const [localLlmStatus, setLocalLlmStatus] = useState(null);
+  const [codexProvider, setCodexProvider] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       api.getCodeReviewDefaults({ silent: true }).catch(() => null),
       api.getLocalLlmStatus({ silent: true }).catch(() => null),
-    ]).then(([defaults, status]) => {
+      api.getProviders({ silent: true }).catch(() => null),
+    ]).then(([defaults, status, providers]) => {
       if (cancelled) return;
       if (defaults) {
         setReviewers(Array.isArray(defaults.reviewers) && defaults.reviewers.length ? defaults.reviewers : DEFAULT_REVIEWERS);
@@ -39,8 +46,12 @@ export default function CodeReviewDefaultsPanel() {
         setReviewerApplies(defaults.reviewerApplies === true);
         setLmstudioModel(defaults.lmstudioModel || '');
         setOllamaModel(defaults.ollamaModel || '');
+        setCodexModel(defaults.codexModel || '');
       }
       setLocalLlmStatus(status || null);
+      // Codex is a CLI reviewer, so its selectable model tiers come from the
+      // provider catalog (not the local-LLM status probe the others use).
+      setCodexProvider((providers?.providers || []).find((p) => p.id === 'codex') || null);
       setLoading(false);
     });
     return () => { cancelled = true; };
@@ -48,6 +59,7 @@ export default function CodeReviewDefaultsPanel() {
 
   const needsLmStudio = reviewers.includes('lmstudio');
   const needsOllama = reviewers.includes('ollama');
+  const needsCodex = reviewers.includes('codex');
 
   const lmStudioModels = useMemo(
     () => localLlmStatus?.lmstudio?.models?.map((m) => m.id).filter(Boolean) || [],
@@ -56,6 +68,10 @@ export default function CodeReviewDefaultsPanel() {
   const ollamaModels = useMemo(
     () => localLlmStatus?.ollama?.models?.map((m) => m.id).filter(Boolean) || [],
     [localLlmStatus]
+  );
+  const codexModels = useMemo(
+    () => codexProvider ? filterSelectableModels(codexProvider.models || [codexProvider.defaultModel]) : [],
+    [codexProvider]
   );
 
   const handleSave = async () => {
@@ -69,6 +85,7 @@ export default function CodeReviewDefaultsPanel() {
       reviewerApplies,
       lmstudioModel: lmstudioModel || undefined,
       ollamaModel: ollamaModel || undefined,
+      codexModel: codexModel || undefined,
     };
     const ok = await api.updateSettings({ codeReview: payload }, { silent: true })
       .then(() => true)
@@ -77,7 +94,9 @@ export default function CodeReviewDefaultsPanel() {
     if (ok) toast.success('Code Review Defaults saved');
   };
 
-  const renderModelPicker = (label, backend, value, setValue, options, selectId) => {
+  // `emptyMessage` overrides the default local-LLM "install a model" hint so the
+  // Codex picker (a CLI reviewer, not a local backend) shows relevant guidance.
+  const renderModelPicker = (label, backend, value, setValue, options, selectId, emptyMessage = null) => {
     const status = localLlmStatus?.[backend];
     const unavailable = status && status.available === false;
     return (
@@ -95,9 +114,9 @@ export default function CodeReviewDefaultsPanel() {
           </select>
         ) : (
           <div className="text-xs text-amber-400/80">
-            {unavailable
+            {emptyMessage || (unavailable
               ? `${label} backend isn't reachable — start it from Settings → Local LLMs to load models.`
-              : `No ${label} models installed yet — add one in Settings → Local LLMs.`}
+              : `No ${label} models installed yet — add one in Settings → Local LLMs.`)}
           </div>
         )}
       </div>
@@ -111,7 +130,7 @@ export default function CodeReviewDefaultsPanel() {
         <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
       </div>
       <p className="text-xs text-gray-500">
-        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint and run the model selected below.
+        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the Codex reviewer invokes the Codex CLI directly. Each runs the model selected below.
       </p>
 
       {loading ? (
@@ -132,6 +151,7 @@ export default function CodeReviewDefaultsPanel() {
 
           {needsLmStudio && renderModelPicker('LM Studio', 'lmstudio', lmstudioModel, setLmstudioModel, lmStudioModels, lmStudioSelectId)}
           {needsOllama && renderModelPicker('Ollama', 'ollama', ollamaModel, setOllamaModel, ollamaModels, ollamaSelectId)}
+          {needsCodex && renderModelPicker('Codex', 'codex', codexModel, setCodexModel, codexModels, codexSelectId, 'No selectable Codex models — configure the Codex provider on the AI Providers page (or leave blank to use the Codex CLI default).')}
 
           <div className="flex justify-end">
             <button

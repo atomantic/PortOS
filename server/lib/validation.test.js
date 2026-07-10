@@ -103,8 +103,15 @@ describe('validation.js', () => {
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
+        codexModel: 'gpt-5.6-sol',
       })
       expect(r.success).toBe(true)
+    })
+
+    it('coerces an empty codexModel to undefined', () => {
+      const r = codeReviewSettingsSchema.safeParse({ reviewers: ['codex'], codexModel: '' })
+      expect(r.success).toBe(true)
+      expect(r.data.codexModel).toBeUndefined()
     })
 
     it('accepts an empty object (all fields optional)', () => {

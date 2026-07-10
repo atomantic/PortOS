@@ -59,6 +59,7 @@ export function pickCodeReviewDefaults(settings) {
     reviewerApplies: raw?.reviewerApplies === true,
     lmstudioModel: typeof raw?.lmstudioModel === 'string' && raw.lmstudioModel ? raw.lmstudioModel : null,
     ollamaModel: typeof raw?.ollamaModel === 'string' && raw.ollamaModel ? raw.ollamaModel : null,
+    codexModel: typeof raw?.codexModel === 'string' && raw.codexModel ? raw.codexModel : null,
   }
 }
 
@@ -94,6 +95,12 @@ export async function getCodeReviewDefaults() {
  * module doesn't have to import it directly — keeps validation.js as the
  * single source of truth for the reviewer enum & fallback rules.
  *
+ * `codexModel` (the Codex CLI model tier for a `codex` reviewer) comes from the
+ * Code Review Defaults panel. Unlike the local-LLM models — which the
+ * `/api/code-review/local` endpoint injects server-side — the Codex CLI is
+ * invoked directly by the follow-up agent, so this value has to ride along into
+ * the follow-up's prompt.
+ *
  * Errors in settings I/O fall back to the hardcoded defaults — settings read
  * failures shouldn't block agent completion.
  */
@@ -104,7 +111,8 @@ export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMe
   const reviewerApplies = metadata?.reviewerApplies !== undefined
     ? isTruthyMeta(metadata?.reviewerApplies)
     : (defaults?.reviewerApplies === true)
-  return { reviewers, reviewStopMode, reviewerApplies }
+  const codexModel = defaults?.codexModel || null
+  return { reviewers, reviewStopMode, reviewerApplies, codexModel }
 }
 
 const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:

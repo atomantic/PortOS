@@ -91,7 +91,7 @@ export const REVIEWER_OPTIONS = [
   { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
   { value: 'antigravity', label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
-  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' },
+  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on AI Providers → Code Review Defaults)' },
   { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
   { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
 ];
