@@ -458,6 +458,28 @@ export function buildProgrammaticOutputCompletionSection(sentinelPath) {
 }
 
 /**
+ * Completion block for a **read-only** task (e.g. reference-watch, pr-reviewer's
+ * scan stage). The agent must NOT commit/push/modify source; its real output is
+ * recorded elsewhere DURING the run (a tracker issue, PLAN.md, a report).
+ *
+ * A TUI agent still needs a `.agent-done` sentinel to signal completion — the 2s
+ * sentinel poll in `spawnTuiAgent` is the primary finalize path and the channel
+ * that ingests the run summary. Without it a read-only TUI run only finalizes via
+ * the idle reaper / shell-exit fallback, so the resolution summary is never
+ * captured cleanly (the bug this repairs). CLI/API read-only agents complete on
+ * process exit and never poll a sentinel, so they get the bare notice only.
+ */
+export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const notice = '## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.';
+  if (!isTui || !sentinelPath) return notice;
+  return [
+    notice,
+    '',
+    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+  ].join('\n');
+}
+
+/**
  * Build the agent prompt.
  *
  * Two context modes, selected by `options.providerType`:
@@ -930,7 +952,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     // over the isTui / CLI push-and-PR completion workflows below.
     sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
   } else if (isReadOnly) {
-    sections.push('## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.');
+    sections.push(buildReadOnlyCompletionSection({
+      isTui,
+      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+    }));
   } else if (isReviewLoopFollowUp) {
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {
