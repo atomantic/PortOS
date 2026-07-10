@@ -446,6 +446,25 @@ describe('spawnTuiAgent runtime', () => {
     await completeDone;
   });
 
+  it('lets an explicit provider GH_TOKEN override win over the owner-pinned token (spread order matches the CLI/runner paths)', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+    vi.mocked(gitService.resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_owner_pinned' });
+
+    runSpawn({ provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', envVars: { GH_TOKEN: 'ghp_provider_override' } } });
+    await flushMicrotasks();
+
+    // provider.envVars.GH_TOKEN must win — forgeTokenEnv is spread first.
+    expect(shellService.createShellSession).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_provider_override' }) }),
+    );
+
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
+
   // ── 1. Successful idle-complete path ────────────────────────────────────────
   it('idle-complete: calls finalizeAgent(success:true) with completionReason=idle-complete when idle fires after enough output and runtime', async () => {
     // Wire finalizeAgent to resolve a promise we can await, so we can detect

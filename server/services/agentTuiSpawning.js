@@ -205,8 +205,10 @@ export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd
     // Only AI agent sessions get this — the user's own Shell page does not.
     // opencodeEnv comes after provider.envVars to override the static config.
     // forgeTokenEnv is threaded in explicitly because buildSafeEnv strips
-    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv).
-    env: { ...(provider.envVars || {}), ...opencodeEnv, ...forgeTokenEnv, ...agentGuardEnv() },
+    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv); it goes before
+    // provider.envVars so an explicit provider GH_TOKEN override still wins,
+    // matching the direct-CLI and runner spawn paths.
+    env: { ...forgeTokenEnv, ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });

@@ -372,10 +372,14 @@ export async function resolveForgeForRepo(dir) {
  */
 export async function resolveForgeTokenEnv(dir) {
   const resolved = await resolveForgeForRepo(dir).catch(() => null);
-  // Only overlay when an owner-matched account was actually picked — the
-  // no-match branches of resolveForgeForRepo return the ambient env verbatim,
-  // and re-setting the ambient GH_TOKEN would be a meaningless no-op.
-  const token = resolved?.account ? resolved.env?.GH_TOKEN : null;
+  // resolveForgeForRepo returns a NEW env object (`{ ...process.env, GH_TOKEN }`)
+  // ONLY when it successfully minted an owner-matched token; every other branch
+  // (unparseable remote, glab, no account match, token fetch failed) returns the
+  // ambient `process.env` by reference. So an identity check on the env object is
+  // the precise "a pinned token was minted" signal — keying on `account` alone
+  // would wrongly re-emit the ambient GH_TOKEN when the account matched but the
+  // token fetch failed (that branch keeps `account` set but env === process.env).
+  const token = resolved && resolved.env !== process.env ? resolved.env.GH_TOKEN : null;
   return token ? { GH_TOKEN: token } : {};
 }
 
