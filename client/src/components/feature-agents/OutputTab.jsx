@@ -59,6 +59,7 @@ export default function OutputTab({ agent }) {
         </div>
         <button
           onClick={() => api.getFeatureAgentOutput(agent.id).then(d => d && setOutput(d.output || '')).catch(() => {})}
+          aria-label="Refresh output"
           className="p-1.5 text-gray-400 hover:text-white hover:bg-port-border/50 rounded transition-colors"
         >
           <RefreshCw size={14} />

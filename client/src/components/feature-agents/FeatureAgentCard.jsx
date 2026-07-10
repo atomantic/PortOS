@@ -85,7 +85,7 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
             onCancel={() => setConfirmingDelete(false)}
           />
         ) : (
-          <button onClick={() => setConfirmingDelete(true)} className="flex items-center gap-1 px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded transition-colors">
+          <button onClick={() => setConfirmingDelete(true)} aria-label="Delete" className="flex items-center gap-1 px-2 py-1 text-xs text-port-error hover:bg-port-error/10 rounded transition-colors">
             <Trash2 size={12} />
           </button>
         )}

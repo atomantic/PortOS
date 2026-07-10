@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 export function HistoryPage() {
   const [history, setHistory] = useState([]);
@@ -162,6 +163,7 @@ export function HistoryPage() {
                 <div
                   className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(entry.id)}
+                  {...clickableProps(() => toggleExpand(entry.id))}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
                     <div className="flex items-center gap-3 flex-1 min-w-0">

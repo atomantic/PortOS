@@ -430,7 +430,7 @@ export default function CreativeDirector() {
                     <Play className="w-3 h-3" /> Start
                   </button>
                 )}
-                <button onClick={() => handleDelete(p.id)} className="ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
+                <button onClick={() => handleDelete(p.id)} aria-label="Delete" className="ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
                   <Trash2 className="w-3 h-3" />
                 </button>
               </div>

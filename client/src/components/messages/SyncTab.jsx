@@ -179,6 +179,7 @@ export default function SyncTab({ accounts, onRefresh }) {
                     setEditingSelector(editingSelector === provider ? null : provider);
                     setSelectorForm(sels);
                   }}
+                  aria-label="Edit selectors"
                   className="text-xs text-gray-400 hover:text-white transition-colors"
                 >
                   <Settings size={14} />

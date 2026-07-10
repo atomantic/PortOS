@@ -41,6 +41,7 @@ export * from './brainGraphFocus.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===
+export * from './a11yKeyboard.js';
 export * from './applyManuscriptEdits.js';
 export * from './audioRecorder.js';
 export * from './boundedMap.js';

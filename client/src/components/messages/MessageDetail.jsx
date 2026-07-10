@@ -179,7 +179,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
     <div className="space-y-4">
       {/* Header: back + subject + actions — single compact row */}
       <div className="flex items-center gap-3 px-3 py-2 bg-port-card rounded-lg border border-port-border">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors shrink-0">
+        <button onClick={onBack} aria-label="Back" className="text-gray-400 hover:text-white transition-colors shrink-0">
           <ArrowLeft size={16} />
         </button>
         <div className="flex-1 min-w-0">

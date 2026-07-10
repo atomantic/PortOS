@@ -110,7 +110,7 @@ export default function ReviewTab() {
       {/* Date Navigation */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <button onClick={() => changeDate(-1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button aria-label="Previous" onClick={() => changeDate(-1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <ChevronLeft size={18} />
           </button>
           <input
@@ -119,7 +119,7 @@ export default function ReviewTab() {
             onChange={e => setDate(e.target.value)}
             className="bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-port-accent"
           />
-          <button onClick={() => changeDate(1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button aria-label="Next" onClick={() => changeDate(1)} className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <ChevronRight size={18} />
           </button>
           {!isToday && (

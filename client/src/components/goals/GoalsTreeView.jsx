@@ -146,7 +146,7 @@ function OrganizePanel({ suggestion, goals, onApply, onClose, applying }) {
           <Wand2 className="w-4 h-4 text-port-accent" />
           <h3 className="text-sm font-semibold text-white">Goal Organization</h3>
         </div>
-        <button onClick={onClose} className="p-1 text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} aria-label="Close" className="p-1 text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
       </div>
 
       {suggestion.analysis && (

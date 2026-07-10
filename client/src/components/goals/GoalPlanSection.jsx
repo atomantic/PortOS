@@ -50,6 +50,7 @@ export default function GoalPlanSection({
                           setProposedPhases(next);
                         }}
                         disabled={idx === 0}
+                        aria-label="Move up"
                         className="text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowUp className="w-2.5 h-2.5" />
@@ -63,6 +64,7 @@ export default function GoalPlanSection({
                           setProposedPhases(next);
                         }}
                         disabled={idx === proposedPhases.length - 1}
+                        aria-label="Move down"
                         className="text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowDown className="w-2.5 h-2.5" />
@@ -104,6 +106,7 @@ export default function GoalPlanSection({
                       />
                       <button
                         onClick={() => setProposedPhases(proposedPhases.filter((_, i) => i !== idx).map((p, i) => ({ ...p, order: i })))}
+                        aria-label="Delete"
                         className="text-gray-600 hover:text-red-400"
                       >
                         <Trash2 className="w-3 h-3" />
@@ -159,6 +162,7 @@ export default function GoalPlanSection({
                           setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === 0}
+                        aria-label="Move up"
                         className="text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowUp className="w-2.5 h-2.5" />
@@ -171,6 +175,7 @@ export default function GoalPlanSection({
                           setProposedDecomposition(next.map((m, i) => ({ ...m, order: i })));
                         }}
                         disabled={idx === proposedDecomposition.length - 1}
+                        aria-label="Move down"
                         className="text-gray-600 hover:text-white disabled:opacity-30"
                       >
                         <ArrowDown className="w-2.5 h-2.5" />
@@ -201,6 +206,7 @@ export default function GoalPlanSection({
                     </div>
                     <button
                       onClick={() => setProposedDecomposition(proposedDecomposition.filter((_, i) => i !== idx).map((m, i) => ({ ...m, order: i })))}
+                      aria-label="Delete"
                       className="text-gray-600 hover:text-red-400 pt-0.5"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -223,6 +229,7 @@ export default function GoalPlanSection({
                               next[idx] = { ...next[idx], tasks: ms.tasks.filter((_, i) => i !== tIdx) };
                               setProposedDecomposition(next);
                             }}
+                            aria-label="Delete"
                             className="text-gray-600 hover:text-red-400 shrink-0"
                           >
                             <Trash2 className="w-2.5 h-2.5" />

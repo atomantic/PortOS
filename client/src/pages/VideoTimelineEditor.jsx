@@ -21,6 +21,7 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { formatTimecode } from '../utils/formatters';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 // Map project-time t (every clip contributes its trimmed duration) to the
 // (clipIndex, withinClipSec) pair the preview <video> element needs. The
@@ -66,6 +67,7 @@ function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSele
       onClick={() => onSelect(clip._key)}
       {...attributes}
       {...listeners}
+      {...clickableProps(() => onSelect(clip._key))}
     >
       {clipMeta?.thumbnail && (
         <img

@@ -256,17 +256,17 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
                 className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white focus:outline-hidden focus:border-port-accent"
                 autoFocus
               />
-              <button onClick={saveName} className="text-port-success hover:text-port-success/80">
+              <button onClick={saveName} aria-label="Save name" className="text-port-success hover:text-port-success/80">
                 <Check size={16} />
               </button>
-              <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-white">
+              <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white">
                 <X size={16} />
               </button>
             </div>
           ) : (
             <>
               <span className="text-white font-semibold text-lg">{self.name}</span>
-              <button onClick={startEdit} className="text-gray-500 hover:text-white">
+              <button onClick={startEdit} aria-label="Edit" className="text-gray-500 hover:text-white">
                 <Edit3 size={14} />
               </button>
             </>
@@ -936,8 +936,8 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white font-mono focus:outline-hidden focus:border-port-accent flex-1 min-w-[180px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving} className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
-        <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-white"><X size={14} /></button>
+        <button onClick={save} disabled={saving} aria-label="Save name" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
         {suggestion && suggestion !== value && (
           <button
             onClick={applySuggestion}
@@ -1050,8 +1050,8 @@ function PeerAuthEditor({ peer, onRefresh }) {
           className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-xs text-white focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
           autoFocus
         />
-        <button onClick={save} disabled={saving || !password} className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
-        <button onClick={() => setEditing(false)} className="text-gray-500 hover:text-white"><X size={14} /></button>
+        <button onClick={save} disabled={saving || !password} aria-label="Save name" className="text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
+        <button onClick={() => setEditing(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
         {hasAuth && (
           <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50">remove</button>
         )}
@@ -1253,13 +1253,13 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
                 className="bg-port-bg border border-port-border rounded px-2 py-0.5 text-sm text-white focus:outline-hidden focus:border-port-accent w-32"
                 autoFocus
               />
-              <button onClick={saveName} className="text-port-success hover:text-port-success/80"><Check size={14} /></button>
-              <button onClick={() => setEditingName(false)} className="text-gray-500 hover:text-white"><X size={14} /></button>
+              <button onClick={saveName} aria-label="Save name" className="text-port-success hover:text-port-success/80"><Check size={14} /></button>
+              <button onClick={() => setEditingName(false)} aria-label="Cancel" className="text-gray-500 hover:text-white"><X size={14} /></button>
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
               <span className="text-white font-medium">{peer.name}</span>
-              <button onClick={() => { setName(peer.name); setEditingName(true); }} className="text-gray-600 hover:text-white">
+              <button onClick={() => { setName(peer.name); setEditingName(true); }} aria-label="Edit" className="text-gray-600 hover:text-white">
                 <Edit3 size={12} />
               </button>
             </div>

@@ -88,7 +88,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">{item.title}</h2>
@@ -128,7 +128,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Practice Complete</h2>
@@ -190,7 +190,7 @@ export default function MemoryPractice({ item, onBack }) {
       return (
         <div className="space-y-6 max-w-2xl">
           <div className="flex items-center gap-3">
-            <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+            <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
               <ChevronLeft size={20} />
             </button>
             <h2 className="text-lg font-bold text-white">Spaced Repetition — {item.title}</h2>
@@ -225,7 +225,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Spaced — {item.title}</h2>
@@ -303,6 +303,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
+                aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckSpacedAnswer(currentLine.text, currentChunk.id, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
@@ -320,7 +321,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Learn — {item.title}</h2>
@@ -387,7 +388,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Sequence — {item.title}</h2>
@@ -444,6 +445,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
+                aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckSequenceAnswer(expectedLine.text, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
@@ -468,7 +470,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Fill Blank — {item.title}</h2>
@@ -520,6 +522,7 @@ export default function MemoryPractice({ item, onBack }) {
                 Check
               </button>
               <button
+                aria-label="Skip"
                 onClick={() => { setAnswer(''); handleCheckFillBlank(blankWords, true); }}
                 className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
               >
@@ -537,7 +540,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Speed Run — {item.title}</h2>
