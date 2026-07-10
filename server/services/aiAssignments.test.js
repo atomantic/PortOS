@@ -109,6 +109,8 @@ describe('getAiAssignments', () => {
     expect(ids).toContain('provider.active');
     expect(ids).toContain('settings.embeddings');
     expect(ids).toContain('settings.voice.vision');
+    expect(ids).toContain('settings.creativeDirector.treatment');
+    expect(ids).toContain('settings.creativeDirector.plan');
     expect(ids).toContain('settings.creativeDirector.evaluation');
     expect(ids).toContain('cos.task.morning-brief');
   });
@@ -133,6 +135,11 @@ describe('updateAiAssignment routing', () => {
   it('settings.creativeDirector.evaluation writes the vision provider/model under creativeDirector', async () => {
     await updateAiAssignment('settings.creativeDirector.evaluation', { providerId: 'ollama', model: 'qwen2.5-vl' });
     expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { evaluation: { providerId: 'ollama', model: 'qwen2.5-vl' } } });
+  });
+
+  it.each(['treatment', 'plan'])('settings.creativeDirector.%s writes that agent stage provider/model', async (stage) => {
+    await updateAiAssignment(`settings.creativeDirector.${stage}`, { providerId: 'claude', model: 'sonnet' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { [stage]: { providerId: 'claude', model: 'sonnet' } } });
   });
 
   it('cos.task.<existing> updates the schedule interval', async () => {

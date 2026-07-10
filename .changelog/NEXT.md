@@ -2,6 +2,8 @@
 
 ## AI Providers
 
+- **Creative Director LLM stages are now independently configurable.** AI Assignments has separate provider/model rows for treatment generation, production planning, and scene evaluation. Point **Scene evaluation vision model** at a local Ollama or LM Studio vision model to judge rendered scenes without using the system-default agent; treatment and planning can likewise be pinned to any agent-capable CLI/TUI provider.
+
 - **[issue-2336] xAI Grok is now a built-in AI provider — API, Grok Build CLI, and Grok Build TUI.** Three new providers ship ready to enable under AI Providers: **xAI Grok** (the OpenAI-compatible chat API at `https://api.x.ai/v1` — paste your xAI key and pick a model), **Grok Build CLI** (headless, for one-shot generations and file-writing CoS agents), and **Grok Build TUI** (the interactive `grok` coding agent driven over a PTY like Claude Code / Codex). All three arrive disabled by default (nothing calls Grok until you turn one on) and reach existing installs on upgrade. The CLI/TUI use the local `grok` binary; run `grok login` (or set your xAI credentials) to authenticate it.
 
 ## Layered Intelligence

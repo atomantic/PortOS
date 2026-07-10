@@ -457,11 +457,15 @@ export const featureProviderConfigSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
-// Creative Director settings slice. `evaluation` pins the vision provider/model
-// used to judge each rendered scene server-side (blank = auto-pick a local
-// vision model, else fall back to the coding agent). Reuses the shared
-// feature-provider shape so an empty-string picker value normalizes to unset.
+// Creative Director settings slice. Each LLM-backed stage can pin its own
+// provider/model instead of inheriting the system default. `evaluation` is a
+// direct vision API call (blank = auto-pick a local vision model, else fall
+// back to the coding agent); treatment and plan run as CoS agent tasks.
+// Reuses the shared feature-provider shape so an empty-string picker value
+// normalizes to unset.
 export const creativeDirectorSettingsSchema = z.object({
+  treatment: featureProviderConfigSchema.partial().optional(),
+  plan: featureProviderConfigSchema.partial().optional(),
   evaluation: featureProviderConfigSchema.partial().optional(),
 });
 
