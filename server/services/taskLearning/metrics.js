@@ -203,6 +203,15 @@ export async function recordTaskCompletion(agent, task) {
   const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
   const success = telemetry.success;
+  // Learning outcome (issue #2344): when a success criterion WAS declared, its
+  // validation verdict is authoritative for what the aggregates learn — a clean
+  // exit that produced no committed work is NOT a tier success, and a commit-found
+  // run is a success even on a non-zero exit. Only when no criterion is declared
+  // (validationPassed === null) do the aggregates fall back to the runner's
+  // exit-code `success`. Keeps routingAccuracy/tier/type/total counts consistent
+  // with the correlation window's `bad` label. Back-compat: legacy completions
+  // (and tests) that stamp no validationPassed see outcomeSuccess === success.
+  const outcomeSuccess = telemetry.validationPassed === null ? success : telemetry.validationPassed;
   const duration = agent.result?.duration || 0;
   const errorCategory = telemetry.failureSignature?.category || null;
 
@@ -249,7 +258,7 @@ export async function recordTaskCompletion(agent, task) {
   // Update task type metrics
   const typeMetrics = data.byTaskType[taskType];
   typeMetrics.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     typeMetrics.succeeded++;
     // Only include successful durations in ETA calculations — failed agents often
     // run long in error loops and skew estimates
@@ -266,7 +275,7 @@ export async function recordTaskCompletion(agent, task) {
   // Update model tier metrics
   const tierMetrics = data.byModelTier[modelTier];
   tierMetrics.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     tierMetrics.succeeded++;
     tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
   } else {
@@ -282,7 +291,7 @@ export async function recordTaskCompletion(agent, task) {
     data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
   }
   const routing = data.routingAccuracy[taskType][modelTier];
-  if (success) {
+  if (outcomeSuccess) {
     routing.succeeded++;
   } else {
     routing.failed++;
@@ -328,14 +337,11 @@ export async function recordTaskCompletion(agent, task) {
 
   // Correlation-quality window (issue #2344): pair the pre-mutation prediction
   // snapshot (captured above, before any of this run's aggregates were folded in)
-  // with the actual outcome. When a success criterion WAS declared, its verdict
-  // is authoritative — a run that met it is good even on a non-zero exit
-  // (commit-found), and one that missed it is bad even on a clean exit. Only when
-  // no criterion is declared (validationPassed === null) do we fall back to the
-  // runner's `success`. This ties the two #2344 signals together.
+  // with the actual outcome. Reuses the same validation-authoritative
+  // `outcomeSuccess` the aggregates above learn from, so the correlation `bad`
+  // label and the routing counts can never disagree about a single run.
   if (correlationPredictedRisk !== null) {
-    const bad = telemetry.validationPassed === null ? !success : !telemetry.validationPassed;
-    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad });
+    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad: !outcomeSuccess });
   }
 
   // Aggregate the enriched failure signature (category + snippet + position +
@@ -344,7 +350,7 @@ export async function recordTaskCompletion(agent, task) {
 
   // Update totals
   data.totals.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     data.totals.succeeded++;
     data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
     data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
@@ -359,7 +365,13 @@ export async function recordTaskCompletion(agent, task) {
   const { provider, model, component, routingReason } = telemetry.executionContext;
   const { wallMs, queueMs } = telemetry.latency;
   const wallSecs = Math.round((wallMs ?? duration) / 1000);
-  emitLog('debug', `Recorded task completion: ${taskType} (${success ? 'success' : `failed:${errorCategory || 'uncategorized'}`}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
+  // Label reflects the learning OUTCOME (validation-authoritative). A run that
+  // exited clean but missed its declared criterion reads as `failed:validation-miss`
+  // rather than the misleading `success` the raw exit code would show (#2344).
+  const outcomeLabel = outcomeSuccess
+    ? 'success'
+    : `failed:${errorCategory || (success ? 'validation-miss' : 'uncategorized')}`;
+  emitLog('debug', `Recorded task completion: ${taskType} (${outcomeLabel}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
     taskType,
     modelTier,
     provider,
@@ -367,6 +379,8 @@ export async function recordTaskCompletion(agent, task) {
     component,
     routingReason,
     success,
+    validationPassed: telemetry.validationPassed,
+    outcomeSuccess,
     errorCategory,
     failurePosition: telemetry.failureSignature?.failurePosition ?? null,
     wallMs,

@@ -466,6 +466,47 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
     expect(savedData.routingAccuracy['user-task']['medium'].succeeded).toBe(2);
     expect(savedData.routingAccuracy['user-task']['medium'].failed).toBe(1);
   });
+
+  it('counts a clean exit that MISSED its declared criterion as a tier failure (#2344)', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    // Runner exit-code success, but the declared success criterion was not met
+    // (e.g. agent finished clean yet committed nothing). The learning aggregates
+    // must treat the validation verdict as authoritative — not the exit code.
+    const agent = {
+      metadata: { modelTier: 'heavy', taskDescription: 'Ship the fix' },
+      result: { success: true, validationPassed: false, duration: 60000 }
+    };
+    const task = { description: 'Ship the fix', taskType: 'internal', metadata: {} };
+
+    await recordTaskCompletion(agent, task);
+
+    const routing = savedData.routingAccuracy['internal-task']['heavy'];
+    expect(routing.succeeded).toBe(0);
+    expect(routing.failed).toBe(1);
+    expect(savedData.byModelTier['heavy'].succeeded).toBe(0);
+    expect(savedData.byModelTier['heavy'].failed).toBe(1);
+    expect(savedData.byTaskType['internal-task'].succeeded).toBe(0);
+    expect(savedData.byTaskType['internal-task'].failed).toBe(1);
+  });
+
+  it('counts a non-zero exit that MET its declared criterion as a tier success (#2344)', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    // Runner reported failure, but a task-referencing commit was found — the
+    // criterion was met, so the tier gets credit.
+    const agent = {
+      metadata: { modelTier: 'medium', taskDescription: 'Ship the fix' },
+      result: { success: false, validationPassed: true, duration: 60000 }
+    };
+    const task = { description: 'Ship the fix', taskType: 'internal', metadata: {} };
+
+    await recordTaskCompletion(agent, task);
+
+    const routing = savedData.routingAccuracy['internal-task']['medium'];
+    expect(routing.succeeded).toBe(1);
+    expect(routing.failed).toBe(0);
+  });
 });
 
 describe('TaskLearning - getRoutingAccuracy', () => {
