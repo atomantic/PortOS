@@ -19,7 +19,7 @@ import {
   loadLearningData,
   saveLearningData
 } from './store.js';
-import { deriveFailureSignalAvoidance } from './routing.js';
+import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
@@ -223,8 +223,10 @@ export async function recordTaskCompletion(agent, task) {
   // run's own outcome into its own prediction and inflate the gauge. Uses the
   // signal's BASE sensitivity (default aggressive bar) as a fixed predictor —
   // measuring the gate against its own correlation-gated output would be circular.
-  // Skipped for the unknown tier (no routable prediction to make).
-  const correlationPredictedRisk = (modelTier && modelTier !== 'unknown')
+  // Skipped for the unknown tier AND non-routable learned tiers (minimal/low):
+  // routing can never flag those, so recording them as "predicted safe" would
+  // encode "no routable prediction" as a true-negative and skew the gauge.
+  const correlationPredictedRisk = (modelTier && modelTier !== 'unknown' && !isNonRoutableLearnedTier(modelTier))
     ? deriveFailureSignalAvoidance(data, taskType).avoidTiers.includes(modelTier)
     : null;
 
@@ -623,7 +625,14 @@ export async function recalculateDurationStats() {
       agentCount++;
 
       const duration = meta.result?.duration || 0;
-      if (!meta.result?.success || duration <= 0) continue;
+      // Validation-authoritative outcome (issue #2344), consistent with the live
+      // recordTaskCompletion path: an archived clean-exit run that missed its
+      // declared criterion is NOT a success (excluded from success-only ETAs),
+      // and a commit-found run is a success even on a non-zero exit. Falls back to
+      // the raw exit-code success for records that predate validationPassed.
+      const vp = meta.result?.validationPassed;
+      const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
+      if (!outcomeSuccess || duration <= 0) continue;
 
       successCount++;
       const taskType = extractTaskType({

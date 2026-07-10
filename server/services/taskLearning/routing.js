@@ -56,6 +56,14 @@ const tierWeight = (tier) => TIER_WEIGHT[tier] ?? HEAVIEST_WEIGHT;
  */
 const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low']);
 
+/**
+ * True for a learned tier the selection path can't actually route to
+ * (`minimal`/`low`). Exported so the correlation window (metrics.js) can skip
+ * these the same way `deriveFailureSignalAvoidance` does — recording a
+ * never-flaggable tier as "predicted safe" would skew the global gauge (#2344).
+ */
+export const isNonRoutableLearnedTier = (tier) => NON_ROUTABLE_LEARNED_TIERS.has(tier);
+
 /** Minimum success rate (%) for a tier to count as "proven" for a task type. */
 const HIGH_SUCCESS_THRESHOLD = 80;
 
