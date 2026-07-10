@@ -468,27 +468,37 @@ export async function runPromptThroughProvider(args) {
       }
     };
 
-    // Track the primary key's suppression so a `finally` can guarantee release:
-    // once `noteStarted(primaryKey)` cancels the backstop timer, ANY unexpected
-    // throw before we resolve it (e.g. coalesceFallbackMarkAndPick throwing)
-    // would otherwise leave the key in autoFixer's in-flight set for the process
-    // lifetime — permanently suppressing every future identical failure.
-    let primarySuppressed = false;
-    let primaryResolved = false;
-    const suppressPrimary = async () => {
-      if (primarySuppressed) return; // idempotent across tiers
-      primarySuppressed = true;
-      await noteStarted(primaryKey);
+    // Track every provider+model key whose deferred investigation task we
+    // suppress across the cascade, so (a) a recovery at ANY tier cancels ALL of
+    // them, (b) a give-up releases them without leaking autoFixer's in-flight
+    // set, and (c) the `finally` safety-net releases any left unresolved by an
+    // unexpected throw (e.g. coalesceFallbackMarkAndPick) — which would
+    // otherwise suppress every future identical failure for the process
+    // lifetime. Keyed by a NUL-joined string (provider names / model ids both
+    // contain '-'); the value carries the original key object + resolution state.
+    const suppressed = new Map();
+    const keyStr = (k) => `${k.provider}\x00${k.model}`;
+    const suppress = async (key) => {
+      const id = keyStr(key);
+      if (suppressed.has(id)) return; // idempotent across tiers
+      suppressed.set(id, { key, resolved: false });
+      await noteStarted(key);
     };
-    const resolvePrimaryHandled = async () => { primaryResolved = true; await noteHandled(primaryKey); };
-    const resolvePrimaryFailed = async () => { primaryResolved = true; await noteFailed(primaryKey); };
+    const resolveHandled = async (key) => {
+      const entry = suppressed.get(keyStr(key));
+      if (entry) entry.resolved = true;
+      await noteHandled(key);
+    };
+    const releaseAllUnresolved = async () => {
+      for (const entry of suppressed.values()) {
+        if (!entry.resolved) { entry.resolved = true; await noteFailed(entry.key); }
+      }
+    };
 
     // Explicitly escalate the primary failure to a Tier-4 investigation task —
-    // used only when Tier 1 pre-suppressed the primary (cancelling its backstop
-    // task) and its corrected retry left no surviving queued task (a
-    // pre-execution throw) AND no fallback exists, so nothing else would surface
-    // the unrecovered failure. Best-effort — a failure here must not mask the
-    // rethrow.
+    // used only on a give-up where every attempted key's incidental task was
+    // suppressed, so nothing else would surface the unrecovered failure. Honors
+    // the circuit breaker. Best-effort: a failure here must not mask the rethrow.
     const escalatePrimaryFailure = async () => {
       const a = await getAutoFixer();
       try {
@@ -517,25 +527,26 @@ export async function runPromptThroughProvider(args) {
       // deterministic fix — retry the SAME provider with a valid model it lists.
       // No config is persisted; on success the user's own provider keeps serving.
       //
-      // `tier1CorrectedKey` is set only when the corrected retry reaches the
-      // EXECUTION layer and fails — in which case its own onRunFailed queued a
-      // task we must cancel on a later recovery. It's derived from the retry's
-      // EFFECTIVE provider/model (createRun may have proactively swapped), not
-      // the pre-run guess, so the cancel matches the key the hook published.
+      // Gated on `providerHonorsModelOverride`: a CLI/TUI provider with a model
+      // flag baked into its args ignores the per-call `model`, so the "corrected"
+      // model would silently be the same failed one — a pointless retry that
+      // would also mis-key the corrected task onto the primary key. Skip Tier 1
+      // for those and let the cascade fall through to a real fallback provider.
       let tier1CorrectedKey = null;
       // Only a wrong-model failure is config-correctable here. Compare against
       // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
       // does NOT exist (it would be `undefined`, matching a category-less failure
       // and wrongly engaging Tier 1). 'model-not-supported' is autoFixer's own
       // Tier-1 category (from CoS agent analysis), matched here for parity.
-      if (category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported') {
+      if ((category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported')
+        && providerHonorsModelOverride(failed)) {
         const correctedModel = pickConfigCorrectedModel(failed, failedModel);
         if (correctedModel) {
           console.log(`🔧 Tier 1 (config/env) retry: ${args.source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
           // Suppress the primary's investigation task while the corrected retry
           // runs so a slow (>TASK_DEFER_MS) but SUCCESSFUL retry can't leave a
           // task behind for a recovered failure.
-          await suppressPrimary();
+          await suppress(primaryKey);
           let tier1Result;
           try {
             tier1Result = await executeProviderRunOnce({
@@ -546,20 +557,22 @@ export async function runPromptThroughProvider(args) {
             });
           } catch (tier1Error) {
             // The corrected retry failed. If it reached the execution layer, its
-            // onRunFailed queued a task keyed on the EFFECTIVE provider/model —
-            // record that key so a later recovery cancels it. A pre-execution
-            // throw (no effectiveProvider) queued NO task, so leave the key null
-            // and let the give-up branch escalate explicitly.
+            // onRunFailed queued a task keyed on the EFFECTIVE provider/model
+            // (createRun may have proactively swapped) — record and suppress that
+            // key too, so a slow Tier-3 recovery below can't let its backstop
+            // fire. A pre-execution throw (no effectiveProvider) queued NO task,
+            // so leave the key null and let the give-up branch escalate.
             if (tier1Error?.effectiveProvider) {
               tier1CorrectedKey = {
                 provider: tier1Error.effectiveProvider.name || tier1Error.effectiveProvider.id,
                 model: tier1Error.effectiveModel || correctedModel,
               };
+              await suppress(tier1CorrectedKey);
             }
             console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
           }
           if (tier1Result) {
-            await resolvePrimaryHandled();
+            await resolveHandled(primaryKey);
             return {
               ...tier1Result,
               usedFallback: true,
@@ -581,18 +594,12 @@ export async function runPromptThroughProvider(args) {
       // call still executes its own fallback to get its own result.
       const picked = await coalesceFallbackMarkAndPick(failed, firstError);
       if (!picked) {
-        // ── Tier 4 — escalate ──: no recovery path left.
-        if (primarySuppressed && !tier1CorrectedKey) {
-          // Tier 1 cancelled the primary's backstop task but its corrected retry
-          // queued NO replacement (pre-execution throw) — so nothing would
-          // surface this unrecovered failure. Escalate one investigation task
-          // explicitly (honors the circuit breaker), which also clears the key.
+        // ── Tier 4 — escalate ──: no recovery path left. Every attempted key's
+        // incidental task was suppressed, so escalate exactly one investigation
+        // task explicitly (honors the circuit breaker), then release the keys.
+        if (suppressed.size > 0) {
           await escalatePrimaryFailure();
-          primaryResolved = true;
-        } else if (primarySuppressed) {
-          // A Tier-1 corrected-retry task already surfaces the failure; just
-          // release the primary key so the in-flight set doesn't leak.
-          await resolvePrimaryFailed();
+          await releaseAllUnresolved();
         }
         throw stripFallbackContext(firstError);
       }
@@ -601,7 +608,7 @@ export async function runPromptThroughProvider(args) {
       console.log(`⚡ Tier 3 (constrained-agent-retry): ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
 
       // Suppress the primary key (idempotent across tiers) for the fallback run.
-      await suppressPrimary();
+      await suppress(primaryKey);
 
       // Run the fallback as a fresh attempt. Pass the configured `fallbackModel`
       // when one is set (so the user's chosen fallback provider+model pair is
@@ -621,24 +628,20 @@ export async function runPromptThroughProvider(args) {
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
-        // ── Tier 4 — escalate ──: every deterministic tier failed. Release the
-        // primary's suppression (the fallback provider's own failure already
-        // queued its investigation task) and rethrow. Any Tier-1 corrected-retry
-        // task is intentionally left in place — one investigation task per
-        // genuinely-failed attempt is the intended escalation.
-        await resolvePrimaryFailed();
+        // ── Tier 4 — escalate ──: every deterministic tier failed. The fallback
+        // provider's OWN failure already queued its investigation task (its key
+        // was never suppressed), so release the suppressed keys — one surviving
+        // task — and rethrow.
+        await releaseAllUnresolved();
         throw stripFallbackContext(fallbackError);
       }
 
-      // Fallback succeeded — clear the primary's suppression so the user doesn't
-      // see a noisy "investigate" entry in their plan for a failure that was
-      // auto-recovered.
-      await resolvePrimaryHandled();
-      // A Tier-1 corrected retry that failed before this recovery left its own
-      // deferred task; cancel it too so a fully-recovered action creates ZERO
+      // Fallback succeeded — cancel EVERY suppressed key (the primary and any
+      // Tier-1 corrected-retry key) so a fully-recovered action creates ZERO
       // investigation tasks (issue #2342 acceptance: only UNRECOVERED failures
       // escalate to Tier 4).
-      if (tier1CorrectedKey) await noteHandled(tier1CorrectedKey);
+      await resolveHandled(primaryKey);
+      if (tier1CorrectedKey) await resolveHandled(tier1CorrectedKey);
 
       return {
         ...fallbackResult,
@@ -649,9 +652,9 @@ export async function runPromptThroughProvider(args) {
         fallbackProvider: fallback,
       };
     } finally {
-      // Safety net: if an unexpected throw left the primary key suppressed but
-      // unresolved, release it so the in-flight set can't leak the key.
-      if (primarySuppressed && !primaryResolved) await noteFailed(primaryKey);
+      // Safety net: release any key left suppressed-but-unresolved by an
+      // unexpected throw, so the in-flight set can't leak the key.
+      await releaseAllUnresolved();
     }
   }
 }

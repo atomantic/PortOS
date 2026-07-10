@@ -1282,7 +1282,7 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
   });
 
-  it('releases the Tier-1 suppression and rethrows when the corrected retry fails and no fallback exists', async () => {
+  it('escalates once and releases both suppressed keys when the corrected retry fails and no fallback exists', async () => {
     mockToolkitWithFallback(null); // no fallback available
     const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
 
@@ -1293,12 +1293,44 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
       .rejects.toThrow(/model gone/);
 
-    // The primary key was suppressed for the corrected retry, then released on
-    // give-up so the in-flight set doesn't leak (the corrected retry's own
-    // onRunFailed task survives as the escalation).
+    // Both the primary AND the pre-suppressed corrected-retry key were
+    // suppressed, so nothing incidental would surface the failure — the cascade
+    // escalates exactly one investigation task explicitly, then releases both
+    // keys so the in-flight set doesn't leak.
     expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
     expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('skips Tier 1 for a CLI provider whose model flag is baked into args (override ignored)', async () => {
+    // providerHonorsModelOverride is false when the CLI has a baked --model, so
+    // the "corrected" model would silently be the same failed one. Tier 1 must
+    // decline and the cascade fall through to the fallback provider instead.
+    runner.hasModelFlag.mockReturnValue(true); // args carry a baked model flag
+    const status = mockToolkitWithFallback();
+    const primary = { id: 'primary-cli', name: 'Primary CLI', type: 'cli', defaultModel: 'baked-model', timeout: 5000, args: ['--model', 'baked-model'], models: ['baked-model', 'good-model'] };
+
+    let primaryCalls = 0;
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      primaryCalls += 1;
+      onComplete({ success: false, error: 'model not found', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    // No same-provider corrected retry (primary ran once), straight to Tier 3.
+    expect(primaryCalls).toBe(1);
+    expect(out.fixTier).toBe(3);
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
   });
 
   it('does NOT attempt a Tier-1 correction for non-model failure categories', async () => {
