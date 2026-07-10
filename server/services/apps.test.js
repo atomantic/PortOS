@@ -22,6 +22,7 @@ vi.mock('../lib/ports.js', () => ({
 
 vi.mock('./taskSchedule.js', () => ({
   SELF_IMPROVEMENT_TASK_TYPES: [],
+  resetExecutionHistory: vi.fn().mockResolvedValue({ error: 'No execution history found' }),
 }));
 
 vi.mock('./pm2.js', () => ({
@@ -30,9 +31,52 @@ vi.mock('./pm2.js', () => ({
   listProcessesStrict: vi.fn().mockResolvedValue([]),
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
-import { getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID } from './apps.js';
+import { resetExecutionHistory } from './taskSchedule.js';
+import { getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
+
+describe('pr-watcher cooldown reset', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({
+      apps: {
+        'app-1': {
+          name: 'App One',
+          prWatcherState: { lastSeenPr: 42 },
+          taskTypeOverrides: { 'pr-watcher': { enabled: true } },
+        },
+      },
+    });
+  });
+
+  it('keeps the primary disable successful but logs a contextual storage failure', async () => {
+    resetExecutionHistory.mockRejectedValueOnce(new Error('ENOSPC: schedule write failed'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const updated = await updateAppTaskTypeOverride('app-1', 'pr-watcher', { enabled: false });
+
+    expect(updated.taskTypeOverrides['pr-watcher'].enabled).toBe(false);
+    expect(updated.prWatcherState).toBeUndefined();
+    expect(atomicWrite).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(
+      'Failed to reset pr-watcher cooldown for app app-1: ENOSPC: schedule write failed'
+    ));
+    errorSpy.mockRestore();
+  });
+
+  it('treats missing execution history as a quiet no-op', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const updated = await updateAppTaskTypeOverride('app-1', 'pr-watcher', { enabled: false });
+
+    expect(updated.taskTypeOverrides['pr-watcher'].enabled).toBe(false);
+    expect(resetExecutionHistory).toHaveBeenCalledWith('pr-watcher', 'app-1');
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+});
 
 describe('getReservedPorts', () => {
   beforeEach(() => {

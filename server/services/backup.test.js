@@ -53,6 +53,7 @@ import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, restoreSnaps
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {
   const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   return proc;
 }
@@ -680,5 +681,52 @@ describe('restoreSnapshot subdirFilter guard', () => {
     await expect(restoreSnapshot('/dest', 'snap-1', { subdirFilter: '/etc' }))
       .rejects.toThrow(/Invalid subdirFilter/);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('uses PORTOS_RSYNC when configured and keeps shell execution disabled', async () => {
+    const previous = process.env.PORTOS_RSYNC;
+    process.env.PORTOS_RSYNC = '/custom/bin/rsync';
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+
+    try {
+      const restore = restoreSnapshot('/dest', 'snap-1');
+      await flush();
+      proc.stdout.emit('data', Buffer.from('>f+++++++++ settings.json\n'));
+      proc.emit('close', 0);
+
+      await expect(restore).resolves.toMatchObject({
+        dryRun: true,
+        changedFiles: ['>f+++++++++ settings.json'],
+      });
+      expect(spawn).toHaveBeenCalledWith(
+        '/custom/bin/rsync',
+        expect.arrayContaining(['--archive', '--itemize-changes', '--dry-run']),
+        { shell: false },
+      );
+    } finally {
+      if (previous === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previous;
+    }
+  });
+
+  it('falls back to the PATH-resolved rsync command when no override is configured', async () => {
+    const previous = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+
+    try {
+      const restore = restoreSnapshot('/dest', 'snap-1');
+      await flush();
+      proc.emit('close', 0);
+      await restore;
+
+      expect(spawn.mock.calls[0][0]).toBe('rsync');
+      expect(spawn.mock.calls[0][2]).toEqual({ shell: false });
+    } finally {
+      if (previous === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previous;
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { computeDistrictBounds } from '../../utils/cityMiniMap';
 import { cityDayMix } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
 
@@ -146,18 +147,9 @@ export default function CityVolumetricLights({ positions, settings }) {
   const beams = useMemo(() => {
     if (!positions || positions.size < 2) return { lights: [], scans: [] };
 
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    const bounds = computeDistrictBounds(positions, 'downtown', { minCount: 2 });
+    if (!bounds) return { lights: [], scans: [] };
+    const { minX, maxX, minZ, maxZ } = bounds;
 
     const pad = 5;
     const colors = neonAccents;

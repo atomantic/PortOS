@@ -21,6 +21,7 @@
  * and unit-tested with fixture payloads — no network or DB required.
  */
 import { dataPath, ensureDir, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSettings } from './settings.js';
 import { getAccessToken, getAuthStatus } from './spotifyAuth.js';
 
@@ -29,6 +30,7 @@ import { getAccessToken, getAuthStatus } from './spotifyAuth.js';
 // ---------------------------------------------------------------------------
 
 const RECENTLY_PLAYED_URL = 'https://api.spotify.com/v1/me/player/recently-played';
+const RECENTLY_PLAYED_TIMEOUT_MS = 15_000;
 
 // The API caps this at 50; the cursor + fast cadence keep us from missing plays.
 const SCAN_LIMIT = 50;
@@ -183,7 +185,18 @@ async function doRunSync() {
   url.searchParams.set('limit', String(SCAN_LIMIT));
   if (state.cursorAfter) url.searchParams.set('after', String(state.cursorAfter));
 
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  let res;
+  try {
+    res = await fetchWithTimeout(
+      url,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+      RECENTLY_PLAYED_TIMEOUT_MS,
+    );
+  } catch (err) {
+    const reason = err?.message || String(err);
+    console.error(`❌ Spotify recently-played fetch failed: ${reason}`);
+    return { ok: false, error: `Spotify API request failed: ${reason}` };
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     console.error(`❌ Spotify recently-played fetch failed: ${res.status} ${body.slice(0, 200)}`);

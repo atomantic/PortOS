@@ -52,6 +52,8 @@ const INDEX_FILE = join(AUTOFIXER_DIR, 'index.json');
 const recentlyFixed = new Map();
 const FIX_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 minutes
+let checkTimer = null;
+let shuttingDown = false;
 
 // Load apps from PortOS
 async function loadApps() {
@@ -359,6 +361,28 @@ async function checkAndFixProcesses() {
   }
 }
 
+function scheduleNextCheck() {
+  if (shuttingDown) return;
+
+  checkTimer = setTimeout(() => {
+    checkTimer = null;
+    void runCheckCycle();
+  }, CHECK_INTERVAL);
+}
+
+// Schedule from completion rather than wall-clock time so a long-running fix
+// cannot overlap the next process scan. Errors are contained here because this
+// loop runs outside a request lifecycle and must keep retrying autonomously.
+async function runCheckCycle() {
+  try {
+    await checkAndFixProcesses();
+  } catch (error) {
+    console.error(`❌ [Autofixer] Process check failed: ${error?.message || String(error)}`);
+  } finally {
+    scheduleNextCheck();
+  }
+}
+
 // Main loop
 async function main() {
   console.log(`🚀 [Autofixer] Starting PortOS Autofixer daemon`);
@@ -367,25 +391,24 @@ async function main() {
 
   await ensureHistoryDir();
 
-  // Initial check
-  await checkAndFixProcesses();
-
-  // Periodic check
-  setInterval(async () => {
-    await checkAndFixProcesses();
-  }, CHECK_INTERVAL);
+  // Run immediately, then wait a full interval after each pass completes.
+  await runCheckCycle();
 }
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log(`\n🛑 [Autofixer] Shutting down...`);
-  process.exit(0);
-});
+function shutdown() {
+  shuttingDown = true;
+  if (checkTimer) {
+    clearTimeout(checkTimer);
+    checkTimer = null;
+  }
 
-process.on('SIGTERM', () => {
   console.log(`\n🛑 [Autofixer] Shutting down...`);
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // Start
 main().catch(error => {

@@ -2,6 +2,7 @@ import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
+import { computeDistrictBounds } from '../../utils/cityMiniMap';
 import { PIXEL_FONT_URL } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
 
@@ -229,20 +230,11 @@ export default function CityBillboards({ positions, apps, cosStatus, reviewCount
     const onlinePeers = peers.filter(peer => peer.status === 'online').length;
     const nodeCount = 1 + peers.length;
 
-    // Find downtown bounding box for billboard placement
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-    if (entries.length < 2) return [];
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    // Find downtown bounding box for billboard placement.
+    const bounds = computeDistrictBounds(positions, 'downtown', { minCount: 2 });
+    if (!bounds) return [];
+    const { minX, maxX, minZ, maxZ } = bounds;
+    const downtownCount = [...positions.values()].filter((pos) => pos.district === 'downtown').length;
 
     const uptime = totalActive > 0
       ? `${Math.round(onlineApps.length / totalActive * 100)}%`
@@ -310,7 +302,7 @@ export default function CityBillboards({ positions, apps, cosStatus, reviewCount
     });
 
     // Billboard 3 - Front facing into the city (only if enough buildings)
-    if (entries.length >= 4) {
+    if (downtownCount >= 4) {
       const frontMessages = onlineApps.slice(0, 6).map(a => ({
         label: 'ONLINE',
         text: (a.name || '').toUpperCase(),

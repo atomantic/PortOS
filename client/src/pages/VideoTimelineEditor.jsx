@@ -43,9 +43,10 @@ const totalDuration = (clips) => clips.reduce((s, c) => s + Math.max(0, c.outSec
 
 // Draggable+sortable timeline block. Snaps the trimmed duration to a width
 // derived from `pxPerSec` so longer clips visibly take more horizontal space.
-function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSelect, onRemove }) {
+export function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSelect, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: clip._key });
   const dur = Math.max(0.05, clip.outSec - clip.inSec);
+  const removeLabel = isMissing ? 'missing clip' : clipMeta?.prompt?.trim().slice(0, 40) || 'clip';
   const width = Math.max(60, dur * pxPerSec);
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -88,10 +89,13 @@ function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec, onSele
         type="button"
         onClick={(e) => { e.stopPropagation(); onRemove(clip._key); }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-port-error rounded opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white"
+        className="absolute top-0 right-0 inline-flex min-w-[44px] min-h-[44px] items-start justify-end p-1 rounded opacity-40 lg:opacity-0 lg:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-white group/remove"
         title="Remove from timeline"
+        aria-label={`Remove ${removeLabel} from timeline`}
       >
-        <X className="w-3 h-3" />
+        <span className="inline-flex items-center justify-center p-0.5 bg-black/60 group-hover/remove:bg-port-error rounded transition-colors" aria-hidden="true">
+          <X className="w-3 h-3" />
+        </span>
       </button>
     </div>
   );

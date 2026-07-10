@@ -39,47 +39,68 @@ export function isAppleSilicon({ platform: plat = process.platform, arch = proce
 }
 
 /**
- * Get list of listening TCP ports
- * @returns {Promise<number[]>} Array of port numbers
+ * Parse a platform port-discovery command into a sorted unique list. Kept pure
+ * so command formats are covered deterministically instead of depending on the
+ * test host's current listeners or installed utilities.
+ * @param {string} stdout
+ * @param {string} targetPlatform
+ * @returns {number[]} Array of port numbers
  */
-export async function getListeningPorts() {
+export function parseListeningPorts(stdout, targetPlatform = platform) {
   const ports = new Set();
+  const addPort = (value) => {
+    const port = Number(value);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) ports.add(port);
+  };
 
-  if (platform === 'darwin') {
-    // macOS: use lsof
-    const { stdout } = await execAsync('lsof -iTCP -sTCP:LISTEN -n -P', { windowsHide: true }).catch(() => ({ stdout: '' }));
-    const lines = stdout.split('\n').slice(1); // Skip header
-    for (const line of lines) {
+  if (targetPlatform === 'darwin') {
+    for (const line of String(stdout || '').split('\n')) {
       const match = line.match(/:(\d+)\s+\(LISTEN\)/);
-      if (match) {
-        ports.add(parseInt(match[1], 10));
-      }
+      if (match) addPort(match[1]);
     }
-  } else if (platform === 'linux') {
-    // Linux: use ss
-    const { stdout } = await execAsync('ss -lntp', { windowsHide: true }).catch(() => ({ stdout: '' }));
-    const lines = stdout.split('\n').slice(1); // Skip header
-    for (const line of lines) {
+  } else if (targetPlatform === 'linux') {
+    for (const line of String(stdout || '').split('\n')) {
+      if (!/^\s*LISTEN\b/.test(line)) continue;
       const match = line.match(/:(\d+)\s/);
-      if (match) {
-        ports.add(parseInt(match[1], 10));
-      }
+      if (match) addPort(match[1]);
     }
   } else {
-    // Windows: use netstat
-    const { stdout } = await execAsync('netstat -an', { windowsHide: true }).catch(() => ({ stdout: '' }));
-    const lines = stdout.split('\n');
-    for (const line of lines) {
-      if (line.includes('LISTENING')) {
-        const match = line.match(/:(\d+)\s/);
-        if (match) {
-          ports.add(parseInt(match[1], 10));
-        }
-      }
+    for (const line of String(stdout || '').split('\n')) {
+      if (!/\bLISTENING\b/i.test(line)) continue;
+      const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+/i);
+      if (match) addPort(match[1]);
     }
   }
 
   return Array.from(ports).sort((a, b) => a - b);
+}
+
+function portProbeFor(targetPlatform) {
+  if (targetPlatform === 'darwin') return 'lsof -iTCP -sTCP:LISTEN -n -P';
+  if (targetPlatform === 'linux') return 'ss -lntp';
+  return 'netstat -an';
+}
+
+/**
+ * Get list of listening TCP ports. Discovery failure is explicit: returning an
+ * empty array would be indistinguishable from a host with no listeners and let
+ * callers advertise occupied ports as free.
+ * @param {{platform?: string, exec?: Function}} options deterministic overrides
+ * @returns {Promise<number[]>} Array of port numbers
+ */
+export async function getListeningPorts({ platform: targetPlatform = platform, exec: run = execAsync } = {}) {
+  const command = portProbeFor(targetPlatform);
+  try {
+    const { stdout } = await run(command, { windowsHide: true });
+    return parseListeningPorts(stdout, targetPlatform);
+  } catch (cause) {
+    const error = new Error(`Unable to discover listening ports with ${command}: ${cause.message}`);
+    error.code = 'PORT_DISCOVERY_FAILED';
+    error.command = command;
+    error.platform = targetPlatform;
+    error.cause = cause;
+    throw error;
+  }
 }
 
 /**
@@ -87,8 +108,8 @@ export async function getListeningPorts() {
  * @param {number} port Port to check
  * @returns {Promise<boolean>} True if port is in use
  */
-export async function isPortInUse(port) {
-  const ports = await getListeningPorts();
+export async function isPortInUse(port, probeOptions) {
+  const ports = await getListeningPorts(probeOptions);
   return ports.includes(port);
 }
 
@@ -99,12 +120,13 @@ export async function isPortInUse(port) {
  * @param {number} count Number of ports to find
  * @returns {Promise<number[]>} Available ports
  */
-export async function findAvailablePorts(start, end, count = 1) {
-  const usedPorts = await getListeningPorts();
+export async function findAvailablePorts(start, end, count = 1, probeOptions) {
+  if (start > end || count <= 0) return [];
+  const usedPorts = new Set(await getListeningPorts(probeOptions));
   const available = [];
 
   for (let port = start; port <= end && available.length < count; port++) {
-    if (!usedPorts.includes(port)) {
+    if (!usedPorts.has(port)) {
       available.push(port);
     }
   }

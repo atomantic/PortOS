@@ -36,6 +36,20 @@ export function computeBounds(positions) {
   return { minX, maxX, minZ, maxZ };
 }
 
+// Compute bounds for one layout district directly from the Map returned by
+// computeCityLayout. Keeping the filter + minimum-count gate beside the
+// canonical extrema reducer prevents visual layers from re-implementing the
+// Infinity/-Infinity sentinel loop (and forgetting the empty-district case).
+export function computeDistrictBounds(positions, district, { minCount = 1 } = {}) {
+  if (!positions || typeof positions.forEach !== 'function') return null;
+  const entries = [];
+  positions.forEach((position) => {
+    if (position?.district === district) entries.push(position);
+  });
+  if (entries.length < minCount) return null;
+  return computeBounds(entries);
+}
+
 // Project a single world (x, z) into normalized 0..1 map coordinates given the world bounds.
 // `nx` runs left→right with world +x; `ny` runs top→bottom with world +z (so the map reads
 // like a top-down floor plan). A zero-width or zero-height span (one app, or a row/column)

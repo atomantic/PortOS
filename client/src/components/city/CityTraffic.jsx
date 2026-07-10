@@ -1,5 +1,6 @@
 import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { computeDistrictBounds } from '../../utils/cityMiniMap';
 import { useCityPalette } from './CityPaletteContext';
 
 // A single flying hover vehicle
@@ -75,21 +76,9 @@ export default function CityTraffic({ positions }) {
   const vehicles = useMemo(() => {
     if (!positions || positions.size < 2) return [];
 
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-
-    if (entries.length < 2) return [];
-
-    // Find bounding box of downtown
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    const bounds = computeDistrictBounds(positions, 'downtown', { minCount: 2 });
+    if (!bounds) return [];
+    const { minX, maxX, minZ, maxZ } = bounds;
 
     const pad = 3;
     const colors = neonAccents;
@@ -105,7 +94,8 @@ export default function CityTraffic({ positions }) {
     ];
 
     // Perimeter vehicles (3-5 hover cars circling the downtown)
-    const vehicleCount = Math.min(5, Math.max(3, entries.length));
+    const downtownCount = [...positions.values()].filter((pos) => pos.district === 'downtown').length;
+    const vehicleCount = Math.min(5, Math.max(3, downtownCount));
     for (let i = 0; i < vehicleCount; i++) {
       result.push({
         id: `perim-${i}`,
@@ -118,7 +108,7 @@ export default function CityTraffic({ positions }) {
     }
 
     // Cross-city lanes (a few vehicles going through the center)
-    if (entries.length >= 3) {
+    if (downtownCount >= 3) {
       // Horizontal lane
       result.push({
         id: 'cross-h',

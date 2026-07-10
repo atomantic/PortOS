@@ -124,7 +124,7 @@ function ThemeModeToggle({ className = '' }) {
       onClick={toggleMode}
       title={`${theme?.label ?? 'Theme'}${pairLabel}`}
       aria-label={`Toggle day/night mode${pairLabel}`}
-      className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+      className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
     >
       <Icon size={18} aria-hidden="true" />
     </button>
@@ -964,7 +964,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg text-gray-500 hover:text-white"
+            className="lg:hidden inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg text-gray-500 hover:text-white"
             aria-label="Close sidebar"
           >
             <span aria-hidden="true">✕</span>
@@ -1006,7 +1006,7 @@ export default function Layout() {
             <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
               <NavLink
                 to="/ambient"
-                className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
+                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
                   isActive('/ambient')
                     ? 'text-port-accent'
                     : 'text-gray-500 hover:text-white'
@@ -1114,7 +1114,7 @@ export default function Layout() {
         <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
             onClick={() => setMobileOpen(true)}
-            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-1 rounded-lg text-gray-400 hover:text-white"
+            className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"
             aria-label="Open navigation menu"
             aria-expanded={mobileOpen}
           >
@@ -1127,7 +1127,7 @@ export default function Layout() {
           <div className="flex items-center gap-0.5">
             <NavLink
               to="/ambient"
-              className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg transition-colors ${
+              className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors ${
                 isActive('/ambient')
                   ? 'text-port-accent'
                   : 'text-gray-500 hover:text-white'
