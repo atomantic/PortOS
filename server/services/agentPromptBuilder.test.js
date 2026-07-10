@@ -749,4 +749,63 @@ describe('buildCompletionGuidelineBullet', () => {
     });
     expect(none).toBeNull();
   });
+
+  it('discardWorktree short-circuits to the reasoning-only bullet (wins over TUI/openPR)', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: true,
+      discardWorktree: true,
+    });
+    expect(bullet).toMatch(/reasoning-only task/i);
+    expect(bullet).toMatch(/discarded on exit/);
+    expect(bullet).not.toMatch(/`\/do:pr`/);
+  });
+});
+
+// A discardWorktree (reasoning-only) task — the layered-intelligence pattern —
+// runs a normal agent in a worktree that is thrown away on exit. The completion
+// contract is the `.agent-done` sentinel payload, NOT commit/push/PR. The prompt
+// MUST NOT tell the agent to run /do:push, /do:pr, or open a PR, because (a) the
+// worktree is discarded so any push is wasted, and (b) the generic markdown
+// sentinel workflow would clobber the hook's structured-JSON sentinel contract.
+// Regression for codex review of PR #2341.
+describe('discardWorktree (reasoning-only) completion contract', () => {
+  const wt = { branchName: 'cos/li-1', worktreePath: '/tmp/wt', baseBranch: 'origin/main' };
+  const liTask = () => makeTask({ metadata: { discardWorktree: true, useWorktree: true, openPR: false, simplify: true } });
+
+  const assertReasoningOnly = (prompt) => {
+    expect(prompt).toMatch(/## Completion \(Reasoning-Only Task\)/);
+    expect(prompt).toMatch(/discarded on exit/);
+    expect(prompt).toMatch(/\.agent-done/);
+    // The whole point: no push/PR/merge instructions anywhere.
+    expect(prompt).not.toMatch(/`\/do:push`\*\*/); // no "Use `/do:push`" hygiene bullet
+    expect(prompt).not.toMatch(/## Completion Workflow/); // TUI push+PR workflow suppressed
+    expect(prompt).not.toMatch(/gh pr merge/);
+    expect(prompt).not.toMatch(/will push your branch and open a pull request/);
+  };
+
+  it('light TUI path emits the sentinel-only completion, not the /do:push workflow', () => {
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: true });
+    assertReasoningOnly(prompt);
+    // Worktree section carries the discard note, not commit/merge guidance.
+    expect(prompt).toMatch(/discarded on exit/);
+    expect(prompt).not.toMatch(/merged back/);
+  });
+
+  it('light CLI (non-TUI) path emits the sentinel-only completion', () => {
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: false, providerId: 'codex' });
+    assertReasoningOnly(prompt);
+  });
+
+  it('full (api) path suppresses the commit/push instructions in Instructions + Git Hygiene', async () => {
+    const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+    assertReasoningOnly(prompt);
+    // Fallback-template step 4 must not tell the agent to commit/push.
+    expect(prompt).toMatch(/Write your result to the completion sentinel/);
+    expect(prompt).not.toMatch(/Commit and push your changes/);
+    // Git Hygiene commit/push bullet replaced with the do-NOT variant.
+    expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
+    // Simplify-before-commit step is suppressed (nothing gets committed).
+    expect(prompt).not.toMatch(/## Simplify Step/);
+  });
 });
