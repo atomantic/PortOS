@@ -48,6 +48,15 @@ describe('SingleNavRow', () => {
     expect(screen.queryByRole('button', { name: /Pin Dashboard/i })).toBeNull();
   });
 
+  // Long dynamic names (apps, series) used to get `truncate` + ellipsis in the
+  // narrow sidebar with no readable fallback. Labels must wrap instead.
+  it('renders long labels without CSS truncate so names stay readable', () => {
+    renderRow({ item: { ...baseItem, label: 'barnhub.online-very-long-name' } });
+    const label = screen.getByText('barnhub.online-very-long-name');
+    expect(label.className).not.toMatch(/\btruncate\b/);
+    expect(label.className).toMatch(/\bbreak-words\b/);
+  });
+
   it('does not navigate when the pin button is clicked (preventDefault + stopPropagation)', () => {
     const onNavigate = vi.fn();
     const onTogglePin = vi.fn();
