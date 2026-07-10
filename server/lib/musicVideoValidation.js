@@ -103,8 +103,9 @@ export const musicVideoTranscribeMidiRequestSchema = z.object({
   model: z.enum(['small', 'medium', 'large']).optional(),
 }).strict();
 
-// The persisted MIDI-transcription pointer (a .mid basename under /api/uploads,
-// produced by the MuScriptor sidecar from the project's source audio). Cleared
+// The persisted MIDI-transcription pointer (a .mid basename under data/music/,
+// produced by the MuScriptor sidecar from the project's source audio; it lives
+// with the master audio so the peer-sync asset manifest federates it). Cleared
 // alongside audioAnalysis when the audio source changes — it was transcribed
 // from the OLD track.
 export const musicVideoMidiTranscriptionSchema = z.object({

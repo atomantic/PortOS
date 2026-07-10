@@ -497,9 +497,16 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   MUSCRIPTOR_PY="$MUSCRIPTOR_VENV/bin/python3"
   mkdir -p "${HOME}/.portos"
 
-  if [[ ! -x "$MUSCRIPTOR_PY" ]]; then
+  if [[ ! -x "$MUSCRIPTOR_PY" && ! -x "$MUSCRIPTOR_VENV/Scripts/python.exe" ]]; then
     echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
     "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
+  fi
+  # A venv created by Windows Python (this script run under git-bash) places the
+  # interpreter at Scripts/python.exe instead of bin/python3 — pick whichever
+  # layout the venv actually has so the pip steps below work on both. The JS
+  # side (pythonSetup's MUSCRIPTOR_VENV_CANDIDATES) already probes both.
+  if [[ ! -x "$MUSCRIPTOR_PY" ]]; then
+    MUSCRIPTOR_PY="$MUSCRIPTOR_VENV/Scripts/python.exe"
   fi
   echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
   "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null

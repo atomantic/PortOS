@@ -163,6 +163,9 @@ describe('musicVideo routes', () => {
       expect(call.audioPath).toMatch(/song\.wav$/);
       expect(call.model).toBe('small');
       expect(call.outputName).toBe('Neon-midi');
+      // Lands in the music dir (not uploads) so the peer-sync asset manifest
+      // federates the .mid with the project's other audio.
+      expect(call.destDir).toMatch(/music$/);
       expect(typeof call.onComplete).toBe('function');
     });
 
@@ -176,6 +179,19 @@ describe('musicVideo routes', () => {
         filename: 'neon-midi.mid', model: 'medium',
       }));
       expect(extra.midiTranscription.filename).toBe('neon-midi.mid');
+    });
+
+    it('onComplete drops a stale result when the audio source changed mid-transcription', async () => {
+      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't1' }); // kickoff read
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
+      const { onComplete } = midiSvc.startMidiTranscription.mock.calls[0][0];
+      // By completion time the project points at a different track — the old
+      // audio's MIDI must not be re-attached (applyProjectPatch cleared it).
+      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't2' });
+      const extra = await onComplete({ filename: 'stale.mid', model: 'medium' });
+      expect(extra).toEqual({});
+      expect(svc.setProjectMidiTranscription).not.toHaveBeenCalled();
     });
 
     it('404s when the project is missing', async () => {

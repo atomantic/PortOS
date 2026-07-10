@@ -21,7 +21,6 @@ import {
   musicVideoMidiEventsUrl,
   cancelMusicVideoMidiTranscription,
 } from '../services/apiMusicVideo.js';
-import { getUploadUrl } from '../services/apiMedia.js';
 import useMidiTranscription from '../hooks/useMidiTranscription.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
@@ -732,7 +731,7 @@ export default function MusicVideo() {
                         <Download size={13} /> Download audio
                       </a>
                       {selected.midiTranscription?.filename && (
-                        <a href={getUploadUrl(selected.midiTranscription.filename)} download
+                        <a href={trackAudioUrl(selected.midiTranscription.filename)} download
                           title={`Download the MIDI transcription (MuScriptor ${selected.midiTranscription.model || ''})`}
                           className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-port-accent hover:bg-port-border/40">
                           <Music size={13} /> Download MIDI

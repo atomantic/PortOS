@@ -209,7 +209,9 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
     listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
     await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } });
     const dl = await screen.findByRole('link', { name: /Download MIDI/i });
-    expect(dl.getAttribute('href')).toBe('/api/uploads/neon-midi.mid');
+    // Served from the music dir (same static route as the master audio) so the
+    // federated .mid resolves on peers too.
+    expect(dl.getAttribute('href')).toBe('/data/music/neon-midi.mid');
   });
 });
 

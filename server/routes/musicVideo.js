@@ -137,11 +137,28 @@ router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const audioPath = await resolveAudioPath(project);
   const projectId = project.id;
+  // Audio-source identity at kickoff — the completion callback re-checks it so
+  // a transcription of the OLD track can't land on a project whose audio was
+  // swapped mid-run (another client / peer sync). applyProjectPatch clears
+  // midiTranscription on the swap; without this guard the in-flight job would
+  // reintroduce the stale pointer right after.
+  const sourceTrackId = project.trackId ?? null;
+  const sourceUpload = project.uploadedAudioFilename ?? null;
   res.status(202).json(await startMidiTranscription({
     audioPath,
     outputName: `${project.name || 'music-video'}-midi`,
     model,
+    // Land the .mid in the music dir (not uploads) so the peer-sync asset
+    // manifest federates it with the project's other audio — the manifest
+    // only ships known asset kinds/directories, and `music` is one.
+    destDir: PATHS.music,
     onComplete: async ({ filename, model: usedModel }) => {
+      const current = await getProject(projectId);
+      if (!current) throw new Error('Project was deleted during transcription');
+      if ((current.trackId ?? null) !== sourceTrackId || (current.uploadedAudioFilename ?? null) !== sourceUpload) {
+        console.log(`🎹 Audio source of ${projectId} changed mid-transcription — dropping the stale MIDI result`);
+        return {};
+      }
       const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
       await setProjectMidiTranscription(projectId, midiTranscription);
       return { midiTranscription };

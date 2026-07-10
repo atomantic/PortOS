@@ -14,9 +14,10 @@
  * Job shape mirrors roundReferenceAudioImport.js (the lightweight SSE-job
  * pattern): kickoff returns `{ jobId }` immediately, the transcription runs
  * detached and streams `{ type: 'progress' | 'complete' | 'error' |
- * 'canceled' }` frames, and the produced `.mid` lands in the uploads dir
- * (served at /api/uploads/<filename>) — a filename pointer, consistent with
- * every other audio field.
+ * 'canceled' }` frames, and the produced `.mid` lands in the caller's
+ * `destDir` — uploads for rounds (served at /api/uploads/<filename>), the
+ * music dir for music video (so the file federates with the project's other
+ * audio) — a filename pointer, consistent with every other audio field.
  */
 
 import { randomUUID } from 'crypto';
@@ -25,7 +26,7 @@ import { unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
-import { shortId, importFileToUploads } from '../lib/fileUtils.js';
+import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
@@ -95,9 +96,12 @@ export function cancelMidiTranscription(jobId) {
  *
  * `audioPath` must already be resolved + validated by the caller (safeUnder
  * against the owning directory). `outputName` seeds the landed `.mid`
- * filename's human-readable prefix.
+ * filename's human-readable prefix. `destDir` picks where the `.mid` lands —
+ * uploads by default (the rounds path); the music video route passes
+ * `PATHS.music` so the file federates to peers alongside the project's other
+ * audio (the peer-sync asset manifest only ships known directories).
  */
-export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete }) {
+export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads }) {
   const pythonPath = resolveMuscriptorPython();
   if (!pythonPath) {
     throw new ServerError(MUSCRIPTOR_INSTALL_HINT, { status: 503, code: 'MIDI_RUNTIME_MISSING' });
@@ -146,7 +150,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       }
 
       broadcastSse(job, { type: 'progress', stage: 'importing' });
-      const { filename } = await importFileToUploads(tempOut, `${outputName}.mid`);
+      const { filename } = await importFileToDir(tempOut, `${outputName}.mid`, destDir);
       const extra = (await onComplete?.({ filename, model: resolvedModel })) || {};
 
       console.log(`🎹 MIDI transcription ${shortId(jobId)} complete — ${filename}`);
