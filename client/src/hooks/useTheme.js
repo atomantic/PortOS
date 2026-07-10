@@ -91,10 +91,12 @@ export default function useTheme() {
         const serverTheme = settings?.theme ? normalizeThemeId(settings.theme) : null;
         const currentSaved = normalizeThemeId(safeReadStorage(STORAGE_KEY));
         if (serverTheme && serverTheme !== currentSaved) {
-          safeWriteStorage(STORAGE_KEY, serverTheme);
-          resetCityTimeOfDayOverride();
+          // Apply the in-memory theme first so a failing persistence/side-effect
+          // path can't leave the UI on the stale theme.
           applyTheme(serverTheme);
           setThemeId(serverTheme);
+          safeWriteStorage(STORAGE_KEY, serverTheme);
+          resetCityTimeOfDayOverride();
         }
       })
       .catch((err) => {
@@ -107,10 +109,12 @@ export default function useTheme() {
   const setTheme = useCallback((id) => {
     userPickedRef.current = true;
     const normalized = normalizeThemeId(id);
-    safeWriteStorage(STORAGE_KEY, normalized);
-    resetCityTimeOfDayOverride();
+    // Apply the in-memory theme (DOM + state) first so persistence or side-effect
+    // failures never leave switching non-functional (issue #2387).
     applyTheme(normalized);
     setThemeId(normalized);
+    safeWriteStorage(STORAGE_KEY, normalized);
+    resetCityTimeOfDayOverride();
     fetch('/api/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

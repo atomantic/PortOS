@@ -48,10 +48,45 @@ const DEFAULT_SETTINGS = {
   ...QUALITY_PRESETS.high,
 };
 
+// localStorage can throw (Safari private mode, blocked storage, disabled cookies)
+// or be absent. These settings drive CyberCity, which also renders on the theme
+// path, so guard every access — a storage failure must never crash init or a
+// settings write. Persistence is best-effort; in-memory state is the source of truth.
+const safeReadStorage = (key) => {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const safeWriteStorage = (key, value) => {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+  } catch {
+    // Ignore — settings changes stay in memory when persistence is unavailable.
+  }
+};
+
+const safeRemoveStorage = (key) => {
+  try {
+    globalThis.localStorage?.removeItem(key);
+  } catch {
+    // Ignore — nothing persisted to remove when storage is unavailable.
+  }
+};
+
 const loadSettings = () => {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = safeReadStorage(STORAGE_KEY);
   if (!saved) return DEFAULT_SETTINGS;
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+  let parsed;
+  try {
+    parsed = JSON.parse(saved);
+  } catch {
+    return DEFAULT_SETTINGS; // Corrupt stored JSON — fall back to defaults.
+  }
+  if (!parsed || typeof parsed !== 'object') return DEFAULT_SETTINGS;
+  return { ...DEFAULT_SETTINGS, ...parsed };
 };
 
 export { QUALITY_PRESETS };
@@ -64,7 +99,7 @@ export default function useCitySettings() {
       setSettings(prev => {
         if (prev.timeOfDay === 'auto') return prev;
         const next = { ...prev, timeOfDay: 'auto' };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
         return next;
       });
     };
@@ -77,17 +112,17 @@ export default function useCitySettings() {
       // If changing quality preset, apply bulk changes
       if (key === 'qualityPreset' && QUALITY_PRESETS[value]) {
         const next = { ...prev, qualityPreset: value, ...QUALITY_PRESETS[value] };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
         return next;
       }
       const next = { ...prev, [key]: value };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }, []);
 
   const resetSettings = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    safeRemoveStorage(STORAGE_KEY);
     setSettings(DEFAULT_SETTINGS);
   }, []);
 
