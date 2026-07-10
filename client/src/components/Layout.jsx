@@ -363,22 +363,27 @@ function PinButton({ label, pinned, onTogglePin }) {
 // One row in the sidebar's Pinned/Recent sections: a nav link plus a pin/unpin
 // toggle that does not navigate (stops propagation). Pinned rows show a filled
 // pin; recent rows reveal the pin affordance on hover/focus.
+// Labels wrap (no truncate) so long app/series names stay readable in the
+// narrow rail; the pin is absolutely positioned so it doesn't steal label width.
 function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
   const Icon = entry.icon;
   return (
-    <div className="group mx-2 flex items-stretch min-w-0">
+    <div className="group relative mx-2 min-w-0">
       <NavLink
         to={entry.path}
         end={entry.end}
         onClick={onNavigate}
-        className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
+        title={entry.label}
+        className={`flex items-start gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
           isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
       >
-        {Icon && <Icon size={16} className="shrink-0" />}
-        <span className="min-w-0 truncate">{entry.label}</span>
+        {Icon && <Icon size={16} className="shrink-0 mt-0.5" />}
+        <span className="min-w-0 break-words leading-snug">{entry.label}</span>
       </NavLink>
-      <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
+      <div className="absolute right-0 top-0 bottom-0 flex items-center">
+        <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
+      </div>
     </div>
   );
 }
@@ -396,22 +401,22 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
   const showBadge = item.showBadge && badgeCount > 0;
   const badgeText = badgeCount > 9 ? '9+' : badgeCount;
   return (
-    <div className={`group flex items-stretch min-w-0 mx-2 ${collapsed ? 'lg:justify-center' : ''}`}>
+    <div className={`group relative min-w-0 mx-2 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
       <NavLink
         to={item.to}
         end={item.to === '/'}
         onClick={onNavigate}
-        className={`flex-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
-          collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+        className={`flex items-start gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          collapsed ? 'lg:justify-center lg:px-2' : 'pr-9'
         } ${
           active
             ? 'bg-port-accent/10 text-port-accent'
             : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
-        title={collapsed ? item.label : undefined}
+        title={item.label}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="relative">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className="relative shrink-0">
             <Icon size={20} className="shrink-0" />
             {/* Badge for collapsed state */}
             {showBadge && collapsed && (
@@ -420,18 +425,22 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
               </span>
             )}
           </div>
-          <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+          <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
             {item.label}
           </span>
         </div>
-        {/* Badge for expanded state */}
+        {/* Badge for expanded state — sits left of the absolute pin */}
         {showBadge && !collapsed && (
-          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0 mt-0.5">
             {badgeText}
           </span>
         )}
       </NavLink>
-      {!collapsed && <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />}
+      {!collapsed && (
+        <div className="absolute right-0 top-0 bottom-0 flex items-center">
+          <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />
+        </div>
+      )}
     </div>
   );
 }
@@ -696,18 +705,18 @@ export default function Layout() {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          className={`flex items-start gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
             collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
           } text-gray-400 hover:text-white hover:bg-port-border/50`}
-          title={collapsed ? item.label : undefined}
+          title={item.label}
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-start gap-3 min-w-0">
             <Icon size={20} className="shrink-0" />
-            <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+            <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
               {item.label}
             </span>
           </div>
-          {!collapsed && <ExternalLink size={14} className="text-gray-500" />}
+          {!collapsed && <ExternalLink size={14} className="text-gray-500 shrink-0 mt-0.5" />}
         </a>
       );
     }
@@ -780,12 +789,12 @@ export default function Layout() {
                   </span>
                 )}
               </div>
-              <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+              <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
                 {item.label}
               </span>
             </div>
             {!collapsed && item.showBadge && unreadCount > 0 && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -823,13 +832,14 @@ export default function Layout() {
                     href={childHref}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
+                    title={child.label}
+                    className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <ChildIcon size={16} />
-                      <span className="min-w-0 truncate">{child.label}</span>
+                    <div className="flex items-start gap-3 min-w-0">
+                      <ChildIcon size={16} className="shrink-0 mt-0.5" />
+                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
                     </div>
-                    <ExternalLink size={12} className="text-gray-500" />
+                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
                   </a>
                 );
               }
@@ -863,7 +873,7 @@ export default function Layout() {
                             to={gc.to}
                             onClick={() => setMobileOpen(false)}
                             title={gc.title || gc.label}
-                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 truncate ${
+                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
                               gcActive
                                 ? 'text-port-accent'
                                 : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
@@ -912,8 +922,8 @@ export default function Layout() {
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-          ${collapsed ? 'lg:w-16' : 'lg:w-56'}
-          w-56
+          ${collapsed ? 'lg:w-16' : 'lg:w-64'}
+          w-64
         `}
       >
         {/* Header with logo and collapse toggle */}
@@ -1036,7 +1046,7 @@ export default function Layout() {
             onFocus={cancelCloseFlyout}
             onBlur={scheduleCloseFlyout}
             style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', maxHeight: 'calc(100vh - 16px)' }}
-            className="hidden lg:block z-[60] min-w-[200px] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}
@@ -1058,13 +1068,14 @@ export default function Layout() {
                     rel="noopener noreferrer"
                     role="menuitem"
                     onClick={() => setFlyoutSection(null)}
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                    title={child.label}
+                    className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <ChildIcon size={16} aria-hidden="true" />
-                      <span className="min-w-0 truncate">{child.label}</span>
+                    <div className="flex items-start gap-3 min-w-0">
+                      <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
                     </div>
-                    <ExternalLink size={12} className="text-gray-500" />
+                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
                   </a>
                 );
               }
@@ -1078,14 +1089,15 @@ export default function Layout() {
                   end={child.end}
                   role="menuitem"
                   onClick={() => setFlyoutSection(null)}
-                  className={`flex items-center gap-3 px-3 py-2 text-sm min-w-0 ${
+                  title={child.label}
+                  className={`flex items-start gap-3 px-3 py-2 text-sm min-w-0 ${
                     childActive
                       ? 'bg-port-accent/10 text-port-accent'
                       : 'text-gray-300 hover:text-white hover:bg-port-border/50'
                   }`}
                 >
-                  <ChildIcon size={16} className="shrink-0" aria-hidden="true" />
-                  <span className="min-w-0 truncate">{child.label}</span>
+                  <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+                  <span className="min-w-0 break-words leading-snug">{child.label}</span>
                 </NavLink>
               );
             })}
@@ -1094,7 +1106,7 @@ export default function Layout() {
       })()}
 
       {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
-      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
         {/* Mobile header */}
         <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
