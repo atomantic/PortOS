@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bot, GitBranch, Loader2, Plus, Save, X } from 'lucide-react';
 import toast from '../../../ui/Toast';
 import * as api from '../../../../services/api';
-import { describeCron } from '../../../../utils/cronHelpers';
+import { describeCron, parseSimpleCron, buildWeeklyCron, DEFAULT_CRON } from '../../../../utils/cronHelpers';
+import WeekdayTimePicker from '../../../WeekdayTimePicker';
 
 const TASK_MODES = [
   ['cron', 'Pinned time (cron)'],
@@ -25,18 +26,6 @@ const JOB_INTERVALS = [
   ['biweekly', 'Every 2 weeks'],
   ['monthly', 'Monthly']
 ];
-
-function dailyTimeFromCron(expression) {
-  const match = String(expression || '').match(/^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/);
-  if (!match) return '';
-  return `${String(Number(match[2])).padStart(2, '0')}:${String(Number(match[1])).padStart(2, '0')}`;
-}
-
-function cronFromDailyTime(value) {
-  if (!value) return '';
-  const [hour, minute] = value.split(':');
-  return `${Number(minute)} ${Number(hour)} * * *`;
-}
 
 export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSaved }) {
   const [form, setForm] = useState(null);
@@ -190,15 +179,11 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
 
         {form.mode === 'cron' && (
           <div className="space-y-2">
-            <label className="block text-xs text-gray-400">
-              Daily time
-              <input
-                type="time"
-                value={dailyTimeFromCron(form.cronExpression)}
-                onChange={event => set('cronExpression', cronFromDailyTime(event.target.value))}
-                className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
-              />
-            </label>
+            <div>
+              <span className="block text-xs text-gray-400">Run on</span>
+              <WeekdayTimePicker value={form.cronExpression || DEFAULT_CRON} onChange={value => set('cronExpression', value)} className="mt-1.5" />
+              <p className="mt-1 text-[11px] text-gray-600">No days selected runs every day.</p>
+            </div>
             <label className="block text-xs text-gray-400">
               Advanced cron
               <input value={form.cronExpression} onChange={event => set('cronExpression', event.target.value)} placeholder="0 9 * * *" className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 font-mono text-sm text-white" />
@@ -214,8 +199,8 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
             </p>
             <input
               type="time"
-              value={dailyTimeFromCron(form.recheckCron)}
-              onChange={event => set('recheckCron', cronFromDailyTime(event.target.value))}
+              value={parseSimpleCron(form.recheckCron)?.time ?? ''}
+              onChange={event => set('recheckCron', buildWeeklyCron([], event.target.value))}
               className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
             />
             <input value={form.recheckCron} onChange={event => set('recheckCron', event.target.value)} placeholder="0 9 * * *" className="w-full rounded border border-port-border bg-port-bg px-3 py-2 font-mono text-xs text-gray-300" aria-label="Perpetual recheck cron" />

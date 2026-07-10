@@ -18,6 +18,8 @@
 
 ## Changed
 
+- **CoS scheduled tasks get a day-of-week + time-of-day picker — no more typing crontab syntax for weekly schedules.** Every CoS cron surface (Schedule tab overrides and global config, the Workflow/Timeline schedule editor's pinned-time mode, CoS system jobs, and per-app custom tasks) now leads with a row of day pills (S M T W T F S) plus a time input: click the days it should run and set the time, and the cron expression is built for you (no days selected = every day). The raw crontab field and presets are still there behind an "Advanced" toggle for interval/stepped schedules the picker can't represent, and it round-trips — an existing `0 9 * * 1,3` lights up Mon/Wed at 09:00. Built on a shared `WeekdayTimePicker` component and `parseSimpleCron`/`buildWeeklyCron` helpers so all surfaces stay consistent.
+
 - **Creative Director is now a top-level page under Create, not a Media Gen tab.** It moved out of the Media Gen tab strip to its own `/creative-director` route with a Create sidebar link, so it's reachable directly (⌘K, voice nav, and the sidebar) without first opening Media Gen. Legacy `/media/creative-director` links and deep-links (including `:id/:tab`) redirect to the new route, preserving query string and hash.
 
 ## Added

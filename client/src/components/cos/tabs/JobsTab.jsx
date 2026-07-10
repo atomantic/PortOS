@@ -3,7 +3,8 @@ import { Plus, RefreshCw, Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLef
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
-import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
+import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHelpers';
+import WeekdayTimePicker from '../../WeekdayTimePicker';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
@@ -192,25 +193,29 @@ function ScheduleFields({ data, onChange }) {
         ))}
       </div>
       {data.scheduleMode === 'cron' ? (
-        <div className="flex gap-2 items-center">
-          <input
-            type="text"
-            value={data.cronExpression || ''}
-            onChange={e => onChange('cronExpression', e.target.value)}
-            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
-            placeholder="0 7 * * *"
-            title="Cron expression: minute hour dayOfMonth month dayOfWeek"
-          />
-          <select
-            value=""
-            onChange={e => { if (e.target.value) onChange('cronExpression', e.target.value); }}
-            className="px-2 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs"
-          >
-            <option value="">Presets</option>
-            {CRON_PRESETS.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
+        <div className="space-y-2">
+          <WeekdayTimePicker value={data.cronExpression || DEFAULT_CRON} onChange={value => onChange('cronExpression', value)} />
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              value={data.cronExpression || ''}
+              onChange={e => onChange('cronExpression', e.target.value)}
+              className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
+              placeholder="0 7 * * *"
+              title="Cron expression: minute hour dayOfMonth month dayOfWeek"
+            />
+            <select
+              value=""
+              onChange={e => { if (e.target.value) onChange('cronExpression', e.target.value); }}
+              className="px-2 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs"
+              aria-label="Cron presets"
+            >
+              <option value="">Presets</option>
+              {CRON_PRESETS.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+          </div>
           {data.cronExpression && (
             <span className="text-xs text-gray-500">{describeCron(data.cronExpression)}</span>
           )}
