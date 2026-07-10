@@ -21,6 +21,8 @@ import {
   sanitizeProjectForSync,
   mergeProjectRecord,
   startingImageFilename,
+  normalizeModelOverrides,
+  resolveStagePin,
 } from './projectsLogic.js';
 
 const VALID_TREATMENT = {
@@ -28,6 +30,56 @@ const VALID_TREATMENT = {
   synopsis: 'Then puts it on.',
   scenes: [{ sceneId: 'scene-1', order: 0, intent: 'Cat enters', prompt: 'A cat walks in', durationSeconds: 4 }],
 };
+
+describe('modelOverrides (per-project provider/model pins)', () => {
+  const base = { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 };
+
+  it('defaults to an empty object on a bare project', () => {
+    const p = buildProjectRecord(base, { id: 'cd-1', now: 'now', collectionId: 'c-1' });
+    expect(p.modelOverrides).toEqual({});
+  });
+
+  it('normalizes: keeps provider-bearing stages, drops empty + model-only ones', () => {
+    const p = buildProjectRecord(
+      {
+        ...base,
+        modelOverrides: {
+          treatment: { providerId: '  agent-a  ', model: '  qwen  ' },
+          plan: { model: 'no-provider' }, // dropped — a model alone can't resolve
+          evaluation: { providerId: '' },  // dropped — blank provider
+          bogus: { providerId: 'x' },       // dropped — not a known stage
+        },
+      },
+      { id: 'cd-1', now: 'now', collectionId: 'c-1' },
+    );
+    expect(p.modelOverrides).toEqual({ treatment: { providerId: 'agent-a', model: 'qwen' } });
+  });
+
+  it('normalizeModelOverrides tolerates non-objects', () => {
+    expect(normalizeModelOverrides(null)).toEqual({});
+    expect(normalizeModelOverrides('nope')).toEqual({});
+    expect(normalizeModelOverrides([1, 2])).toEqual({});
+    expect(normalizeModelOverrides({ treatment: { providerId: 'a' } })).toEqual({ treatment: { providerId: 'a' } });
+  });
+
+  it('applyProjectPatch re-normalizes an incoming override object', () => {
+    const next = applyProjectPatch({ id: 'cd-1', modelOverrides: {} }, {
+      modelOverrides: { plan: { providerId: 'a', model: '' }, evaluation: { model: 'orphan' } },
+    });
+    expect(next.modelOverrides).toEqual({ plan: { providerId: 'a' } });
+  });
+
+  it('resolveStagePin prefers the project override, else the global assignment', () => {
+    const settings = { creativeDirector: { treatment: { providerId: 'global', model: 'gm' } } };
+    // Override wins when it names a provider.
+    expect(resolveStagePin('treatment', { modelOverrides: { treatment: { providerId: 'proj', model: 'pm' } } }, settings))
+      .toEqual({ providerId: 'proj', model: 'pm' });
+    // No override → global.
+    expect(resolveStagePin('treatment', {}, settings)).toEqual({ providerId: 'global', model: 'gm' });
+    // Neither → empty strings.
+    expect(resolveStagePin('plan', {}, settings)).toEqual({ providerId: '', model: '' });
+  });
+});
 
 describe('buildProjectRecord', () => {
   it('produces a draft project with the supplied collection id and null pointers', () => {

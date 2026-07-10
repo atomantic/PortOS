@@ -36,6 +36,7 @@ import { getProviderById } from '../providers.js';
 import { listVisionModels } from '../localLlm.js';
 import { addItem } from '../mediaCollections.js';
 import { updateScene, recordRun, updateRun } from './local.js';
+import { resolveStagePin } from './projectsLogic.js';
 import { enqueueEvaluateTask } from './agentBridge.js';
 
 // Cap frames per call — the runner base64-inlines every frame into one request
@@ -97,15 +98,18 @@ export function parseVisionVerdict(text) {
  * Resolve which API provider + model should run the vision evaluation.
  *
  * Order:
- *   1. Explicit assignment — `settings.creativeDirector.evaluation.providerId`
- *      (set via AI Assignments). Honored as long as it's an enabled API
- *      provider; the assigned `model` (if any) is used verbatim.
+ *   1. Explicit assignment — the project's own `modelOverrides.evaluation` pin
+ *      (per-project CD provider/model pins) when set, else the global
+ *      `settings.creativeDirector.evaluation` pin (set via AI Assignments).
+ *      Honored as long as it's an enabled API provider; the assigned `model`
+ *      (if any) is used verbatim.
  *   2. Auto — the first installed local (Ollama/LM Studio) vision-capable model.
  *
+ * @param {object} [project] the CD project, for its per-project override.
  * @returns {Promise<{ provider: object, model: string|undefined }|null>} null
  *   when nothing suitable is configured (caller falls back to the agent).
  */
-export async function resolveVisionEvalTarget() {
+export async function resolveVisionEvalTarget(project) {
   // An API provider is usable only if it exists and is enabled — vision runs
   // through the api-only chat path, so a CLI/TUI provider can't serve it.
   const usableApiProvider = async (id) => {
@@ -114,7 +118,7 @@ export async function resolveVisionEvalTarget() {
   };
 
   const settings = await getSettings().catch(() => ({}));
-  const assigned = settings?.creativeDirector?.evaluation || {};
+  const assigned = resolveStagePin('evaluation', project, settings);
 
   if (assigned.providerId) {
     const provider = await usableApiProvider(assigned.providerId);
@@ -168,7 +172,7 @@ function collectFramePaths(scene) {
  * >}
  */
 export async function evaluateSceneWithVision(project, scene) {
-  const target = await resolveVisionEvalTarget();
+  const target = await resolveVisionEvalTarget(project);
   if (!target) {
     return { ok: false, fallbackToAgent: true, reason: 'no vision-capable API provider configured' };
   }

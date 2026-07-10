@@ -62,4 +62,38 @@ describe('Creative Director agent bridge model assignments', () => {
     expect(task.metadata).not.toHaveProperty('provider');
     expect(task.metadata).not.toHaveProperty('model');
   });
+
+  it('prefers the project-level override over the global assignment', async () => {
+    mocks.getSettings.mockResolvedValue({
+      creativeDirector: { treatment: { providerId: 'global-agent', model: 'global-model' } },
+    });
+
+    await enqueueTreatmentTask({
+      ...project,
+      modelOverrides: { treatment: { providerId: 'project-agent', model: 'project-model' } },
+    });
+
+    const [task] = mocks.addTask.mock.calls[0];
+    expect(task.metadata).toMatchObject({
+      provider: 'project-agent',
+      providerId: 'project-agent',
+      model: 'project-model',
+    });
+  });
+
+  it('inherits the global assignment when the project override omits a provider', async () => {
+    mocks.getSettings.mockResolvedValue({
+      creativeDirector: { plan: { providerId: 'global-agent', model: 'global-model' } },
+    });
+
+    // A model-only override can't resolve (no provider) → inherit the global pin.
+    await enqueuePlanTask({ ...project, modelOverrides: { plan: { model: 'stray-model' } } });
+
+    const [task] = mocks.addTask.mock.calls[0];
+    expect(task.metadata).toMatchObject({
+      provider: 'global-agent',
+      providerId: 'global-agent',
+      model: 'global-model',
+    });
+  });
 });

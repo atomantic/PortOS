@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
+  providerDisplayName,
+  assignmentProviderOptions,
+  assignmentModelOptions,
   PROVIDER_TYPES,
   filterSelectableModels,
   filterGenerationModels,
@@ -398,5 +401,38 @@ describe('visionLocalModelFilter', () => {
 
   it('treats an unknown/undefined provider as non-local (no filtering)', () => {
     expect(visionLocalModelFilter('some-text-model', undefined)).toBe(true);
+  });
+});
+
+describe('AI Assignments option helpers', () => {
+  const providers = [
+    { id: 'agent-a', name: 'Agent A', type: 'cli', enabled: true, models: ['a-1', 'a-2'] },
+    { id: 'vlm-x', name: 'VLM X', type: 'api', enabled: false, models: ['llava'] },
+  ];
+
+  it('providerDisplayName resolves name, then id, then fallback', () => {
+    expect(providerDisplayName(providers, 'agent-a')).toBe('Agent A');
+    expect(providerDisplayName(providers, 'ghost')).toBe('ghost');
+    expect(providerDisplayName(providers, '', 'Default')).toBe('Default');
+    expect(providerDisplayName(providers, '')).toBe('');
+  });
+
+  it('assignmentProviderOptions filters by providerTypes and flags disabled', () => {
+    expect(assignmentProviderOptions({ providerTypes: ['api'] }, providers))
+      .toEqual([{ id: 'vlm-x', name: 'VLM X (disabled)' }]);
+    // No providerTypes → all providers.
+    expect(assignmentProviderOptions({}, providers).map((p) => p.id)).toEqual(['agent-a', 'vlm-x']);
+  });
+
+  it('assignmentProviderOptions honors a pre-baked providerOptions override', () => {
+    const baked = [{ id: 'x', name: 'X' }];
+    expect(assignmentProviderOptions({ providerOptions: baked }, providers)).toBe(baked);
+  });
+
+  it('assignmentModelOptions returns the selected provider models, else empty', () => {
+    expect(assignmentModelOptions({}, providers, 'agent-a')).toEqual(['a-1', 'a-2']);
+    expect(assignmentModelOptions({}, providers, 'ghost')).toEqual([]);
+    const baked = ['m'];
+    expect(assignmentModelOptions({ modelOptions: baked }, providers, 'agent-a')).toBe(baked);
   });
 });

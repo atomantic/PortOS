@@ -322,3 +322,42 @@ export const providerTypeClass = (type) => {
   if (type === PROVIDER_TYPES.TUI) return 'bg-emerald-500/20 text-emerald-400';
   return 'bg-purple-500/20 text-purple-400';
 };
+
+// ---------------------------------------------------------------------------
+// AI Assignments option helpers — shared by the global AI Assignments table
+// (settings/AiAssignmentsTab.jsx) and per-record override drawers (e.g. the
+// Creative Director Models drawer). All three consume the `getAiAssignments`
+// payload shape (`{ providers, assignments }`), where an assignment `entry` may
+// carry `providerTypes` (which provider kinds are eligible) and optional
+// pre-baked `providerOptions` / `modelOptions` overrides for runtime call sites.
+// ---------------------------------------------------------------------------
+
+/** Display name for a provider id, falling back to the id then `fallback`. */
+export const providerDisplayName = (providers, id, fallback = '') =>
+  providers.find((p) => p.id === id)?.name || id || fallback;
+
+/**
+ * Provider `{ id, name }` options eligible for an assignment entry — the entry's
+ * pre-baked `providerOptions` when present, else every provider whose `type` is
+ * in the entry's `providerTypes` (all providers when unfiltered), tagged with a
+ * "(disabled)" suffix on disabled providers.
+ */
+export const assignmentProviderOptions = (entry, providers) => {
+  if (Array.isArray(entry?.providerOptions)) return entry.providerOptions;
+  const types = Array.isArray(entry?.providerTypes) && entry.providerTypes.length
+    ? new Set(entry.providerTypes)
+    : null;
+  return providers
+    .filter((p) => !types || types.has(p.type))
+    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}` }));
+};
+
+/**
+ * Model-id options for an assignment entry given the selected provider — the
+ * entry's pre-baked `modelOptions` when present, else the provider's own model
+ * list (empty when the provider is unknown or has none).
+ */
+export const assignmentModelOptions = (entry, providers, providerId) => {
+  if (Array.isArray(entry?.modelOptions)) return entry.modelOptions;
+  return providers.find((p) => p.id === providerId)?.models || [];
+};

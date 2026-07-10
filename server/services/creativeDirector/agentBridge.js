@@ -19,13 +19,16 @@ import { addTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
+import { resolveStagePin } from './projectsLogic.js';
 import { recordRun } from './local.js';
 
 // Treatment and production planning are CoS tasks, so unlike scene evaluation
-// they need a CLI/TUI provider with an agent harness. The assignment UI limits
-// choices accordingly; this helper only adds a pin when one was explicitly
-// saved, preserving the system-default behavior for existing installations.
-async function getStageAssignment(kind) {
+// they need a CLI/TUI provider with an agent harness. Resolution prefers the
+// project's own `modelOverrides.<kind>` pin (per-project CD provider/model
+// pins) and falls back to the global `settings.creativeDirector.<kind>` AI
+// Assignment — only adding a pin when one is set, preserving the system-default
+// behavior for existing installations.
+async function getStageAssignment(kind, project) {
   // Scene evaluation is a direct vision API call (apiProviderTypes) resolved
   // separately, NOT a CoS agent pin — injecting its api-type provider into the
   // agent task metadata would trip the harness-boundary guard. Never pin it
@@ -34,8 +37,8 @@ async function getStageAssignment(kind) {
   // `creativeDirector.evaluation`.)
   if (kind === 'evaluate') return {};
   const settings = await getSettings().catch(() => ({}));
-  const assignment = settings?.creativeDirector?.[kind];
-  if (!assignment?.providerId && !assignment?.model) return {};
+  const assignment = resolveStagePin(kind, project, settings);
+  if (!assignment.providerId && !assignment.model) return {};
   return {
     ...(assignment.providerId ? { provider: assignment.providerId, providerId: assignment.providerId } : {}),
     ...(assignment.model ? { model: assignment.model } : {}),
@@ -45,7 +48,7 @@ async function getStageAssignment(kind) {
 async function buildTaskRecord(project, kind, scene, context) {
   const taskId = `cd-${project.id}-${kind}-${Date.now().toString(36)}`;
   const runId = randomUUID();
-  const assignment = await getStageAssignment(kind);
+  const assignment = await getStageAssignment(kind, project);
   return {
     id: taskId,
     runId,
