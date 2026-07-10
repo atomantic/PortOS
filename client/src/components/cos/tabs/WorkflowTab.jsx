@@ -50,6 +50,25 @@ function relativeTime(iso) {
   return `in ${Math.round(deltaMinutes / 1440)}d`;
 }
 
+// A launch tagged `dueNow` fires because the scheduler already considers the
+// task due — a catch-up, first run, or elapsed interval — not because a cadence
+// slot lands now. Explain why, so a NOW marker beside "Sun at 07:00" doesn't
+// read as a bug. Returns null for ordinary on-cadence launches.
+function dueNowMeta(occurrence, node, timezone) {
+  if (!occurrence?.dueNow) return null;
+  const reason = occurrence.reason || '';
+  if (reason.startsWith('cron-catch-up')) {
+    const slot = occurrence.missedSlot
+      ? new Date(occurrence.missedSlot).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: timezone })
+      : null;
+    return { badge: 'catch-up', detail: slot ? `Catch-up for the missed ${slot} slot` : 'Catch-up for a missed slot' };
+  }
+  if (reason === 'once-first-run' || !node?.lastRun) {
+    return { badge: 'first run', detail: 'First run — has never run before' };
+  }
+  return { badge: 'overdue', detail: 'Overdue — the interval elapsed since the last run' };
+}
+
 function timelinePercent(iso, timeline) {
   const start = new Date(timeline.startAt).getTime();
   const end = new Date(timeline.endAt).getTime();
@@ -109,14 +128,20 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
             <span className="absolute left-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-amber-200"><InfinityIcon className="mr-1 inline h-3 w-3" />draining</span>
           </span>
         ))}
-        {occurrences.map(occurrence => (
-          <span
-            key={occurrence.id}
-            className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : palette.marker} ${occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : ''}`}
-            style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
-            title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
-          />
-        ))}
+        {occurrences.map(occurrence => {
+          const meta = dueNowMeta(occurrence, node, timezone);
+          const ring = occurrence.collision
+            ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg'
+            : meta ? 'ring-2 ring-amber-300 ring-offset-1 ring-offset-port-bg' : '';
+          return (
+            <span
+              key={occurrence.id}
+              className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : palette.marker} ${ring}`}
+              style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
+              title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
+            />
+          );
+        })}
       </div>
     </button>
   );
@@ -134,10 +159,14 @@ function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
         {next.map((occurrence, index) => {
           const node = nodeMap.get(occurrence.nodeId);
           if (!node) return null;
+          const meta = dueNowMeta(occurrence, node, timezone);
           return (
             <div key={occurrence.id} className="flex shrink-0 items-center gap-2">
-              <button type="button" onClick={() => onSelect(node.id)} className={`min-w-36 rounded border px-3 py-2 text-left hover:border-port-accent/50 ${occurrence.collision ? 'border-port-warning/50 bg-port-warning/5' : 'border-port-border bg-port-bg/50'}`}>
-                <span className="block text-[10px] font-medium uppercase tracking-wide text-gray-500">{formatPoint(occurrence.at, hours, timezone)} · {relativeTime(occurrence.at)}</span>
+              <button type="button" onClick={() => onSelect(node.id)} title={meta?.detail || undefined} className={`min-w-36 rounded border px-3 py-2 text-left hover:border-port-accent/50 ${occurrence.collision ? 'border-port-warning/50 bg-port-warning/5' : meta ? 'border-amber-400/50 bg-amber-500/5' : 'border-port-border bg-port-bg/50'}`}>
+                <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
+                  <span>{formatPoint(occurrence.at, hours, timezone)} · {relativeTime(occurrence.at)}</span>
+                  {meta && <span className="rounded-sm bg-amber-500/15 px-1 py-px text-[9px] text-amber-300">{meta.badge}</span>}
+                </span>
                 <span className="mt-0.5 block max-w-44 truncate text-xs text-gray-200">{occurrence.kind === 'recheck' ? '↻ ' : ''}{node.label}</span>
               </button>
               {index < next.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-gray-700" />}
@@ -278,6 +307,7 @@ export default function WorkflowTab() {
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-400 ring-2 ring-amber-300 ring-offset-1 ring-offset-port-bg" /> due now (catch-up)</span>
                   </div>
                   <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
                 </div>
@@ -321,6 +351,7 @@ export default function WorkflowTab() {
 
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
                 <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
+                <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber ring at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
                 <span><TimerReset className="mr-1 inline h-3 w-3" />Perpetual bands have no fixed end while backlog remains.</span>
               </div>
             </div>

@@ -181,6 +181,13 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       blocked: info.status?.reason === 'waiting-on-dependencies' ? info.status.reason : null,
       statusReason: info.status?.shouldRun === false ? info.status.reason : null,
       shouldRun: info.status?.shouldRun === true,
+      // Why the task is due right now (e.g. 'weekly-due', 'cron-catch-up',
+      // 'once-first-run'). Surfaced only for shouldRun=true so the timeline can
+      // explain a NOW marker that sits far from the task's next cadence slot —
+      // a catch-up or first run reads as a bug otherwise (issue: NOW markers on
+      // weekly/Sunday tasks). `missedSlot` is the cron slot catch-up recovers.
+      runReason: info.status?.shouldRun === true ? (info.status.reason || null) : null,
+      missedSlot: info.status?.missedSlot || null,
       pendingDeps: info.status?.pendingDeps || [],
       nextRunAt: info.status?.nextRunAt || info.perpetual?.nextRecheckAt || null,
       perpetual: info.perpetual || null
@@ -287,7 +294,7 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
     if (schedule.cronExpression) {
       const dueNow = isCronDueNow(node, schedule.cronExpression, startMs, timezone);
       if (dueNow) {
-        occurrences.push(makeOccurrence(node, startMs, 'launch'));
+        occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
       }
       // When a due-now marker was emitted, start the projection strictly after
       // startMs so a cron slot landing exactly on the current minute doesn't
@@ -374,7 +381,7 @@ function projectIntervalTask(node, startMs, endMs, timezone, occurrences) {
   const type = node.schedule?.type;
   if (type === 'rotation' || type === 'on-demand') return;
   if (type === 'once') {
-    if (node.shouldRun) occurrences.push(makeOccurrence(node, startMs, 'launch'));
+    if (node.shouldRun) occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
     return;
   }
 
@@ -382,10 +389,19 @@ function projectIntervalTask(node, startMs, endMs, timezone, occurrences) {
     || (type === 'weekly' ? 7 * DAY : type === 'daily' ? DAY : node.schedule?.intervalMs);
   if (!cadence) return;
 
-  let nextMs = node.shouldRun ? startMs : (node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN);
-  if (!Number.isFinite(nextMs)) {
-    const lastRunMs = node.lastRun ? new Date(node.lastRun).getTime() : NaN;
-    nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
+  let nextMs;
+  if (node.shouldRun) {
+    // Emit the due-now marker explicitly (tagged) and project subsequent cadence
+    // slots strictly after now so the recurring slots aren't mislabelled due-now.
+    occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
+    const anchor = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
+    nextMs = Number.isFinite(anchor) && anchor > startMs ? anchor : startMs + cadence;
+  } else {
+    nextMs = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
+    if (!Number.isFinite(nextMs)) {
+      const lastRunMs = node.lastRun ? new Date(node.lastRun).getTime() : NaN;
+      nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
+    }
   }
   appendIntervalOccurrences(node, nextMs, cadence, startMs, endMs, timezone, occurrences, 'launch');
 }
@@ -397,7 +413,7 @@ function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
   let nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
   const timeMatch = String(node.schedule?.scheduledTime || '').match(/^([01]\d|2[0-3]):([0-5]\d)$/);
   if (isIntervalJobDueNow(node, startMs, timezone)) {
-    occurrences.push(makeOccurrence(node, startMs, 'launch'));
+    occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
     nextMs = startMs + cadence;
   }
   // Fast-forward a stale anchor (lastRun many cadences ago but not due right
@@ -468,13 +484,23 @@ function appendIntervalOccurrences(node, firstMs, cadence, startMs, endMs, timez
   }
 }
 
-function makeOccurrence(node, atMs, kind) {
+function makeOccurrence(node, atMs, kind, extra = {}) {
   return {
     id: `${node.id}:${kind}:${atMs}`,
     nodeId: node.id,
     at: new Date(atMs).toISOString(),
-    kind
+    kind,
+    ...extra
   };
+}
+
+// A launch pinned to the window start (NOW) fires because the scheduler already
+// considers the task due — a catch-up, first run, or elapsed interval — NOT
+// because a cadence slot happens to land now. Tag it so the UI can distinguish
+// it from an on-cadence launch (a NOW marker next to "Sun at 07:00" otherwise
+// reads as a bug). Future cadence slots never carry this flag.
+function dueNowExtra(node) {
+  return { dueNow: true, reason: node?.runReason || null, missedSlot: node?.missedSlot || null };
 }
 
 function findCollisionOccurrenceIds(occurrences) {
