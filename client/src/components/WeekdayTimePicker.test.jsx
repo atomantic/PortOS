@@ -34,6 +34,12 @@ describe('WeekdayTimePicker', () => {
   it('shows no days selected for an interval cron the picker cannot represent', () => {
     render(<WeekdayTimePicker value="*/15 * * * *" onChange={vi.fn()} />);
     expect(screen.getByTitle('Mon')).toHaveAttribute('aria-pressed', 'false');
-    // First interaction converts it into a simple day+time cron at the default time.
+  });
+
+  it('converts an unrepresentable interval cron into a day+time cron at the default time on first toggle', () => {
+    const onChange = vi.fn();
+    render(<WeekdayTimePicker value="*/15 * * * *" onChange={onChange} />);
+    fireEvent.click(screen.getByTitle('Mon'));
+    expect(onChange).toHaveBeenCalledWith('0 7 * * 1');
   });
 });

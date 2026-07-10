@@ -37,6 +37,7 @@ export default function WeekdayTimePicker({ value, onChange, className = '' }) {
               type="button"
               onClick={() => toggleDay(wd.value)}
               aria-pressed={active}
+              aria-label={wd.label}
               title={wd.label}
               className={`w-6 h-6 rounded text-xs font-medium ${
                 active
