@@ -79,6 +79,11 @@ describe('tuiHandshake — paste timing constants', () => {
     expect(PASTE_MARKER_PATTERN.test('banner stuff [Pasted text #7 +1 lines] trailer')).toBe(true);
   });
 
+  it('PASTE_MARKER_PATTERN matches Codex paste-commit chips', () => {
+    expect(PASTE_MARKER_PATTERN.test('[Pasted Content 2431 chars]')).toBe(true);
+    expect(PASTE_MARKER_PATTERN.test('[PastedContent2431chars]')).toBe(true);
+  });
+
   it('PASTE_MARKER_PATTERN matches the SPACE-COLLAPSED form left after ANSI strip', () => {
     // The raw PTY stream renders the marker with absolute-column cursor moves
     // between tokens (`[Pasted\x1b[11Gtext\x1b[16G#1…`), so once ANSI is stripped
@@ -499,6 +504,12 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const provider = { id: 'codex', args: ['exec', '-'] };
     const out = buildTuiInvocation(provider, CODEX_CONFIGURED_DEFAULT);
     expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', 'exec', '-']);
+  });
+
+  it('passes a selected Codex model tier to the interactive CLI', () => {
+    const provider = { id: 'codex-tui', command: 'codex', args: [] };
+    const out = buildTuiInvocation(provider, 'gpt-5.6-sol');
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.6-sol']);
   });
 
   it('skips --model injection when model is null/undefined/empty', () => {

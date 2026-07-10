@@ -140,6 +140,16 @@ function ollamaModelSupportsTools(id, capabilities) {
 
 const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+// Codex 0.144+ exposes three selectable coding-model tiers. Keep the ids in
+// provider config (rather than the old "use ~/.codex/config.toml" sentinel) so
+// PortOS can pass the user's choice through as `codex --model <id>`.
+const CODEX_MODELS = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'];
+const CODEX_MODEL_DEFAULTS = {
+  defaultModel: 'gpt-5.6-terra',
+  lightModel: 'gpt-5.6-luna',
+  mediumModel: 'gpt-5.6-terra',
+  heavyModel: 'gpt-5.6-sol',
+};
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 const CODEX_CONTEXT_WINDOW = 1_000_000;
 const GEMINI_CONTEXT_WINDOW = 1_048_576;
@@ -158,29 +168,26 @@ function canonicalProviderContextWindow(provider) {
   return null;
 }
 
-// Auto-migrate legacy codex provider configs that pin a real model id
-// (e.g. "gpt-5.2") to the sentinel "codex-configured-default" so the Codex
-// CLI uses whatever model is configured in ~/.codex/config.toml. Idempotent.
+// Replace only the old sentinel-only Codex setup with the current selectable
+// Codex tier catalog. Real model choices are deliberately preserved: PortOS
+// must never silently erase a model selected in AI Providers.
 function migrateCodexProvider(data) {
   if (!data?.providers) return false;
   let changed = false;
   for (const provider of Object.values(data.providers)) {
-    if (provider?.id !== 'codex' || provider?.type !== 'cli') continue;
+    const isCodexProcessProvider = (provider?.id === 'codex' || provider?.id === 'codex-tui')
+      && (provider?.type === 'cli' || provider?.type === 'tui');
+    if (!isCodexProcessProvider) continue;
 
-    const modelsAlreadyMigrated = Array.isArray(provider.models)
+    const isSentinelOnly = Array.isArray(provider.models)
       && provider.models.length === 1
-      && provider.models[0] === CODEX_CONFIGURED_DEFAULT;
-    if (!modelsAlreadyMigrated) {
-      provider.models = [CODEX_CONFIGURED_DEFAULT];
-      changed = true;
-    }
+      && provider.models[0] === CODEX_CONFIGURED_DEFAULT
+      && CODEX_MODEL_KEYS.every((key) => provider[key] === CODEX_CONFIGURED_DEFAULT);
+    if (!isSentinelOnly) continue;
 
-    for (const key of CODEX_MODEL_KEYS) {
-      if (provider[key] !== CODEX_CONFIGURED_DEFAULT) {
-        provider[key] = CODEX_CONFIGURED_DEFAULT;
-        changed = true;
-      }
-    }
+    provider.models = [...CODEX_MODELS];
+    Object.assign(provider, CODEX_MODEL_DEFAULTS);
+    changed = true;
   }
   return changed;
 }
@@ -343,7 +350,7 @@ export function createProviderService(config = {}) {
     const migratedContextWindows = migrateProviderContextWindows(data);
     if (migratedCodex || migratedAntigravity || migratedContextWindows) {
       await atomicWrite(PROVIDERS_PATH, data);
-      if (migratedCodex) console.log('🔧 Migrated codex provider config to codex-configured-default sentinel');
+      if (migratedCodex) console.log('🔧 Migrated Codex providers to the selectable GPT-5.6 model tiers');
       if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
       if (migratedContextWindows) console.log('🔧 Migrated provider context windows to current canonical values');
     }

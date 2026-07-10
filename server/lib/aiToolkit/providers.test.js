@@ -260,7 +260,7 @@ describe('Provider Service', () => {
       return JSON.parse(raw);
     };
 
-    it('rewrites legacy codex models/defaultModel to the sentinel on first read', async () => {
+    it('preserves a real Codex model selection on first read', async () => {
       await writeProvidersFile({
         activeProvider: 'codex',
         providers: {
@@ -280,18 +280,18 @@ describe('Provider Service', () => {
       });
 
       const codex = await providerService.getProviderById('codex');
-      expect(codex.models).toEqual([CODEX_SENTINEL]);
-      expect(codex.defaultModel).toBe(CODEX_SENTINEL);
-      expect(codex.lightModel).toBe(CODEX_SENTINEL);
-      expect(codex.mediumModel).toBe(CODEX_SENTINEL);
-      expect(codex.heavyModel).toBe(CODEX_SENTINEL);
+      expect(codex.models).toEqual(['gpt-5.2', 'gpt-5-codex']);
+      expect(codex.defaultModel).toBe('gpt-5.2');
+      expect(codex.lightModel).toBe('gpt-5');
+      expect(codex.mediumModel).toBe('gpt-5.2');
+      expect(codex.heavyModel).toBe('gpt-5.2');
 
       const onDisk = await readProvidersFile();
-      expect(onDisk.providers.codex.defaultModel).toBe(CODEX_SENTINEL);
-      expect(onDisk.providers.codex.models).toEqual([CODEX_SENTINEL]);
+      expect(onDisk.providers.codex.defaultModel).toBe('gpt-5.2');
+      expect(onDisk.providers.codex.models).toEqual(['gpt-5.2', 'gpt-5-codex']);
     });
 
-    it('is idempotent — already-migrated codex configs are not rewritten', async () => {
+    it('migrates a sentinel-only Codex CLI config to selectable tiers', async () => {
       await writeProvidersFile({
         activeProvider: 'codex',
         providers: {
@@ -311,15 +311,38 @@ describe('Provider Service', () => {
         }
       });
 
-      const { statSync } = await import('fs');
-      const path = join(TEST_DATA_DIR, 'providers.json');
-      const mtimeBefore = statSync(path).mtimeMs;
+      const codex = await providerService.getProviderById('codex');
+      expect(codex.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']);
+      expect(codex.defaultModel).toBe('gpt-5.6-terra');
+      expect(codex.lightModel).toBe('gpt-5.6-luna');
+      expect(codex.mediumModel).toBe('gpt-5.6-terra');
+      expect(codex.heavyModel).toBe('gpt-5.6-sol');
+    });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    it('migrates a sentinel-only Codex TUI config to selectable tiers', async () => {
+      await writeProvidersFile({
+        activeProvider: 'codex-tui',
+        providers: {
+          'codex-tui': {
+            id: 'codex-tui',
+            name: 'Codex TUI',
+            type: 'tui',
+            command: 'codex',
+            models: [CODEX_SENTINEL],
+            defaultModel: CODEX_SENTINEL,
+            lightModel: CODEX_SENTINEL,
+            mediumModel: CODEX_SENTINEL,
+            heavyModel: CODEX_SENTINEL,
+          },
+        },
+      });
 
-      await providerService.getProviderById('codex');
-      const mtimeAfter = statSync(path).mtimeMs;
-      expect(mtimeAfter).toBe(mtimeBefore);
+      const codexTui = await providerService.getProviderById('codex-tui');
+      expect(codexTui.models).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']);
+      expect(codexTui.defaultModel).toBe('gpt-5.6-terra');
+      expect(codexTui.lightModel).toBe('gpt-5.6-luna');
+      expect(codexTui.mediumModel).toBe('gpt-5.6-terra');
+      expect(codexTui.heavyModel).toBe('gpt-5.6-sol');
     });
 
     it('does not touch non-codex providers', async () => {
@@ -402,7 +425,7 @@ describe('Provider Service', () => {
       expect(codex.envVars).toEqual({ OPENAI_BASE_URL: 'https://example.com' });
     });
 
-    it('handles partial migration (only defaultModel pinned, models[] already sentinel)', async () => {
+    it('preserves a partial legacy config rather than erasing its selected model', async () => {
       await writeProvidersFile({
         activeProvider: 'codex',
         providers: {
@@ -418,7 +441,7 @@ describe('Provider Service', () => {
 
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([CODEX_SENTINEL]);
-      expect(codex.defaultModel).toBe(CODEX_SENTINEL);
+      expect(codex.defaultModel).toBe('gpt-5.2');
     });
 
     it('upgrades default Codex and Antigravity context windows on first read', async () => {
