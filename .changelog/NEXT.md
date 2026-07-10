@@ -41,6 +41,8 @@
 
 ## Fixed
 
+- **CoS tasks with Review Loop turned off now explicitly disable saved external-review defaults when opening a PR.** Their completion prompt passes `--review-with none`, so an inherited Copilot (or other reviewer) default cannot launch a review that was not requested.
+
 - **Digital Twin Taste questionnaire no longer shows "Question 5 of 3" after follow-ups.** The progress header used total response count (core + follow-ups) as the current question number against a core-only total, so once branching follow-ups fired the counter overran the "of N". It now reports the 1-based index among core questions for that section, so the label stays "Question 2 of 3" even when follow-ups sit between cores.
 
 - **Schedule Timeline now explains why a task sits on "Now" instead of looking like a bug.** A weekly task that has never run, or a cron task whose scheduled slot passed while it was down, is genuinely *due now* — the scheduler will fire it on the next check as a first-run or catch-up. The timeline drew that NOW launch identically to an on-cadence launch, so a marker on "Now" next to a "Sun at 07:00" / "weekly" label read as wrong (e.g. `branch-cleanup` and `reference-watch` both showing NOW). Due-now launches are now tagged server-side (`dueNow` + the scheduler's reason and any missed cron slot) and rendered distinctly: an amber marker at Now (kept on a separate visual channel from the collision warning ring so a launch that is both due-now and colliding shows both states), a `first run` / `catch-up` / `overdue` badge on the Scheduled-order chip, and tooltips/legend explaining that it launches on the next check rather than waiting for the next cadence slot. On-cadence future launches are unchanged.

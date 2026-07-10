@@ -292,7 +292,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
-      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review is disabled/i);
       expect(prompt).not.toMatch(/gh pr create/);
     });
 
