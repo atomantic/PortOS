@@ -94,6 +94,10 @@ function getSuccessRateStyle(rate) {
 }
 
 export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, providers, durations, dragHandleProps, apps, onEditingChange }) {
+  // System and approval-gated tasks are persisted in COS-TASKS.md. Every task
+  // mutation must name that source; otherwise the API's user-queue default
+  // searches TASKS.md and reports the system task as missing.
+  const taskSource = isSystem || awaitingApproval ? 'internal' : 'user';
   const [editing, setEditingInternal] = useState(false);
   const setEditing = useCallback((val) => {
     setEditingInternal(val);
@@ -184,7 +188,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   }, [durations, task.description, task.status]);
 
   const handleStatusChange = async (newStatus, blockedReasonText = '') => {
-    const updates = { status: newStatus };
+    const updates = { status: newStatus, type: taskSource };
     if (newStatus === 'blocked' && blockedReasonText) {
       updates.blockedReason = blockedReasonText;
     }
@@ -206,7 +210,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleSave = async () => {
-    const result = await api.updateCosTask(task.id, editData, { silent: true }).catch(err => {
+    const result = await api.updateCosTask(task.id, { ...editData, type: taskSource }, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
@@ -217,8 +221,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   };
 
   const handleDelete = async () => {
-    const taskType = isSystem ? 'internal' : 'user';
-    const result = await api.deleteCosTask(task.id, taskType, { silent: true }).catch(err => { toast.error(err.message); return null; });
+    const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Task deleted');
     onRefresh();
