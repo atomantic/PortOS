@@ -26,6 +26,13 @@ import { recordRun } from './local.js';
 // choices accordingly; this helper only adds a pin when one was explicitly
 // saved, preserving the system-default behavior for existing installations.
 async function getStageAssignment(kind) {
+  // Scene evaluation is a direct vision API call (apiProviderTypes) resolved
+  // separately, NOT a CoS agent pin — injecting its api-type provider into the
+  // agent task metadata would trip the harness-boundary guard. Never pin it
+  // here. (This also documents that `kind === 'evaluate'` intentionally has no
+  // `creativeDirector.evaluate` settings key; the eval pin lives under
+  // `creativeDirector.evaluation`.)
+  if (kind === 'evaluate') return {};
   const settings = await getSettings().catch(() => ({}));
   const assignment = settings?.creativeDirector?.[kind];
   if (!assignment?.providerId && !assignment?.model) return {};

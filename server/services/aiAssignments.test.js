@@ -142,6 +142,12 @@ describe('updateAiAssignment routing', () => {
     expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { [stage]: { providerId: 'claude', model: 'sonnet' } } });
   });
 
+  it('settings.creativeDirector.<unknown> rejects with a 400 instead of writing a bogus stage', async () => {
+    await expect(updateAiAssignment('settings.creativeDirector.bogus', { providerId: 'claude', model: 'sonnet' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
   it('cos.task.<existing> updates the schedule interval', async () => {
     await updateAiAssignment('cos.task.morning-brief', { providerId: 'claude', model: 'opus' });
     expect(mocks.updateTaskInterval).toHaveBeenCalledWith('morning-brief', { providerId: 'claude', model: 'opus' });
