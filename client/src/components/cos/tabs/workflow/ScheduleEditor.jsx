@@ -52,7 +52,11 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       enabled: node.enabled,
       mode: node.kind === 'job' ? (schedule.cronExpression ? 'cron' : 'interval') : schedule.type,
       cronExpression: schedule.cronExpression || '',
-      recheckCron: schedule.recheckCron || '0 9 * * *',
+      // Empty means "no recheck cron": the task keeps its interval-based
+      // recheck cadence (recheckIntervalMs, default daily). Prefilling a cron
+      // here would silently override that cadence on any unrelated save,
+      // because recheckCron takes precedence over recheckIntervalMs.
+      recheckCron: schedule.recheckCron || '',
       interval: node.kind === 'job' ? (schedule.type || 'daily') : 'daily',
       intervalHours: Math.max(1, Math.round((schedule.intervalMs || 3_600_000) / 3_600_000)),
       scheduledTime: schedule.scheduledTime || '',
@@ -205,14 +209,16 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
 
         {node.kind === 'task' && form.mode === 'perpetual' && (
           <div className="space-y-2 rounded border border-port-warning/20 bg-port-warning/5 p-3">
-            <p className="text-xs text-gray-400">Drains work back-to-back. Once parked, this is its daily reset/recheck.</p>
+            <p className="text-xs text-gray-400">
+              Drains work back-to-back. Once parked, this is its reset/recheck time — leave blank to keep the default interval-based recheck cadence.
+            </p>
             <input
               type="time"
               value={dailyTimeFromCron(form.recheckCron)}
               onChange={event => set('recheckCron', cronFromDailyTime(event.target.value))}
               className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
             />
-            <input value={form.recheckCron} onChange={event => set('recheckCron', event.target.value)} className="w-full rounded border border-port-border bg-port-bg px-3 py-2 font-mono text-xs text-gray-300" aria-label="Perpetual recheck cron" />
+            <input value={form.recheckCron} onChange={event => set('recheckCron', event.target.value)} placeholder="0 9 * * *" className="w-full rounded border border-port-border bg-port-bg px-3 py-2 font-mono text-xs text-gray-300" aria-label="Perpetual recheck cron" />
           </div>
         )}
 

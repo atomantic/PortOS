@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, Bot, CalendarDays, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
 import * as api from '../../../services/api';
 import { describeCron } from '../../../utils/cronHelpers';
@@ -25,7 +26,12 @@ function describeSchedule(node) {
   }
   if (schedule.cronExpression) return describeCron(schedule.cronExpression) || schedule.cronExpression;
   if (node.kind === 'job' && schedule.scheduledTime) return `${schedule.type} at ${schedule.scheduledTime}`;
-  if (schedule.type === 'custom' && schedule.intervalMs) return `every ${Math.round(schedule.intervalMs / 3_600_000)}h`;
+  if (schedule.type === 'custom' && schedule.intervalMs) {
+    const intervalHours = schedule.intervalMs / 3_600_000;
+    if (intervalHours >= 24) return `every ${Math.round(intervalHours / 24)}d`;
+    if (intervalHours >= 1) return `every ${Math.round(intervalHours)}h`;
+    return `every ${Math.round(schedule.intervalMs / 60_000)}m`;
+  }
   return schedule.type?.replaceAll('-', ' ') || 'flexible';
 }
 
@@ -144,11 +150,30 @@ function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
 }
 
 export default function WorkflowTab() {
-  const [hours, setHours] = useState(24);
+  // Zoom window + selected track live in the URL so the open editor and view
+  // are shareable/bookmarkable and survive reload — the same "URL is the
+  // source of truth for what's open" convention as ScheduleTab's ?task=.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const hoursParam = Number.parseInt(searchParams.get('hours'), 10);
+  const hours = [24, 168].includes(hoursParam) ? hoursParam : 24;
+  const setHours = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === 24) params.delete('hours');
+    else params.set('hours', String(next));
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const selectedId = searchParams.get('track');
+  const setSelectedId = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next) params.set('track', next);
+    else params.delete('track');
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const [graph, setGraph] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
   const fetchGeneration = useRef(0);
 
   const fetchGraph = useCallback(async () => {
