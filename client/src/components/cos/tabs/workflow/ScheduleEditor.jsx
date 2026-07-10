@@ -71,6 +71,14 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
 
   const Icon = node.kind === 'job' ? Bot : GitBranch;
   const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  // Switching to cron seeds the expression with the picker's displayed default
+  // (07:00 daily) so the visible schedule is actually saveable instead of
+  // failing validation on an empty cronExpression.
+  const setMode = (mode) => setForm(current => ({
+    ...current,
+    mode,
+    cronExpression: mode === 'cron' && !current.cronExpression ? DEFAULT_CRON : current.cronExpression
+  }));
   const validateCron = (value) => String(value || '').trim().split(/\s+/).length === 5;
 
   const handleSave = async () => {
@@ -160,7 +168,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         {node.kind === 'task' ? (
           <label className="block text-xs text-gray-400">
             Scheduling behavior
-            <select value={form.mode} onChange={event => set('mode', event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
+            <select value={form.mode} onChange={event => setMode(event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
               {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
@@ -169,7 +177,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
             <span className="block text-xs text-gray-400">Scheduling behavior</span>
             <div className="mt-1.5 grid grid-cols-2 rounded border border-port-border bg-port-bg p-1">
               {['cron', 'interval'].map(mode => (
-                <button key={mode} type="button" onClick={() => set('mode', mode)} className={`rounded px-2 py-1.5 text-xs capitalize ${form.mode === mode ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'}`}>
+                <button key={mode} type="button" onClick={() => setMode(mode)} className={`rounded px-2 py-1.5 text-xs capitalize ${form.mode === mode ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-gray-300'}`}>
                   {mode === 'cron' ? 'Pinned time' : 'Interval'}
                 </button>
               ))}
@@ -200,7 +208,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
             <input
               type="time"
               value={parseSimpleCron(form.recheckCron)?.time ?? ''}
-              onChange={event => set('recheckCron', buildWeeklyCron([], event.target.value))}
+              onChange={event => set('recheckCron', buildWeeklyCron(parseSimpleCron(form.recheckCron)?.days ?? [], event.target.value))}
               className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
             />
             <input value={form.recheckCron} onChange={event => set('recheckCron', event.target.value)} placeholder="0 9 * * *" className="w-full rounded border border-port-border bg-port-bg px-3 py-2 font-mono text-xs text-gray-300" aria-label="Perpetual recheck cron" />

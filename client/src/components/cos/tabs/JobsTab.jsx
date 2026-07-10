@@ -181,7 +181,12 @@ function ScheduleFields({ data, onChange }) {
           <button
             key={opt.value}
             type="button"
-            onClick={() => onChange('scheduleMode', opt.value)}
+            onClick={() => {
+              onChange('scheduleMode', opt.value);
+              // Seed the expression with the picker's displayed default (07:00
+              // daily) so an untouched Cron picker is actually saveable.
+              if (opt.value === 'cron' && !data.cronExpression) onChange('cronExpression', DEFAULT_CRON);
+            }}
             className={`px-2 py-1 text-xs rounded transition-colors ${
               data.scheduleMode === opt.value
                 ? 'bg-port-accent/20 text-port-accent'
