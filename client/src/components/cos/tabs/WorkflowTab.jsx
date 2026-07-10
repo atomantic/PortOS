@@ -130,13 +130,16 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
         ))}
         {occurrences.map(occurrence => {
           const meta = dueNowMeta(occurrence, node, timezone);
-          const ring = occurrence.collision
-            ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg'
-            : meta ? 'ring-2 ring-amber-300 ring-offset-1 ring-offset-port-bg' : '';
+          // Due-now is an amber FILL, collision a warning RING — kept on separate
+          // channels so a launch that is BOTH (the common catch-up scenario, where
+          // several tasks are due at Now and therefore also collide) shows both
+          // states at once. A shared ring channel would let collision mask due-now.
+          const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
+          const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
           return (
             <span
               key={occurrence.id}
-              className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : palette.marker} ${ring}`}
+              className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${fill} ${ring}`}
               style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
               title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
             />
@@ -307,7 +310,7 @@ export default function WorkflowTab() {
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-400 ring-2 ring-amber-300 ring-offset-1 ring-offset-port-bg" /> due now (catch-up)</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> due now (catch-up)</span>
                   </div>
                   <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
                 </div>
@@ -351,7 +354,7 @@ export default function WorkflowTab() {
 
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
                 <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
-                <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber ring at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
+                <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber marker at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
                 <span><TimerReset className="mr-1 inline h-3 w-3" />Perpetual bands have no fixed end while backlog remains.</span>
               </div>
             </div>
