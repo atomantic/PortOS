@@ -35,6 +35,7 @@ import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 import { isGenerationModel } from './localModelHeuristics.js';
 import { getAIToolkitInstance } from './aiToolkitState.js';
 import { createSingleFlight } from './singleFlight.js';
+import { extractJson } from './jsonExtract.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -226,6 +227,180 @@ export function pickConfigCorrectedModel(provider, failedModel) {
   return models.find((m) => m && m !== failedModel && isGenerationModel(m)) || null;
 }
 
+// ── Tier-2 (schema/type) request/response correction (issue #2350) ─────────
+// At the runner layer a schema/type failure never arrives as a provider ERROR —
+// errorDetection.js only categorizes transport/auth/model failures, so a
+// malformed *response* surfaces as a run that SUCCEEDED at the transport layer
+// but whose text doesn't satisfy the caller's declared schema. Tier-2 therefore
+// validates a successful response against a caller-supplied `responseSchema`
+// (or `repair` normalizer), attempts a bounded deterministic JSON coercion in
+// place, and — only when that can't recover the shape — re-requests the SAME
+// provider with a schema-strengthened prompt before the cascade escalates to a
+// Tier-3 fallback / Tier-4 investigation task.
+
+// Categories the tiered cascade classifies as schema/type (mirrors
+// autoFixer.CATEGORY_TO_TIER's SCHEMA_TYPE entries; kept LOCAL so promptRunner
+// stays decoupled from the lazily-imported CoS stack — see loadAutoFixer). The
+// synthetic response-schema failure below is tagged 'parse-error' so it lands
+// in this tier when it re-enters the cascade.
+const SCHEMA_TYPE_CATEGORIES = new Set([
+  'parse-error', 'bad-request', 'context-length', 'output-length', 'build-error', 'lint-error',
+]);
+export const isSchemaTypeCategory = (category) => SCHEMA_TYPE_CATEGORIES.has(category);
+
+// Deterministic instruction appended to the prompt on a schema/type re-request
+// when the caller declared a schema but supplied no custom `repair`. Names the
+// two failure modes coercion couldn't fix (fenced/prose-wrapped output) so the
+// model returns a bare, parseable value on the retry.
+const SCHEMA_RETRY_INSTRUCTION = '\n\n---\nIMPORTANT: Your previous response could not be parsed into the required structured format. Respond with ONLY the raw JSON value that satisfies the required schema — no markdown code fences, and no explanatory text before or after the JSON.';
+
+/**
+ * Normalize a caller `responseSchema` into a predicate over a PARSED JSON value
+ * (issue #2350). Accepts a Zod-style schema (duck-typed via `.safeParse`/`.parse`
+ * — promptRunner takes no zod dependency), a bare predicate `(value)=>boolean`,
+ * or null/undefined (⇒ null, feature off). An unrecognized truthy value degrades
+ * to "any JSON parses" so a loose schema hint still enables fence/prose stripping
+ * without throwing. Pure.
+ * @returns {((value:unknown)=>boolean)|null}
+ */
+export function normalizeResponseSchema(schema) {
+  if (!schema) return null;
+  if (typeof schema === 'function') return (value) => { try { return !!schema(value); } catch { return false; } };
+  if (typeof schema.safeParse === 'function') return (value) => schema.safeParse(value).success;
+  if (typeof schema.parse === 'function') return (value) => { try { schema.parse(value); return true; } catch { return false; } };
+  return () => true;
+}
+
+// Discriminated JSON parse: `{ ok:true, value }` (value may legitimately be
+// `null`) vs `{ ok:false }`, so a top-level `null` response isn't conflated with
+// a parse failure.
+const safeJsonParse = (text) => { try { return { ok: true, value: JSON.parse(text) }; } catch { return { ok: false }; } };
+
+/**
+ * True when `text` already parses as JSON that satisfies the schema predicate —
+ * i.e. no correction is needed. A non-JSON or off-shape response returns false.
+ */
+function responseSatisfiesSchema(text, predicate) {
+  if (typeof text !== 'string' || !text) return false;
+  const parsed = safeJsonParse(text);
+  return parsed.ok && (!predicate || predicate(parsed.value));
+}
+
+// Pick which top-level JSON shape to try first based on the first structural
+// char, so a top-level array isn't mis-picked as its first inner object (and
+// vice-versa). Deterministic; always returns both types so the other is still
+// tried. `[`/`{` never appear inside a ```json fence marker, so scanning the raw
+// text is sufficient without stripping fences first.
+function detectBlockOrder(text) {
+  const firstBrace = text.indexOf('{');
+  const firstBracket = text.indexOf('[');
+  if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) return ['array', 'object'];
+  return ['object', 'array'];
+}
+
+/**
+ * Deterministic Tier-2 JSON coercion keyed on the caller's schema (issue #2350).
+ * Reuses jsonExtract.extractJson to strip markdown fences / prose and pull the
+ * first balanced JSON block whose shape satisfies the schema predicate — the
+ * "JSON coercion, field-shape fix keyed on that schema" the issue calls for.
+ * Returns the coerced value plus its canonical `JSON.stringify` text. Pure.
+ * @param {string} text — raw response text
+ * @param {*} schema — a responseSchema (see normalizeResponseSchema)
+ * @returns {{ ok:true, value:unknown, text:string } | { ok:false }}
+ */
+export function coerceResponseToSchema(text, schema) {
+  if (typeof text !== 'string' || !text.trim()) return { ok: false };
+  const predicate = normalizeResponseSchema(schema);
+  for (const blockType of detectBlockOrder(text)) {
+    // extractJson's `parsedHolder` fallback returns the first PARSEABLE block
+    // even when it doesn't match the shape predicate (so a top-level `null` can
+    // flow through) — so re-check the predicate here and only accept a block
+    // that actually satisfies the schema.
+    const { value } = extractJson(text, { shapePredicate: predicate || undefined, blockType });
+    if (value !== undefined && (!predicate || predicate(value))) {
+      return { ok: true, value, text: JSON.stringify(value) };
+    }
+  }
+  return { ok: false };
+}
+
+// Best-effort call to a caller `repair` normalizer for a given phase. Never
+// throws (a repair-callback error is logged + treated as a decline); returns the
+// corrected string for the requested field, or null.
+async function callRepair(repair, payload, field) {
+  if (typeof repair !== 'function') return null;
+  let out = null;
+  try { out = await repair(payload); } catch (e) {
+    console.error(`❌ Tier 2 ${payload.phase} repair callback threw: ${e.message}`);
+    return null;
+  }
+  const v = out?.[field];
+  return typeof v === 'string' && v ? v : null;
+}
+
+/**
+ * Validate a run RESULT against the caller's declared `responseSchema` (issue
+ * #2350) and, when it doesn't match, attempt a bounded deterministic correction
+ * IN PLACE: first the caller's `repair({ phase:'response' })` normalizer, then
+ * the schema-keyed JSON coercion. Never throws. Returns:
+ *   { ok:true, result }                — no schema declared, or already valid
+ *   { ok:true, result, coerced:true }  — recovered in place (⇒ mark Tier-2)
+ *   { ok:false }                        — response is off-shape and uncoercible
+ */
+async function correctResponseToSchema(result, { responseSchema, repair, prompt }) {
+  const predicate = normalizeResponseSchema(responseSchema);
+  // Response validation requires a declared schema — a `repair`-only caller has
+  // no way for the runner to know a response is malformed, so leave it untouched.
+  if (!predicate) return { ok: true, result };
+  const text = typeof result?.text === 'string' ? result.text : '';
+  if (responseSatisfiesSchema(text, predicate)) return { ok: true, result };
+
+  const repaired = await callRepair(repair, { phase: 'response', text, prompt }, 'text');
+  if (repaired && responseSatisfiesSchema(repaired, predicate)) {
+    return { ok: true, result: { ...result, text: repaired }, coerced: true };
+  }
+  const coerced = coerceResponseToSchema(text, responseSchema);
+  if (coerced.ok) return { ok: true, result: { ...result, text: coerced.text }, coerced: true };
+  return { ok: false };
+}
+
+/**
+ * Build the Tier-2 corrected REQUEST for a schema/type failure. Prefers the
+ * caller's `repair({ phase:'request' })` normalizer; otherwise, when a
+ * `responseSchema` is declared, appends a deterministic schema-conformance
+ * instruction to the original prompt. Returns null (⇒ Tier-2 declines, cascade
+ * falls through to Tier-3) when no correction is available or it wouldn't change
+ * the prompt.
+ */
+async function buildSchemaCorrectedPrompt({ prompt, responseSchema, repair, category, error }) {
+  const repaired = await callRepair(repair, { phase: 'request', prompt, category, error }, 'prompt');
+  if (repaired && repaired !== prompt) return repaired;
+  if (responseSchema) {
+    const corrected = `${prompt}${SCHEMA_RETRY_INSTRUCTION}`;
+    if (corrected !== prompt) return corrected;
+  }
+  return null;
+}
+
+/**
+ * Synthesize a schema/type failure Error so an uncoercible response re-enters
+ * the SAME fallback cascade as a transport failure (Tier-2 re-request → Tier-3
+ * fallback → Tier-4 escalate) with the identical noteFallback* reconciliation.
+ * Carries `effectiveProvider`/`effectiveModel` (the annotations the cascade
+ * keys on) from the run that actually produced the bad response, a 'parse-error'
+ * category (⇒ isSchemaTypeCategory, and skipped by markProviderUnavailableFromError
+ * so a healthy provider isn't benched for one off-shape response), and a
+ * `schemaFailure` marker for diagnostics.
+ */
+function buildSchemaFailureError(result) {
+  const err = new Error('AI response did not match the declared schema and could not be coerced');
+  err.errorAnalysis = { category: 'parse-error' };
+  err.effectiveProvider = result?.provider;
+  err.effectiveModel = result?.model ?? null;
+  err.schemaFailure = true;
+  return err;
+}
+
 /**
  * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
  * `providerId` — any `getProviderById` failure (stale id, lookup
@@ -354,7 +529,26 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
  *   cwd and the analysis runs against the wrong files. No-op for API
  *   providers (no spawn).
- * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
+ * @param {*} [args.responseSchema] — the caller's declared response schema
+ *   (issue #2350). A Zod-style schema (`.safeParse`/`.parse`) or a bare
+ *   predicate `(parsedValue) => boolean`. When set, the runner enables Tier-2
+ *   (schema/type): it validates a SUCCESSFUL run's response against the schema
+ *   and, when it doesn't match, attempts a deterministic JSON coercion in place
+ *   (strip fences/prose, pull the first schema-matching block); if that can't
+ *   recover the shape it re-requests the SAME provider once with a
+ *   schema-strengthened prompt before falling through to a Tier-3 fallback and
+ *   Tier-4 investigation task. Left unset (the default), the runner behaves
+ *   exactly as before — no validation, no coercion.
+ * @param {(ctx: { phase: 'response'|'request', text?: string, prompt?: string,
+ *   category?: string, error?: Error }) => ({ text?: string, prompt?: string }|null|undefined)}
+ *   [args.repair] — optional caller-owned deterministic normalizer (issue #2350).
+ *   `phase:'response'` fires when a successful response fails `responseSchema`;
+ *   return `{ text }` to substitute a corrected response (tried before the
+ *   built-in JSON coercion). `phase:'request'` fires on a schema/type failure;
+ *   return `{ prompt }` to re-request the SAME provider with a corrected prompt
+ *   (tried before the built-in schema-strengthened prompt). Must be deterministic
+ *   (no LLM calls); may be async. Errors are logged and treated as a decline.
+ * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, coercedResponse?: boolean, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
  *   — `model` is the resolved model that actually executed (null when
  *   neither override nor provider.defaultModel applies). `provider` is the
  *   provider object that actually ran, reflecting createRun's proactive swap
@@ -366,10 +560,14 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   and `fallbackProvider` is the full provider object that actually ran
  *   (so callers persisting run attribution can write the correct
  *   providerId without re-picking the fallback themselves). `fixTier` /
- *   `fixStrategy` (issue #2342) record WHICH fallback tier recovered the
+ *   `fixStrategy` (issue #2342/#2350) record WHICH fallback tier recovered the
  *   failure — `1`/`'config/env'` when a same-provider model correction
- *   recovered it, `3`/`'constrained-agent-retry'` for a fallback-provider
- *   retry — so callers can log/attribute the deterministic recovery path.
+ *   recovered it, `2`/`'schema/type'` when the response was coerced in place or
+ *   re-requested to match the caller's declared schema (`coercedResponse:true`
+ *   flags the pure in-place coercion, which needs no retry — `usedFallback`
+ *   stays unset there since the same provider succeeded), `3`/
+ *   `'constrained-agent-retry'` for a fallback-provider retry — so callers can
+ *   log/attribute the deterministic recovery path.
  */
 export async function runPromptThroughProvider(args) {
   // Validate inputs up front so an accidentally-null `provider` (or one
@@ -392,22 +590,47 @@ export async function runPromptThroughProvider(args) {
     throw new Error('runPromptThroughProvider: source must be a non-empty string');
   }
 
-  try {
-    // The local-endpoint concurrency gate lives INSIDE executeProviderRunOnce,
-    // keyed on the EFFECTIVE provider after createRun's proactive swap — so a
-    // remote/CLI primary that swaps to a local backend is still serialized.
-    // Gating here on the requested provider would miss that swap (the gate
-    // would no-op for a remote primary and the swapped-in local run would
-    // dispatch ungated).
-    return await executeProviderRunOnce(args);
-  } catch (firstError) {
+  // Execute once, then decide whether the deterministic fallback cascade runs.
+  // A transport-layer failure is caught into `firstError`. A transport SUCCESS
+  // whose response fails the caller's declared schema (Tier-2, issue #2350) is
+  // validated/coerced in place and returned; only an UNCOERCIBLE off-schema
+  // response synthesizes a schema/type `firstError` so it re-enters the SAME
+  // cascade (with the identical noteFallback* reconciliation) below.
+  let firstError;
+  {
+    let firstResult;
+    try {
+      // The local-endpoint concurrency gate lives INSIDE executeProviderRunOnce,
+      // keyed on the EFFECTIVE provider after createRun's proactive swap — so a
+      // remote/CLI primary that swaps to a local backend is still serialized.
+      // Gating here on the requested provider would miss that swap (the gate
+      // would no-op for a remote primary and the swapped-in local run would
+      // dispatch ungated).
+      firstResult = await executeProviderRunOnce(args);
+    } catch (err) {
+      firstError = err;
+    }
+    if (!firstError) {
+      const validated = await correctResponseToSchema(firstResult, args);
+      if (validated.ok) {
+        // Either the response already matched the schema (return as-is) or a
+        // deterministic in-place coercion recovered its shape (Tier-2, no retry).
+        return validated.coerced
+          ? { ...validated.result, fixTier: 2, fixStrategy: 'schema/type', coercedResponse: true }
+          : validated.result;
+      }
+      firstError = buildSchemaFailureError(firstResult);
+    }
+  }
+
+  {
     // Only retry when the failure came from the execution layer (annotated
-    // by safeReject with effectiveProvider). Pre-execution throws —
-    // createRun rejecting on a disk error / disabled provider / unsupported
-    // type — never fire the AI_PROVIDER_EXECUTION_FAILED hook, so there's
-    // no deferred investigation task to suppress and marking the provider
-    // unavailable would punish it for a disk/config problem. Rethrow
-    // those as-is so the caller sees the original error.
+    // by safeReject with effectiveProvider) or is a synthetic schema/type
+    // failure (also annotated). Pre-execution throws — createRun rejecting on a
+    // disk error / disabled provider / unsupported type — never fire the
+    // AI_PROVIDER_EXECUTION_FAILED hook, so there's no deferred investigation
+    // task to suppress and marking the provider unavailable would punish it for
+    // a disk/config problem. Rethrow those as-is so the caller sees the original.
     if (!firstError?.effectiveProvider) {
       throw stripFallbackContext(firstError);
     }
@@ -420,9 +643,11 @@ export async function runPromptThroughProvider(args) {
     // only when every deterministic tier declines or fails:
     //   Tier 1 config/env  — retry the SAME provider with a valid model
     //                         (deterministic; no persisted config change)
-    //   Tier 2 schema/type  — no safe same-provider transform at this layer
-    //                         (a malformed request/response can't be rewritten
-    //                         without the caller's schema) → falls through
+    //   Tier 2 schema/type  — re-request the SAME provider with a schema-
+    //                         corrected prompt (issue #2350), when the caller
+    //                         declared a `responseSchema`/`repair`; else falls
+    //                         through (the in-place response coercion already
+    //                         ran on the success path above)
     //   Tier 3 constrained-agent-retry — bounded retry via a fallback provider
     //   Tier 4 escalate     — the deferred investigation task the hook queued
     //
@@ -533,6 +758,7 @@ export async function runPromptThroughProvider(args) {
       // would also mis-key the corrected task onto the primary key. Skip Tier 1
       // for those and let the cascade fall through to a real fallback provider.
       let tier1CorrectedKey = null;
+      let tier2CorrectedKey = null;
       // Only a wrong-model failure is config-correctable here. Compare against
       // string literals, not `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` — that member
       // does NOT exist (it would be `undefined`, matching a category-less failure
@@ -581,6 +807,70 @@ export async function runPromptThroughProvider(args) {
               fallbackFrom: { id: failed.id, name: failed.name },
               fallbackProvider: failed,
             };
+          }
+        }
+      }
+
+      // ── Tier 2 — schema/type request correction (issue #2350) ──────────────
+      // Reached for a schema/type-category failure — the synthetic
+      // response-schema failure raised on the success path above, or an
+      // agent-analysis parse/bad-request/output-length category. When the caller
+      // declared a `responseSchema` (or supplied a `repair`), re-request the SAME
+      // provider once with a schema-corrected prompt before benching it for a
+      // Tier-3 fallback. Mirrors Tier 1: suppress the primary's task up front,
+      // retry once, cancel the task on a recovered + schema-valid response.
+      if (isSchemaTypeCategory(category)) {
+        const correctedPrompt = await buildSchemaCorrectedPrompt({
+          prompt: args.prompt,
+          responseSchema: args.responseSchema,
+          repair: args.repair,
+          category,
+          error: firstError,
+        });
+        if (correctedPrompt) {
+          console.log(`🧩 Tier 2 (schema/type) retry: ${args.source} on ${failed.name} (category ${category})`);
+          await suppress(primaryKey);
+          let tier2Result;
+          try {
+            tier2Result = await executeProviderRunOnce({
+              ...args,
+              provider: failed,
+              prompt: correctedPrompt,
+              runId: undefined, // fresh run so the failed primary's record stays intact
+            });
+          } catch (tier2Error) {
+            // Same bookkeeping as Tier 1's failed corrected retry: a retry that
+            // reached the execution layer queued its own task keyed on the
+            // EFFECTIVE provider/model — record + suppress it so a slow Tier-3
+            // recovery can't let its backstop fire. A pre-execution throw queued
+            // no task, so leave the key null for the give-up branch to escalate.
+            if (tier2Error?.effectiveProvider) {
+              tier2CorrectedKey = {
+                provider: tier2Error.effectiveProvider.name || tier2Error.effectiveProvider.id,
+                model: tier2Error.effectiveModel || failedModel,
+              };
+              await suppress(tier2CorrectedKey);
+            }
+            console.log(`↪️ Tier 2 correction failed on ${failed.name}: ${tier2Error.message} — escalating to constrained-agent-retry`);
+          }
+          if (tier2Result) {
+            // The re-requested response must ALSO satisfy the schema (or coerce)
+            // — a retry that returns fresh-but-still-malformed output is not a
+            // recovery. On success cancel the primary task; otherwise fall
+            // through to the Tier-3 fallback provider.
+            const revalidated = await correctResponseToSchema(tier2Result, args);
+            if (revalidated.ok) {
+              await resolveHandled(primaryKey);
+              return {
+                ...revalidated.result,
+                usedFallback: true,
+                fixTier: 2, // FIX_TIERS.SCHEMA_TYPE (mirrored; kept decoupled from the lazy autoFixer import)
+                fixStrategy: 'schema/type',
+                fallbackFrom: { id: failed.id, name: failed.name },
+                fallbackProvider: failed,
+              };
+            }
+            console.log(`↪️ Tier 2 re-request still off-schema on ${failed.name} — escalating to constrained-agent-retry`);
           }
         }
       }
@@ -640,15 +930,27 @@ export async function runPromptThroughProvider(args) {
         throw stripFallbackContext(fallbackError);
       }
 
+      // A fallback provider can ALSO return an off-schema response (issue #2350)
+      // — validate/coerce it before declaring recovery. If it can't be coerced,
+      // no deterministic tier is left: escalate one investigation task and give
+      // up (a fresh-but-unusable fallback response is not a recovery).
+      const fallbackValidated = await correctResponseToSchema(fallbackResult, args);
+      if (!fallbackValidated.ok) {
+        await escalatePrimaryFailure();
+        await releaseAllUnresolved();
+        throw stripFallbackContext(buildSchemaFailureError(fallbackResult));
+      }
+
       // Fallback succeeded — cancel EVERY suppressed key (the primary and any
-      // Tier-1 corrected-retry key) so a fully-recovered action creates ZERO
-      // investigation tasks (issue #2342 acceptance: only UNRECOVERED failures
-      // escalate to Tier 4).
+      // Tier-1/Tier-2 corrected-retry key) so a fully-recovered action creates
+      // ZERO investigation tasks (issue #2342 acceptance: only UNRECOVERED
+      // failures escalate to Tier 4).
       await resolveHandled(primaryKey);
       if (tier1CorrectedKey) await resolveHandled(tier1CorrectedKey);
+      if (tier2CorrectedKey) await resolveHandled(tier2CorrectedKey);
 
       return {
-        ...fallbackResult,
+        ...fallbackValidated.result,
         usedFallback: true,
         fixTier: 3, // FIX_TIERS.CONSTRAINED_RETRY
         fixStrategy: 'constrained-agent-retry',
@@ -769,7 +1071,15 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
   // single failing call still falls back via the retry path; the provider stays
   // available for its working models. A genuine endpoint outage surfaces as
   // NETWORK_ERROR, not MODEL_NOT_FOUND, so it is still benched.
-  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL || category === ERROR_CATEGORIES.MODEL_NOT_FOUND) return;
+  //
+  // A schema/type failure (issue #2350) is likewise RESPONSE-specific, not a
+  // provider outage — the provider returned HTTP 200 with content that just
+  // didn't match this caller's declared schema. Benching it would take a healthy
+  // provider offline for every other caller over one off-shape response; the
+  // single failing call still fails over via Tier 3.
+  if (category === ERROR_CATEGORIES.CONTENT_REFUSAL
+    || category === ERROR_CATEGORIES.MODEL_NOT_FOUND
+    || isSchemaTypeCategory(category)) return;
 
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     await providerStatus.markUsageLimit(failed.id, {
