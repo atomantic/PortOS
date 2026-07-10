@@ -942,7 +942,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1022,14 +1022,19 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName, baseBranch });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
-  const reviewArgs = willOpenPR && willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '';
+  // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
+  // when the task's Review Loop control is off so that default cannot start a
+  // Copilot (or other external) review unexpectedly.
+  const reviewArgs = willOpenPR
+    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '--review-with none')
+    : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
   const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
   const reviewSuffix = willOpenPR && willReviewLoop
     ? (copilotOnly
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
         : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
-    : '';
+    : (willOpenPR ? ' — external review is disabled for this task.' : '');
   // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
   // (codex-tui, antigravity-tui) can't run it, so give them the inline equivalent.
   // Default (no providerId) stays Claude-shaped for backward compatibility.
@@ -1038,7 +1043,9 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`)
     : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
-  const merge = willOpenPR ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode }) : { lines: [], nextStep: 3 };
+  const merge = willOpenPR && willReviewLoop
+    ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode })
+    : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
 
   return [
@@ -1150,20 +1157,26 @@ function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinel
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    const reviewArgs = buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies);
+    const reviewArgs = willReviewLoop
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies)
+      : '--review-with none';
     const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
-    const reviewerNote = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER)
-      ? 'Copilot review loop'
-      : `review loop for ${reviewers.join(', ')} in order`;
-    lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, opens a pull request against the default branch, and drives the ${reviewerNote} until clean.`);
-    const merge = buildPostPRMergeSteps(step, { reviewers, reviewStopMode });
+    const completionNote = willReviewLoop
+      ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER)
+          ? 'and drives the Copilot review loop until clean.'
+          : `and drives the review loop for ${reviewers.join(', ')} in order until clean.`)
+      : 'with external review disabled.';
+    lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
+    const merge = willReviewLoop
+      ? buildPostPRMergeSteps(step, { reviewers, reviewStopMode })
+      : { lines: [], nextStep: step };
     lines.push(...merge.lines);
     step = merge.nextStep;
     return lines.join('\n');
