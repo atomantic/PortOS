@@ -48,6 +48,7 @@ export { default as useUniverseAction } from './useUniverseAction.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
+export { default as useMidiTranscription } from './useMidiTranscription.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';

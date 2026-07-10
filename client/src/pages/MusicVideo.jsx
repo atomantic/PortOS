@@ -17,7 +17,12 @@ import {
   renderMusicVideoProject,
   musicVideoRenderEventsUrl,
   cancelMusicVideoRender,
+  transcribeMusicVideoMidi,
+  musicVideoMidiEventsUrl,
+  cancelMusicVideoMidiTranscription,
 } from '../services/apiMusicVideo.js';
+import { getUploadUrl } from '../services/apiMedia.js';
+import useMidiTranscription from '../hooks/useMidiTranscription.js';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
@@ -253,6 +258,27 @@ export default function MusicVideo() {
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
+
+  // Audio → MIDI transcription (MuScriptor): turn the project's source audio
+  // into a .mid. The server persists the pointer on the project at completion;
+  // the terminal frame carries it, merged here keyed on the captured projectId
+  // (the hook's `context`) so a project switch mid-transcription can't
+  // misattribute the result. `midiTargetsSelected` gates the track-change
+  // controls, since the .mid being produced is of the CURRENT audio (mirrors
+  // renderTargetsSelected).
+  const midiJob = useMidiTranscription({
+    startRequest: (projectId) => transcribeMusicVideoMidi(projectId, {}, { silent: true }),
+    eventsUrl: musicVideoMidiEventsUrl,
+    cancelRequest: cancelMusicVideoMidiTranscription,
+    onComplete: (frame, projectId) => {
+      if (frame.midiTranscription) {
+        setProjects((prev) => prev.map((p) => (p.id === projectId
+          ? { ...p, midiTranscription: frame.midiTranscription } : p)));
+      }
+      toast.success('MIDI transcription ready');
+    },
+  });
+  const midiTargetsSelected = !!(midiJob.active && selected && midiJob.context === selected.id);
 
   const handleAnalyze = () => {
     if (!selected) return;
@@ -609,6 +635,21 @@ export default function MusicVideo() {
                       className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
                       <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
                     </button>
+                    {midiTargetsSelected ? (
+                      <button onClick={midiJob.cancel} title="Cancel MIDI transcription"
+                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                        <Activity size={15} className="animate-spin" /> MIDI · Cancel
+                      </button>
+                    ) : (
+                      <button onClick={() => midiJob.start(selected.id)}
+                        disabled={midiJob.active || (!selected.trackId && !selected.uploadedAudioFilename)}
+                        title={!selected.trackId && !selected.uploadedAudioFilename
+                          ? 'Link a track first'
+                          : 'Transcribe the track to MIDI with MuScriptor (local, needs INSTALL_MUSCRIPTOR=1)'}
+                        className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                        <Music size={15} /> MIDI
+                      </button>
+                    )}
                     <button onClick={handlePlan} disabled={planning || !selected.audioAnalysis}
                       title={!selected.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}
                       className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
@@ -648,18 +689,26 @@ export default function MusicVideo() {
                   <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(selected.trackId)}</span>
                   <select value={selected.trackId || ''} aria-label="Change track"
                     onChange={(e) => e.target.value && handleChangeTrack(e.target.value)}
-                    disabled={ytImportEdit.active || renderTargetsSelected}
-                    title={renderTargetsSelected ? 'Wait for the current render to finish before changing the track' : undefined}
+                    disabled={ytImportEdit.active || renderTargetsSelected || midiTargetsSelected}
+                    title={renderTargetsSelected
+                      ? 'Wait for the current render to finish before changing the track'
+                      : midiTargetsSelected
+                        ? 'Wait for the MIDI transcription to finish before changing the track'
+                        : undefined}
                     className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
                     <option value="">Change track…</option>
                     {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
                   </select>
                   <YoutubeImportControls
                     url={ytUrlEdit} onUrlChange={(e) => setYtUrlEdit(e.target.value)}
-                    job={ytImportEdit} disabled={renderTargetsSelected}
+                    job={ytImportEdit} disabled={renderTargetsSelected || midiTargetsSelected}
                     onStart={() => {
                       if (renderTargetsSelected) {
                         toast.error('Wait for the current render to finish before changing the track');
+                        return;
+                      }
+                      if (midiTargetsSelected) {
+                        toast.error('Wait for the MIDI transcription to finish before changing the track');
                         return;
                       }
                       setYtEditProjectId(selected.id);
@@ -682,6 +731,13 @@ export default function MusicVideo() {
                         className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
                         <Download size={13} /> Download audio
                       </a>
+                      {selected.midiTranscription?.filename && (
+                        <a href={getUploadUrl(selected.midiTranscription.filename)} download
+                          title={`Download the MIDI transcription (MuScriptor ${selected.midiTranscription.model || ''})`}
+                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-port-accent hover:bg-port-border/40">
+                          <Music size={13} /> Download MIDI
+                        </a>
+                      )}
                     </div>
                   );
                 })()}

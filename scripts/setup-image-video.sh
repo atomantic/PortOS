@@ -15,6 +15,7 @@
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
+#   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
 
 set -euo pipefail
 
@@ -61,8 +62,8 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}"
-if [[ "$ANY_BYOV" == "000000" ]]; then
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MUSCRIPTOR:-0}"
+if [[ "$ANY_BYOV" == "0000000" ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
   DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)
@@ -479,6 +480,45 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   echo "✅ ACE-Step venv ready: $ACESTEP_PY"
 fi
 
+INSTALL_MUSCRIPTOR="${INSTALL_MUSCRIPTOR:-0}"
+if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
+  # Local audio → MIDI transcription for the Rounds workbench + Music Video
+  # parsing system. MuScriptor is a multi-instrument music-transcription model
+  # (https://github.com/muscriptor/muscriptor) that installs as the
+  # `muscriptor` pip package — it declares its own torch stack, so this is a
+  # sibling venv kept apart from the music-generation piles. The sidecar
+  # `scripts/transcribe_muscriptor.py` imports `TranscriptionModel` from
+  # muscriptor; server/lib/pythonSetup.js (resolveMuscriptorPython) looks for
+  # python3 here. Runs on Apple-Silicon MPS, CUDA, or CPU. Model weights
+  # (small/medium/large) auto-download from HuggingFace on first transcription,
+  # so this only builds the venv — no weights are fetched here. Weights are
+  # CC BY-NC 4.0 (non-commercial).
+  MUSCRIPTOR_VENV="${HOME}/.portos/venv-muscriptor"
+  MUSCRIPTOR_PY="$MUSCRIPTOR_VENV/bin/python3"
+  mkdir -p "${HOME}/.portos"
+
+  if [[ ! -x "$MUSCRIPTOR_PY" ]]; then
+    echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
+    "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
+  fi
+  echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
+  "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+  # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
+  # package pulls the matching stack. The import probe below catches a broken
+  # resolve before a transcription depends on it.
+  "$MUSCRIPTOR_PY" -m pip install --upgrade \
+    muscriptor \
+    "huggingface_hub[hf_xet]"
+  # Verify the model class imports — a clean import means transcription only
+  # needs the one-time weight download, not a broken venv.
+  if ! "$MUSCRIPTOR_PY" -c "from muscriptor import TranscriptionModel" 2>/dev/null; then
+    echo "❌ MuScriptor venv built but 'from muscriptor import TranscriptionModel' failed." >&2
+    echo "   Check that the muscriptor package installed cleanly in ${MUSCRIPTOR_VENV}." >&2
+    exit 1
+  fi
+  echo "✅ MuScriptor venv ready: $MUSCRIPTOR_PY"
+fi
+
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
@@ -557,6 +597,9 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
 fi
 if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   echo "   ACE-Step:  ${HOME}/.portos/venv-acestep/bin/python3 (separate venv, acestep — full song + vocals)"
+fi
+if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
+  echo "   MuScriptor: ${HOME}/.portos/venv-muscriptor/bin/python3 (separate venv, muscriptor — audio → MIDI)"
 fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"

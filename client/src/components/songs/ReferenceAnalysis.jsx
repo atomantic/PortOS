@@ -24,12 +24,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, AudioLines, Download, Flag, FlagOff, Layers, Loader2, Mic, Play, Plus, Square, Trash2, Upload, Wand2, X,
+  ArrowLeft, AudioLines, Download, Flag, FlagOff, Layers, Loader2, Mic, Music, Play, Plus, Square, Trash2, Upload, Wand2, X,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ScoreSheet from './ScoreSheet.jsx';
 import { uploadFile, getUploadUrl } from '../../services/api';
+import {
+  transcribeReferenceMidi,
+  referenceMidiTranscriptionEventsUrl,
+  cancelReferenceMidiTranscription,
+} from '../../services/apiRounds.js';
 import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
+import useMidiTranscription from '../../hooks/useMidiTranscription.js';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
@@ -42,6 +48,16 @@ const MAX_AUDIO_BYTES = 35 * 1024 * 1024;
 // Mirror services/rounds.js REF_SEGMENTS_MAX / SCORE_PARTS_MAX — used only to
 // disable adding more client-side; the server enforces the real bounds.
 const REF_SEGMENTS_MAX = 24;
+
+// Human labels for the MuScriptor sidecar's STAGE names (SSE progress frames).
+const MIDI_STAGE_LABELS = {
+  starting: 'Starting…',
+  'import-runtime': 'Loading runtime…',
+  'load-model': 'Loading model…',
+  transcribe: 'Transcribing…',
+  'write-midi': 'Writing MIDI…',
+  importing: 'Saving…',
+};
 
 const msToSec = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
 const secToMs = (raw) => {
@@ -90,6 +106,19 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   // upload/mic capture.
   const audioImport = useReferenceAudioImport({
     onComplete: (filename) => { setUrl(''); onUpdate('audioFilename', filename); },
+  });
+
+  // Audio → MIDI transcription (MuScriptor) — turn the attached audio into a
+  // .mid. Same explicit-save model as the other reference fields: the returned
+  // uploads filename lands on the draft; the user Saves to keep it.
+  const midiJob = useMidiTranscription({
+    startRequest: (filename) => transcribeReferenceMidi(filename, undefined, { silent: true }),
+    eventsUrl: referenceMidiTranscriptionEventsUrl,
+    cancelRequest: cancelReferenceMidiTranscription,
+    onComplete: ({ filename }) => {
+      onUpdate('midiFilename', filename);
+      toast.success('MIDI transcribed — Save the song to keep it');
+    },
   });
 
   // Never leave the mic open on unmount (deferred-work cleanup rule).
@@ -150,12 +179,50 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
           <AudioLines size={14} /> Audio attached
         </span>
         <audio controls preload="none" src={getUploadUrl(reference.audioFilename)} className="h-8 max-w-[180px]" />
+        {reference.midiFilename ? (
+          <>
+            <a
+              href={getUploadUrl(reference.midiFilename)}
+              download
+              className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-port-accent hover:bg-port-border/50"
+              title="Download the transcribed MIDI file"
+            >
+              <Music size={13} /> MIDI
+            </a>
+            <button
+              type="button"
+              onClick={() => onUpdate('midiFilename', '')}
+              title="Remove the MIDI transcription"
+              className="flex items-center gap-1 px-1.5 py-1 text-xs rounded-lg border border-port-border text-gray-400 hover:text-port-error"
+            >
+              <X size={13} />
+            </button>
+          </>
+        ) : midiJob.active ? (
+          <span className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300">
+            <Loader2 size={13} className="animate-spin" /> {MIDI_STAGE_LABELS[midiJob.stage] || 'Transcribing…'}
+            <button type="button" onClick={midiJob.cancel} title="Cancel MIDI transcription" className="ml-1 text-gray-400 hover:text-port-error">
+              <X size={13} />
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => midiJob.start(reference.audioFilename)}
+            title="Transcribe this audio to MIDI with MuScriptor (local, needs INSTALL_MUSCRIPTOR=1)"
+            className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+          >
+            <Music size={13} /> Transcribe MIDI
+          </button>
+        )}
         <button
           type="button"
           onClick={() => {
-            // Segments are offsets into THIS audio — clear them with it so
-            // stale ranges can't resurrect against a different recording.
+            // Segments are offsets into THIS audio — and the MIDI was
+            // transcribed from it — clear them with it so stale artifacts
+            // can't resurrect against a different recording.
             onUpdate('segments', []);
+            onUpdate('midiFilename', '');
             onUpdate('audioFilename', '');
           }}
           className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-400 hover:text-port-error"

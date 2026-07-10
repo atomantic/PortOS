@@ -18,6 +18,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoPlanRequestSchema,
+  musicVideoTranscribeMidiRequestSchema,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -32,7 +33,13 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  setProjectMidiTranscription,
 } from '../services/musicVideo/projects.js';
+import {
+  startMidiTranscription,
+  attachMidiTranscriptionSseClient,
+  cancelMidiTranscription,
+} from '../services/audioMidiTranscription.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { planProject } from '../services/musicVideo/planner.js';
@@ -115,6 +122,43 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const result = await planProject(req.params.id, { seedPrompts, providerId, model });
   res.json(result);
 }));
+
+// --- Audio → MIDI transcription (MuScriptor) ---
+// Transcribe the project's source audio into a .mid via the local MuScriptor
+// sidecar. Kickoff returns 202 + a jobId (503 with the install hint when the
+// venv isn't provisioned); progress streams over SSE. Unlike the rounds path
+// (where the client persists on Save), the terminal `complete` frame here
+// carries the server-persisted pointer — the project record isn't an editor
+// draft, so the server lands `midiTranscription` on completion and the frame
+// includes it for the client to merge.
+router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(musicVideoTranscribeMidiRequestSchema, req.body || {});
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const audioPath = await resolveAudioPath(project);
+  const projectId = project.id;
+  res.status(202).json(await startMidiTranscription({
+    audioPath,
+    outputName: `${project.name || 'music-video'}-midi`,
+    model,
+    onComplete: async ({ filename, model: usedModel }) => {
+      const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
+      await setProjectMidiTranscription(projectId, midiTranscription);
+      return { midiTranscription };
+    },
+  }));
+}));
+
+// Two-segment paths — distinct from the one-segment GET /:id project read.
+router.get('/transcribe-midi/:jobId/events', (req, res) => {
+  if (!attachMidiTranscriptionSseClient(req.params.jobId, res)) {
+    throw new ServerError('Transcription job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
+});
 
 // --- Render (#1760, Phase 2) ---
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio

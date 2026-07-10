@@ -24,6 +24,14 @@ import {
   attachReferenceAudioSseClient,
   cancelReferenceAudioImport,
 } from '../services/roundReferenceAudioImport.js';
+import {
+  startMidiTranscription,
+  attachMidiTranscriptionSseClient,
+  cancelMidiTranscription,
+  MUSCRIPTOR_MODELS,
+} from '../services/audioMidiTranscription.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { safeUnder } from '../lib/ffmpeg.js';
 
 const router = Router();
 
@@ -138,6 +146,10 @@ const referenceSchema = z.object({
   note: str(svc.FIELD_MAX_LENGTH).optional().default(''),
   audioFilename: str(svc.URL_MAX_LENGTH).optional(),
   segments: z.array(refSegmentSchema).max(svc.REF_SEGMENTS_MAX).optional(),
+  // MuScriptor audio → MIDI transcription of the attached audio (an
+  // /api/uploads .mid pointer). The service persists it only alongside an
+  // audioFilename — same structural invariant as segments.
+  midiFilename: str(svc.URL_MAX_LENGTH).optional(),
 });
 
 // No `.default('')` on these fields: `.partial()` (used for PUT) materializes a
@@ -244,6 +256,37 @@ router.get('/reference-audio/import/:jobId/events', (req, res) => {
 
 router.post('/reference-audio/import/:jobId/cancel', (req, res) => {
   res.json({ ok: cancelReferenceAudioImport(req.params.jobId) });
+});
+
+// --- Reference-audio → MIDI transcription (MuScriptor) ------------------------
+// Transcribe an already-attached reference audio file (an /api/uploads basename)
+// into a .mid via the local MuScriptor sidecar. Same job/SSE shape as the import
+// above: kickoff returns 202 + a jobId (503 with the install hint when the venv
+// isn't provisioned); progress streams over SSE; the client persists the
+// returned midiFilename on the reference via the normal PUT on Save.
+const transcribeMidiSchema = z.object({
+  filename: str(svc.URL_MAX_LENGTH).min(1),
+  model: z.enum(MUSCRIPTOR_MODELS).optional(),
+});
+
+router.post('/reference-audio/transcribe-midi', asyncHandler(async (req, res) => {
+  const { filename, model } = validateRequest(transcribeMidiSchema, req.body || {});
+  // The filename is a stored uploads basename — validate it can't escape the
+  // uploads dir (same posture as musicVideo's resolveAudioPath).
+  const audioPath = safeUnder(PATHS.uploads, filename);
+  if (!audioPath) throw new ServerError('Invalid audio filename', { status: 400, code: 'VALIDATION_ERROR' });
+  const outputName = filename.replace(/\.[^.]+$/, '') || 'reference';
+  res.status(202).json(await startMidiTranscription({ audioPath, outputName, model }));
+}));
+
+router.get('/reference-audio/transcribe-midi/:jobId/events', (req, res) => {
+  if (!attachMidiTranscriptionSseClient(req.params.jobId, res)) {
+    throw new ServerError('Transcription job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/reference-audio/transcribe-midi/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
 });
 
 router.post('/', asyncHandler(async (req, res) => {

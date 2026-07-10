@@ -96,6 +96,23 @@ export const musicVideoPlanRequestSchema = z.object({
   model: z.string().max(200).optional(),
 }).strict();
 
+// MuScriptor audio → MIDI transcription request (services/audioMidiTranscription.js).
+// `model` picks the MuScriptor size tier; the service clamps unknown values to
+// its default, this only types the field.
+export const musicVideoTranscribeMidiRequestSchema = z.object({
+  model: z.enum(['small', 'medium', 'large']).optional(),
+}).strict();
+
+// The persisted MIDI-transcription pointer (a .mid basename under /api/uploads,
+// produced by the MuScriptor sidecar from the project's source audio). Cleared
+// alongside audioAnalysis when the audio source changes — it was transcribed
+// from the OLD track.
+export const musicVideoMidiTranscriptionSchema = z.object({
+  filename: z.string().min(1).max(256),
+  model: z.string().max(32).optional(),
+  createdAt: z.string().max(64).optional(),
+}).strict();
+
 // The cached beat/tempo/section map (audioAnalysis.js output). Validated when a
 // record round-trips so a hand-edited/legacy project can't carry a malformed
 // analysis; the analyzer itself produces this shape.
