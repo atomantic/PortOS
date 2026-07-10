@@ -103,10 +103,16 @@ export function sanitizeChildEnv(baseEnv = process.env) {
  * Collect the credential VALUES the agent's environment exposes, for the diff
  * secret-scan (scanDiffForSecrets) — so an agent that reads a key at runtime
  * (e.g. `/proc/self/environ`, which stays readable even with Bash denied) can't
- * write it into a source file and promote it. Scoped to auth-bearing keys +
- * everything the runner injects via `provider.envVars` (Bedrock/Vertex/custom
- * keys delivered only there), and deliberately excludes system vars (PATH/HOME)
- * so a diff legitimately referencing a path isn't a false positive.
+ * write it into a source file and promote it.
+ *
+ * Scoped to keys whose NAME denotes a secret (`*_API_KEY`, `*_TOKEN`,
+ * `*_SECRET`, `*_KEY`, `*CREDENTIAL*`) or a provider-auth prefix, plus every
+ * value the runner injects via `provider.envVars` (Bedrock/Vertex/custom keys
+ * delivered only there). It deliberately does NOT harvest values of non-secret
+ * allowlisted config — base URLs, regions (`us-east-1`), on/off flags — nor
+ * system vars (PATH/HOME): those are legitimate strings a fix might write into
+ * source, and scanning them would false-positive the promotion block. Known
+ * key *formats* embedded elsewhere are still caught by SECRET_LINE_PATTERNS.
  *
  * @param {Record<string,string>} childEnv  the sanitized child env
  * @param {Record<string,string>} [providerEnvVars]  provider.envVars overlaid by the runner
@@ -116,9 +122,8 @@ export function collectSecretEnvValues(childEnv = {}, providerEnvVars = {}) {
   const vals = [];
   for (const [k, v] of Object.entries(childEnv || {})) {
     if (
-      PROVIDER_AUTH_ALLOW.has(k) ||
-      PROVIDER_AUTH_PREFIXES.some((p) => k.startsWith(p)) ||
-      /API_KEY|TOKEN|SECRET|CREDENTIAL|_KEY$/i.test(k)
+      /API_KEY|TOKEN|SECRET|CREDENTIAL|_KEY$/i.test(k) ||
+      PROVIDER_AUTH_PREFIXES.some((p) => k.startsWith(p))
     ) {
       vals.push(v);
     }

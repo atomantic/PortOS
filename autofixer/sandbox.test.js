@@ -71,20 +71,25 @@ describe('sanitizeChildEnv — credential stripping', () => {
 });
 
 describe('collectSecretEnvValues — exfil-scan value list', () => {
-  it('includes auth-key values and provider.envVars, excludes system paths', () => {
+  it('includes secret-named + provider.envVars values, excludes URLs/regions/paths', () => {
     const childEnv = {
       PATH: '/usr/local/bin:/usr/bin',
       HOME: '/home/someuser',
       ANTHROPIC_API_KEY: 'sk-ant-childkeyvalue123',
-      OPENCODE_CONFIG_CONTENT: 'config-with-embedded-secret-abc',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret-value-123',
+      ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
+      AWS_REGION: 'us-east-1234',
     };
     // Bedrock/custom key delivered ONLY via provider.envVars (overlaid by runner).
     const providerEnvVars = { AWS_BEARER_TOKEN_BEDROCK: 'bedrock-opaque-token-xyz' };
     const values = collectSecretEnvValues(childEnv, providerEnvVars);
-    expect(values).toContain('sk-ant-childkeyvalue123');
-    expect(values).toContain('config-with-embedded-secret-abc'); // non-key-named allowlisted var
-    expect(values).toContain('bedrock-opaque-token-xyz');        // provider-injected
-    // System paths are NOT scanned (would false-positive on legit path edits).
+    expect(values).toContain('sk-ant-childkeyvalue123'); // *_API_KEY
+    expect(values).toContain('oauth-secret-value-123');  // CLAUDE_CODE_ prefix + *_TOKEN
+    expect(values).toContain('bedrock-opaque-token-xyz'); // provider-injected
+    // Non-secret allowlisted config + system vars must NOT be scanned — a fix
+    // legitimately writing a base URL / region / path would else be blocked.
+    expect(values).not.toContain('https://api.anthropic.com');
+    expect(values).not.toContain('us-east-1234');
     expect(values).not.toContain('/usr/local/bin:/usr/bin');
     expect(values).not.toContain('/home/someuser');
   });
