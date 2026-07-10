@@ -142,7 +142,7 @@ function AutoFixMetricsWidget() {
       </div>
 
       <div className="space-y-1.5 mb-3">
-        {byTier.map((t) => (
+        {(byTier || []).map((t) => (
           <div key={t.tier} className="flex items-center gap-2 text-xs">
             <span
               className="inline-block w-2 h-2 rounded-full shrink-0"
