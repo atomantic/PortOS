@@ -1292,14 +1292,19 @@ function GalleryPickerModal({ onClose, onPick }) {
   return (
     <Modal open onClose={onClose} size="lg" ariaLabelledBy="gallery-picker-title"
       panelClassName="bg-port-card border border-port-border rounded-lg max-h-[80vh] overflow-hidden flex flex-col">
-      <div>
-        <div className="flex items-center justify-between p-3 border-b border-port-border">
+      {/* Header + scroll area must be DIRECT flex children of the panel (a
+          fragment, not a wrapping <div>) so the panel's max-h-[80vh] flex
+          column constrains the scroll region's height — an intervening
+          content-sized <div> would leave `overflow-y-auto` unbounded and clip
+          long galleries. */}
+      <>
+        <div className="flex items-center justify-between p-3 border-b border-port-border shrink-0">
           <h3 id="gallery-picker-title" className="text-sm font-semibold text-white">Pick from media gallery</h3>
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close">
             <X size={16} />
           </button>
         </div>
-        <div className="p-3 overflow-y-auto">
+        <div className="p-3 overflow-y-auto flex-1 min-h-0">
           {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
           {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
           {items && items.length > 0 && (
@@ -1319,7 +1324,7 @@ function GalleryPickerModal({ onClose, onPick }) {
             </div>
           )}
         </div>
-      </div>
+      </>
     </Modal>
   );
 }
