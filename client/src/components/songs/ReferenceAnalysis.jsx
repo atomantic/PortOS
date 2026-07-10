@@ -277,15 +277,60 @@ function Waveform({ samples, durationMs, segments, playheadMs, onSeek }) {
     }
   }, [samples, durationMs, segments]);
 
+  const interactive = durationMs > 0 && typeof onSeek === 'function';
+
   const seek = (e) => {
-    if (!durationMs || !onSeek) return;
+    if (!interactive) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     onSeek(ratio * durationMs);
   };
 
+  // Keyboard scrubbing: arrows nudge ±1s (±5s with Shift), Home/End jump to the
+  // ends. Without this the waveform is a mouse-only control — unreachable and
+  // unusable for keyboard/screen-reader users.
+  const handleKeyDown = (e) => {
+    if (!interactive) return;
+    const cur = Math.min(durationMs, Math.max(0, playheadMs ?? 0));
+    const bigStep = e.shiftKey;
+    let next = null;
+    switch (e.key) {
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        next = cur - (bigStep ? 5000 : 1000);
+        break;
+      case 'ArrowRight':
+      case 'ArrowUp':
+        next = cur + (bigStep ? 5000 : 1000);
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      case 'End':
+        next = durationMs;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    onSeek(Math.min(durationMs, Math.max(0, next)));
+  };
+
+  const nowMs = Math.min(durationMs, Math.max(0, playheadMs ?? 0));
+
   return (
-    <div className="relative w-full cursor-pointer" onClick={seek} role="presentation">
+    <div
+      className={`relative w-full rounded-lg ${interactive ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-port-accent' : ''}`}
+      onClick={seek}
+      onKeyDown={handleKeyDown}
+      role={interactive ? 'slider' : 'presentation'}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive ? 'Seek position in reference audio' : undefined}
+      aria-valuemin={interactive ? 0 : undefined}
+      aria-valuemax={interactive ? Math.round(durationMs) : undefined}
+      aria-valuenow={interactive ? Math.round(nowMs) : undefined}
+      aria-valuetext={interactive ? `${(nowMs / 1000).toFixed(1)} of ${(durationMs / 1000).toFixed(1)} seconds` : undefined}
+    >
       <canvas ref={canvasRef} width={800} height={96} className="w-full h-24 rounded-lg bg-port-bg border border-port-border" />
       {durationMs > 0 && playheadMs != null && (
         <div
