@@ -63,7 +63,7 @@ const providers = await import('../services/providers.js');
 const autoFixer = await import('../services/autoFixer.js');
 const toolkitState = await import('./aiToolkitState.js');
 const { ERROR_CATEGORIES } = await import('./aiToolkit/errorDetection.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -1565,5 +1565,221 @@ describe('resolveProviderAndModel', () => {
     providers.getActiveProvider.mockResolvedValue(null);
     const out = await resolveProviderAndModel({});
     expect(out).toEqual({ provider: null, selectedModel: null });
+  });
+});
+
+// =============================================================================
+// Tier-2 (schema/type) request/response correction (issue #2350). At the runner
+// layer a schema/type failure surfaces as a run that SUCCEEDED at the transport
+// layer but whose response doesn't satisfy the caller's declared schema. The
+// runner validates + coerces in place, then re-requests the SAME provider with a
+// schema-corrected prompt, before falling through to a Tier-3 fallback.
+// =============================================================================
+
+describe('normalizeResponseSchema', () => {
+  it('returns null for a falsy schema (feature off)', () => {
+    expect(normalizeResponseSchema(null)).toBeNull();
+    expect(normalizeResponseSchema(undefined)).toBeNull();
+    expect(normalizeResponseSchema(0)).toBeNull();
+  });
+  it('wraps a bare predicate, swallowing predicate throws as false', () => {
+    const pred = normalizeResponseSchema((v) => v.ok === true);
+    expect(pred({ ok: true })).toBe(true);
+    expect(pred({ ok: false })).toBe(false);
+    expect(pred(null)).toBe(false); // predicate throws on null.ok → false, not a crash
+  });
+  it('adapts a Zod-style schema via safeParse', () => {
+    const schema = { safeParse: (v) => ({ success: typeof v === 'string' }) };
+    const pred = normalizeResponseSchema(schema);
+    expect(pred('hi')).toBe(true);
+    expect(pred(42)).toBe(false);
+  });
+  it('degrades an unrecognized truthy schema to always-true', () => {
+    const pred = normalizeResponseSchema({ description: 'a loose hint' });
+    expect(pred({ anything: 1 })).toBe(true);
+  });
+});
+
+describe('coerceResponseToSchema', () => {
+  const okShape = (v) => v && v.ok === true;
+  it('pulls a fenced JSON object matching the schema', () => {
+    const out = coerceResponseToSchema('```json\n{"ok":true,"n":1}\n```', okShape);
+    expect(out).toEqual({ ok: true, value: { ok: true, n: 1 }, text: '{"ok":true,"n":1}' });
+  });
+  it('strips leading prose and extracts the JSON block', () => {
+    const out = coerceResponseToSchema('Sure! Here you go:\n{"ok":true}', okShape);
+    expect(out.ok).toBe(true);
+    expect(out.value).toEqual({ ok: true });
+  });
+  it('coerces a top-level array when the schema expects one', () => {
+    const out = coerceResponseToSchema('```json\n[1,2,3]\n```', (v) => Array.isArray(v));
+    expect(out.ok).toBe(true);
+    expect(out.value).toEqual([1, 2, 3]);
+  });
+  it('returns { ok:false } when no block matches the schema', () => {
+    expect(coerceResponseToSchema('no json here', okShape)).toEqual({ ok: false });
+    expect(coerceResponseToSchema('{"ok":false}', okShape)).toEqual({ ok: false });
+    expect(coerceResponseToSchema('', okShape)).toEqual({ ok: false });
+  });
+});
+
+describe('isSchemaTypeCategory', () => {
+  it('recognizes the schema/type categories and rejects others', () => {
+    expect(isSchemaTypeCategory('parse-error')).toBe(true);
+    expect(isSchemaTypeCategory('bad-request')).toBe(true);
+    expect(isSchemaTypeCategory('output-length')).toBe(true);
+    expect(isSchemaTypeCategory('rate-limit')).toBe(false);
+    expect(isSchemaTypeCategory('model-not-found')).toBe(false);
+    expect(isSchemaTypeCategory(undefined)).toBe(false);
+  });
+});
+
+describe('promptRunner — Tier 2 schema/type correction (issue #2350)', () => {
+  const okShape = (v) => v && v.ok === true;
+  const fallbackApi = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+
+  function mockToolkitWithFallback(fallback = fallbackApi) {
+    const isAvailable = vi.fn().mockReturnValue(true);
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    const markUsageLimit = vi.fn().mockResolvedValue(undefined);
+    const getFallbackProvider = vi.fn().mockReturnValue(fallback ? { provider: fallback, source: 'provider' } : null);
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: { providerStatus: { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider } },
+    });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: fallback ? [fallback] : [] });
+    return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
+  }
+
+  it('returns a schema-valid response untouched (no coercion, no fixTier)', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('{"ok":true}');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    });
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBeUndefined();
+    expect(out.coercedResponse).toBeUndefined();
+  });
+
+  it('coerces a fenced/prose-wrapped response IN PLACE (fixTier 2, no retry, no fallback lookup)', async () => {
+    const status = mockToolkitWithFallback();
+    let calls = 0;
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      calls += 1;
+      onData('Here is your answer:\n```json\n{"ok":true,"v":9}\n```');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    });
+    expect(out.text).toBe('{"ok":true,"v":9}');
+    expect(out.fixTier).toBe(2);
+    expect(out.fixStrategy).toBe('schema/type');
+    expect(out.coercedResponse).toBe(true);
+    expect(out.usedFallback).toBeUndefined(); // in-place coercion, same provider succeeded
+    expect(calls).toBe(1); // no retry needed
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackStarted).not.toHaveBeenCalled();
+  });
+
+  it('uses a caller repair({ phase:"response" }) before the built-in coercion', async () => {
+    const repair = vi.fn(({ phase }) => (phase === 'response' ? { text: '{"ok":true,"fixed":1}' } : null));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('total garbage, not even close');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape, repair,
+    });
+    expect(out.text).toBe('{"ok":true,"fixed":1}');
+    expect(out.fixTier).toBe(2);
+    expect(repair).toHaveBeenCalledWith(expect.objectContaining({ phase: 'response' }));
+  });
+
+  it('re-requests the SAME provider with a schema-strengthened prompt when the response is uncoercible', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'm1' });
+    const prompts = [];
+    runner.executeApiRun.mockImplementation(async ({ prompt, onData, onComplete }) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) { onData('not json'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test', responseSchema: okShape });
+
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBe(2);
+    expect(out.usedFallback).toBe(true);
+    expect(out.fallbackProvider).toMatchObject({ id: 'primary-api' });
+    // Re-request went to the SAME provider with a strengthened prompt.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('previous response could not be parsed');
+    // Tier-3 never engaged; the healthy provider was NOT benched for an off-shape response.
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    // The primary's incidental task was suppressed up front and resolved.
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('prefers a caller repair({ phase:"request" }) prompt for the Tier-2 re-request', async () => {
+    mockToolkitWithFallback();
+    const repair = vi.fn(({ phase }) => (phase === 'request' ? { prompt: 'CORRECTED REQUEST' } : null));
+    const prompts = [];
+    runner.executeApiRun.mockImplementation(async ({ prompt, onData, onComplete }) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) { onData('nope'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape, repair,
+    });
+    expect(out.fixTier).toBe(2);
+    expect(prompts[1]).toBe('CORRECTED REQUEST');
+  });
+
+  it('falls through to a Tier-3 fallback provider when the Tier-2 re-request is still off-schema', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'm1' });
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') { onData('never valid'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test', responseSchema: okShape });
+
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBe(3);
+    expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api' });
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    // Schema/type failure never benches the primary (it's response-specific, not an outage).
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+  });
+
+  it('escalates and throws when even the Tier-3 fallback returns an uncoercible response', async () => {
+    mockToolkitWithFallback();
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('never ever valid json'); // every provider returns off-schema
+      onComplete({ success: true });
+    });
+    await expect(runPromptThroughProvider({
+      provider: apiProvider({ id: 'primary-api', name: 'Primary API' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    })).rejects.toThrow(/did not match the declared schema/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('leaves a messy response untouched when NO responseSchema is declared (regression)', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('```json\n{"ok":true}\n```');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({ provider: apiProvider(), prompt: 'p', source: 'test' });
+    expect(out.text).toBe('```json\n{"ok":true}\n```'); // no coercion without a schema
+    expect(out.fixTier).toBeUndefined();
   });
 });
