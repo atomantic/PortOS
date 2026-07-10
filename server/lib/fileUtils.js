@@ -899,24 +899,31 @@ export function sanitizeFilename(filename) {
 }
 
 /**
- * Move a temp file into the uploads dir (`PATHS.uploads`) and return the
- * persisted filename, mirroring the `/api/uploads` route's naming
- * (`<uuid8>-<sanitized-name>`) so a server-produced file (e.g. a yt-dlp audio
- * extraction, #2120) is served and referenced exactly like a user upload.
+ * Move a temp file into `destDir` and return the persisted filename, using the
+ * `/api/uploads` route's naming (`<uuid8>-<sanitized-name>`) so a
+ * server-produced file is served and referenced exactly like a user upload.
  *
  * copyFile + unlink instead of rename — the source usually lives in
  * `os.tmpdir()`, which may sit on a different filesystem (rename across devices
  * throws EXDEV on Linux); copy works regardless. The temp unlink is best-effort
  * cleanup. Returns `{ filename, sizeBytes }`.
  */
-export async function importFileToUploads(tempPath, originalName) {
-  await ensureDir(PATHS.uploads);
+export async function importFileToDir(tempPath, originalName, destDir) {
+  await ensureDir(destDir);
   const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
-  const dest = join(PATHS.uploads, filename);
+  const dest = join(destDir, filename);
   await copyFile(tempPath, dest);
   await unlink(tempPath).catch(() => {});
   const s = await stat(dest).catch(() => null);
   return { filename, sizeBytes: s?.size ?? 0 };
+}
+
+/**
+ * `importFileToDir` pinned to the uploads dir (`PATHS.uploads`) — the common
+ * case (e.g. a yt-dlp audio extraction, #2120).
+ */
+export async function importFileToUploads(tempPath, originalName) {
+  return importFileToDir(tempPath, originalName, PATHS.uploads);
 }
 
 /**

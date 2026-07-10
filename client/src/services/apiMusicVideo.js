@@ -47,6 +47,22 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
 
+// ---- Audio → MIDI transcription (MuScriptor) ----
+// Transcribe the project's source audio into a .mid via the local MuScriptor
+// sidecar. Kickoff resolves to { jobId, model } (503 with an install hint when
+// the runtime isn't provisioned). Progress streams over SSE; the terminal
+// `complete` frame carries the server-persisted `midiTranscription` pointer.
+export const transcribeMusicVideoMidi = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/transcribe-midi`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
+
+export const musicVideoMidiEventsUrl = (jobId) =>
+  `/api/music-video/transcribe-midi/${encodeURIComponent(jobId)}/events`;
+
+export const cancelMusicVideoMidiTranscription = (jobId, options = {}) =>
+  request(`/music-video/transcribe-midi/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+
 // ---- Render (#1760, Phase 2) ----
 // Kick off the master-bed render; resolves to { jobId }. Progress streams over
 // the SSE URL below (subscribe with useSseProgress). cancel stops an in-flight job.

@@ -304,6 +304,38 @@ export function invalidateAcestepPython() {
   cachedAcestepPython = null;
 }
 
+// MuScriptor (audio → MIDI transcription for the Rounds workbench + Music Video
+// parsing, #reference-audio-to-midi) runs in its own venv at
+// ~/.portos/venv-muscriptor — the `muscriptor` pip package pulls its own torch
+// stack, kept apart from the music-generation venvs above. Model weights
+// auto-download from HuggingFace on first transcription (small/medium/large).
+// `INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh` provisions the venv;
+// the sidecar is `scripts/transcribe_muscriptor.py`.
+const MUSCRIPTOR_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-muscriptor', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-muscriptor', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-muscriptor', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-muscriptor', 'bin', 'python3'),
+    ];
+
+export const MUSCRIPTOR_VENV_DEFAULT = MUSCRIPTOR_VENV_CANDIDATES[0];
+
+let cachedMuscriptorPython = null;
+export function resolveMuscriptorPython() {
+  if (cachedMuscriptorPython && existsSync(cachedMuscriptorPython)) return cachedMuscriptorPython;
+  for (const p of MUSCRIPTOR_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedMuscriptorPython = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateMuscriptorPython() {
+  cachedMuscriptorPython = null;
+}
+
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
 // before exec. Single-user / Tailnet model means we trust the operator, but
 // "you can shell out to anything" is still too sharp — restrict to actual
