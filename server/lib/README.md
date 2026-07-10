@@ -94,11 +94,11 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `promptTemplate.js` | Mustache-flavored, dot-notation-aware prompt template engine. |
 | `promptPartials.js` | Mustache-style partial expansion. |
 | `mediaModels.js` | Single source of truth for image/video model metadata. |
-| `providerModels.js` | Provider model resolution sentinel + helpers. |
+| `providerModels.js` | Provider model resolution sentinels + helpers (`CODEX_CONFIGURED_DEFAULT` / `ANTIGRAVITY_CONFIGURED_DEFAULT` / `GROK_CONFIGURED_DEFAULT`, `resolveCliModel`, `filterSelectableModels`, Bedrock/OpenCode model mappers, model-flag scan helpers). |
 | `opencodeConfig.js` | OpenCode config builder — `buildOpencodeEnvVars(provider, model)` builds dynamic `OPENCODE_CONFIG_CONTENT` declaring the models map under `provider.ollama.models` (bare ids) for Ollama-backed OpenCode providers. Fixes --model rejection. |
 | `cliProviderArgs.js` | Per-CLI argv conventions (`buildCliArgs`) for stdin prompt delivery — dependency-light extraction from runner.js so out-of-process callers (autofixer) can import it. |
 | `cliProviderRun.js` | One-shot CLI provider invocation (`pickCliProvider` + `runCliProviderPrompt`) — lightweight path for the autofixer + calendar MCP sync to honor the configured provider/model. |
-| `grok.js` | xAI Grok Build (`grok`) provider helpers — id/endpoint/default-model constants (`GROK_API_ID`/`GROK_CLI_ID`/`GROK_TUI_ID`/`GROK_API_ENDPOINT`/`GROK_DEFAULT_MODEL`), `isGrokCommand`/`isGrokCliProvider`/`isGrokTuiProvider` predicates, `ensureGrokHeadlessArgs`/`ensureGrokTuiArgs` argv builders (grok reads its prompt from `--prompt-file /dev/stdin`, not raw stdin), and `prepareGrokPromptFile` (Windows temp-file delivery fallback). |
+| `grok.js` | xAI Grok Build (`grok`) provider helpers — id/endpoint constants (`GROK_API_ID`/`GROK_CLI_ID`/`GROK_TUI_ID`/`GROK_API_ENDPOINT`), `isGrokCommand`/`isGrokCliProvider`/`isGrokTuiProvider` predicates, `ensureGrokHeadlessArgs`/`ensureGrokTuiArgs` argv builders (grok reads its prompt from `--prompt-file /dev/stdin`, not raw stdin; model selection uses the `GROK_CONFIGURED_DEFAULT` sentinel in `providerModels.js` so PortOS omits `--model` like Antigravity), and `prepareGrokPromptFile` (Windows temp-file delivery fallback). |
 | `runners.js` | Image-runner family constants. |
 | `codexAssistantExtract.js` | Strip Codex CLI banner + echoed metadata from session transcript. |
 | `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |

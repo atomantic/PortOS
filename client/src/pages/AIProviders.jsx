@@ -148,8 +148,9 @@ export default function AIProviders() {
     if (isTuiProvider(provider)) {
       return false;
     }
-    // Antigravity/Gemini CLIs use their own local model configuration.
-    if (provider.type === 'cli' && (provider.command === 'agy' || provider.command === 'gemini')) {
+    // Antigravity/Gemini/Grok Build CLIs use their own local model configuration
+    // (no PortOS model list to refresh — same as the configured-default sentinel).
+    if (provider.type === 'cli' && (provider.command === 'agy' || provider.command === 'gemini' || provider.command === 'grok')) {
       return false;
     }
     // All other providers support refresh (API and CLI)

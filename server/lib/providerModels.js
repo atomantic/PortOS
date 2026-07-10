@@ -5,8 +5,21 @@
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
+// Grok Build CLI/TUI: PortOS does not select a model — the local `grok` binary
+// uses its own latest default. Stored as a sentinel so pickers hide the model
+// dropdown (same UX as Codex / Antigravity).
+export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+
+const CONFIGURED_DEFAULT_SENTINELS = new Set([
+  CODEX_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
+]);
 
 export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
+
+/** True for any provider "use CLI's own default" sentinel (Codex / Antigravity / Grok Build). */
+export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 
 /**
  * Normalize a provider `command` to its lowercase binary basename, stripping any
@@ -25,12 +38,13 @@ export function commandBasename(command) {
 
 /**
  * Returns the model string to pass to a CLI's --model flag, or null if the
- * caller should omit --model entirely (Codex sentinel case — the CLI will use
- * whatever model is configured in ~/.codex/config.toml).
+ * caller should omit --model entirely (configured-default sentinels — the CLI
+ * uses its own default: Codex via ~/.codex/config.toml, Antigravity/Grok Build
+ * via the binary's built-in latest model).
  * @param {string|null|undefined} model
  * @returns {string|null}
  */
-export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
+export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null : (model || null);
 
 /**
  * True when a provider command points at the OpenCode binary — matching the bare
@@ -181,12 +195,12 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
 }
 
 /**
- * Strip the sentinel from a model list — the user-selectable view.
+ * Strip configured-default sentinels from a model list — the user-selectable view.
  * @param {string[]} models
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
+  (models || []).filter(m => !isConfiguredDefaultModel(m));
 
 /**
  * Detects whether the provider's stored argv already pins a model with a

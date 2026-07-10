@@ -224,16 +224,16 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
   });
 
-  it('runs `grok` headless with plain output, permission bypass, model, and stdin prompt file', () => {
-    const config = buildCliSpawnConfig({ id: 'grok-cli', command: 'grok', args: [] }, 'grok-build');
+  it('runs `grok` headless with plain output, permission bypass, and stdin prompt file (no --model for configured-default)', () => {
+    const config = buildCliSpawnConfig({ id: 'grok-cli', command: 'grok', args: [] }, 'grok-configured-default');
     expect(config.command).toBe('grok');
     expect(config.stdinMode).toBe('prompt');
     expect(config.args).toEqual([
       '--output-format', 'plain',
       '--permission-mode', 'bypassPermissions',
-      '--model', 'grok-build',
       '--prompt-file', '/dev/stdin',
     ]);
+    expect(config.args).not.toContain('--model');
     // Grok is non-Claude, so no claude-only flags leak in.
     expect(config.args).not.toContain('--dangerously-skip-permissions');
     expect(config.args).not.toContain('--print');

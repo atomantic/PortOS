@@ -7,6 +7,16 @@ import { formatContextLength } from './formatters.js';
  */
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
+export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+
+const CONFIGURED_DEFAULT_SENTINELS = new Set([
+  CODEX_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
+]);
+
+/** True for any provider "use CLI's own default" sentinel. Mirror of server `isConfiguredDefaultModel`. */
+export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 
 export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
@@ -74,7 +84,7 @@ export const PROVIDER_TYPES = Object.freeze({
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
+  (models || []).filter(m => !isConfiguredDefaultModel(m));
 
 /**
  * Embedding-only model detector — mirror of `isEmbeddingModel` in
