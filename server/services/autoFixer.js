@@ -32,6 +32,12 @@ const deferredTasks = new Map(); // errorKey -> { timer }
 // fallback's real outcome). Cleared by noteFallbackHandled (success → no task)
 // and noteFallbackFailed (failure → the fallback's own task already covers it).
 const inFlightFallbacks = new Set(); // errorKey
+// Error keys explicitly escalated via escalateProviderFailure, with the ms
+// timestamp of the escalation. Deduped on its own window (NOT recentErrors,
+// which the primary failure may already have populated) so a concurrent
+// no-fallback failure storm collapses to ONE escalated investigation task
+// instead of one per call. Pruned + reset alongside the other maps.
+const escalatedKeys = new Map(); // errorKey -> number (ms timestamp)
 
 // Circuit breaker: if the SAME resource (errorKey) trips auto-fix more than
 // CIRCUIT_MAX_FAILURES times within CIRCUIT_WINDOW_MS, stop creating
@@ -313,15 +319,34 @@ export function noteFallbackFailed({ provider, model }) {
 export async function escalateProviderFailure(error) {
   const ctx = error?.context || {};
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
+  const now = Date.now();
 
-  // Clear any lingering suppression/dedupe/timer for this key so the explicit
-  // escalation isn't swallowed and a later failure isn't blocked.
+  // Cancel any pending backstop timer + drop the in-flight suppression for this
+  // key (the cascade already cancelled the timer; make sure it's gone).
   inFlightFallbacks.delete(errorKey);
   const pending = deferredTasks.get(errorKey);
   if (pending) {
     clearTimeout(pending.timer);
     deferredTasks.delete(errorKey);
   }
+
+  // Dedupe on the escalation window, checked+set synchronously (single-threaded)
+  // BEFORE the first await so a concurrent no-fallback failure storm collapses
+  // to ONE task. We can't use isDuplicateError/recentErrors here — the primary
+  // failure's handleAIProviderError may already hold a recentErrors entry for
+  // this key, which would make our FIRST escalation look like a duplicate and
+  // silently swallow it.
+  const lastEscalated = escalatedKeys.get(errorKey);
+  if (lastEscalated && now - lastEscalated < ERROR_DEDUPE_WINDOW) {
+    console.log(`⏭️ Skipping duplicate escalated AI provider failure: ${ctx.provider} (${ctx.model})`);
+    return null;
+  }
+  escalatedKeys.set(errorKey, now);
+  for (const [key, ts] of escalatedKeys.entries()) {
+    if (now - ts >= ERROR_DEDUPE_WINDOW) escalatedKeys.delete(key);
+  }
+  // Clear the primary's dedupe entry so a genuinely NEW failure after this
+  // window can still raise a task through the normal deferred path.
   recentErrors.delete(errorKey);
 
   if (tripCircuit(errorKey)) {
@@ -405,6 +430,7 @@ export function _resetAutoFixerForTests() {
   inFlightFallbacks.clear();
   recentErrors.clear();
   failureTimestamps.clear();
+  escalatedKeys.clear();
   pendingAutoFixTasks.length = 0;
 }
 

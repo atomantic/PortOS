@@ -646,12 +646,34 @@ describe('autoFixer — escalateProviderFailure (explicit Tier-4, issue #2342)',
     expect(task).toBeTruthy();
   });
 
+  it('dedupes concurrent identical escalations to a single task (no-fallback failure storm)', async () => {
+    const results = await Promise.all([
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+      escalateProviderFailure(providerError('Ollama', 'command-r')),
+    ]);
+    // Only the first escalation creates a task; the rest are deduped within the
+    // window (returns null).
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
   it('honors the per-resource circuit breaker (suppresses after >3 escalations in the window)', async () => {
-    for (let i = 0; i < 3; i++) await escalateProviderFailure(providerError('Ollama', 'command-r'));
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
-    // 4th escalation trips the circuit — no task created.
-    const suppressed = await escalateProviderFailure(providerError('Ollama', 'command-r'));
-    expect(suppressed).toBeNull();
-    expect(cos.addTask).toHaveBeenCalledTimes(3);
+    vi.useFakeTimers();
+    try {
+      // Space escalations past the 60s dedupe window so each counts as a
+      // distinct task-worthy failure toward the circuit threshold.
+      for (let i = 0; i < 3; i++) {
+        await escalateProviderFailure(providerError('Ollama', 'command-r'));
+        await vi.advanceTimersByTimeAsync(61000);
+      }
+      expect(cos.addTask).toHaveBeenCalledTimes(3);
+      // 4th distinct escalation (still within the 1h circuit window) trips it.
+      const suppressed = await escalateProviderFailure(providerError('Ollama', 'command-r'));
+      expect(suppressed).toBeNull();
+      expect(cos.addTask).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

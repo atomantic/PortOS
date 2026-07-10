@@ -628,10 +628,14 @@ export async function runPromptThroughProvider(args) {
           runId: undefined, // fresh runId so the failed primary's record stays intact
         });
       } catch (fallbackError) {
-        // ── Tier 4 — escalate ──: every deterministic tier failed. The fallback
-        // provider's OWN failure already queued its investigation task (its key
-        // was never suppressed), so release the suppressed keys — one surviving
-        // task — and rethrow.
+        // ── Tier 4 — escalate ──: every deterministic tier failed. If the
+        // fallback reached the execution layer, its OWN onRunFailed already
+        // queued an investigation task (its key was never suppressed), so just
+        // release the suppressed keys — one surviving task. But if the fallback
+        // threw BEFORE execution (e.g. createRun error), no task was queued and
+        // the suppressed primary/corrected keys would leave ZERO tasks — so
+        // escalate one explicitly first (deduped inside escalateProviderFailure).
+        if (!fallbackError?.effectiveProvider) await escalatePrimaryFailure();
         await releaseAllUnresolved();
         throw stripFallbackContext(fallbackError);
       }

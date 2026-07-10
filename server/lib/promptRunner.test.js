@@ -1384,6 +1384,28 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
   });
 
+  it('escalates explicitly when the Tier-3 fallback throws before execution (no fallback task queued)', async () => {
+    // A fallback that rejects in createRun (pre-execution) fires no onRunFailed,
+    // so no fallback task is queued. With the primary suppressed, that would be
+    // zero investigation tasks — the cascade must escalate one explicitly.
+    mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model' }); // no models → Tier 1 declines
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })        // primary
+      .mockRejectedValueOnce(new Error('fallback disabled')); // fallback: pre-execution throw
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
+      .rejects.toThrow(/fallback disabled/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+  });
+
   it('keys the Tier-1 corrected-retry task on the run that actually ran when createRun proactively swaps', async () => {
     // The corrected retry's createRun proactively swaps to a different provider,
     // which then fails — its queued task is keyed on the SWAPPED provider/model,
