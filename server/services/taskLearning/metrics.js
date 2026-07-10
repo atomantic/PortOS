@@ -39,6 +39,47 @@ function msBetween(startIso, endIso) {
 }
 
 /**
+ * Compute the queue/compute latency split for a completed run (issue #2329).
+ * Pure. Prefers measured values from source timestamps; where a source timestamp
+ * is missing, derives the missing leg from the wall/execution difference so a
+ * run without a `createdAt` (queue) or a runner `duration` (compute) still yields
+ * a usable split instead of a null.
+ *
+ * Sentinel discipline: every leg carries a `source` marker so a *derived* value
+ * is never confused with a *measured* one, and a legitimately-measured `0` is
+ * never confused with an *absent* leg (`null`). Derivation only fires when the
+ * other two legs are genuinely measured — an absent leg is never fabricated from
+ * two other absent/derived legs.
+ *
+ * @returns {{ wallMs:number|null, queueMs:number|null, executionMs:number|null,
+ *   source:{ wall:'measured'|null, queue:'measured'|'derived'|null,
+ *            execution:'measured'|'derived'|null } }}
+ */
+export function computeLatencySplit({ startedAt, completedAt, createdAt, durationMs }) {
+  const wallMs = msBetween(startedAt, completedAt);
+  let queueMs = msBetween(createdAt, startedAt);
+  let executionMs = Number.isFinite(durationMs) ? durationMs : null;
+
+  const source = {
+    wall: wallMs === null ? null : 'measured',
+    queue: queueMs === null ? null : 'measured',
+    execution: executionMs === null ? null : 'measured'
+  };
+
+  // Fallback: no createdAt but wall+compute measured → queue = wall − compute.
+  if (queueMs === null && wallMs !== null && executionMs !== null && executionMs <= wallMs) {
+    queueMs = wallMs - executionMs;
+    source.queue = 'derived';
+  } else if (executionMs === null && wallMs !== null && queueMs !== null && queueMs <= wallMs) {
+    // Fallback: no runner duration but wall+queue measured → compute = wall − queue.
+    executionMs = wallMs - queueMs;
+    source.execution = 'derived';
+  }
+
+  return { wallMs, queueMs, executionMs, source };
+}
+
+/**
  * Build a structured TaskTelemetryContext for a completed agent run (issue
  * #2329). Pure — no I/O. Derives what is cheaply available from the agent/task
  * and their timestamps/metadata; uses explicit null sentinels for anything not
@@ -78,20 +119,21 @@ export function buildTaskTelemetryContext(agent, task) {
     routingReason: meta.modelReason ?? null
   };
 
-  const executionMs = Number.isFinite(result.duration) ? result.duration : null;
+  // Queue/compute latency split with a wall-difference fallback when a source
+  // timestamp (task.createdAt or runner duration) is missing (issue #2329).
+  const latency = computeLatencySplit({
+    startedAt: agent?.startedAt,
+    completedAt: agent?.completedAt,
+    createdAt: task?.createdAt,
+    durationMs: result.duration
+  });
+
   return {
     taskType,
     success,
     failureSignature,
     executionContext,
-    latency: {
-      // Wall time: spawn → completion (includes any in-agent waiting).
-      wallMs: msBetween(agent?.startedAt, agent?.completedAt),
-      // Queue/wait time only derivable when the source task carried a createdAt.
-      queueMs: msBetween(task?.createdAt, agent?.startedAt),
-      // Measured execution time reported by the runner.
-      executionMs
-    }
+    latency
   };
 }
 

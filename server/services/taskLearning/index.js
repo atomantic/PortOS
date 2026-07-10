@@ -29,6 +29,7 @@ export {
 export {
   recordTaskCompletion,
   buildTaskTelemetryContext,
+  computeLatencySplit,
   recordFailureSignature,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
@@ -38,6 +39,7 @@ export {
 export {
   getTaskTypePriorityMultiplier,
   suggestModelTier,
+  deriveFailureSignalAvoidance,
   getRoutingAccuracy,
   getPerformanceSummary,
   getAdaptiveCooldownMultiplier,

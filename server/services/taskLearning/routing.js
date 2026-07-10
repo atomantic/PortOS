@@ -59,6 +59,95 @@ const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low']);
 const HIGH_SUCCESS_THRESHOLD = 80;
 
 /**
+ * Minimum recent failure samples on a single tier (scoped to a task type) before
+ * the enriched failure signatures can steer routing away from it. Matches the
+ * routingAccuracy "≥3 attempts" bar so a one-off failure never condemns a tier.
+ */
+const MIN_FAILURE_SAMPLES = 3;
+
+/** NUL separator joining provider+model into one tally key (safe: neither contains NUL). */
+const PAIR_SEP = '\x00';
+
+/** Key with the highest count in a `{ key: count }` tally (null when empty). */
+function topKey(counts) {
+  let best = null;
+  let bestCount = -1;
+  for (const [key, count] of Object.entries(counts)) {
+    if (count > bestCount) { best = key; bestCount = count; }
+  }
+  return best;
+}
+
+/**
+ * Consume the enriched failure signatures (issue #2329) to derive a
+ * recency-weighted tier avoidance for a task type. Pure — no I/O.
+ *
+ * `routingAccuracy` tracks per-tier success/failure counts but carries no
+ * provider/model attribution and is all-time (slow to react). The
+ * `failureSignatures.recent[]` samples (recorded by #2332) DO carry
+ * provider/model/tier attribution and are recency-bounded. This cross-references
+ * the two: a tier is steered away from only when it BOTH accumulates ≥
+ * MIN_FAILURE_SAMPLES recent failures for this task type AND is *unproven* in
+ * routingAccuracy (success rate < HIGH_SUCCESS_THRESHOLD, or no success data).
+ *
+ * Proven tiers (≥80% success) keep their slot despite a few absolute failures —
+ * failureSignatures records failures ONLY, so raw counts can never condemn a
+ * tier on their own (a tier with 100 successes + 3 failures is fine). The
+ * cross-check is what keeps this from starving a good tier.
+ *
+ * @returns {{ avoidTiers: string[], sampleCount: number,
+ *   dominant: { tier, failures, provider, model }|null }}
+ */
+export function deriveFailureSignalAvoidance(data, taskType) {
+  const signatures = data?.failureSignatures || {};
+  const routing = data?.routingAccuracy?.[taskType] || {};
+
+  // Gather recent failure samples scoped to this task type across all categories.
+  const byTier = {};
+  let sampleCount = 0;
+  for (const bucket of Object.values(signatures)) {
+    for (const sample of bucket?.recent || []) {
+      if (sample?.taskType !== taskType || !sample.modelTier) continue;
+      if (NON_ROUTABLE_LEARNED_TIERS.has(sample.modelTier)) continue;
+      sampleCount++;
+      const tier = (byTier[sample.modelTier] ||= { failures: 0, pairs: {} });
+      tier.failures++;
+      // Tally provider+model as ONE pair so the reported attribution is a
+      // combination that actually failed together (not a top-provider crossed
+      // with an unrelated top-model). NUL-joined; '' encodes an absent side.
+      const pairKey = `${sample.provider ?? ''}${PAIR_SEP}${sample.model ?? ''}`;
+      tier.pairs[pairKey] = (tier.pairs[pairKey] || 0) + 1;
+    }
+  }
+
+  const avoidTiers = [];
+  let dominant = null;
+  for (const [tier, stats] of Object.entries(byTier)) {
+    const r = routing[tier];
+    const attempts = r ? (r.succeeded + r.failed) : 0;
+    // null = no success data (not "0% success") — an unproven tier by default.
+    const successRate = attempts > 0 ? Math.round((r.succeeded / attempts) * 100) : null;
+    const proven = successRate !== null && successRate >= HIGH_SUCCESS_THRESHOLD;
+    if (proven || stats.failures < MIN_FAILURE_SAMPLES) continue;
+    avoidTiers.push(tier);
+    // `dominant` is the AVOIDED tier with the most recent failures — the tier we
+    // actually steer away from — so the attribution surfaced in logs/reasons can
+    // never name a proven tier that isn't in avoidTiers. null when nothing avoided.
+    if (!dominant || stats.failures > dominant.failures) {
+      const [provider, model] = (topKey(stats.pairs) || PAIR_SEP).split(PAIR_SEP);
+      dominant = { tier, failures: stats.failures, provider: provider || null, model: model || null };
+    }
+  }
+
+  return { avoidTiers, sampleCount, dominant };
+}
+
+/** Union two tier lists, preserving order and dropping duplicates. */
+function mergeAvoidTiers(...lists) {
+  return [...new Set(lists.flat().filter(Boolean))];
+}
+
+/**
  * Get suggested priority boost for a task type based on historical success
  * Returns a multiplier: >1 for boost, <1 for demotion
  */
@@ -93,9 +182,46 @@ export async function suggestModelTier(taskType) {
 
   const data = await loadLearningData();
 
+  // Recency-weighted, provider-attributed avoidance from the enriched failure
+  // signatures (#2329) — folded into every suggestion below so a tier that's
+  // freshly degrading is steered away from before its all-time routingAccuracy
+  // rate crosses the hard misroute line. Computed BEFORE the completions guard:
+  // the signal has its own MIN_FAILURE_SAMPLES bar, so 3-4 recent failures on a
+  // tier can steer selection even before routingAccuracy has enough data to
+  // suggest a tier at all.
+  const failureAvoidance = deriveFailureSignalAvoidance(data, taskType);
+  const withFailureSignal = (suggestion, existingAvoid = []) => {
+    const avoidTiers = mergeAvoidTiers(existingAvoid, failureAvoidance.avoidTiers);
+    // If the tier we were about to suggest is itself failure-flagged (a 60-79%
+    // "successful" tier, or the generic `heavy` fallback), don't route to it —
+    // drop to avoidance-only (suggested: null) so selection steers off it and
+    // picks the best non-avoided tier instead of the tier the signal condemned.
+    const suggested = avoidTiers.includes(suggestion.suggested) ? null : suggestion.suggested;
+    return {
+      ...suggestion,
+      suggested,
+      avoidTiers,
+      ...(failureAvoidance.dominant ? { failureSignal: failureAvoidance.dominant } : {})
+    };
+  };
+  // Avoidance-only suggestion (no positive tier pick) built purely from the
+  // failure signal — used both below the completions threshold and as the final
+  // fallback when routingAccuracy is quiet.
+  const avoidanceOnlySuggestion = () => {
+    const { dominant } = failureAvoidance;
+    return withFailureSignal({
+      suggested: null,
+      reason: `${taskType} shows ${dominant.failures} recent failure(s) on ${dominant.tier} tier`
+        + (dominant.provider ? ` via ${dominant.provider}${dominant.model ? `/${dominant.model}` : ''}` : '')
+        + ' — avoiding it'
+    });
+  };
+
   const metrics = data.byTaskType[taskType];
   if (!metrics || metrics.completed < 5) {
-    return null; // Not enough data to suggest
+    // Not enough completions for a routingAccuracy-based tier suggestion, but a
+    // strong recency signal can still steer selection off a freshly-failing tier.
+    return failureAvoidance.avoidTiers.length > 0 ? avoidanceOnlySuggestion() : null;
   }
 
   // Check routing accuracy for tier-specific signals
@@ -122,31 +248,40 @@ export async function suggestModelTier(taskType) {
       const reason = provenTiers.length > 1
         ? `${taskType} succeeds with ${lightest.tier} tier (${lightest.successRate}%) — using lightest of ${provenTiers.length} proven tiers`
         : `${taskType} has ${lightest.successRate}% success with ${lightest.tier} tier`;
-      return {
-        suggested: lightest.tier,
-        reason,
-        avoidTiers: tierResults.filter(t => t.successRate < 40).map(t => t.tier)
-      };
+      return withFailureSignal(
+        { suggested: lightest.tier, reason },
+        tierResults.filter(t => t.successRate < 40).map(t => t.tier)
+      );
     }
 
     // If current default tier is failing, find a better one
     const failingTiers = tierResults.filter(t => t.successRate < 40);
     if (failingTiers.length > 0) {
       const successfulTier = tierResults.find(t => t.successRate >= 60);
-      return {
-        suggested: successfulTier?.tier || 'heavy',
-        reason: `${taskType} fails with ${failingTiers.map(t => t.tier).join(', ')} (${failingTiers.map(t => `${t.successRate}%`).join(', ')})`,
-        avoidTiers: failingTiers.map(t => t.tier)
-      };
+      return withFailureSignal(
+        {
+          suggested: successfulTier?.tier || 'heavy',
+          reason: `${taskType} fails with ${failingTiers.map(t => t.tier).join(', ')} (${failingTiers.map(t => `${t.successRate}%`).join(', ')})`
+        },
+        failingTiers.map(t => t.tier)
+      );
     }
   }
 
   // Fallback: if overall success rate is low, suggest heavier model
   if (metrics.successRate < 60) {
-    return {
+    return withFailureSignal({
       suggested: 'heavy',
       reason: `${taskType} has ${metrics.successRate}% success rate - heavier model may help`
-    };
+    });
+  }
+
+  // No tier-level or overall signal, but the enriched failure signatures flagged
+  // a currently-degrading tier — emit an avoidance-only suggestion so selection
+  // steers off it (agentModelSelection picks the best non-avoided tier) even
+  // though the all-time routingAccuracy rate hasn't crossed the misroute line.
+  if (failureAvoidance.avoidTiers.length > 0) {
+    return avoidanceOnlySuggestion();
   }
 
   return null; // Current selection is working fine
