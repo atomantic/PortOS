@@ -24,6 +24,10 @@ export default defineConfig({
       '**/*.test.js',
       '../scripts/**/*.test.js',
       '../lib/**/*.test.js',
+      // The standalone autofixer package ships pure, node-builtin-only helpers
+      // (sandbox.js isolation/promotion primitives) whose adversarial tests run
+      // under this node runner.
+      '../autofixer/**/*.test.js',
     ],
     // The slashdo submodule ships its own node:test suites; vitest can't
     // parse them and the broad `../lib/**` glob would otherwise pick them up
