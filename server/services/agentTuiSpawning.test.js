@@ -75,6 +75,8 @@ vi.mock('./git.js', () => ({
   // to exercise the idle-no-changes failure path override via mockResolvedValueOnce.
   getStatus: vi.fn().mockResolvedValue({ clean: false, files: [{ path: 'file.txt', status: 'M' }] }),
   getDiff: vi.fn().mockResolvedValue('diff content here'),
+  // No owner-matched gh account by default → empty overlay (ambient auth kept).
+  resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock('fs', () => ({
@@ -421,6 +423,47 @@ describe('spawnTuiAgent runtime', () => {
   // the runner-mode and direct-CLI paths. The tests below assert the
   // arguments handed to `finalizeAgent`, not the downstream individual
   // calls — those are covered by agentLifecycle.test.js.
+
+  // ── GH_TOKEN pinning: the agent's own `gh pr create` must auth as the repo owner ─
+  it('passes the repo-owner-pinned GH_TOKEN into the TUI session env (buildSafeEnv would otherwise strip it)', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+    vi.mocked(gitService.resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_pinned_owner_token' });
+
+    runSpawn({ workspacePath: '/tmp/ws' });
+    await flushMicrotasks();
+
+    // Resolved against the agent's workspace and folded into the session env.
+    expect(gitService.resolveForgeTokenEnv).toHaveBeenCalledWith('/tmp/ws');
+    expect(shellService.createShellSession).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_pinned_owner_token' }) }),
+    );
+
+    // Drive the shell-exit path so the completion chain settles and no timer leaks.
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
+
+  it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN so the explicit credential wins', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', envVars: { GITHUB_TOKEN: 'ghp_provider_bot' } } });
+    await flushMicrotasks();
+
+    // gh prefers GH_TOKEN over GITHUB_TOKEN, so injecting an owner GH_TOKEN would
+    // shadow the provider's bot credential — the probe must be skipped entirely.
+    expect(gitService.resolveForgeTokenEnv).not.toHaveBeenCalled();
+    const env = vi.mocked(shellService.createShellSession).mock.calls[0][1].env;
+    expect(env.GITHUB_TOKEN).toBe('ghp_provider_bot');
+    expect(env.GH_TOKEN).toBeUndefined();
+
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
 
   // ── 1. Successful idle-complete path ────────────────────────────────────────
   it('idle-complete: calls finalizeAgent(success:true) with completionReason=idle-complete when idle fires after enough output and runtime', async () => {

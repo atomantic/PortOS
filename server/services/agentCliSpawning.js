@@ -27,8 +27,9 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -430,11 +431,18 @@ export async function spawnDirectly({
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // For Claude CLI providers, inject ~/.claude/settings.json env vars so Bedrock config
-  // (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.) is present even if PM2 lacks them
-  const claudeSettingsEnv = isClaudeCliProvider(provider)
-    ? await getClaudeSettingsEnv()
-    : {};
+  // Two independent async env lookups, resolved together: Claude's
+  // ~/.claude/settings.json Bedrock config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE,
+  // etc., present even if PM2 lacks them) and the repo-owner-pinned GH_TOKEN
+  // (so the agent's own `gh pr create` auths as the right account — see
+  // resolveForgeTokenEnv; `{}` when there's no owner match). Skip the token probe
+  // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
+  // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
+  // provider GITHUB_TOKEN).
+  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+  ]);
 
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
@@ -443,8 +451,9 @@ export async function spawnDirectly({
   // The pm2 shim must be prepended onto the FINAL PATH (after any
   // provider.envVars override) so a `--dangerously-skip-permissions` agent
   // can't `pm2 kill` the shared daemon. opencodeEnv comes LAST to override
-  // the static OPENCODE_CONFIG_CONTENT in provider.envVars.
-  const childEnv = (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
+  // the static OPENCODE_CONFIG_CONTENT in provider.envVars; forgeTokenEnv sits
+  // before provider.envVars so an explicit provider GH_TOKEN override still wins.
+  const childEnv = (() => { const e = { ...process.env, ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap a shim as `cmd.exe /c <path>` so spawn() under shell:false

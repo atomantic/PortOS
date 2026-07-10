@@ -20,7 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -180,7 +180,7 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, forgeTokenEnv = {}, onData, onExit, onInitialCommandSent }) {
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
   const opencodeEnv = buildOpencodeEnvVars(provider, model);
@@ -204,7 +204,11 @@ export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
     // opencodeEnv comes after provider.envVars to override the static config.
-    env: { ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
+    // forgeTokenEnv is threaded in explicitly because buildSafeEnv strips
+    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv); it goes before
+    // provider.envVars so an explicit provider GH_TOKEN override still wins,
+    // matching the direct-CLI and runner spawn paths.
+    env: { ...forgeTokenEnv, ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -798,12 +802,21 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Repo-owner-pinned GH_TOKEN for the agent's own `gh pr create` (see
+  // resolveForgeTokenEnv). Resolved here since createAgentTuiSession is sync.
+  // Skip when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its explicit
+  // credential wins.
+  const forgeTokenEnv = providerSuppliesGithubToken(provider)
+    ? {}
+    : await git.resolveForgeTokenEnv(cwd);
+
   const session = createAgentTuiSession({
     agentId,
     provider,
     model,
     tuiConfig,
     cwd,
+    forgeTokenEnv,
     onData: handleData,
     onExit: handleExit,
     onInitialCommandSent: () => { commandInjected = true; },

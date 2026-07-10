@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview } from './git.js';
+import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview, resolveForgeTokenEnv } from './git.js';
 
 describe('parseGitRemote', () => {
   it('parses GitHub SSH urls', () => {
@@ -208,6 +208,17 @@ describe('requestCopilotReview', () => {
   // The mocked-spawn coverage is provided in cleanupAgentWorktree.test.js,
   // which mocks `./git.js` wholesale — here we just verify the parser/skip
   // contract so the request never reaches a real network call.
+});
+
+describe('resolveForgeTokenEnv', () => {
+  it('returns {} for a non-existent dir so ambient gh auth is untouched (and never throws)', async () => {
+    // A cwd that doesn't exist makes the git spawn fail → resolveForgeForRepo
+    // sees no origin remote → account: null → no overlay. Deterministic and
+    // network-free regardless of the host machine's gh logins. (A null/omitted
+    // dir would fall back to the process cwd — a real repo — so we use an
+    // explicitly bogus path to keep the assertion environment-independent.)
+    await expect(resolveForgeTokenEnv('/nonexistent-path-for-test')).resolves.toEqual({});
+  });
 });
 
 describe('extractAgentSummary', () => {

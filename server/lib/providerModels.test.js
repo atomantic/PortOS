@@ -19,10 +19,28 @@ import {
   isOllamaClaudeProvider,
   applyLeanClaudeArgs,
   LEAN_CLAUDE_ARGS,
-  commandBasename
+  commandBasename,
+  providerSuppliesGithubToken
 } from './providerModels.js';
 
 describe('providerModels', () => {
+  describe('providerSuppliesGithubToken', () => {
+    it('is true when envVars carries GH_TOKEN or GITHUB_TOKEN (even if empty-string)', () => {
+      expect(providerSuppliesGithubToken({ envVars: { GH_TOKEN: 'x' } })).toBe(true);
+      expect(providerSuppliesGithubToken({ envVars: { GITHUB_TOKEN: 'x' } })).toBe(true);
+      // `in` check, not truthiness: an intentionally-empty override still counts.
+      expect(providerSuppliesGithubToken({ envVars: { GH_TOKEN: '' } })).toBe(true);
+    });
+
+    it('is false when the provider has no github credential in envVars', () => {
+      expect(providerSuppliesGithubToken({ envVars: { OTHER: 'x' } })).toBe(false);
+      expect(providerSuppliesGithubToken({ envVars: {} })).toBe(false);
+      expect(providerSuppliesGithubToken({})).toBe(false);
+      expect(providerSuppliesGithubToken(null)).toBe(false);
+      expect(providerSuppliesGithubToken(undefined)).toBe(false);
+    });
+  });
+
   describe('commandBasename', () => {
     it('strips directory prefixes, lowercases, and drops a .exe suffix', () => {
       expect(commandBasename('grok')).toBe('grok');
