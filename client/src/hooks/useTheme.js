@@ -13,6 +13,30 @@ import {
 
 const STORAGE_KEY = 'portos-theme';
 
+// localStorage can throw (Safari private mode, blocked storage, disabled
+// cookies) or be entirely absent. Guard every access so theme init/switching
+// stays usable when persistence is unavailable — the in-memory theme is the
+// source of truth; localStorage is best-effort. Returns null on any failure so
+// callers fall through to a valid default (normalizeThemeId handles null).
+const safeReadStorage = (key) => {
+  try {
+    return globalThis.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+};
+
+// Best-effort write; returns false when persistence is unavailable so callers
+// can decide (they don't — theme switching continues regardless).
+const safeWriteStorage = (key, value) => {
+  try {
+    globalThis.localStorage?.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const applyTheme = (id) => {
   const theme = getTheme(id);
   const style = document.documentElement.style;
@@ -29,21 +53,25 @@ const applyTheme = (id) => {
 };
 
 const loadTheme = () => {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = safeReadStorage(STORAGE_KEY);
   const normalized = normalizeThemeId(saved);
-  if (saved && saved !== normalized) localStorage.setItem(STORAGE_KEY, normalized);
+  if (saved && saved !== normalized) safeWriteStorage(STORAGE_KEY, normalized);
   return normalized;
 };
 
 const resetCityTimeOfDayOverride = () => {
-  try {
-    const raw = localStorage.getItem(CITY_SETTINGS_KEY);
-    const citySettings = raw ? JSON.parse(raw) : {};
-    localStorage.setItem(CITY_SETTINGS_KEY, JSON.stringify({ ...citySettings, timeOfDay: 'auto' }));
-    window.dispatchEvent(new Event(CITY_TIME_OF_DAY_AUTO_EVENT));
-  } catch {
-    // Theme switching should still work if city settings are unavailable/corrupt.
+  const raw = safeReadStorage(CITY_SETTINGS_KEY);
+  let citySettings = {};
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') citySettings = parsed;
+    } catch {
+      // Corrupt city settings — start from an empty object rather than bail.
+    }
   }
+  safeWriteStorage(CITY_SETTINGS_KEY, JSON.stringify({ ...citySettings, timeOfDay: 'auto' }));
+  window.dispatchEvent(new Event(CITY_TIME_OF_DAY_AUTO_EVENT));
 };
 
 export default function useTheme() {
@@ -61,9 +89,9 @@ export default function useTheme() {
       .then(settings => {
         if (userPickedRef.current) return;
         const serverTheme = settings?.theme ? normalizeThemeId(settings.theme) : null;
-        const currentSaved = normalizeThemeId(localStorage.getItem(STORAGE_KEY));
+        const currentSaved = normalizeThemeId(safeReadStorage(STORAGE_KEY));
         if (serverTheme && serverTheme !== currentSaved) {
-          localStorage.setItem(STORAGE_KEY, serverTheme);
+          safeWriteStorage(STORAGE_KEY, serverTheme);
           resetCityTimeOfDayOverride();
           applyTheme(serverTheme);
           setThemeId(serverTheme);
@@ -79,7 +107,7 @@ export default function useTheme() {
   const setTheme = useCallback((id) => {
     userPickedRef.current = true;
     const normalized = normalizeThemeId(id);
-    localStorage.setItem(STORAGE_KEY, normalized);
+    safeWriteStorage(STORAGE_KEY, normalized);
     resetCityTimeOfDayOverride();
     applyTheme(normalized);
     setThemeId(normalized);
