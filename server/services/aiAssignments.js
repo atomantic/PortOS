@@ -165,7 +165,7 @@ const addSettingsEntries = async (entries) => {
     providerId: settings.creativeDirector?.treatment?.providerId || null,
     model: settings.creativeDirector?.treatment?.model || null,
     providerTypes: cliProviderTypes,
-    notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model.',
+    notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
 
@@ -177,7 +177,7 @@ const addSettingsEntries = async (entries) => {
     providerId: settings.creativeDirector?.plan?.providerId || null,
     model: settings.creativeDirector?.plan?.model || null,
     providerTypes: cliProviderTypes,
-    notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model.',
+    notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
 
@@ -189,7 +189,7 @@ const addSettingsEntries = async (entries) => {
     providerId: settings.creativeDirector?.evaluation?.providerId || null,
     model: settings.creativeDirector?.evaluation?.model || null,
     providerTypes: apiProviderTypes,
-    notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent.',
+    notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
 

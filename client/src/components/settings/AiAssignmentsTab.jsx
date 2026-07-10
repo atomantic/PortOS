@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import { providerDisplayName, assignmentProviderOptions, assignmentModelOptions } from '../../utils/providers.js';
 
 const getDraft = (entry) => ({
   providerId: entry.providerId || '',
@@ -25,24 +26,8 @@ const reconcileDrafts = (prev, assignments, savedIds) => {
   return next;
 };
 
-const providerName = (providers, id) =>
-  providers.find((p) => p.id === id)?.name || id || 'Default';
-
-const modelOptionsFor = (entry, providers, draftProviderId) => {
-  if (Array.isArray(entry.modelOptions)) return entry.modelOptions;
-  const provider = providers.find((p) => p.id === draftProviderId);
-  return provider?.models || [];
-};
-
-const providerOptionsFor = (entry, providers) => {
-  if (Array.isArray(entry.providerOptions)) return entry.providerOptions;
-  const types = Array.isArray(entry.providerTypes) && entry.providerTypes.length
-    ? new Set(entry.providerTypes)
-    : null;
-  return providers
-    .filter((p) => !types || types.has(p.type))
-    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}` }));
-};
+// Provider label with the settings-table's "Default" fallback for an unset id.
+const providerName = (providers, id) => providerDisplayName(providers, id, 'Default');
 
 export default function AiAssignmentsTab() {
   const [loading, setLoading] = useState(true);
@@ -130,7 +115,7 @@ export default function AiAssignmentsTab() {
       entry.editable !== false &&
       entry.providerEditable !== false &&
       (drafts[entry.id]?.providerId || entry.providerId || '') === fromProvider &&
-      providerOptionsFor(entry, data.providers).some((option) => option.id === toProvider)
+      assignmentProviderOptions(entry, data.providers).some((option) => option.id === toProvider)
     ));
     if (targets.length === 0) {
       toast.error('No editable assignments match that provider');
@@ -260,8 +245,8 @@ export default function AiAssignmentsTab() {
           <tbody className="divide-y divide-port-border bg-port-bg">
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
-              const providerOptions = providerOptionsFor(entry, data.providers);
-              const modelOptions = modelOptionsFor(entry, data.providers, draft.providerId);
+              const providerOptions = assignmentProviderOptions(entry, data.providers);
+              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId);
               const dirty = !sameDraft(entry, draft);
               return (
                 <tr key={entry.id} className="align-top">

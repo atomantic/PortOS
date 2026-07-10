@@ -11,9 +11,10 @@ export const createCreativeDirectorProject = (data) => request('/creative-direct
   method: 'POST',
   body: JSON.stringify(data),
 });
-export const updateCreativeDirectorProject = (id, patch) => request(`/creative-director/${encodeURIComponent(id)}`, {
+export const updateCreativeDirectorProject = (id, patch, options = {}) => request(`/creative-director/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
 export const deleteCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}`, {
   method: 'DELETE',

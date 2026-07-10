@@ -20,6 +20,49 @@ import { localImageFilename } from '../../lib/localImageFilename.js';
 
 const isStr = (v) => typeof v === 'string';
 
+// Per-project AI model override (per-project CD provider/model pins). Stored on
+// the project record as `modelOverrides.{treatment,plan,evaluation}` — each an
+// optional `{ providerId, model }`. Only stages that name a `providerId` are
+// kept, so the stored object never carries empty stubs (a blank stage means
+// "inherit the global AI Assignment"). Additive: the whole record round-trips
+// through the JSONB `data` column verbatim in sanitizeProjectForSync, so this
+// needs no schema-version bump.
+export const MODEL_OVERRIDE_STAGES = ['treatment', 'plan', 'evaluation'];
+
+export function normalizeModelOverrides(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const stage of MODEL_OVERRIDE_STAGES) {
+    const v = raw[stage];
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+    const providerId = isStr(v.providerId) ? v.providerId.trim() : '';
+    const model = isStr(v.model) ? v.model.trim() : '';
+    // A model without a provider can't be resolved (the runtime keys on the
+    // provider first), so drop a model-only stage — it would inherit anyway.
+    if (providerId) out[stage] = { providerId, ...(model ? { model } : {}) };
+  }
+  return out;
+}
+
+/**
+ * Resolve the effective provider/model pin for one CD cognitive stage. The
+ * per-project override wins when it names a providerId; otherwise the global
+ * `settings.creativeDirector.<stage>` assignment applies (which itself may be
+ * empty → the caller falls back to the system default / auto-resolution).
+ * Returns `{ providerId, model }` with string values ('' when unset). Shared by
+ * agentBridge (treatment/plan CoS-task pins) and sceneEvaluator (evaluation
+ * vision-call pin) so the two resolution paths can never drift.
+ */
+export function resolveStagePin(stage, project, settings) {
+  const override = project?.modelOverrides?.[stage];
+  const global = settings?.creativeDirector?.[stage];
+  const chosen = override?.providerId ? override : global;
+  return {
+    providerId: isStr(chosen?.providerId) ? chosen.providerId : '',
+    model: isStr(chosen?.model) ? chosen.model : '',
+  };
+}
+
 // TIMESTAMPTZ bind-safety helper, shared with the media asset index (#1000) and
 // any other store that mirrors a hand-editable timestamp into a typed column.
 // Re-exported here so the historical `import { mirrorTimestamp } from
@@ -87,6 +130,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null,
     cast = [], generateFirstPass = false, directive = null,
+    modelOverrides = {},
   } = input;
   return {
     id,
@@ -141,6 +185,11 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // the whole record round-trips through the JSONB column verbatim.
     directive: directive && typeof directive === 'object' ? directive : null,
     plan: null,
+    // Per-project provider/model pins for the treatment/plan/evaluation stages
+    // (per-project CD provider/model pins). `{}` = every stage inherits the
+    // global AI Assignment. Additive — round-trips through the JSONB column
+    // verbatim, so no schema-version bump is needed for federation.
+    modelOverrides: normalizeModelOverrides(modelOverrides),
     runs: [],
     // Soft-delete / LWW tombstone trio (#1564) — projects federate across peers
     // via the per-record push pipeline (record kind `creativeDirectorProject`,
@@ -208,7 +257,11 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !PROJECT_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  return { ...project, ...patch, updatedAt: new Date().toISOString() };
+  const next = { ...project, ...patch, updatedAt: new Date().toISOString() };
+  // Normalize the whole override object on write so stored records never carry
+  // empty/model-only stage stubs; the client sends the full object each save.
+  if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);
+  return next;
 }
 
 /**
