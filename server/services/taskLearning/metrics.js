@@ -87,7 +87,8 @@ export function computeLatencySplit({ startedAt, completedAt, createdAt, duratio
  * and their timestamps/metadata; uses explicit null sentinels for anything not
  * derivable rather than fabricating a value.
  *
- *   failureSignature  — { category, messageSnippet, failurePosition } (null on success)
+ *   failureSignature  — { category, messageSnippet, failurePosition } (null when the
+ *     run met its validation-authoritative outcome; see outcomeSuccess below)
  *   executionContext  — { provider, model, modelTier, taskType, component, inputChars, routingReason }
  *   latency           — { wallMs, queueMs, executionMs } (null members when not derivable)
  *   validationPassed  — success-criteria validation boolean (issue #2344):
@@ -105,11 +106,17 @@ export function buildTaskTelemetryContext(agent, task) {
   // Sentinel discipline: only an explicit boolean counts as a validation verdict;
   // anything else (undefined/null/non-bool) is "no criterion declared" → null.
   const validationPassed = typeof result.validationPassed === 'boolean' ? result.validationPassed : null;
+  // Validation-authoritative outcome (issue #2344): a declared verdict overrides
+  // the runner's exit code. Failure telemetry keys off THIS, not raw `success`,
+  // so a commit-found run (success:false, validationPassed:true) is NOT harvested
+  // as a failure (which would poison the #2329 failure-signal window that routing
+  // consumes), and a criterion-missed clean exit is treated as the failure it is.
+  const outcomeSuccess = validationPassed === null ? success : validationPassed;
   const taskType = extractTaskType(task);
 
   const errorAnalysis = result.errorAnalysis || null;
   const rawMessage = errorAnalysis?.message || errorAnalysis?.details || '';
-  const failureSignature = success ? null : {
+  const failureSignature = outcomeSuccess ? null : {
     category: errorAnalysis?.category || null,
     messageSnippet: rawMessage ? String(rawMessage).substring(0, 200) : null,
     // Best-available proxy for "where in a multi-step workflow it failed": the
@@ -144,6 +151,9 @@ export function buildTaskTelemetryContext(agent, task) {
     taskType,
     success,
     validationPassed,
+    // Validation-authoritative learning outcome (#2344): the single source of
+    // truth every aggregate/window/telemetry gate keys off, so they can't drift.
+    outcomeSuccess,
     failureSignature,
     executionContext,
     latency
@@ -203,15 +213,13 @@ export async function recordTaskCompletion(agent, task) {
   const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
   const success = telemetry.success;
-  // Learning outcome (issue #2344): when a success criterion WAS declared, its
-  // validation verdict is authoritative for what the aggregates learn — a clean
-  // exit that produced no committed work is NOT a tier success, and a commit-found
-  // run is a success even on a non-zero exit. Only when no criterion is declared
-  // (validationPassed === null) do the aggregates fall back to the runner's
-  // exit-code `success`. Keeps routingAccuracy/tier/type/total counts consistent
-  // with the correlation window's `bad` label. Back-compat: legacy completions
-  // (and tests) that stamp no validationPassed see outcomeSuccess === success.
-  const outcomeSuccess = telemetry.validationPassed === null ? success : telemetry.validationPassed;
+  // Validation-authoritative learning outcome (issue #2344) — computed once in
+  // buildTaskTelemetryContext so aggregates, the correlation window, and failure
+  // telemetry all key off the same value. A clean exit that produced no committed
+  // work is NOT a tier success; a commit-found run is a success even on a non-zero
+  // exit; with no criterion declared it falls back to the runner's exit-code
+  // `success` (so legacy completions/tests are unchanged).
+  const outcomeSuccess = telemetry.outcomeSuccess;
   const duration = agent.result?.duration || 0;
   const errorCategory = telemetry.failureSignature?.category || null;
 
@@ -300,8 +308,9 @@ export async function recordTaskCompletion(agent, task) {
   }
   routing.lastAttempt = new Date().toISOString();
 
-  // Track error patterns
-  if (!success && errorCategory) {
+  // Track error patterns — gated on the validation-authoritative outcome so a
+  // commit-found run isn't logged as an error and a criterion-miss is (#2344).
+  if (!outcomeSuccess && errorCategory) {
     if (!data.errorPatterns[errorCategory]) {
       data.errorPatterns[errorCategory] = {
         count: 0,

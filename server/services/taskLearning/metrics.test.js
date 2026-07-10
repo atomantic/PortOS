@@ -181,6 +181,39 @@ describe('buildTaskTelemetryContext', () => {
     expect(bogus.validationPassed).toBeNull();
   });
 
+  it('does NOT harvest a failure signature for a commit-found run (success:false, validationPassed:true) (#2344)', () => {
+    // Runner exit non-zero, but the declared criterion WAS met (commit found).
+    // The validation verdict is authoritative — no failure signature is built, so
+    // a fulfilled run can't poison the #2329 failure-signal window that routing
+    // consumes.
+    const agent = {
+      ...baseAgent,
+      result: {
+        success: false,
+        duration: 2000,
+        validationPassed: true,
+        errorAnalysis: { category: 'test-failure', message: 'exit 1 but committed' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal' });
+    expect(ctx.outcomeSuccess).toBe(true);
+    expect(ctx.failureSignature).toBeNull();
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures).toEqual({});
+  });
+
+  it('exposes a validation-authoritative outcomeSuccess distinct from runner success (#2344)', () => {
+    // Clean exit, criterion missed → outcome is a failure.
+    const missed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1, validationPassed: false } }, {});
+    expect(missed.success).toBe(true);
+    expect(missed.outcomeSuccess).toBe(false);
+    // No criterion declared → outcomeSuccess mirrors runner success.
+    const plain = buildTaskTelemetryContext({ ...baseAgent, result: { success: true, duration: 1 } }, {});
+    expect(plain.outcomeSuccess).toBe(true);
+  });
+
   it('carries the validation verdict into the harvested failure signature sample (#2344)', () => {
     const agent = {
       ...baseAgent,
