@@ -206,6 +206,19 @@ export async function recordTaskCompletion(agent, task) {
   const duration = agent.result?.duration || 0;
   const errorCategory = telemetry.failureSignature?.category || null;
 
+  // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
+  // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
+  // are folded in below, so the prediction reflects history strictly BEFORE this
+  // completion. `deriveFailureSignalAvoidance` reads routingAccuracy for its
+  // proven cross-check, so computing it after those mutations would leak this
+  // run's own outcome into its own prediction and inflate the gauge. Uses the
+  // signal's BASE sensitivity (default aggressive bar) as a fixed predictor —
+  // measuring the gate against its own correlation-gated output would be circular.
+  // Skipped for the unknown tier (no routable prediction to make).
+  const correlationPredictedRisk = (modelTier && modelTier !== 'unknown')
+    ? deriveFailureSignalAvoidance(data, taskType).avoidTiers.includes(modelTier)
+    : null;
+
   // Initialize task type bucket if needed
   if (!data.byTaskType[taskType]) {
     data.byTaskType[taskType] = {
@@ -313,21 +326,14 @@ export async function recordTaskCompletion(agent, task) {
     }
   }
 
-  // Correlation-quality window (issue #2344): record whether the enriched
-  // failure signal — computed from history BEFORE this completion is folded in —
-  // flagged this run's tier as risky, paired with the actual outcome. Measured
-  // BEFORE recordFailureSignature so this run's own failure can't leak into its
-  // own prediction. Uses the signal's BASE sensitivity (the default aggressive
-  // sample bar) as the fixed predictor — measuring the gate against its own
-  // correlation-gated output would be circular. A run that "succeeded" but MISSED
-  // its declared success criteria (validationPassed === false) counts as a bad
-  // outcome, tying the two #2344 signals together. Skipped for the unknown tier
-  // (no routable prediction to make).
-  if (modelTier && modelTier !== 'unknown') {
-    const priorAvoidance = deriveFailureSignalAvoidance(data, taskType);
-    const predictedRisk = priorAvoidance.avoidTiers.includes(modelTier);
+  // Correlation-quality window (issue #2344): pair the pre-mutation prediction
+  // snapshot (captured above, before any of this run's aggregates were folded in)
+  // with the actual outcome. A run that "succeeded" but MISSED its declared
+  // success criteria (validationPassed === false) counts as a bad outcome, tying
+  // the two #2344 signals together.
+  if (correlationPredictedRisk !== null) {
     const bad = telemetry.validationPassed === false ? true : !success;
-    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk, bad });
+    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad });
   }
 
   // Aggregate the enriched failure signature (category + snippet + position +

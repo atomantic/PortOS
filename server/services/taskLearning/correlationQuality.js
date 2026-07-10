@@ -75,6 +75,12 @@ export function recordCorrelationSample(data, { taskType, tier, predictedRisk, b
  * (all runs predicted-safe, or none failed). "Not measurable" must never
  * collapse into "measured zero correlation".
  *
+ * Scope: the window is deliberately CROSS-taskType — one global "is the enriched
+ * signal trustworthy" gauge, not a per-taskType score. `suggestModelTier(taskType)`
+ * gates a per-taskType decision on it intentionally: the signal's calibration is
+ * a property of the enrichment mechanism, not of any one task type, and a global
+ * window reaches confident sample counts far sooner than N per-type windows would.
+ *
  * @returns {{ score:number|null, sampleCount:number, confident:boolean,
  *   matrix:{ tp:number, fp:number, fn:number, tn:number } }}
  */
