@@ -19,6 +19,8 @@ import {
   loadLearningData,
   saveLearningData
 } from './store.js';
+import { deriveFailureSignalAvoidance } from './routing.js';
+import { recordCorrelationSample } from './correlationQuality.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
@@ -88,11 +90,21 @@ export function computeLatencySplit({ startedAt, completedAt, createdAt, duratio
  *   failureSignature  — { category, messageSnippet, failurePosition } (null on success)
  *   executionContext  — { provider, model, modelTier, taskType, component, inputChars, routingReason }
  *   latency           — { wallMs, queueMs, executionMs } (null members when not derivable)
+ *   validationPassed  — success-criteria validation boolean (issue #2344):
+ *     did the run meet its DECLARED success criteria, distinct from the runner's
+ *     exit-code `success`? null sentinel = no machine-checkable criterion was
+ *     declared for this task; true/false = declared criterion met / not met.
+ *     Stamped authoritatively at the completion chokepoint (finalizeAgent) onto
+ *     `result.validationPassed`; surfaced here with an explicit null default so
+ *     "absent" never masquerades as `false`.
  */
 export function buildTaskTelemetryContext(agent, task) {
   const meta = agent?.metadata || {};
   const result = agent?.result || {};
   const success = result.success || false;
+  // Sentinel discipline: only an explicit boolean counts as a validation verdict;
+  // anything else (undefined/null/non-bool) is "no criterion declared" → null.
+  const validationPassed = typeof result.validationPassed === 'boolean' ? result.validationPassed : null;
   const taskType = extractTaskType(task);
 
   const errorAnalysis = result.errorAnalysis || null;
@@ -131,6 +143,7 @@ export function buildTaskTelemetryContext(agent, task) {
   return {
     taskType,
     success,
+    validationPassed,
     failureSignature,
     executionContext,
     latency
@@ -165,6 +178,10 @@ export function recordFailureSignature(data, context) {
     taskType: context.executionContext.taskType,
     wallMs: context.latency.wallMs,
     executionMs: context.latency.executionMs,
+    // Success-criteria validation verdict at failure time (issue #2344): null
+    // when no machine-checkable criterion was declared, false when declared and
+    // missed. Explicit null default keeps "absent" distinct from "failed".
+    validationPassed: context.validationPassed ?? null,
     recordedAt
   });
   if (bucket.recent.length > MAX_SIGNATURE_SAMPLES) {
@@ -294,6 +311,23 @@ export async function recordTaskCompletion(agent, task) {
         data.recentUnknownErrors = data.recentUnknownErrors.slice(-20);
       }
     }
+  }
+
+  // Correlation-quality window (issue #2344): record whether the enriched
+  // failure signal — computed from history BEFORE this completion is folded in —
+  // flagged this run's tier as risky, paired with the actual outcome. Measured
+  // BEFORE recordFailureSignature so this run's own failure can't leak into its
+  // own prediction. Uses the signal's BASE sensitivity (the default aggressive
+  // sample bar) as the fixed predictor — measuring the gate against its own
+  // correlation-gated output would be circular. A run that "succeeded" but MISSED
+  // its declared success criteria (validationPassed === false) counts as a bad
+  // outcome, tying the two #2344 signals together. Skipped for the unknown tier
+  // (no routable prediction to make).
+  if (modelTier && modelTier !== 'unknown') {
+    const priorAvoidance = deriveFailureSignalAvoidance(data, taskType);
+    const predictedRisk = priorAvoidance.avoidTiers.includes(modelTier);
+    const bad = telemetry.validationPassed === false ? true : !success;
+    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk, bad });
   }
 
   // Aggregate the enriched failure signature (category + snippet + position +

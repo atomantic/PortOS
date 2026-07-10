@@ -13,6 +13,7 @@ import {
   loadDismissedRecommendations,
   saveDismissedRecommendations
 } from './store.js';
+import { computeCorrelationQuality, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
 /**
  * Get learning insights for display
@@ -61,12 +62,23 @@ export async function getLearningInsights() {
     }))
     .sort((a, b) => b.successRate - a.successRate);
 
+  // Correlation-quality gauge (issue #2344): how well the enriched failure
+  // signal predicts actual outcomes over the rolling window. `proven` mirrors the
+  // routing aggressiveness gate (score > threshold with enough samples).
+  const correlationQuality = computeCorrelationQuality(data.correlationWindow);
+
   return {
     lastUpdated: data.lastUpdated,
     totals: {
       ...data.totals,
       successRate: overallSuccessRate,
       avgDurationMin: Math.round(data.totals.avgDurationMs / 60000)
+    },
+    correlationQuality: {
+      ...correlationQuality,
+      threshold: CORRELATION_QUALITY_THRESHOLD,
+      proven: correlationQuality.confident && correlationQuality.score !== null
+        && correlationQuality.score > CORRELATION_QUALITY_THRESHOLD
     },
     insights: {
       bestPerforming: bestPerforming.map(t => ({

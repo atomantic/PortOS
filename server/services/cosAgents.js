@@ -313,7 +313,12 @@ export async function completeAgent(agentId, result = {}) {
       ...state.agents[agentId],
       status: 'completed',
       completedAt: new Date().toISOString(),
-      result
+      // Success-criteria validation verdict (issue #2344): normalize to an
+      // explicit null sentinel when a completion path didn't declare/evaluate a
+      // machine-checkable criterion, so persisted telemetry never conflates
+      // "not declared" with "declared and failed" (false). Distinct from
+      // result.success (the runner's exit-code verdict).
+      result: { validationPassed: null, ...result },
     };
 
     if (result.success) {

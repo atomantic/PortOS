@@ -158,6 +158,45 @@ describe('buildTaskTelemetryContext', () => {
     });
   });
 
+  it('surfaces the success-criteria validation boolean with a null sentinel default (#2344)', () => {
+    // No validationPassed on the result → null sentinel (no criterion declared),
+    // never conflated with a false.
+    const ctx = buildTaskTelemetryContext(baseAgent, { taskType: 'user' });
+    expect(ctx.validationPassed).toBeNull();
+
+    // Explicit true/false pass through unchanged — distinct from result.success.
+    const passed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1000, validationPassed: true } }, {});
+    expect(passed.validationPassed).toBe(true);
+
+    // "ran clean but produced nothing": success true yet criterion missed.
+    const missed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1000, validationPassed: false } }, {});
+    expect(missed.success).toBe(true);
+    expect(missed.validationPassed).toBe(false);
+
+    // A non-boolean (e.g. undefined-shaped) validation value never leaks through.
+    const bogus = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: false, duration: 1, validationPassed: 'nope' } }, {});
+    expect(bogus.validationPassed).toBeNull();
+  });
+
+  it('carries the validation verdict into the harvested failure signature sample (#2344)', () => {
+    const agent = {
+      ...baseAgent,
+      result: {
+        success: false,
+        duration: 2000,
+        validationPassed: false,
+        errorAnalysis: { category: 'test-failure', message: 'no commit produced' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { description: 'fix the flaky test', taskType: 'internal' });
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures['test-failure'].recent[0].validationPassed).toBe(false);
+  });
+
   it('harvests failures even for the sandboxed external/untyped fallback (#2333)', () => {
     const agent = {
       ...baseAgent,

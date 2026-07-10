@@ -84,4 +84,16 @@ describe('deriveFailureSignalAvoidance (#2329)', () => {
     const out = deriveFailureSignalAvoidance({ routingAccuracy: {} }, 'user-task');
     expect(out).toEqual({ avoidTiers: [], sampleCount: 0, dominant: null });
   });
+
+  it('respects a caller-supplied minFailureSamples bar (issue #2344 aggressiveness gate)', () => {
+    // 3 unproven-tier failures: steered off at the aggressive default bar (3)...
+    const data = dataWith([sample(), sample(), sample()]);
+    expect(deriveFailureSignalAvoidance(data, 'user-task').avoidTiers).toContain('heavy');
+    // ...but held back at the conservative bar (5) the routing gate uses until
+    // the correlation-quality window proves the signal predicts outcomes.
+    expect(deriveFailureSignalAvoidance(data, 'user-task', { minFailureSamples: 5 }).avoidTiers).toEqual([]);
+    // Once enough failures accumulate, even the conservative bar steers off.
+    const more = dataWith([sample(), sample(), sample(), sample(), sample()]);
+    expect(deriveFailureSignalAvoidance(more, 'user-task', { minFailureSamples: 5 }).avoidTiers).toContain('heavy');
+  });
 });

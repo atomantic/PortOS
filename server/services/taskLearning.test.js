@@ -92,6 +92,19 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ...overrides
 });
 
+// A correlation-quality window proving the enriched failure signal predicts
+// outcomes (perfect correlation, >= MIN_CORRELATION_SAMPLES) — so `suggestModelTier`
+// runs the AGGRESSIVE failure-sample bar (3) and the #2329 avoidance mechanics
+// engage. Without this the #2344 gate holds avoidance back to the conservative
+// bar (5) until the signal has earned it. Injected into the #2329 avoidance
+// tests to isolate their intent from the new gate (which has its own tests).
+const provenCorrelationWindow = () => Array.from({ length: 24 }, (_, i) => ({
+  taskType: 'user-task', tier: 'heavy',
+  predictedRisk: i % 2 === 0,
+  bad: i % 2 === 0,
+  recordedAt: '2026-01-26T00:00:00.000Z'
+}));
+
 describe('TaskLearning - resetTaskTypeLearning', () => {
   let savedData;
 
@@ -598,6 +611,7 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
         }
       },
       routingAccuracy: {},
+      correlationWindow: provenCorrelationWindow(),
       failureSignatures: {
         'test-failure': {
           count: 3,
@@ -642,6 +656,7 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
         }
       },
       routingAccuracy: {},
+      correlationWindow: provenCorrelationWindow(),
       failureSignatures: {
         'test-failure': {
           count: 3,
@@ -680,6 +695,7 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
           medium: { succeeded: 7, failed: 3, lastAttempt: '2026-01-26T00:00:00.000Z' } // 70% (unproven)
         }
       },
+      correlationWindow: provenCorrelationWindow(),
       failureSignatures: {
         'test-failure': {
           count: 3,
@@ -697,6 +713,44 @@ describe('TaskLearning - suggestModelTier with routing signals', () => {
     expect(result.suggested).toBeNull();
     expect(result.avoidTiers).toEqual(expect.arrayContaining(['heavy', 'medium']));
     expect(result.failureSignal).toMatchObject({ tier: 'medium', provider: 'claude', model: 'sonnet' });
+  });
+
+  it('holds avoidance back to the conservative bar until correlation is proven (#2344)', async () => {
+    // 3 recent 'heavy' failures — enough for the AGGRESSIVE bar (3) — but the
+    // correlation window is empty (unproven), so the #2344 gate applies the
+    // conservative bar (5) and does NOT steer off 'heavy' yet.
+    const fixture = (correlationWindow) => makeLearningData({
+      byTaskType: {
+        'gate-task': {
+          completed: 12, succeeded: 9, failed: 3,
+          totalDurationMs: 1200000, avgDurationMs: 100000, successRate: 75
+        }
+      },
+      routingAccuracy: {},
+      correlationWindow,
+      failureSignatures: {
+        'test-failure': {
+          count: 3,
+          recent: [
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'gate-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'gate-task' },
+            { modelTier: 'heavy', provider: 'claude', model: 'opus', taskType: 'gate-task' }
+          ]
+        }
+      }
+    });
+
+    // Unproven correlation (empty window) → no avoidance despite 3 failures.
+    readFile.mockResolvedValue(JSON.stringify(fixture([])));
+    clearLearningCache();
+    expect(await suggestModelTier('gate-task')).toBeNull();
+
+    // Proven correlation (>0.8, >= min samples) → the same 3 failures now steer.
+    readFile.mockResolvedValue(JSON.stringify(fixture(provenCorrelationWindow())));
+    clearLearningCache();
+    const proven = await suggestModelTier('gate-task');
+    expect(proven).not.toBeNull();
+    expect(proven.avoidTiers).toContain('heavy');
   });
 
   it('does not let failure signatures condemn a proven tier (#2329)', async () => {
