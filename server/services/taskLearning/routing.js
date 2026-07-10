@@ -11,6 +11,7 @@
 
 import { loadLearningData, emitLog, isSandboxedTaskType } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
+import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
 /**
  * Relative resource cost of each tier name that can land in
@@ -55,6 +56,14 @@ const tierWeight = (tier) => TIER_WEIGHT[tier] ?? HEAVIEST_WEIGHT;
  */
 const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low']);
 
+/**
+ * True for a learned tier the selection path can't actually route to
+ * (`minimal`/`low`). Exported so the correlation window (metrics.js) can skip
+ * these the same way `deriveFailureSignalAvoidance` does — recording a
+ * never-flaggable tier as "predicted safe" would skew the global gauge (#2344).
+ */
+export const isNonRoutableLearnedTier = (tier) => NON_ROUTABLE_LEARNED_TIERS.has(tier);
+
 /** Minimum success rate (%) for a tier to count as "proven" for a task type. */
 const HIGH_SUCCESS_THRESHOLD = 80;
 
@@ -62,8 +71,18 @@ const HIGH_SUCCESS_THRESHOLD = 80;
  * Minimum recent failure samples on a single tier (scoped to a task type) before
  * the enriched failure signatures can steer routing away from it. Matches the
  * routingAccuracy "≥3 attempts" bar so a one-off failure never condemns a tier.
+ * This is the AGGRESSIVE bar, used once the correlation-quality window has proven
+ * the signal predicts outcomes well (>0.8, issue #2344).
  */
 const MIN_FAILURE_SAMPLES = 3;
+
+/**
+ * Conservative failure-sample bar used until the correlation-quality window
+ * proves the enriched signal actually predicts bad outcomes (issue #2344). While
+ * the signal is unproven, require MORE recent failures before steering off a
+ * tier, so the system doesn't over-correct on a signal that hasn't earned it.
+ */
+const CONSERVATIVE_MIN_FAILURE_SAMPLES = 5;
 
 /** NUL separator joining provider+model into one tally key (safe: neither contains NUL). */
 const PAIR_SEP = '\x00';
@@ -95,10 +114,16 @@ function topKey(counts) {
  * tier on their own (a tier with 100 successes + 3 failures is fine). The
  * cross-check is what keeps this from starving a good tier.
  *
+ * `minFailureSamples` (issue #2344) is the failure-sample bar a tier must clear
+ * before it is steered away from. Callers pass the conservative bar until the
+ * correlation-quality window proves the signal predicts outcomes (>0.8); default
+ * stays at the aggressive `MIN_FAILURE_SAMPLES` for back-compat with direct
+ * callers/tests.
+ *
  * @returns {{ avoidTiers: string[], sampleCount: number,
  *   dominant: { tier, failures, provider, model }|null }}
  */
-export function deriveFailureSignalAvoidance(data, taskType) {
+export function deriveFailureSignalAvoidance(data, taskType, { minFailureSamples = MIN_FAILURE_SAMPLES } = {}) {
   const signatures = data?.failureSignatures || {};
   const routing = data?.routingAccuracy?.[taskType] || {};
 
@@ -128,7 +153,7 @@ export function deriveFailureSignalAvoidance(data, taskType) {
     // null = no success data (not "0% success") — an unproven tier by default.
     const successRate = attempts > 0 ? Math.round((r.succeeded / attempts) * 100) : null;
     const proven = successRate !== null && successRate >= HIGH_SUCCESS_THRESHOLD;
-    if (proven || stats.failures < MIN_FAILURE_SAMPLES) continue;
+    if (proven || stats.failures < minFailureSamples) continue;
     avoidTiers.push(tier);
     // `dominant` is the AVOIDED tier with the most recent failures — the tier we
     // actually steer away from — so the attribution surfaced in logs/reasons can
@@ -182,14 +207,23 @@ export async function suggestModelTier(taskType) {
 
   const data = await loadLearningData();
 
+  // Auto-adjustment aggressiveness gate (issue #2344): the enriched failure
+  // signal steers routing more aggressively only once the correlation-quality
+  // window proves it actually predicts bad outcomes (>0.8). Until then, require a
+  // higher failure-sample bar so the system doesn't over-correct on an unproven
+  // signal. Computed synchronously from the already-loaded window — no extra I/O.
+  const correlationQuality = computeCorrelationQuality(data.correlationWindow);
+  const aggressive = isCorrelationProven(correlationQuality);
+  const minFailureSamples = aggressive ? MIN_FAILURE_SAMPLES : CONSERVATIVE_MIN_FAILURE_SAMPLES;
+
   // Recency-weighted, provider-attributed avoidance from the enriched failure
   // signatures (#2329) — folded into every suggestion below so a tier that's
   // freshly degrading is steered away from before its all-time routingAccuracy
   // rate crosses the hard misroute line. Computed BEFORE the completions guard:
-  // the signal has its own MIN_FAILURE_SAMPLES bar, so 3-4 recent failures on a
-  // tier can steer selection even before routingAccuracy has enough data to
-  // suggest a tier at all.
-  const failureAvoidance = deriveFailureSignalAvoidance(data, taskType);
+  // the signal has its own failure-sample bar, so recent failures on a tier can
+  // steer selection even before routingAccuracy has enough data to suggest a
+  // tier at all.
+  const failureAvoidance = deriveFailureSignalAvoidance(data, taskType, { minFailureSamples });
   const withFailureSignal = (suggestion, existingAvoid = []) => {
     const avoidTiers = mergeAvoidTiers(existingAvoid, failureAvoidance.avoidTiers);
     // If the tier we were about to suggest is itself failure-flagged (a 60-79%

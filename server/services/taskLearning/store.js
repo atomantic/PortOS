@@ -65,6 +65,12 @@ const DEFAULT_LEARNING_DATA = {
   // Records which model tiers work/fail for each task type
   routingAccuracy: {},
 
+  // Rolling correlation-quality window (issue #2344): prediction/outcome pairs
+  // measuring how well the enriched failure signals predict actual outcomes.
+  // Gates auto-adjustment aggressiveness (see correlationQuality.js). Additive:
+  // older learning.json files predate this key and load fine.
+  correlationWindow: [],
+
   // Overall stats
   totals: {
     completed: 0,

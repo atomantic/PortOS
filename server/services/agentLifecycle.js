@@ -738,6 +738,35 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
 }
 
 /**
+ * Evaluate a completed autonomous run against its DECLARED success criteria
+ * (issue #2344). Distinct from the runner's exit-code `success`: it answers
+ * "did the run actually produce the work it was supposed to?" using the one
+ * machine-checkable criterion the CoS already relies on — a `[task-<id>]` commit.
+ *
+ * Returns a null sentinel when NO criterion is declared (interactive/user tasks,
+ * user-terminated runs, or a run with no task id / workspace to validate
+ * against), so downstream telemetry never conflates "not declared" with
+ * "declared and failed". For autonomous tasks it verifies the commit on BOTH
+ * success and failure — a clean exit that committed nothing is an honest miss,
+ * and that is exactly the signal task-learning wants. `checkForTaskCommit` is
+ * git-repo-gated, off the event loop, and hard-timeout-bounded, so a non-repo
+ * workspace or a hung git degrades to "no commit" rather than stalling finalize.
+ */
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath }) {
+  if (terminatedByUser) return null;
+  const taskType = task?.taskType || 'user';
+  // Interactive/user tasks declare no machine-checkable criterion; neither does
+  // a run missing the task id or workspace needed to validate.
+  if (taskType === 'user' || !task?.id || !workspacePath) return null;
+  // Pipeline/media tasks deliver artifacts, not a `[task-<id>]` commit — the
+  // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
+  // validation miss (which would also pollute the correlation window). null =
+  // no commit criterion declared for this task shape.
+  if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
+  return await checkForTaskCommit(task.id, workspacePath);
+}
+
+/**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
  * Path-specific cleanup (worktree, sentinel removal, pty kill, in-memory
@@ -780,6 +809,17 @@ export async function finalizeAgent({
       ? { status: 'completed' }
       : await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
 
+  // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
+  // null-when-undeclared) verdict onto the completion result, distinct from the
+  // exit-code `success`, so task-learning telemetry can distinguish "ran clean
+  // but produced nothing" from a genuine success. Best-effort — a validation
+  // check failure must never block finalize (falls back to the null sentinel).
+  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath })
+    .catch(err => {
+      emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
+      return null;
+    });
+
   // Sequential by design: completeAgent + updateTask share the cosState
   // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
   // matters — if completeAgent throws, we must not mark the task completed.
@@ -788,6 +828,7 @@ export async function finalizeAgent({
   // failure.
   await completeAgent(agentId, {
     success,
+    validationPassed,
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,

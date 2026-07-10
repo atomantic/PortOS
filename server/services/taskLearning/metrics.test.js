@@ -158,6 +158,78 @@ describe('buildTaskTelemetryContext', () => {
     });
   });
 
+  it('surfaces the success-criteria validation boolean with a null sentinel default (#2344)', () => {
+    // No validationPassed on the result → null sentinel (no criterion declared),
+    // never conflated with a false.
+    const ctx = buildTaskTelemetryContext(baseAgent, { taskType: 'user' });
+    expect(ctx.validationPassed).toBeNull();
+
+    // Explicit true/false pass through unchanged — distinct from result.success.
+    const passed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1000, validationPassed: true } }, {});
+    expect(passed.validationPassed).toBe(true);
+
+    // "ran clean but produced nothing": success true yet criterion missed.
+    const missed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1000, validationPassed: false } }, {});
+    expect(missed.success).toBe(true);
+    expect(missed.validationPassed).toBe(false);
+
+    // A non-boolean (e.g. undefined-shaped) validation value never leaks through.
+    const bogus = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: false, duration: 1, validationPassed: 'nope' } }, {});
+    expect(bogus.validationPassed).toBeNull();
+  });
+
+  it('does NOT harvest a failure signature for a commit-found run (success:false, validationPassed:true) (#2344)', () => {
+    // Runner exit non-zero, but the declared criterion WAS met (commit found).
+    // The validation verdict is authoritative — no failure signature is built, so
+    // a fulfilled run can't poison the #2329 failure-signal window that routing
+    // consumes.
+    const agent = {
+      ...baseAgent,
+      result: {
+        success: false,
+        duration: 2000,
+        validationPassed: true,
+        errorAnalysis: { category: 'test-failure', message: 'exit 1 but committed' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal' });
+    expect(ctx.outcomeSuccess).toBe(true);
+    expect(ctx.failureSignature).toBeNull();
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures).toEqual({});
+  });
+
+  it('exposes a validation-authoritative outcomeSuccess distinct from runner success (#2344)', () => {
+    // Clean exit, criterion missed → outcome is a failure.
+    const missed = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1, validationPassed: false } }, {});
+    expect(missed.success).toBe(true);
+    expect(missed.outcomeSuccess).toBe(false);
+    // No criterion declared → outcomeSuccess mirrors runner success.
+    const plain = buildTaskTelemetryContext({ ...baseAgent, result: { success: true, duration: 1 } }, {});
+    expect(plain.outcomeSuccess).toBe(true);
+  });
+
+  it('carries the validation verdict into the harvested failure signature sample (#2344)', () => {
+    const agent = {
+      ...baseAgent,
+      result: {
+        success: false,
+        duration: 2000,
+        validationPassed: false,
+        errorAnalysis: { category: 'test-failure', message: 'no commit produced' }
+      }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { description: 'fix the flaky test', taskType: 'internal' });
+    const data = { failureSignatures: {} };
+    recordFailureSignature(data, ctx);
+    expect(data.failureSignatures['test-failure'].recent[0].validationPassed).toBe(false);
+  });
+
   it('harvests failures even for the sandboxed external/untyped fallback (#2333)', () => {
     const agent = {
       ...baseAgent,

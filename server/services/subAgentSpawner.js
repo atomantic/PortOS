@@ -196,7 +196,10 @@ async function runInitSpawner() {
       const agent = runnerAgents.get(agentId);
       if (agent) {
         clearTimeout(agent.initializationTimeout);
-        await completeAgent(agentId, { success: false, error });
+        // Runner-level error before the run could produce work — no success
+        // criterion was evaluated, so validation is the null sentinel (issue
+        // #2344), never a false that would look like a declared-and-failed run.
+        await completeAgent(agentId, { success: false, validationPassed: null, error });
         await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });
         runnerAgents.delete(agentId);
       }
