@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal.jsx';
 import {
   getCatalogIngredientDetails,
   updateCatalogIngredient,
@@ -1281,7 +1282,6 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) 
 // history" requirement. Never uploads; it only references library keys.
 function GalleryPickerModal({ onClose, onPick }) {
   const [items, setItems] = useState(null); // null = loading, [] = loaded-empty
-  const closeRef = useRef(null);
 
   useEffect(() => {
     listImageGallery()
@@ -1290,11 +1290,12 @@ function GalleryPickerModal({ onClose, onPick }) {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
-      <div className="bg-port-card border border-port-border rounded-lg w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <Modal open onClose={onClose} size="lg" ariaLabelledBy="gallery-picker-title"
+      panelClassName="bg-port-card border border-port-border rounded-lg max-h-[80vh] overflow-hidden flex flex-col">
+      <div>
         <div className="flex items-center justify-between p-3 border-b border-port-border">
-          <h3 className="text-sm font-semibold text-white">Pick from media gallery</h3>
-          <button ref={closeRef} type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close">
+          <h3 id="gallery-picker-title" className="text-sm font-semibold text-white">Pick from media gallery</h3>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close">
             <X size={16} />
           </button>
         </div>
@@ -1319,7 +1320,7 @@ function GalleryPickerModal({ onClose, onPick }) {
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 

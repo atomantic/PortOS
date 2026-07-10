@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import Modal from '../ui/Modal.jsx';
 import { PHOTO_PRESETS, getPreset, cyclePreset, buildPostcardStats, screenshotFilename } from '../../utils/cityPhotoMode';
 
 // Photo-mode HUD overlay (roadmap 3.3). When photo mode is active it dims the rest of the HUD,
@@ -157,30 +158,35 @@ export default function CityPhotoOverlay({ active, presetId, onPresetChange, onE
         </button>
       </div>
 
-      {/* Postcard preview modal */}
-      {postcard && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 pointer-events-auto" onClick={() => setPostcard(null)}>
-          <div className="max-w-[80vw] max-h-[80vh] flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
-            <img src={postcard} alt="City postcard" className="max-w-full max-h-[68vh] rounded-lg border border-cyan-500/40 shadow-[0_0_30px_rgba(6,182,212,0.3)]" />
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="font-pixel text-[11px] text-black bg-cyan-400 tracking-wider rounded px-4 py-2 hover:bg-cyan-300 transition-all"
-              >
-                ↓ SAVE POSTCARD
-              </button>
-              <button
-                type="button"
-                onClick={() => setPostcard(null)}
-                className="font-pixel text-[11px] text-cyan-400 tracking-wider border border-cyan-500/40 rounded px-4 py-2 hover:bg-cyan-500/10 transition-all"
-              >
-                CLOSE
-              </button>
-            </div>
-          </div>
+      {/* Postcard preview modal — portaled so it escapes the pointer-events-none
+          / z-indexed WebGL HUD stacking context and gets focus-trap + Esc from
+          the shared Modal. */}
+      <Modal
+        open={!!postcard}
+        onClose={() => setPostcard(null)}
+        size="none"
+        usePortal
+        ariaLabel="City postcard preview"
+        panelClassName="max-w-[80vw] max-h-[80vh] flex flex-col items-center gap-3"
+      >
+        <img src={postcard} alt="City postcard" className="max-w-full max-h-[68vh] rounded-lg border border-cyan-500/40 shadow-[0_0_30px_rgba(6,182,212,0.3)]" />
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={handleDownload}
+            className="font-pixel text-[11px] text-black bg-cyan-400 tracking-wider rounded px-4 py-2 hover:bg-cyan-300 transition-all"
+          >
+            ↓ SAVE POSTCARD
+          </button>
+          <button
+            type="button"
+            onClick={() => setPostcard(null)}
+            className="font-pixel text-[11px] text-cyan-400 tracking-wider border border-cyan-500/40 rounded px-4 py-2 hover:bg-cyan-500/10 transition-all"
+          >
+            CLOSE
+          </button>
         </div>
-      )}
+      </Modal>
     </>
   );
 }

@@ -2,6 +2,8 @@
 
 ## Accessibility
 
+- **The reference-audio waveform is now keyboard-operable and two hand-rolled modals gained real dialog semantics.** The Songs "reference analysis" waveform scrubber was a mouse-only `<div onClick>` (`role="presentation"`) — keyboard and screen-reader users could not seek at all. It is now a proper `role="slider"` with `aria-valuemin/max/now/valuetext`, focusable, and scrubbable with the arrow keys (±1s, ±5s with Shift) plus Home/End (WCAG 2.1.1). Separately, the CyberCity photo-mode "postcard preview" overlay and the Catalog "pick from media gallery" picker were hand-rolled `fixed inset-0` backdrops with no `role="dialog"`, no `aria-modal`, no Escape-to-close, and no focus trap; both now render through the shared `Modal` (focus trap + Esc stack + labelled dialog), with the postcard preview portaled so it escapes the WebGL HUD's stacking/pointer-events context.
+
 - **Modals and drawers now trap and restore keyboard focus, and toasts are announced to screen readers.** Opening any shared `Modal` or `Drawer` (which back the great majority of the app's dialogs, config drawers, and lightboxes) now moves focus into the dialog, keeps Tab/Shift+Tab cycling inside it instead of leaking to the page behind, and returns focus to the control that opened it on close (WCAG 2.4.3 / 2.1.2) — implemented once in a reusable `useFocusTrap` hook. The toast stack is now a labelled ARIA notification region: default toasts announce politely (`role="status"`) and error toasts assertively (`role="alert"`), with the decorative status glyphs hidden from assistive tech, so screen-reader users hear notifications (including error toasts) as they arrive.
 
 ## AI Providers
