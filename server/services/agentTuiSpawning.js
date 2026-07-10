@@ -376,6 +376,16 @@ export async function spawnTuiAgent({
   // paste-retry loop below extends its budget to MCP_BOOT_PASTE_DEADLINE_MS so a
   // slow boot completes and the paste finally lands, instead of being killed
   // `paste-not-rendered` mid-boot (incident 2026-07-10, agent-c5a26b40).
+  //
+  // Gated to codex ONLY (isCodexSession below). The extended budget and the
+  // failure message ("check your ~/.codex config") are codex-specific, and the
+  // claude path never blind-pastes during its own MCP boot — it waits for
+  // claude's positive input-ready signal first (createInputReadyTracker) — so it
+  // can't hit this failure mode. Observing every provider would let an unrelated
+  // TUI whose startup text happened to contain "starting mcp servers" inherit
+  // codex's 150s budget and its misleading codex-config guidance, breaking the
+  // "non-codex TUIs are unchanged" contract (codex review [P2]).
+  const isCodexSession = commandName.toLowerCase().includes('codex');
   const mcpBoot = createMcpBootTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
@@ -732,10 +742,13 @@ export async function spawnTuiAgent({
       // injected — earlier toggles belong to shell startup and the readiness
       // probe, not to claude.
       if (!promptSentAt && commandInjected) inputReady.observe(text, stripped);
-      // Latch codex's MCP-server boot banner during startup (before the prompt is
-      // submitted, so codex's own boot chrome — not the echoed prompt — is what
-      // trips it). Gates the extended, boot-aware paste-retry budget below.
-      if (!promptSubmittedAt && stripped && !mcpBoot.active) mcpBoot.observe(stripped);
+      // Latch codex's MCP-server boot banner during startup (codex sessions only;
+      // before the prompt is submitted, so codex's own boot chrome — not the
+      // echoed prompt — is what trips it). Gates the extended, boot-aware
+      // paste-retry budget below. Observing until promptSubmittedAt (set only on a
+      // CONFIRMED paste) means a banner that arrives AFTER an early swallowed paste
+      // still latches — the swallowed paste never sets promptSubmittedAt.
+      if (isCodexSession && !promptSubmittedAt && stripped && !mcpBoot.active) mcpBoot.observe(stripped);
       const now = Date.now();
       // Once the prompt is SUBMITTED (Enter sent — not merely pasted), watch for
       // proof the model is actually working. Keying on promptSubmittedAt (not

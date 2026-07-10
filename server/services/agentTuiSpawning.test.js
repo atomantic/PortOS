@@ -1057,6 +1057,34 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
+  it('MCP-boot budget is codex-only: a non-codex TUI emitting the same banner still fails at 3 attempts', async () => {
+    // Regression for codex review [P2]: the boot tracker must not latch for a
+    // non-codex provider, or an unrelated TUI whose startup text contains
+    // "starting mcp servers" would inherit codex's 150s budget and its
+    // codex-specific failure guidance, breaking "non-codex TUIs are unchanged."
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ tuiConfig: { command: 'gemini', args: [], commandLine: 'gemini', promptDelayMs: 100, idleTimeoutMs: 50 } });
+    await flushMicrotasks();
+    // Same banner text codex prints — but this is a gemini session.
+    await capturedOnData(Buffer.from('Starting MCP servers (0/3): a, b, c\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Fails at the fixed 3-attempt cap (~19s), NOT the 150s boot budget.
+    await vi.advanceTimersByTimeAsync(25000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(pasteCount()).toBe(3);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'paste-not-rendered' })
+    );
+  });
+
   // ── 2. Command-not-found path ────────────────────────────────────────────────
   it('command-not-found: finalizeAgent called with success:false, exitCode 127, completionReason=command-not-found', async () => {
     const spawnPromise = runSpawn();
