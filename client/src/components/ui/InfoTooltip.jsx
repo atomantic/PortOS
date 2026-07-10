@@ -31,7 +31,11 @@ export default function InfoTooltip({
     setHovered(false);
   }, []);
 
-  useClickOutside(wrapRef, open, () => setOpen(false));
+  // Clear BOTH states on outside click: on touch, a tap synthesizes mouseenter
+  // (setting `hovered`) alongside the click that latches `open`, and some mobile
+  // browsers hold sticky-hover without a matching mouseleave — so clearing only
+  // `open` could strand the panel open on the very touch path this targets.
+  useClickOutside(wrapRef, open, close);
 
   useEffect(() => {
     if (!open && !hovered) return undefined;
