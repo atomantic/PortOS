@@ -6,7 +6,7 @@
  * store.
  */
 
-import { loadLearningData } from './store.js';
+import { loadLearningData, summarizeFailureSignatures } from './store.js';
 
 /**
  * Generate prompt improvement recommendations for a specific task type
@@ -29,7 +29,8 @@ export async function getPromptImprovementRecommendations(taskType) {
     completed: metrics?.completed || 0,
     suggestions: [],
     errorInsights: [],
-    promptHints: []
+    promptHints: [],
+    failureSignatures: []
   };
 
   // Not enough data to make recommendations
@@ -109,6 +110,26 @@ export async function getPromptImprovementRecommendations(taskType) {
       type: 'scope',
       message: `Average duration of ${avgDurationMin} minutes is high`,
       action: 'Consider narrowing the task scope or splitting into phases'
+    });
+  }
+
+  // Deeper failure-signature consumption (issue #2333): the enriched
+  // failureSignatures map names WHICH provider/model recently failed for this
+  // task type and how many missed a declared success criterion — attribution the
+  // coarse errorPatterns count above can't express. Surface the structured data
+  // plus an actionable "route away" suggestion the self-improvement loop can act on.
+  const failureSignatures = summarizeFailureSignatures(data.failureSignatures, { taskType });
+  recommendations.failureSignatures = failureSignatures;
+  for (const sig of failureSignatures) {
+    const topProvider = sig.providers[0];
+    if (!topProvider || topProvider.count < 2) continue;
+    recommendations.suggestions.push({
+      priority: sig.validationMissed > 0 ? 'high' : 'medium',
+      type: 'failure-signature',
+      message: `${topProvider.count} recent "${sig.category}" failures for this task type via ${topProvider.key}${sig.validationMissed > 0 ? ` (${sig.validationMissed} missed declared success criteria)` : ''}`,
+      action: sig.validationMissed > 0
+        ? `Tighten acceptance criteria or route this task type away from ${topProvider.key}`
+        : `Consider routing this task type away from ${topProvider.key} or adding guidance for the "${sig.category}" failure mode`
     });
   }
 
@@ -269,7 +290,8 @@ export async function getAllPromptRecommendations() {
         completed: recommendations.completed,
         topSuggestion: recommendations.suggestions[0] || null,
         errorCount: recommendations.errorInsights.length,
-        hintCount: recommendations.promptHints.length
+        hintCount: recommendations.promptHints.length,
+        failureSignatureCount: recommendations.failureSignatures.length
       });
     }
   }

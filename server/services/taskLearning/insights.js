@@ -11,7 +11,8 @@ import {
   loadLearningData,
   saveLearningData,
   loadDismissedRecommendations,
-  saveDismissedRecommendations
+  saveDismissedRecommendations,
+  summarizeFailureSignatures
 } from './store.js';
 import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
@@ -49,6 +50,10 @@ export async function getLearningInsights() {
     }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
+
+  // Enriched failure signatures (issue #2333): provider/model attribution and
+  // success-criteria miss counts the coarse errorPatterns aggregate can't carry.
+  const failureSignatures = summarizeFailureSignatures(data.failureSignatures);
 
   // Model tier effectiveness
   const modelEffectiveness = Object.entries(data.byModelTier)
@@ -94,10 +99,11 @@ export async function getLearningInsights() {
         completed: t.completed
       })),
       commonErrors,
+      failureSignatures,
       modelEffectiveness,
       recentUnknownErrors: data.recentUnknownErrors || []
     },
-    recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed)
+    recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed, failureSignatures)
   };
 }
 
@@ -131,7 +137,7 @@ function pushIfActive(recommendations, dismissed, rec) {
 /**
  * Generate actionable recommendations based on learning data
  */
-function generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed = {}) {
+function generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed = {}, failureSignatures = []) {
   const recommendations = [];
 
   // Recommend focusing on high-success task types
@@ -161,6 +167,20 @@ function generateRecommendations(data, bestPerforming, worstPerforming, commonEr
       type: 'action',
       message: `"${commonErrors[0].category}" errors occurred ${commonErrors[0].count} times - investigate root cause`,
       snapshot: { kind: 'count', value: commonErrors[0].count }
+    });
+  }
+
+  // Provider/model-attributed failure recommendation (issue #2333): the enriched
+  // failureSignatures map can name a specific provider/model behind a recurring
+  // failure category — more actionable than the raw errorPatterns count above.
+  const attributedSignature = failureSignatures.find(sig => sig.providers[0] && sig.providers[0].count >= 3);
+  if (attributedSignature) {
+    const topProvider = attributedSignature.providers[0];
+    pushIfActive(recommendations, dismissed, {
+      id: `failure-signature:${attributedSignature.category}`,
+      type: 'action',
+      message: `${topProvider.count} recent "${attributedSignature.category}" failures via ${topProvider.key}${attributedSignature.validationMissed > 0 ? ` (${attributedSignature.validationMissed} missed success criteria)` : ''} - investigate or route away`,
+      snapshot: { kind: 'count', value: topProvider.count }
     });
   }
 
