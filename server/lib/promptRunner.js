@@ -656,9 +656,17 @@ export async function runPromptThroughProvider(args) {
         fallbackProvider: fallback,
       };
     } finally {
-      // Safety net: release any key left suppressed-but-unresolved by an
-      // unexpected throw, so the in-flight set can't leak the key.
-      await releaseAllUnresolved();
+      // Safety net for an UNEXPECTED throw (e.g. coalesceFallbackMarkAndPick
+      // rejecting) that bypassed the explicit give-up handlers: those handlers
+      // resolve every suppressed key, so any key still unresolved HERE means a
+      // throw cancelled the primary's backstop task with no replacement queued.
+      // Escalate one investigation task (deduped — a no-op if an explicit branch
+      // already escalated) so the unrecovered failure still surfaces, then
+      // release the keys so the in-flight set can't leak.
+      if ([...suppressed.values()].some((entry) => !entry.resolved)) {
+        await escalatePrimaryFailure();
+        await releaseAllUnresolved();
+      }
     }
   }
 }

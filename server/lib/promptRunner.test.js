@@ -1437,6 +1437,25 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
     expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
   });
 
+  it('escalates when the fallback lookup itself throws after Tier 1 suppressed the keys', async () => {
+    // coalesceFallbackMarkAndPick throwing (e.g. getFallbackProvider blowing up)
+    // after Tier 1 cancelled the primary's backstop task would otherwise leave
+    // zero investigation tasks — the finally safety-net must escalate one.
+    const status = mockToolkitWithFallback();
+    status.getFallbackProvider.mockImplementation(() => { throw new Error('provider registry corrupt'); });
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow();
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+  });
+
   it('does NOT engage Tier 1 for a category-less failure even when the provider lists alternatives', async () => {
     // Regression: a failure with no errorAnalysis has category === undefined,
     // which must NOT match the model-not-found guard (the `undefined ===
