@@ -133,8 +133,9 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.codeReview !== undefined) {
     validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
   }
-  // Creative Director scene-evaluation provider/model pin — validate the slice
-  // when present so a malformed picker save can't write a bad provider config.
+  // Creative Director's treatment, plan, and scene-evaluation provider/model
+  // pins — validate the slice when present so a malformed picker save can't
+  // write a bad provider config.
   if (req.body?.creativeDirector !== undefined) {
     validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
   }

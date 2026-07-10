@@ -18,11 +18,27 @@ import { randomUUID } from 'crypto';
 import { addTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
+import { getSettings } from '../settings.js';
 import { recordRun } from './local.js';
 
-function buildTaskRecord(project, kind, scene, context) {
+// Treatment and production planning are CoS tasks, so unlike scene evaluation
+// they need a CLI/TUI provider with an agent harness. The assignment UI limits
+// choices accordingly; this helper only adds a pin when one was explicitly
+// saved, preserving the system-default behavior for existing installations.
+async function getStageAssignment(kind) {
+  const settings = await getSettings().catch(() => ({}));
+  const assignment = settings?.creativeDirector?.[kind];
+  if (!assignment?.providerId && !assignment?.model) return {};
+  return {
+    ...(assignment.providerId ? { provider: assignment.providerId, providerId: assignment.providerId } : {}),
+    ...(assignment.model ? { model: assignment.model } : {}),
+  };
+}
+
+async function buildTaskRecord(project, kind, scene, context) {
   const taskId = `cd-${project.id}-${kind}-${Date.now().toString(36)}`;
   const runId = randomUUID();
+  const assignment = await getStageAssignment(kind);
   return {
     id: taskId,
     runId,
@@ -40,6 +56,7 @@ function buildTaskRecord(project, kind, scene, context) {
           runId,
         },
         context,
+        ...assignment,
         useWorktree: false,
         readOnly: false,
       },
@@ -83,7 +100,7 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
 
 export async function enqueueTreatmentTask(project) {
   const context = await buildTreatmentPrompt(project);
-  const built = buildTaskRecord(project, 'treatment', null, context);
+  const built = await buildTaskRecord(project, 'treatment', null, context);
   return persistAndEmit(built, project, 'treatment', null);
 }
 
@@ -95,13 +112,13 @@ export async function enqueueTreatmentTask(project) {
 // treatment stage — the agent reads the 4xx error body and re-PATCHes.
 export async function enqueuePlanTask(project) {
   const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs() });
-  const built = buildTaskRecord(project, 'plan', null, context);
+  const built = await buildTaskRecord(project, 'plan', null, context);
   return persistAndEmit(built, project, 'plan', null);
 }
 
 export async function enqueueEvaluateTask(project, scene) {
   if (!scene) throw new Error('enqueueEvaluateTask: scene is required');
   const context = await buildEvaluatePrompt(project, scene);
-  const built = buildTaskRecord(project, 'evaluate', scene, context);
+  const built = await buildTaskRecord(project, 'evaluate', scene, context);
   return persistAndEmit(built, project, 'evaluate', scene.sceneId);
 }
