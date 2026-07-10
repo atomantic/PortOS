@@ -468,6 +468,42 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
+    it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex'],
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-cx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+    });
+
+    it('omits the Codex model note when codex is not among the reviewers', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['claude'],
+          // Stale model tier from a prior codex config — must not leak into a
+          // claude-only review.
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-noncx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
+    });
+
     it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {

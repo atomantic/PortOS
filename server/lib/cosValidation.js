@@ -263,6 +263,9 @@ export const generateWeeklyDigestSchema = z.object({
 // up spawner reads it as the fallback for `reviewers` when none are passed in.
 // `lmstudioModel` / `ollamaModel` are the installed model ids the local-LLM
 // reviewer should run with (empty/undefined = pick the active default model).
+// `codexModel` is the Codex CLI model tier (e.g. `gpt-5.6-sol`) threaded into
+// the review-loop follow-up prompt as `codex --model <id>` (empty/undefined =
+// let the Codex CLI pick its own default).
 export const codeReviewSettingsSchema = z.object({
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
@@ -272,6 +275,7 @@ export const codeReviewSettingsSchema = z.object({
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
   ollamaModel: z.preprocess(emptyToUndefined, z.string().optional()),
+  codexModel: z.preprocess(emptyToUndefined, z.string().optional()),
 }).strict();
 
 // =============================================================================
