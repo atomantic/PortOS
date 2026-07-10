@@ -35,6 +35,19 @@
 export function onActivateKeyDown(handler) {
   if (typeof handler !== 'function') return undefined;
   return (event) => {
+    // Only activate when the key event ORIGINATED on the element this handler
+    // is attached to — not when it bubbled up from a focusable descendant.
+    // A clickable container often wraps its own action buttons (a row with a
+    // Delete/Stop/Remove button, an expandable card with a caret toggle);
+    // without this guard, pressing Enter/Space while focused on the inner
+    // button would bubble here, fire the container's handler, AND
+    // `preventDefault` the button's native activation — so "Delete" would
+    // select the row instead of deleting. Only focusable descendants can be a
+    // distinct key-event target (a non-focusable <span>/<div> never receives
+    // the keydown), so this precisely excludes the controls we must not hijack.
+    // `currentTarget` is only null outside a live dispatch (synthetic test
+    // events) — there the guard is a no-op and activation proceeds.
+    if (event.currentTarget != null && event.target !== event.currentTarget) return;
     // `' '` is the modern key value; `'Spacebar'` covers legacy engines.
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
       event.preventDefault();

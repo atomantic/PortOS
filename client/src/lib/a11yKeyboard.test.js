@@ -40,6 +40,27 @@ describe('onActivateKeyDown', () => {
     onActivateKeyDown(handler)(event);
     expect(handler).toHaveBeenCalledWith(event);
   });
+
+  it('activates when the event originated on the element itself (target === currentTarget)', () => {
+    const handler = vi.fn();
+    const el = {};
+    const preventDefault = vi.fn();
+    onActivateKeyDown(handler)({ key: 'Enter', target: el, currentTarget: el, preventDefault });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a key event that bubbled up from a focusable descendant (target !== currentTarget)', () => {
+    const handler = vi.fn();
+    const container = {};
+    const innerButton = {};
+    const preventDefault = vi.fn();
+    // Enter on an inner <button> bubbles to the container's handler — it must
+    // NOT fire the container action nor preventDefault the button's activation.
+    onActivateKeyDown(handler)({ key: 'Enter', target: innerButton, currentTarget: container, preventDefault });
+    expect(handler).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
 });
 
 describe('clickableProps', () => {
