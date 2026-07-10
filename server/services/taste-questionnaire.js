@@ -473,6 +473,20 @@ export async function getTasteProfile() {
 }
 
 /**
+ * Build progress for a taste question.
+ * `current` is the 1-based index among *core* questions (not total responses),
+ * so the UI can show "Question 2 of 3" even after follow-ups inflate the response list.
+ */
+function buildQuestionProgress(config, sectionData, coreQuestion) {
+  const coreIndex = config.questions.findIndex(cq => cq.id === coreQuestion.id);
+  return {
+    current: coreIndex >= 0 ? coreIndex + 1 : sectionData.responses.length + 1,
+    coreTotal: config.questions.length,
+    totalAnswered: sectionData.responses.length
+  };
+}
+
+/**
  * Get the next question for a section.
  * Returns core questions first, then triggered follow-ups based on previous answers.
  */
@@ -494,11 +508,7 @@ export async function getNextQuestion(sectionId) {
         text: q.text,
         type: q.type,
         isFollowUp: false,
-        progress: {
-          current: sectionData.responses.length + 1,
-          coreTotal: config.questions.length,
-          totalAnswered: sectionData.responses.length
-        }
+        progress: buildQuestionProgress(config, sectionData, q)
       };
     }
 
@@ -518,11 +528,7 @@ export async function getNextQuestion(sectionId) {
           type: 'text',
           isFollowUp: true,
           triggeredBy: q.id,
-          progress: {
-            current: sectionData.responses.length + 1,
-            coreTotal: config.questions.length,
-            totalAnswered: sectionData.responses.length
-          }
+          progress: buildQuestionProgress(config, sectionData, q)
         };
       }
     }
