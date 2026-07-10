@@ -31,9 +31,10 @@ export const PASTE_DEADLINE_MS = 10000;
 // path; the non-claude providers use PASTE_DEADLINE_MS.
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
-// Claude Code emits `[Pasted text #N +M lines]` after committing a paste.
-// Watch for the marker (or fall back after PASTE_TO_ENTER_FALLBACK_MS)
-// before sending `\r` so Enter doesn't get swallowed mid-paste-commit.
+// Claude Code emits `[Pasted text #N +M lines]`, while Codex emits
+// `[Pasted Content N chars]`, after committing a paste. Watch for either
+// marker (or fall back after PASTE_TO_ENTER_FALLBACK_MS) before sending `\r`
+// so Enter doesn't get swallowed mid-paste-commit.
 //
 // CRITICAL: the marker must be matched against ANSI-STRIPPED output, never the
 // raw PTY stream. Claude Code renders the marker by positioning each token with
@@ -59,7 +60,7 @@ export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
-export const PASTE_MARKER_PATTERN = /\[Pasted\s*text\s*#\d+/i;
+export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars)\]/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 

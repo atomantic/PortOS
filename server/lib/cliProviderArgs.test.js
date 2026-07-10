@@ -64,6 +64,13 @@ describe('cliProviderArgs', () => {
       });
       expect(args).toEqual(['exec', '--model', 'gpt-5', '-']);
     });
+
+    it('passes the selected GPT-5.6 Codex tier to the CLI', () => {
+      const args = buildCliArgs({
+        id: 'codex', command: 'codex', defaultModel: 'gpt-5.6-sol',
+      });
+      expect(args).toEqual(['exec', '--model', 'gpt-5.6-sol', '-']);
+    });
   });
 
   describe('buildCliArgs — OpenCode Ollama', () => {
