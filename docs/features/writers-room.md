@@ -113,6 +113,6 @@ Most services carry sibling `.test.js` suites (storage CRUD, draft save/version/
 
 ## Related Features
 
-- Creative Director (`server/services/creativeDirector/`, `/media/creative-director`) — treatment/scene/run orchestration the CD bridge feeds into
+- Creative Director (`server/services/creativeDirector/`, `/creative-director`) — treatment/scene/run orchestration the CD bridge feeds into
 - Comic pipeline — the promote-to-pipeline target
 - Media collections, image-gen, and the media job queue — shared render infrastructure

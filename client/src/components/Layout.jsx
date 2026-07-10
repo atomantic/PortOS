@@ -90,7 +90,8 @@ import {
   Navigation,
   Music,
   Workflow as WorkflowIcon,
-  ChartGantt
+  ChartGantt,
+  Clapperboard
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -216,6 +217,7 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/creative-director', label: 'Creative Director', icon: Clapperboard },
       { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
@@ -1152,6 +1154,11 @@ export default function Layout() {
             // own scroll. The /catalog list/index page stays scrolling-default.
             location.pathname.startsWith('/catalog/') ||
             location.pathname.startsWith('/cos') ||
+            // Both the Creative Director index and its detail editor manage
+            // their own internal scroll (flex-col h-full + overflow-auto body),
+            // so they need the bare full-width main — same as when they lived
+            // under the /media tabs.
+            location.pathname.startsWith('/creative-director') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
             location.pathname.startsWith('/feature-agents') ||

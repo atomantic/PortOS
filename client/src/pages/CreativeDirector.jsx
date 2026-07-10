@@ -140,7 +140,7 @@ export default function CreativeDirector() {
       // so the user sees the cast immediately; otherwise stay on the list.
       if (remixIds.length) {
         clearRemix();
-        navigate(`/media/creative-director/${created.id}/overview`);
+        navigate(`/creative-director/${created.id}/overview`);
       }
     } catch (err) {
       toast.error(err.message || 'Failed to create project');
@@ -183,7 +183,7 @@ export default function CreativeDirector() {
     setProjects((prev) => [created, ...prev]);
     toast.success(`Created directive "${created.name}"`);
     closeDirective();
-    navigate(`/media/creative-director/${created.id}/plan`);
+    navigate(`/creative-director/${created.id}/plan`);
   };
 
   // Optimistic-update the row in place rather than refetching the whole list
@@ -404,7 +404,7 @@ export default function CreativeDirector() {
           {projects.map((p) => (
             <div key={p.id} className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
               <div className="flex items-start justify-between gap-2">
-                <Link to={`/media/creative-director/${p.id}/overview`} className="flex-1 min-w-0">
+                <Link to={`/creative-director/${p.id}/overview`} className="flex-1 min-w-0">
                   <div className="font-medium truncate">{p.name}</div>
                   <div className="text-xs text-port-text-muted truncate">{p.id}</div>
                 </Link>

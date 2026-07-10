@@ -466,7 +466,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
   const handleOpenInCreativeDirector = () => {
     if (!work.cdProjectId) return;
-    navigate(`/media/creative-director/${encodeURIComponent(work.cdProjectId)}/overview`);
+    navigate(`/creative-director/${encodeURIComponent(work.cdProjectId)}/overview`);
   };
 
   const commitTitle = async () => {

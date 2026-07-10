@@ -53,7 +53,7 @@ function refPath(refKind, refId) {
     case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
     case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
     case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
-    case 'creative-director': return `/media/creative-director/${encodeURIComponent(refId)}/overview`;
+    case 'creative-director': return `/creative-director/${encodeURIComponent(refId)}/overview`;
     case 'writers-room':
     case 'writersRoom':    return '/writers-room';
     default:               return null;

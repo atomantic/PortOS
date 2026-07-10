@@ -158,6 +158,16 @@ function UniverseRouteRedirect({ fromPrefix, canon = false }) {
   return <Navigate to={target} replace />;
 }
 
+// Redirect legacy /media/creative-director/* deep-links to the top-level
+// /creative-director/* route (Creative Director moved out of the Media Gen
+// tabs into its own Create page). Preserves the trailing path (id + tab),
+// query string, and hash.
+function CreativeDirectorLegacyRedirect() {
+  const { pathname, search, hash } = useLocation();
+  const rest = pathname.replace(/^\/media\/creative-director/, '');
+  return <Navigate to={`/creative-director${rest}${search}${hash}`} replace />;
+}
+
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
 if (import.meta.hot) {
@@ -287,9 +297,12 @@ export default function App() {
             <Route path="collections" element={<MediaCollections />} />
             <Route path="collections/:id" element={<MediaCollectionDetail />} />
             <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
-            <Route path="creative-director" element={<CreativeDirector />} />
-            <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
-            <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+            {/* Creative Director moved to the top-level /creative-director route
+                (Create sidebar link). These redirects keep legacy
+                /media/creative-director bookmarks + in-app deep-links working. */}
+            <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
+            <Route path="creative-director/:id" element={<CreativeDirectorLegacyRedirect />} />
+            <Route path="creative-director/:id/:tab" element={<CreativeDirectorLegacyRedirect />} />
             <Route path="music-video" element={<MusicVideo />} />
             <Route path="music-video/:projectId" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
@@ -305,6 +318,11 @@ export default function App() {
             <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} />} />
             <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
+          {/* Creative Director — a top-level Create page (moved out of the
+              Media Gen tabs). :id with no tab redirects to the overview tab. */}
+          <Route path="creative-director" element={<CreativeDirector />} />
+          <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
+          <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
