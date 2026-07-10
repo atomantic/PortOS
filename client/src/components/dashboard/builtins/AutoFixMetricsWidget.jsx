@@ -23,6 +23,19 @@ const TIER_COLORS = {
 // sentinel ("no data yet" must not read as 0%).
 const pct = (rate) => (rate == null ? '—' : `${Math.round(rate * 100)}%`);
 
+// Stable serialization of every slice the widget renders — the poll de-dupe key.
+// Deliberately omits the server's `generatedAt` wall clock (changes every poll)
+// so identical data doesn't force a re-render, while any change to the rendered
+// tiers / trend / recovery summary does.
+const renderKey = (d) =>
+  JSON.stringify({
+    total: d?.total ?? null,
+    overall: d?.overall ?? null,
+    byTier: d?.byTier ?? null,
+    timeToRecovery: d?.timeToRecovery ?? null,
+    trend: d?.trend ?? null,
+  });
+
 // Inline SVG sparkline of the daily success-rate trend. No chart dependency —
 // a handful of points plotted on a 0–100 y-axis. Days with a null rate (no
 // denominator) are skipped so a gap doesn't read as 0%.
@@ -69,16 +82,14 @@ function AutoFixMetricsWidget() {
     () => api.getAutoFixMetrics({ silent: true }),
     60000,
     {
-      // Skip the re-render when nothing observable moved. `generatedAt` is the
-      // server's wall clock and changes every poll, so it must NOT be part of
-      // this comparison — key on the aggregates the widget actually renders.
-      compare: (prev, next) =>
-        prev?.total === next?.total
-        && prev?.overall?.resolved === next?.overall?.resolved
-        && prev?.overall?.open === next?.overall?.open
-        && (prev?.timeToRecovery?.count ?? null) === (next?.timeToRecovery?.count ?? null)
-        && (prev?.timeToRecovery?.medianMs ?? null) === (next?.timeToRecovery?.medianMs ?? null)
-        && (prev?.trend?.length ?? 0) === (next?.trend?.length ?? 0),
+      // Skip the re-render only when EVERY rendered slice is byte-identical.
+      // `generatedAt` is the server's wall clock and changes every poll, so it
+      // must be excluded — but the comparison otherwise serializes the full
+      // rendered payload (overall, per-tier rows, the trend series, the
+      // time-to-recovery summary) so a tier redistribution or a same-length
+      // trend whose values shifted still re-renders. The payload is tiny (a
+      // few tiers + ≤30 trend days), so stringifying each poll is negligible.
+      compare: (prev, next) => renderKey(prev) === renderKey(next),
     },
   );
 
