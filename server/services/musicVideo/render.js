@@ -301,6 +301,18 @@ export async function renderMusicVideo(projectId) {
     const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
     job.process = proc;
 
+    // 'error' fires for BOTH a genuine pre-spawn failure (ENOENT — the child
+    // never started, so no 'close' will follow) AND a later child-process error
+    // such as a failed kill (the ffmpeg is still live and 'close' still owes us
+    // a terminal event). Track spawn state so only the pre-spawn case finalizes
+    // immediately; a post-spawn error must retain process + project-mutex
+    // ownership until 'close' so a replacement render can't overlap the live
+    // ffmpeg process. `terminal` makes the terminal handling exactly-once,
+    // shared between the pre-spawn error branch and 'close'.
+    let spawned = false;
+    let terminal = false;
+    proc.on('spawn', () => { spawned = true; });
+
     let stderrBuf = '';
     proc.stderr.on('data', (chunk) => {
       stderrBuf += chunk.toString();
@@ -324,17 +336,35 @@ export async function renderMusicVideo(projectId) {
     });
 
     proc.on('error', async (err) => {
-      job.status = 'error';
-      const reason = `Failed to spawn ffmpeg: ${err.message}`;
-      job.lastError = reason;
-      console.log(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-      broadcastSse(job, { type: 'error', error: reason });
-      projectRenders.delete(projectId);
-      await updateProject(projectId, { status: 'failed' }).catch(() => {});
-      closeJobAfterDelay(jobs, jobId);
+      try {
+        if (spawned) {
+          // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
+          // still live — do NOT release the project mutex or null job.process
+          // here, or a replacement render could spawn and overlap it. Record
+          // the reason; the pending 'close' runs the sole terminal finalization.
+          job.lastError = `ffmpeg process error: ${err.message}`;
+          console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
+          return;
+        }
+        if (terminal) return;
+        terminal = true;
+        job.process = null;
+        job.status = 'error';
+        const reason = `Failed to spawn ffmpeg: ${err.message}`;
+        job.lastError = reason;
+        console.log(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+        broadcastSse(job, { type: 'error', error: reason });
+        projectRenders.delete(projectId);
+        await updateProject(projectId, { status: 'failed' }).catch(() => {});
+        closeJobAfterDelay(jobs, jobId);
+      } catch (e) {
+        console.error(`❌ Music-video render error handler failed [${jobId.slice(0, 8)}]: ${e.message}`);
+      }
     });
 
     proc.on('close', async (code, signal) => {
+      if (terminal) return; // a pre-spawn error already finalized this job
+      terminal = true;
       job.process = null;
       if (code !== 0) {
         const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
