@@ -521,6 +521,25 @@ describe('stream error containment', () => {
     await spawnPromise.catch(() => {});
   });
 
+  it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockClear();
+    vi.mocked(spawn).mockClear();
+
+    const args = { ...minimalArgs, provider: { ...minimalArgs.provider, envVars: { GITHUB_TOKEN: 'ghp_provider_bot' } } };
+    const spawnPromise = spawnDirectly(args);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // gh prefers GH_TOKEN over GITHUB_TOKEN — injecting the owner GH_TOKEN would
+    // shadow the provider's explicit bot credential, so the probe is skipped.
+    expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
+    const env = vi.mocked(spawn).mock.calls.at(-1)[2].env;
+    expect(env.GITHUB_TOKEN).toBe('ghp_provider_bot');
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
   describe('initialization timeout — 3-second phase transition', () => {
     it('calls updateAgent with working phase after 3s when agent has not started working', async () => {
       const { activeAgents } = await import('./agentState.js');

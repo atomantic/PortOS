@@ -364,22 +364,41 @@ export async function resolveForgeForRepo(dir) {
  * `hosts.yml` active user; (2) even when inherited, the ambient token can be
  * the wrong account in a multi-login setup ("must be a collaborator").
  *
- * Returns `{ GH_TOKEN }` only when a repo-owner-matched account and token were
- * found; otherwise `{}` so the child keeps whatever gh auth it would have used.
- * Best-effort: never throws, so a spawn is never blocked by remote/auth probes.
+ * Returns `{ GH_TOKEN }` only when a github.com repo-owner-matched account and
+ * token were found; otherwise `{}` so the child keeps whatever gh auth it would
+ * have used. Best-effort and bounded: never throws, and a stalled `gh` probe
+ * times out to `{}` so a spawn is never blocked.
  * @param {string} dir - Repo (or worktree) root
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs=10000] - Cap on the git+gh probe before giving up
  * @returns {Promise<{ GH_TOKEN?: string }>}
  */
-export async function resolveForgeTokenEnv(dir) {
-  const resolved = await resolveForgeForRepo(dir).catch(() => null);
-  // resolveForgeForRepo returns a NEW env object (`{ ...process.env, GH_TOKEN }`)
-  // ONLY when it successfully minted an owner-matched token; every other branch
-  // (unparseable remote, glab, no account match, token fetch failed) returns the
-  // ambient `process.env` by reference. So an identity check on the env object is
-  // the precise "a pinned token was minted" signal — keying on `account` alone
-  // would wrongly re-emit the ambient GH_TOKEN when the account matched but the
-  // token fetch failed (that branch keeps `account` set but env === process.env).
-  const token = resolved && resolved.env !== process.env ? resolved.env.GH_TOKEN : null;
+export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000 } = {}) {
+  // resolveForgeForRepo shells out to git + `gh auth status` + `gh auth token`
+  // with no internal timeout, and this runs on the critical agent-spawn path.
+  // Race it against a timer so a stalled gh (network/keychain hang) can't leave
+  // a task marked in-progress forever with no child process — a timeout falls
+  // through to `{}` (ambient auth) exactly like any other miss. The timer is
+  // unref'd so it never itself keeps the event loop alive.
+  let timer;
+  const resolved = await Promise.race([
+    resolveForgeForRepo(dir).catch(() => null),
+    new Promise((r) => { timer = setTimeout(() => r(null), timeoutMs); timer.unref?.(); }),
+  ]);
+  clearTimeout(timer);
+  // Overlay a token ONLY for a genuinely-minted github.com credential. Two gates:
+  //  - host === 'github.com': detectForgeCli defaults an unrecognized/GHES host to
+  //    `gh`, and resolveForgeForRepo's account/token probes are hardcoded to
+  //    `-h github.com`. Without this gate, a Bitbucket/GHES repo whose owner segment
+  //    happens to match a local github.com login would get that github.com token
+  //    injected into every agent — the wrong (or a leaked) credential.
+  //  - env !== process.env: resolveForgeForRepo returns a NEW env object
+  //    (`{ ...process.env, GH_TOKEN }`) ONLY on a successful mint; every other
+  //    branch (no match, token fetch failed) returns the ambient `process.env` by
+  //    reference. Keying on `account` alone would re-emit the ambient GH_TOKEN when
+  //    the account matched but the token fetch failed.
+  const minted = resolved && resolved.host === 'github.com' && resolved.env !== process.env;
+  const token = minted ? resolved.env.GH_TOKEN : null;
   return token ? { GH_TOKEN: token } : {};
 }
 

@@ -446,20 +446,20 @@ describe('spawnTuiAgent runtime', () => {
     await completeDone;
   });
 
-  it('lets an explicit provider GH_TOKEN override win over the owner-pinned token (spread order matches the CLI/runner paths)', async () => {
+  it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN so the explicit credential wins', async () => {
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
-    vi.mocked(gitService.resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_owner_pinned' });
 
-    runSpawn({ provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', envVars: { GH_TOKEN: 'ghp_provider_override' } } });
+    runSpawn({ provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', envVars: { GITHUB_TOKEN: 'ghp_provider_bot' } } });
     await flushMicrotasks();
 
-    // provider.envVars.GH_TOKEN must win — forgeTokenEnv is spread first.
-    expect(shellService.createShellSession).toHaveBeenCalledWith(
-      null,
-      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_provider_override' }) }),
-    );
+    // gh prefers GH_TOKEN over GITHUB_TOKEN, so injecting an owner GH_TOKEN would
+    // shadow the provider's bot credential — the probe must be skipped entirely.
+    expect(gitService.resolveForgeTokenEnv).not.toHaveBeenCalled();
+    const env = vi.mocked(shellService.createShellSession).mock.calls[0][1].env;
+    expect(env.GITHUB_TOKEN).toBe('ghp_provider_bot');
+    expect(env.GH_TOKEN).toBeUndefined();
 
     await capturedOnExit({ exitCode: 0, killed: false });
     await completeDone;

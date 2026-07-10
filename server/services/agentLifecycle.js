@@ -22,7 +22,7 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
-import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
@@ -632,10 +632,12 @@ export async function spawnViaRunner(agentId, task, opts) {
   // Two independent async env lookups, resolved together: Claude's
   // ~/.claude/settings.json Bedrock config, and the repo-owner-pinned GH_TOKEN
   // (so the runner-spawned agent's own `gh pr create` auths as the right
-  // account — see resolveForgeTokenEnv; `{}` when there's no owner match).
+  // account — see resolveForgeTokenEnv; `{}` when there's no owner match). Skip
+  // the token probe when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so
+  // its explicit credential wins.
   const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
     isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
-    resolveForgeTokenEnv(workspacePath),
+    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(workspacePath),
   ]);
 
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with the

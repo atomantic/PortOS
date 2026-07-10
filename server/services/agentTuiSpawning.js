@@ -20,7 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -804,7 +804,11 @@ export async function spawnTuiAgent({
 
   // Repo-owner-pinned GH_TOKEN for the agent's own `gh pr create` (see
   // resolveForgeTokenEnv). Resolved here since createAgentTuiSession is sync.
-  const forgeTokenEnv = await git.resolveForgeTokenEnv(cwd);
+  // Skip when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its explicit
+  // credential wins.
+  const forgeTokenEnv = providerSuppliesGithubToken(provider)
+    ? {}
+    : await git.resolveForgeTokenEnv(cwd);
 
   const session = createAgentTuiSession({
     agentId,

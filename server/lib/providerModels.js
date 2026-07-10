@@ -265,6 +265,21 @@ export function isOllamaClaudeProvider(provider, command = provider?.command) {
 }
 
 /**
+ * True when a provider explicitly configures its own GitHub credential
+ * (`GH_TOKEN` or `GITHUB_TOKEN`) in `envVars`. Agent-spawn paths that would
+ * otherwise inject a repo-owner-pinned `GH_TOKEN` skip that injection when this
+ * returns true, so the provider's explicit credential wins — `gh` prefers
+ * `GH_TOKEN` over `GITHUB_TOKEN`, so an injected `GH_TOKEN` would silently
+ * shadow a provider's configured `GITHUB_TOKEN` otherwise.
+ * @param {{envVars?: Record<string,unknown>}} provider
+ * @returns {boolean}
+ */
+export function providerSuppliesGithubToken(provider) {
+  const env = provider?.envVars;
+  return !!env && ('GH_TOKEN' in env || 'GITHUB_TOKEN' in env);
+}
+
+/**
  * Lean-context flags for local-model Claude Code sessions:
  * - `--bare` — skip hooks, plugin sync, auto-memory, and CLAUDE.md
  *   auto-discovery (the user's personal environment derails small models).
