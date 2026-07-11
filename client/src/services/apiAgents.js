@@ -44,7 +44,7 @@ export const pauseCos = (reason) => request('/cos/pause', {
   body: JSON.stringify({ reason })
 });
 export const resumeCos = (options = {}) => request('/cos/resume', { method: 'POST', ...options });
-export const getCosConfig = () => request('/cos/config');
+export const getCosConfig = (options) => request('/cos/config', options);
 export const updateCosConfig = (config, options = {}) => request('/cos/config', {
   method: 'PUT',
   body: JSON.stringify(config),
