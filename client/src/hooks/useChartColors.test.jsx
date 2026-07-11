@@ -46,7 +46,7 @@ describe('useChartColors', () => {
   it('re-resolves when the theme dataset attribute changes', async () => {
     const root = document.documentElement;
     root.style.setProperty('--port-accent', '1 1 1');
-    const { result } = renderHook(() => useChartColors());
+    const { result, unmount } = renderHook(() => useChartColors());
     expect(result.current.accent).toBe('rgb(1, 1, 1)');
 
     await act(async () => {
@@ -57,5 +57,8 @@ describe('useChartColors', () => {
     });
 
     expect(result.current.accent).toBe('rgb(2, 2, 2)');
+    // Unmount before afterEach strips data-port-theme — that mutation would
+    // otherwise fire the observer's setColors outside act.
+    unmount();
   });
 });

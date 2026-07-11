@@ -44,6 +44,10 @@ vi.mock('../../hooks/useReferenceAudioImport.js', () => ({
 import { act } from '@testing-library/react';
 import ReferenceAnalysis, { ReferenceAudioAttach } from './ReferenceAnalysis.jsx';
 
+// Drain the mount decode effect's pre-resolved promises (fetch → decodeAudioData)
+// inside act so their state updates can't land outside it after the test body.
+const settle = () => act(async () => {});
+
 const SR = 16000;
 const sine = (hz, seconds) => {
   const n = Math.round(seconds * SR);
@@ -271,7 +275,7 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
 });
 
 describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
-  it('toggling Stacked seeds a backing window ending where the voice enters', () => {
+  it('toggling Stacked seeds a backing window ending where the voice enters', async () => {
     installFakeAudio();
     const onUpdateReference = vi.fn();
     render(
@@ -292,9 +296,10 @@ describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
       // the segment start (the voice's entrance).
       { layerId: 'bass', startMs: 3000, endMs: 6000, bgStartMs: 0, bgEndMs: 3000 },
     ]);
+    await settle();
   });
 
-  it('warns when there is no audio before the segment to use as a backing ref', () => {
+  it('warns when there is no audio before the segment to use as a backing ref', async () => {
     installFakeAudio();
     render(
       <ReferenceAnalysis
@@ -310,6 +315,7 @@ describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /stacked/i }));
     expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/not enough audio before/i));
+    await settle();
   });
 
   it('rejects an invalid backing-window edit instead of silently dropping stacked mode', async () => {

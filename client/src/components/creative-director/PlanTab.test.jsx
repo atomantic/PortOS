@@ -2,7 +2,7 @@
  * Plan-board state transitions + blocked-step triage (CDO Phase 4, #2186).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../../services/apiCreativeDirector.js', () => ({
@@ -53,16 +53,21 @@ const directiveProject = (overrides = {}) => ({
 const renderTab = (project, onProjectUpdate = () => {}) =>
   render(<MemoryRouter><PlanTab project={project} onProjectUpdate={onProjectUpdate} /></MemoryRouter>);
 
+// Drain the mount fetches (catalog/universes/series) inside act so their state
+// updates can't land outside it after a test body that never awaits them.
+const settle = () => act(async () => {});
+
 beforeEach(() => {
   vi.clearAllMocks();
   getCreativeToolCatalog.mockResolvedValue(CATALOG);
 });
 
 describe('legacy project (no directive)', () => {
-  it('offers to add a directive', () => {
+  it('offers to add a directive', async () => {
     renderTab({ id: 'cd-1', name: 'X', status: 'draft', directive: null, plan: null, runs: [] });
     expect(screen.getByText(/No production directive/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Add a directive/i })).toBeTruthy();
+    await settle();
   });
 });
 
@@ -87,12 +92,13 @@ describe('plan board', () => {
     expect(link.getAttribute('href')).toBe('/pipeline/series/s9');
   });
 
-  it('shows the directive goal + deliverables + budget cap', () => {
+  it('shows the directive goal + deliverables + budget cap', async () => {
     renderTab(directiveProject());
     expect(screen.getByText('Produce a noir series')).toBeTruthy();
     expect(screen.getByText('story')).toBeTruthy();
     expect(screen.getByText('covers')).toBeTruthy();
     expect(screen.getByText(/Budget cap: 50/)).toBeTruthy();
+    await settle();
   });
 
   it('renders a dry-run banner when creative autonomy is dry-run', async () => {

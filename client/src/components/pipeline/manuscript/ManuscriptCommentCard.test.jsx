@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import ManuscriptCommentCard, { Badge } from './ManuscriptCommentCard';
 import { Toaster, toast } from '../../ui/Toast';
 import {
@@ -53,6 +53,10 @@ const renderCard = (props) => render(
 // Single-key shortcut dispatched against document.body (no editable focus).
 const pressKey = (key) => fireEvent.keyDown(window, { key });
 
+// Drain pending pre-resolved mock promises inside act so their state updates
+// (card status, Toaster toast) can't land outside it after the test body.
+const settle = () => act(async () => {});
+
 describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
   beforeEach(() => {
     acceptPipelineManuscriptFix.mockReset();
@@ -67,11 +71,12 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     expect(screen.getByText('dismiss')).toBeTruthy();
   });
 
-  it('g triggers generate when there is no fix', () => {
+  it('g triggers generate when there is no fix', async () => {
     generatePipelineManuscriptFix.mockResolvedValue({ comment: baseComment });
     renderCard();
     pressKey('g');
     expect(generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.any(Object));
+    await settle();
   });
 
   it('d dismisses the note via the patch endpoint', async () => {
@@ -104,7 +109,7 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     expect(screen.queryByText('False positive')).toBeNull();
   });
 
-  it('a accepts the suggested fix when one exists, and shows accept/regenerate hints', () => {
+  it('a accepts the suggested fix when one exists, and shows accept/regenerate hints', async () => {
     acceptPipelineManuscriptFix.mockResolvedValue({ comment: { ...withFix, status: 'accepted' } });
     renderCard({ comment: withFix });
     expect(screen.getByText('accept')).toBeTruthy();
@@ -113,6 +118,7 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.objectContaining({
       edits: expect.arrayContaining([expect.objectContaining({ replace: 'new text' })]),
     }));
+    await settle();
   });
 
   it('arrow keys step through the triage order, and the step hint renders only with nav', () => {
